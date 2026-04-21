@@ -1,0 +1,30 @@
+node_modules/
+dist/
+dist-ssr/
+*.local
+*.log
+
+# TypeScript / Vite build artifacts
+*.tsbuildinfo
+vite.config.d.ts
+vite.config.js
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+src-tauri/WixTools/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
