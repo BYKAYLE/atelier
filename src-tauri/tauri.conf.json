@@ -14,8 +14,8 @@
       {
         "label": "main",
         "title": "Atelier",
-        "width": 1280,
-        "height": 820,
+        "width": 1600,
+        "height": 900,
         "minWidth": 900,
         "minHeight": 600,
         "decorations": true,
@@ -25,19 +25,39 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' data: blob: asset: http://asset.localhost; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net; script-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1421 http://localhost:1420"
+      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' data: blob: asset: http://asset.localhost; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net; script-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1421 http://localhost:1420; frame-src 'self' http: https: asset: http://asset.localhost; child-src 'self' http: https: asset: http://asset.localhost",
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/**", "$HOME/Library/Application Support/com.atelier.app/**"]
+      }
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["msi", "nsis"],
+    "targets": ["app", "dmg", "msi", "nsis"],
+    "resources": [
+      "resources/design-engine/**/*"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "signingIdentity": null
+    }
   },
-  "plugins": {}
+  "plugins": {
+    "updater": {
+      "active": true,
+      "dialog": false,
+      "endpoints": [
+        "https://github.com/BYKAYLE/atelier/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENCMEQ3RjcyODE5MTU3NDcKUldSSFY1R0JjbjhOeTlmb1pCNUdoRHNXU01tYU5zRk1iUW1hOFU4SmRzeHdjMDlURzJMTXV0WXYK"
+    }
+  }
 }

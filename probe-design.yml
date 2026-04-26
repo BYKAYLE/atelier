@@ -1,0 +1,58 @@
+target: "http://localhost:1420"
+name: "Atelier Design Tab — Phase 2 (Stage 4 Hi-fi 활성) smoke (Vite dev, no Tauri runtime)"
+
+browsers: [chromium]
+viewports: [desktop]
+
+actions:
+  - wait: 2000
+  # 사이드바 토글 회귀: Cmd+B로 사이드바 숨겼다 다시 보이기 → leftHidden state 회로 정상 동작.
+  - keyboard: "Meta+B"
+  - wait: 400
+  - keyboard: "Meta+B"
+  - wait: 400
+  # 디자인 탭 클릭 (사이드바 상단 탭 스위처).
+  - click: "button:has-text('디자인')"
+  - wait: 1500
+  # Brief textarea 보임 + 입력 가능 확인.
+  - fill:
+      selector: "[data-testid='design-brief-input']"
+      value: "테스트 입력: 의료진이 처방전을 빠르게 검토할 수 있는 데스크탑 도구"
+  - wait: 500
+  # Stepper에서 단계 1/3/4는 활성, 2/5/6은 비활성 (스타일 회로 검증은 LLM).
+  - click: "[data-testid='design-step-3']"
+  - wait: 800
+  # Stage 4 (Hi-fi) 활성 진입 확인
+  - click: "[data-testid='design-step-4']"
+  - wait: 800
+  # 다시 Brief로 복귀
+  - click: "[data-testid='design-step-1']"
+  - wait: 600
+  # 세션 탭으로 전환 → 회귀 가드 (디자인 탭에 쌓아둔 상태 유지)
+  - click: "button:has-text('세션')"
+  - wait: 400
+  # 다시 디자인 탭 → Brief 입력 그대로 남아 있는지 확인 (localStorage persist).
+  - click: "button:has-text('디자인')"
+  - wait: 800
+
+assertions:
+  - noConsoleErrors
+  - noNetworkErrors
+  - hasElement: "[data-testid='design-wizard']"
+  - hasElement: "[data-testid='design-stepper']"
+  - hasElement: "[data-testid='design-brief-input']"
+  - hasElement: "[data-testid='design-step-4']"
+  - llmJudge:
+      prompt: |
+        This is Atelier's Design tab (Phase 2). Observe the rendered UI:
+        1) Is there a clear sidebar tab labeled "디자인" that is currently active/highlighted?
+        2) Is the DesignWizard mounted on the left? Look for a 6-step stepper showing
+           Brief / System / Wireframe / Hi-fi / Motion / Review with stages 1, 3, 4 (Brief, Wireframe, Hi-fi)
+           marked as active and stages 2, 5, 6 dimmed.
+        3) Is there a textarea for entering the brief, with the test text from the actions still present?
+        4) Does the layout look intact — no overlapping elements, no broken styles?
+        Pass if all 4 checks succeed (or close). Fail if any major regression.
+      severity: high
+
+strategy: full
+parallel: 1

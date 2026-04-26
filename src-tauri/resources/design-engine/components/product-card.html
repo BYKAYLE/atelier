@@ -1,0 +1,47 @@
+<!--
+  Product Card — 시뮬레이터 제품 카드 (이미지 + 제품명 + 사양 + CTA)
+  학파별 그림자/모서리 조정. 카드 hover 시 lift + image scale.
+-->
+<article class="prod-card" aria-labelledby="prod-card-title-1">
+  <a href="#product-1" class="prod-card__link">
+    <div class="prod-card__media">
+      <img
+        src="https://images.unsplash.com/photo-1530026405186-ed1f139313f8?w=800&q=80"
+        alt="복강경 수술 시뮬레이터 본체"
+        loading="lazy">
+      <span class="prod-card__badge">신규</span>
+    </div>
+    <div class="prod-card__body">
+      <p class="prod-card__category">복강경 시뮬레이터</p>
+      <h3 id="prod-card-title-1" class="prod-card__title">bykayle Lap-S1</h3>
+      <p class="prod-card__desc">담낭절제·충수절제 50개 시나리오. 실시간 햅틱 피드백 + 수기 평가 자동화.</p>
+      <ul class="prod-card__specs">
+        <li><span>시나리오</span><strong>52개</strong></li>
+        <li><span>지연시간</span><strong>4ms</strong></li>
+        <li><span>평가</span><strong>AI 자동</strong></li>
+      </ul>
+      <span class="prod-card__cta">자세히 보기 →</span>
+    </div>
+  </a>
+</article>
+
+<style>
+  .prod-card { background: #fff; border: 1px solid #e8e6df; border-radius: 16px; overflow: hidden; transition: transform 300ms cubic-bezier(0.22,1,0.36,1), box-shadow 300ms cubic-bezier(0.22,1,0.36,1); box-shadow: 0 1px 2px rgba(31,31,29,0.06); }
+  .prod-card:hover { transform: translateY(-6px); box-shadow: 0 12px 32px rgba(31,31,29,0.10), 0 4px 8px rgba(31,31,29,0.04); }
+  .prod-card__link { display: block; color: inherit; text-decoration: none; }
+  .prod-card__link:focus-visible { outline: 2px solid #c96442; outline-offset: 4px; border-radius: 16px; }
+  .prod-card__media { position: relative; aspect-ratio: 4 / 3; overflow: hidden; }
+  .prod-card__media img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 500ms cubic-bezier(0.22,1,0.36,1); }
+  .prod-card:hover .prod-card__media img { transform: scale(1.06); }
+  .prod-card__badge { position: absolute; top: 16px; left: 16px; background: #c96442; color: #fff; font: 600 11px/16px Pretendard, Inter, system-ui; letter-spacing: 0.04em; padding: 4px 8px; border-radius: 4px; }
+  .prod-card__body { padding: 32px; }
+  .prod-card__category { font: 600 11px/16px Pretendard, Inter, system-ui; letter-spacing: 0.08em; text-transform: uppercase; color: #c96442; margin: 0 0 8px; }
+  .prod-card__title { font: 700 24px/32px Pretendard, Inter, system-ui; letter-spacing: -0.005em; color: #1f1f1d; margin: 0 0 12px; }
+  .prod-card__desc { font: 400 16px/24px Pretendard, system-ui; color: #4a4a47; margin: 0 0 24px; }
+  .prod-card__specs { list-style: none; padding: 16px 0; margin: 0 0 24px; border-top: 1px solid #e8e6df; border-bottom: 1px solid #e8e6df; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .prod-card__specs li { display: flex; flex-direction: column; }
+  .prod-card__specs span { font: 500 11px/16px Pretendard, system-ui; letter-spacing: 0.04em; color: #9b9890; text-transform: uppercase; margin-bottom: 4px; }
+  .prod-card__specs strong { font: 700 16px/22px Pretendard, Inter, system-ui; color: #1f1f1d; font-variant-numeric: tabular-nums; }
+  .prod-card__cta { font: 600 14px/22px Pretendard, system-ui; color: #c96442; letter-spacing: 0.01em; }
+  @media (max-width: 480px) { .prod-card__body { padding: 24px; } .prod-card__title { font-size: 20px; line-height: 28px; } }
+</style>

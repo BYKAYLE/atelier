@@ -1,5 +1,5 @@
 import React from "react";
-import { cls, Tweaks } from "../lib/tokens";
+import { cls, MOD_KEY, Tweaks } from "../lib/tokens";
 import { I } from "./Icons";
 
 interface Props {
@@ -88,7 +88,7 @@ const Welcome: React.FC<Props> = ({ tw, setScreen }) => {
 
         <div className="mt-10 grid grid-cols-3 gap-4 max-w-[640px]">
           {[
-            { icon: I.image, title: "이미지 붙여넣기", body: "Ctrl+V로 스크린샷을 그대로" },
+            { icon: I.image, title: "이미지 붙여넣기", body: `${MOD_KEY}+V로 스크린샷을 그대로` },
             { icon: I.eye, title: "라이브 프리뷰", body: "HTML·마크다운 자동 렌더" },
             { icon: I.zap, title: "가벼움", body: "Tauri · 네이티브 속도" },
           ].map((f, i) => (

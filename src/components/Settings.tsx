@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { ACCENTS, cls, PROFILES, Tweaks } from "../lib/tokens";
+import { ACCENTS, cls, MOD_KEY, Profile, Tweaks } from "../lib/tokens";
 import { I } from "./Icons";
 
 interface Props {
@@ -17,6 +17,7 @@ const Settings: React.FC<Props> = ({ tw, setTw }) => {
     ["profiles", "프로필", I.zap],
     ["shortcuts", "단축키", I.keyboard],
     ["preview", "미리보기 패널", I.eye],
+    ["updates", "업데이트", I.gear],
   ];
 
   return (
@@ -67,9 +68,10 @@ const Settings: React.FC<Props> = ({ tw, setTw }) => {
         <div className="max-w-[720px] px-10 pt-10 pb-16">
           {section === "terminal" && <TerminalSection tw={tw} setTw={setTw} />}
           {section === "appearance" && <AppearanceSection tw={tw} setTw={setTw} />}
-          {section === "profiles" && <ProfilesSection dark={dark} />}
+          {section === "profiles" && <ProfilesSection tw={tw} setTw={setTw} />}
           {section === "shortcuts" && <ShortcutsSection dark={dark} />}
           {section === "preview" && <PreviewSection dark={dark} />}
+          {section === "updates" && <UpdatesSection dark={dark} />}
         </div>
       </div>
     </div>
@@ -259,64 +261,130 @@ const AppearanceSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => v
   );
 };
 
-const ProfilesSection: React.FC<{ dark: boolean }> = ({ dark }) => (
-  <>
-    <SectionHeader
-      dark={dark}
-      title="프로필"
-      sub="자주 쓰는 CLI를 등록하세요. 각각 고유 색 도트가 부여됩니다."
-    />
-    <div
-      className={cls(
-        "rounded-[10px] border overflow-hidden",
-        dark ? "bg-[#252523] border-dline" : "bg-surface border-line",
-      )}
-    >
-      {PROFILES.filter((p) => p.id !== "custom").map((p, i) => (
-        <div
-          key={p.id}
-          className={cls(
-            "flex items-center gap-3 px-4 h-14",
-            i > 0 ? (dark ? "border-t border-dline" : "border-t border-line") : "",
-          )}
-        >
-          <span
-            className="h-2.5 w-2.5 rounded-full shrink-0"
-            style={{ background: p.dot }}
-          />
-          <div className="flex-1 min-w-0">
-            <div
+const DEFAULT_DOTS = ["#c96442", "#9aae63", "#4b7bd1", "#8b4a73", "#6b9a4a", "#b08a4a", "#3d8d87"];
+
+const ProfilesSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => void }> = ({
+  tw,
+  setTw,
+}) => {
+  const dark = tw.dark;
+  const profiles = tw.profiles;
+
+  const updateProfile = (idx: number, patch: Partial<Profile>) => {
+    const next = profiles.map((p, i) => (i === idx ? { ...p, ...patch } : p));
+    setTw({ profiles: next });
+  };
+  const removeProfile = (idx: number) => {
+    if (profiles.length <= 1) return;
+    const target = profiles[idx];
+    const label = target?.name?.trim() || "이 프로필";
+    const ok = window.confirm(
+      `"${label}" 프로필을 삭제하시겠습니까?\n이 프로필로 열려 있는 탭은 유지되지만, 재등록 전까지 새로 열 수 없습니다.`,
+    );
+    if (!ok) return;
+    setTw({ profiles: profiles.filter((_, i) => i !== idx) });
+  };
+  const addProfile = () => {
+    const dot = DEFAULT_DOTS[profiles.length % DEFAULT_DOTS.length];
+    const id = `custom-${Date.now().toString(36)}`;
+    setTw({ profiles: [...profiles, { id, name: "새 프로필", cmd: "", dot }] });
+  };
+
+  return (
+    <>
+      <SectionHeader
+        dark={dark}
+        title="프로필"
+        sub="자주 쓰는 CLI를 등록하세요. + 버튼으로 추가, ✕ 버튼으로 삭제할 수 있습니다."
+      />
+      <div
+        className={cls(
+          "rounded-[10px] border overflow-hidden",
+          dark ? "bg-[#252523] border-dline" : "bg-surface border-line",
+        )}
+      >
+        {profiles.map((p, i) => (
+          <div
+            key={p.id}
+            className={cls(
+              "flex items-center gap-3 px-4 h-14",
+              i > 0 ? (dark ? "border-t border-dline" : "border-t border-line") : "",
+            )}
+          >
+            <input
+              type="color"
+              value={p.dot}
+              onChange={(e) => updateProfile(i, { dot: e.target.value })}
+              className="h-6 w-6 rounded-full shrink-0 cursor-pointer border-0 p-0 bg-transparent"
+              title="색 도트"
+              style={{ appearance: "none" }}
+            />
+            <input
+              value={p.name}
+              onChange={(e) => updateProfile(i, { name: e.target.value })}
+              placeholder="이름"
               className={cls(
-                "text-[13.5px] font-medium",
-                dark ? "text-dink" : "text-ink",
+                "h-8 px-2.5 rounded-[6px] border text-[13px] w-[180px] outline-none",
+                dark
+                  ? "bg-dmuted border-dline text-dink"
+                  : "bg-surface border-line text-ink",
               )}
-            >
-              {p.name}
-            </div>
-            <div
+            />
+            <input
+              value={p.cmd}
+              onChange={(e) => updateProfile(i, { cmd: e.target.value })}
+              placeholder="실행 명령 (예: claude, python3)"
               className={cls(
-                "font-mono text-[11px]",
-                dark ? "text-dsub" : "text-sub",
+                "flex-1 min-w-0 h-8 px-2.5 rounded-[6px] border font-mono text-[12px] outline-none",
+                dark
+                  ? "bg-dmuted border-dline text-dink"
+                  : "bg-surface border-line text-ink",
               )}
+            />
+            <button
+              type="button"
+              onClick={() => removeProfile(i)}
+              disabled={profiles.length <= 1}
+              className={cls(
+                "shrink-0 h-7 w-7 rounded-[6px] text-[13px] transition-colors",
+                profiles.length <= 1
+                  ? "opacity-30 cursor-not-allowed"
+                  : dark
+                    ? "text-dsub hover:bg-[#3d3d3b] hover:text-dink"
+                    : "text-sub hover:bg-line hover:text-ink",
+              )}
+              title={profiles.length <= 1 ? "최소 1개 필요" : "삭제"}
             >
-              {p.cmd}
-            </div>
+              ✕
+            </button>
           </div>
+        ))}
+        <div className={cls("px-4 h-12 flex items-center", dark ? "border-t border-dline" : "border-t border-line")}>
+          <button
+            type="button"
+            onClick={addProfile}
+            className={cls(
+              "h-8 px-3 rounded-[6px] text-[12.5px] font-medium transition-colors",
+              dark ? "text-dsub hover:bg-dmuted hover:text-dink" : "text-sub hover:bg-muted hover:text-ink",
+            )}
+          >
+            + 프로필 추가
+          </button>
         </div>
-      ))}
-    </div>
-  </>
-);
+      </div>
+    </>
+  );
+};
 
 const ShortcutsSection: React.FC<{ dark: boolean }> = ({ dark }) => {
   const shortcuts: Array<[string, string[]]> = [
-    ["새 탭", ["Ctrl", "T"]],
-    ["탭 닫기", ["Ctrl", "W"]],
-    ["다음 / 이전 탭", ["Ctrl", "Tab"]],
-    ["이미지 붙여넣기", ["Ctrl", "V"]],
-    ["미리보기 토글", ["Ctrl", "P"]],
-    ["화면 지우기", ["Ctrl", "K"]],
-    ["명령 팔레트", ["Ctrl", "Shift", "P"]],
+    ["새 탭", [MOD_KEY, "T"]],
+    ["탭 닫기", [MOD_KEY, "W"]],
+    ["다음 / 이전 탭", [MOD_KEY, "Tab"]],
+    ["이미지 붙여넣기", [MOD_KEY, "V"]],
+    ["미리보기 토글", [MOD_KEY, "P"]],
+    ["화면 지우기", [MOD_KEY, "K"]],
+    ["명령 팔레트", [MOD_KEY, "Shift", "P"]],
   ];
   return (
     <>
@@ -388,5 +456,171 @@ const PreviewSection: React.FC<{ dark: boolean }> = ({ dark }) => (
     </Row>
   </>
 );
+
+/**
+ * UpdatesSection — Tauri auto-update plugin 기반.
+ * GitHub Release latest.json을 폴링해 새 버전이 있으면 changelog와 함께 표시.
+ * 사용자 동의 시 다운로드 → ED25519 서명 검증 → 자동 재시작.
+ */
+const UpdatesSection: React.FC<{ dark: boolean }> = ({ dark }) => {
+  const [busy, setBusy] = React.useState(false);
+  const [status, setStatus] = React.useState<string>("");
+  const [available, setAvailable] = React.useState<{
+    version: string;
+    notes?: string;
+    date?: string;
+  } | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+  const [installing, setInstalling] = React.useState(false);
+
+  async function checkForUpdate() {
+    setBusy(true);
+    setError(null);
+    setStatus("최신 버전 확인 중…");
+    setAvailable(null);
+    try {
+      const { check } = await import("@tauri-apps/plugin-updater");
+      const update = await check();
+      if (update) {
+        setAvailable({ version: update.version, notes: update.body, date: update.date });
+        setStatus(`v${update.version} 사용 가능`);
+      } else {
+        setStatus("최신 버전입니다.");
+      }
+    } catch (e) {
+      setError(`확인 실패: ${String(e)}`);
+      setStatus("");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function installAndRestart() {
+    setInstalling(true);
+    setError(null);
+    setStatus("다운로드·설치 중…");
+    try {
+      const { check } = await import("@tauri-apps/plugin-updater");
+      const update = await check();
+      if (!update) {
+        setError("다시 확인하니 새 버전이 없습니다.");
+        return;
+      }
+      let downloaded = 0;
+      let total = 0;
+      await update.downloadAndInstall((event) => {
+        if (event.event === "Started") {
+          total = event.data.contentLength ?? 0;
+        } else if (event.event === "Progress") {
+          downloaded += event.data.chunkLength;
+          if (total > 0) {
+            const pct = Math.round((downloaded / total) * 100);
+            setStatus(`다운로드 ${pct}% (${(downloaded / 1024 / 1024).toFixed(1)}MB / ${(total / 1024 / 1024).toFixed(1)}MB)`);
+          }
+        } else if (event.event === "Finished") {
+          setStatus("설치 완료. 재시작 중…");
+        }
+      });
+      const { relaunch } = await import("@tauri-apps/plugin-process");
+      await relaunch();
+    } catch (e) {
+      setError(`설치 실패: ${String(e)}`);
+      setStatus("");
+    } finally {
+      setInstalling(false);
+    }
+  }
+
+  return (
+    <>
+      <SectionHeader
+        dark={dark}
+        title="업데이트"
+        sub="Atelier 새 버전을 확인하고 설치합니다. 모든 업데이트는 ED25519 서명으로 검증됩니다."
+      />
+      <Row
+        dark={dark}
+        label="현재 버전"
+        hint="앱 번들 메타데이터에 박힌 버전 (tauri.conf.json)."
+      >
+        <div className={cls("text-[12px] font-mono", dark ? "text-dink" : "text-ink")}>
+          v0.1.0
+        </div>
+      </Row>
+      <Row
+        dark={dark}
+        label="업데이트 확인"
+        hint="GitHub Release의 latest.json을 폴링합니다. 첫 확인 시 인터넷 연결이 필요합니다."
+      >
+        <button
+          type="button"
+          onClick={checkForUpdate}
+          disabled={busy || installing}
+          className={cls(
+            "h-9 px-3 rounded-[6px] text-[12px] font-medium border whitespace-nowrap disabled:opacity-40",
+            dark ? "border-dline text-dink hover:bg-[#2a2a28]" : "border-line text-ink hover:bg-muted",
+          )}
+          data-testid="settings-check-update"
+        >
+          {busy ? "확인 중…" : "지금 확인"}
+        </button>
+      </Row>
+      {status && !error && (
+        <div
+          className={cls(
+            "mt-4 p-3 rounded-[6px] border text-[12px]",
+            dark ? "bg-dmuted border-dline text-dink" : "bg-surface border-line text-ink",
+          )}
+        >
+          {status}
+        </div>
+      )}
+      {error && (
+        <div className="mt-4 p-3 rounded-[6px] border border-red-300/40 bg-red-50/10 text-[12px] text-red-500">
+          {error}
+        </div>
+      )}
+      {available && (
+        <div
+          className={cls(
+            "mt-4 p-4 rounded-[8px] border",
+            dark ? "bg-dmuted border-dline" : "bg-surface border-line",
+          )}
+          data-testid="settings-update-available"
+          style={{ boxShadow: "0 0 0 1px #c96442" }}
+        >
+          <div className={cls("text-[14px] font-medium mb-1", dark ? "text-dink" : "text-ink")}>
+            v{available.version} 사용 가능
+          </div>
+          {available.date && (
+            <div className={cls("text-[10px] mb-3", dark ? "text-dsub" : "text-sub")}>
+              {available.date}
+            </div>
+          )}
+          {available.notes && (
+            <pre
+              className={cls(
+                "text-[12px] leading-[1.6] whitespace-pre-wrap font-sans mb-4",
+                dark ? "text-dink" : "text-ink",
+              )}
+            >
+              {available.notes}
+            </pre>
+          )}
+          <button
+            type="button"
+            onClick={installAndRestart}
+            disabled={installing}
+            className="h-9 px-4 rounded-[6px] text-[12px] font-medium text-white whitespace-nowrap disabled:opacity-40"
+            style={{ background: "#c96442" }}
+            data-testid="settings-install-update"
+          >
+            {installing ? "설치 중…" : "지금 설치 + 재시작"}
+          </button>
+        </div>
+      )}
+    </>
+  );
+};
 
 export default Settings;

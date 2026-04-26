@@ -1,0 +1,43 @@
+<!--
+  Hero Variant B — 풀스크린 image + overlay typography
+  학파 호환: field-io (큰 typography + 어둠 + 액센트), pentagram (절제 변형 가능)
+  사용 시 학파에 맞춰 색/타입/모션 조정.
+-->
+<section class="hero-b" aria-labelledby="hero-b-title">
+  <div class="hero-b__bg" aria-hidden="true">
+    <img
+      src="https://images.unsplash.com/photo-1551076805-e1869033e561?w=1920&q=85"
+      alt=""
+      loading="eager">
+    <div class="hero-b__veil"></div>
+  </div>
+  <div class="hero-b__content">
+    <p class="hero-b__eyebrow">bykayle · medical simulation</p>
+    <h1 id="hero-b-title" class="hero-b__title">훈련은<br><span>멈추지 않는다.</span></h1>
+    <p class="hero-b__lead">의료진이 한 시간 동안 50개의 임상 변수를 만난다.<br>실수는 시뮬레이터에서, 자신감은 수술실에서.</p>
+    <a href="#demo" class="hero-b__cta">데모 신청 →</a>
+  </div>
+  <div class="hero-b__scroll-hint" aria-hidden="true">
+    <span></span> SCROLL
+  </div>
+</section>
+
+<style>
+  .hero-b { position: relative; min-height: 100vh; overflow: hidden; color: #faf9f5; display: flex; align-items: center; }
+  .hero-b__bg { position: absolute; inset: 0; }
+  .hero-b__bg img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .hero-b__veil { position: absolute; inset: 0; background: linear-gradient(160deg, rgba(10,10,10,0.85) 0%, rgba(10,10,10,0.55) 50%, rgba(201,100,66,0.35) 100%); }
+  .hero-b__content { position: relative; z-index: 1; max-width: 1100px; padding: 96px 64px; margin: 0 auto; width: 100%; }
+  .hero-b__eyebrow { font: 500 11px/16px 'Helvetica Now', Pretendard, Inter, system-ui; letter-spacing: 0.16em; text-transform: uppercase; color: #c96442; margin: 0 0 64px; animation: fadeUp 700ms cubic-bezier(0.22,1,0.36,1) both; }
+  .hero-b__title { font: 700 120px/108px 'PP Mori', 'Helvetica Now', Pretendard, Inter, system-ui; letter-spacing: -0.04em; margin: 0 0 48px; animation: fadeUp 800ms cubic-bezier(0.22,1,0.36,1) 80ms both; }
+  .hero-b__title span { color: #c96442; }
+  .hero-b__lead { font: 400 22px/32px 'Helvetica Now', Pretendard, system-ui; max-width: 640px; color: rgba(250,249,245,0.85); margin: 0 0 64px; animation: fadeUp 800ms cubic-bezier(0.22,1,0.36,1) 160ms both; }
+  .hero-b__cta { display: inline-block; background: #c96442; color: #fff; padding: 24px 48px; font: 600 14px/22px 'Helvetica Now', Pretendard, system-ui; letter-spacing: 0.08em; text-transform: uppercase; border-radius: 999px; text-decoration: none; transition: transform 300ms cubic-bezier(0.22,1,0.36,1), background 250ms; animation: fadeUp 800ms cubic-bezier(0.22,1,0.36,1) 240ms both; }
+  .hero-b__cta:hover { background: #b3553a; transform: translateY(-3px) scale(1.02); }
+  .hero-b__scroll-hint { position: absolute; bottom: 48px; left: 64px; font: 500 11px/16px 'Helvetica Now', Pretendard, system-ui; letter-spacing: 0.32em; color: rgba(250,249,245,0.6); display: flex; align-items: center; gap: 16px; }
+  .hero-b__scroll-hint span { display: inline-block; width: 48px; height: 1px; background: currentColor; animation: scrollPulse 2s ease-in-out infinite; transform-origin: left center; }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes scrollPulse { 0%, 100% { transform: scaleX(0.4); } 50% { transform: scaleX(1); } }
+  @media (max-width: 1024px) { .hero-b__content { padding: 64px 32px; } .hero-b__title { font-size: 80px; line-height: 80px; } }
+  @media (max-width: 480px) { .hero-b__title { font-size: 48px; line-height: 52px; } .hero-b__lead { font-size: 16px; line-height: 24px; } .hero-b__scroll-hint { left: 32px; bottom: 32px; } }
+</style>

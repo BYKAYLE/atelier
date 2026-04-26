@@ -44,6 +44,7 @@ const TopChrome: React.FC<Props> = ({ screen, setScreen, tw, setTw }) => {
         {[
           ["welcome", "홈"],
           ["main", "코드"],
+          ["design", "디자인"],
           ["settings", "설정"],
         ].map(([k, label]) => (
           <button

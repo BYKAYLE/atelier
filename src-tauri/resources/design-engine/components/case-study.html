@@ -1,0 +1,75 @@
+<!--
+  Case Study — before/after 임상 사례 섹션
+  훈련 전후 의료진 술기 변화를 시각화. 좌/우 이미지 + metric 변화.
+-->
+<section class="case" aria-labelledby="case-title">
+  <div class="case__inner">
+    <div class="case__heading">
+      <p class="case__eyebrow">임상 사례 · 2026.03</p>
+      <h2 id="case-title" class="case__title">서울대학교병원 외과<br>레지던트 12명의 6개월</h2>
+      <p class="case__lead">bykayle Lap-S1 도입 전/후, 동일 시나리오에서 12명의 술기 정확도 변화를 측정했습니다.</p>
+    </div>
+
+    <div class="case__grid">
+      <figure class="case__panel case__panel--before">
+        <img src="https://images.unsplash.com/photo-1581595220892-b0739db3ba8c?w=1200&q=80" alt="훈련 시작 시점 — 레지던트가 시뮬레이터로 첫 시도하는 장면" loading="lazy">
+        <figcaption>
+          <span class="case__panel-label">BEFORE</span>
+          <strong>2025.10</strong>
+          <p>기존 카데바 실습 위주, 평균 12회 술기 노출.</p>
+        </figcaption>
+      </figure>
+      <figure class="case__panel case__panel--after">
+        <img src="https://images.unsplash.com/photo-1559757148-5c350d0d3c56?w=1200&q=80" alt="훈련 6개월 후 — 의료진이 협업하며 자신감 있게 수기를 진행하는 장면" loading="lazy">
+        <figcaption>
+          <span class="case__panel-label">AFTER</span>
+          <strong>2026.04</strong>
+          <p>주 3회 시뮬레이션 + AI 평가, 평균 240회 노출.</p>
+        </figcaption>
+      </figure>
+    </div>
+
+    <div class="case__metrics" role="list">
+      <div class="case__metric" role="listitem">
+        <span class="case__metric-label">술기 정확도</span>
+        <strong class="case__metric-value">+38.2%</strong>
+        <span class="case__metric-detail">평균 64.1% → 88.6%</span>
+      </div>
+      <div class="case__metric" role="listitem">
+        <span class="case__metric-label">합병증 시뮬레이션 대응</span>
+        <strong class="case__metric-value">+52.0%</strong>
+        <span class="case__metric-detail">평균 41% → 62%</span>
+      </div>
+      <div class="case__metric" role="listitem">
+        <span class="case__metric-label">자신감 자가평가</span>
+        <strong class="case__metric-value">4.7 / 5.0</strong>
+        <span class="case__metric-detail">시작 시점 2.8 / 5.0</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  .case { background: #faf9f5; padding: 96px 64px; }
+  .case__inner { max-width: 1280px; margin: 0 auto; }
+  .case__heading { max-width: 720px; margin-bottom: 64px; }
+  .case__eyebrow { font: 600 11px/16px Pretendard, Inter, system-ui; letter-spacing: 0.08em; text-transform: uppercase; color: #c96442; margin: 0 0 16px; }
+  .case__title { font: 700 48px/56px Pretendard, Inter, system-ui; letter-spacing: -0.015em; color: #1f1f1d; margin: 0 0 24px; }
+  .case__lead { font: 400 18px/28px Pretendard, system-ui; color: #4a4a47; margin: 0; }
+  .case__grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 64px; }
+  .case__panel { margin: 0; position: relative; border-radius: 16px; overflow: hidden; box-shadow: 0 12px 32px rgba(31,31,29,0.10); }
+  .case__panel img { width: 100%; height: 480px; object-fit: cover; display: block; transition: transform 500ms cubic-bezier(0.22,1,0.36,1); }
+  .case__panel:hover img { transform: scale(1.04); }
+  .case__panel figcaption { position: absolute; left: 0; right: 0; bottom: 0; padding: 32px; background: linear-gradient(to top, rgba(31,31,29,0.92) 0%, rgba(31,31,29,0.0) 100%); color: #fff; }
+  .case__panel-label { display: inline-block; font: 600 11px/16px Pretendard, Inter, system-ui; letter-spacing: 0.16em; padding: 4px 8px; border: 1px solid rgba(255,255,255,0.4); border-radius: 4px; margin-bottom: 12px; }
+  .case__panel--after .case__panel-label { background: #c96442; border-color: #c96442; }
+  .case__panel figcaption strong { display: block; font: 700 24px/32px Pretendard, Inter, system-ui; letter-spacing: -0.005em; margin-bottom: 8px; }
+  .case__panel figcaption p { font: 400 14px/22px Pretendard, system-ui; color: rgba(255,255,255,0.85); margin: 0; }
+  .case__metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; padding: 48px; background: #fff; border: 1px solid #e8e6df; border-radius: 16px; }
+  .case__metric { display: flex; flex-direction: column; gap: 8px; }
+  .case__metric-label { font: 600 11px/16px Pretendard, Inter, system-ui; letter-spacing: 0.08em; text-transform: uppercase; color: #9b9890; }
+  .case__metric-value { font: 700 48px/56px Pretendard, Inter, system-ui; letter-spacing: -0.015em; color: #c96442; font-variant-numeric: tabular-nums; }
+  .case__metric-detail { font: 500 13px/20px Pretendard, system-ui; color: #4a4a47; letter-spacing: 0.01em; }
+  @media (max-width: 1024px) { .case { padding: 64px 32px; } .case__grid { grid-template-columns: 1fr; } .case__metrics { grid-template-columns: 1fr; padding: 32px; } .case__title { font-size: 36px; line-height: 44px; } .case__panel img { height: 360px; } }
+  @media (max-width: 480px) { .case { padding: 48px 16px; } .case__title { font-size: 28px; line-height: 36px; } .case__metric-value { font-size: 36px; line-height: 44px; } }
+</style>

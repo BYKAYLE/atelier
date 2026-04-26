@@ -1,0 +1,24 @@
+target: "http://localhost:1420"
+name: "Atelier frontend smoke (Vite dev, no Tauri runtime)"
+
+browsers: [chromium]
+viewports: [desktop]
+
+actions:
+  - wait: 2000
+
+assertions:
+  - noConsoleErrors
+  - noNetworkErrors
+  - hasElement: "body"
+  - llmJudge:
+      prompt: |
+        This is Atelier's frontend loaded via Vite dev without Tauri. Observe the rendered UI and report:
+        1) Does the chrome/sidebar/top-nav render?
+        2) Is there a visible xterm terminal area, or only an overlay saying Tauri runtime required?
+        3) Any error/crash indicators?
+        Pass if UI renders and (overlay OR xterm) is shown without console errors. Fail if UI is broken.
+      severity: low
+
+strategy: full
+parallel: 1

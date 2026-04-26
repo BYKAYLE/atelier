@@ -2,6 +2,16 @@
 @tailwind components;
 @tailwind utilities;
 
+/* 한글 monospace 번들 — 시스템 한글 monospace 부재 시 fallback(AppleSDGothicNeo)이
+   1cell 폭으로 한글 그려서 xterm 2cell 가정과 어긋남. "한 글 자 사 이" 띄어짐 증상 fix. */
+@font-face {
+  font-family: "Nanum Gothic Coding";
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url("./assets/fonts/NanumGothicCoding.ttf") format("truetype");
+}
+
 :root {
   --accent: #c96442;
   --accent-hover: #b5573a;
@@ -53,99 +63,68 @@ body.dark {
   }
 }
 
-/* xterm 기본 스타일 (xterm.css 의존성 대체 — 최소한만) */
-.xterm {
-  cursor: text;
-  position: relative;
-  user-select: none;
-  -ms-user-select: none;
-  -webkit-user-select: none;
+/* xterm 6.x 공식 CSS는 Main.tsx에서 import. 추가 override만 여기에. */
+
+/* Atelier Design Wizard — Brief PRD viewer 마크다운 스타일.
+   prose 플러그인 미설치 환경 대응. 12px 본문 + 위계 명확. */
+.atelier-markdown h1 {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 0 0 0.6em;
 }
-.xterm.focus,
-.xterm:focus {
-  outline: none;
+.atelier-markdown h2 {
+  font-size: 13.5px;
+  font-weight: 600;
+  margin: 1em 0 0.4em;
 }
-.xterm .xterm-helpers {
-  position: absolute;
-  top: 0;
-  z-index: 5;
+.atelier-markdown h3 {
+  font-size: 12.5px;
+  font-weight: 600;
+  margin: 0.8em 0 0.3em;
 }
-.xterm .xterm-helper-textarea {
-  position: absolute;
-  opacity: 0;
-  left: -9999em;
-  top: 0;
-  width: 0;
-  height: 0;
-  z-index: -5;
+.atelier-markdown p {
+  margin: 0 0 0.6em;
 }
-.xterm .composition-view {
-  background: #000;
-  color: #fff;
-  display: none;
-  position: absolute;
-  white-space: nowrap;
-  z-index: 1;
+.atelier-markdown ul,
+.atelier-markdown ol {
+  margin: 0 0 0.6em;
+  padding-left: 1.4em;
 }
-.xterm .composition-view.active {
-  display: block;
+.atelier-markdown li {
+  margin: 0.1em 0;
 }
-.xterm .xterm-viewport {
-  background-color: #000;
-  overflow-y: scroll;
-  cursor: default;
-  position: absolute;
-  right: 0;
-  left: 0;
-  top: 0;
-  bottom: 0;
+.atelier-markdown strong {
+  font-weight: 600;
 }
-.xterm .xterm-screen {
-  position: relative;
+.atelier-markdown code {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  padding: 0.1em 0.3em;
+  background: rgba(201, 100, 66, 0.08);
+  border-radius: 3px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
-.xterm .xterm-screen canvas {
-  position: absolute;
-  left: 0;
-  top: 0;
+.atelier-markdown pre {
+  font-size: 11px;
+  padding: 0.6em;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 4px;
+  overflow-x: hidden;
+  margin: 0.6em 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
-.xterm .xterm-scroll-area {
-  visibility: hidden;
+.atelier-markdown pre code {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  background: transparent;
+  padding: 0;
 }
-.xterm-char-measure-element {
-  display: inline-block;
-  visibility: hidden;
-  position: absolute;
-  top: 0;
-  left: -9999em;
-  line-height: normal;
+.dark .atelier-markdown pre {
+  background: rgba(255, 255, 255, 0.04);
 }
-.xterm.enable-mouse-events {
-  cursor: default;
-}
-.xterm.xterm-cursor-pointer,
-.xterm .xterm-cursor-pointer {
-  cursor: pointer;
-}
-.xterm.column-select.focus {
-  cursor: crosshair;
-}
-.xterm .xterm-accessibility:not(.debug),
-.xterm .xterm-message {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  right: 0;
-  z-index: 10;
-  color: transparent;
-  pointer-events: none;
-}
-.xterm .xterm-accessibility-tree:not(.debug) *::selection {
-  color: transparent;
-}
-.xterm-dim {
-  opacity: 0.5;
-}
-.xterm-underline-1 {
-  text-decoration: underline;
-}
+

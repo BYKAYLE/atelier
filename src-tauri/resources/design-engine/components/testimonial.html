@@ -1,0 +1,77 @@
+<!--
+  Testimonial — 의료진 후기. 사진 + 인용문 + 직책.
+  3-up grid 또는 단일 spotlight 형태.
+-->
+<section class="testimonial" aria-labelledby="testimonial-title">
+  <div class="testimonial__inner">
+    <p class="testimonial__eyebrow">의료진 후기</p>
+    <h2 id="testimonial-title" class="testimonial__title">"훈련 데이터가 곧 자신감이 됩니다."</h2>
+
+    <div class="testimonial__grid">
+      <article class="testimonial__card">
+        <div class="testimonial__quote-mark" aria-hidden="true">"</div>
+        <blockquote class="testimonial__quote">
+          <p>레지던트 1년차에 가장 두려운 건 ‘처음 보는 변수’였습니다. bykayle 시뮬레이터는 그 변수를 50개 미리 만나게 해줬어요.</p>
+        </blockquote>
+        <figure class="testimonial__person">
+          <img src="https://images.unsplash.com/photo-1612349317150-e413f6a5b16d?w=200&q=85" alt="박지호 외과 레지던트" loading="lazy">
+          <figcaption>
+            <strong>박지호</strong>
+            <span>외과 레지던트 R2 · 서울대학교병원</span>
+          </figcaption>
+        </figure>
+      </article>
+
+      <article class="testimonial__card testimonial__card--featured">
+        <div class="testimonial__quote-mark" aria-hidden="true">"</div>
+        <blockquote class="testimonial__quote">
+          <p>임상 그대로의 환경을 재현하는 게 핵심입니다. 단순 술기 연습이 아니라, 합병증 시나리오까지 재현해내는 게 큰 차이입니다.</p>
+        </blockquote>
+        <figure class="testimonial__person">
+          <img src="https://images.unsplash.com/photo-1559757148-5c350d0d3c56?w=200&q=85" alt="이서연 외과 교수" loading="lazy">
+          <figcaption>
+            <strong>이서연</strong>
+            <span>외과 교수 · 서울대학교병원</span>
+          </figcaption>
+        </figure>
+      </article>
+
+      <article class="testimonial__card">
+        <div class="testimonial__quote-mark" aria-hidden="true">"</div>
+        <blockquote class="testimonial__quote">
+          <p>주 3회 시뮬레이션을 한 결과, 6개월 만에 술기 정확도가 38% 개선됐습니다. 데이터가 말해주는 결과예요.</p>
+        </blockquote>
+        <figure class="testimonial__person">
+          <img src="https://images.unsplash.com/photo-1584820927498-cfe5211fd8bf?w=200&q=85" alt="김도현 외과 레지던트" loading="lazy">
+          <figcaption>
+            <strong>김도현</strong>
+            <span>외과 레지던트 R3 · 분당서울대학교병원</span>
+          </figcaption>
+        </figure>
+      </article>
+    </div>
+  </div>
+</section>
+
+<style>
+  .testimonial { background: #f3f1ea; padding: 96px 64px; }
+  .testimonial__inner { max-width: 1280px; margin: 0 auto; }
+  .testimonial__eyebrow { font: 600 11px/16px Pretendard, Inter, system-ui; letter-spacing: 0.08em; text-transform: uppercase; color: #c96442; margin: 0 0 16px; }
+  .testimonial__title { font: 700 40px/48px Pretendard, Inter, system-ui; letter-spacing: -0.015em; color: #1f1f1d; margin: 0 0 64px; max-width: 720px; }
+  .testimonial__grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; align-items: stretch; }
+  .testimonial__card { background: #fff; border-radius: 16px; padding: 48px 40px; display: flex; flex-direction: column; gap: 24px; box-shadow: 0 1px 2px rgba(31,31,29,0.06); transition: transform 300ms cubic-bezier(0.22,1,0.36,1), box-shadow 300ms; position: relative; }
+  .testimonial__card:hover { transform: translateY(-4px); box-shadow: 0 12px 32px rgba(31,31,29,0.10); }
+  .testimonial__card--featured { background: #1f1f1d; color: #fff; }
+  .testimonial__quote-mark { font: 700 96px/72px 'Times', serif; color: #c96442; opacity: 0.5; user-select: none; }
+  .testimonial__quote { margin: 0; }
+  .testimonial__quote p { font: 500 18px/30px Pretendard, system-ui; color: inherit; margin: 0; letter-spacing: -0.005em; }
+  .testimonial__card--featured .testimonial__quote p { color: #faf9f5; }
+  .testimonial__person { margin: auto 0 0; display: flex; align-items: center; gap: 16px; padding-top: 24px; border-top: 1px solid #e8e6df; }
+  .testimonial__card--featured .testimonial__person { border-top-color: rgba(250,249,245,0.16); }
+  .testimonial__person img { width: 48px; height: 48px; border-radius: 999px; object-fit: cover; }
+  .testimonial__person strong { display: block; font: 700 16px/24px Pretendard, Inter, system-ui; color: inherit; margin-bottom: 2px; }
+  .testimonial__person span { font: 500 13px/20px Pretendard, system-ui; color: #9b9890; letter-spacing: 0.01em; }
+  .testimonial__card--featured .testimonial__person span { color: rgba(250,249,245,0.6); }
+  @media (max-width: 1024px) { .testimonial { padding: 64px 32px; } .testimonial__grid { grid-template-columns: 1fr; } .testimonial__title { font-size: 32px; line-height: 40px; } }
+  @media (max-width: 480px) { .testimonial { padding: 48px 16px; } .testimonial__card { padding: 32px 24px; } .testimonial__title { font-size: 24px; line-height: 32px; } }
+</style>

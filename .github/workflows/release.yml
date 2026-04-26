@@ -1,0 +1,68 @@
+name: Release
+
+# 트리거: v* 태그 푸시 (예: v0.1.1)
+on:
+  push:
+    tags:
+      - "v*"
+  # 수동 트리거도 허용 (Actions 탭에서)
+  workflow_dispatch:
+
+jobs:
+  build-and-release:
+    permissions:
+      contents: write  # GitHub Release 생성/업로드
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: "macos-latest"
+            args: "--target aarch64-apple-darwin"
+            arch_label: "macos-arm64"
+          # Windows 빌드는 후속 단계에서 활성. 우선 macOS arm64만.
+          # - platform: "windows-latest"
+          #   args: ""
+          #   arch_label: "windows-x64"
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup Rust (with target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install npm deps
+        run: npm install --legacy-peer-deps
+
+      - name: Build & sign Tauri bundle
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Atelier ${{ github.ref_name }}"
+          releaseBody: |
+            ## 변경 사항
+            아래 자동 생성된 changelog 또는 직접 수정해주세요.
+
+            <!-- changelog 자동 생성 영역 -->
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true   # latest.json 자동 생성
+          updaterJsonPreferNsis: false
+          args: ${{ matrix.args }}

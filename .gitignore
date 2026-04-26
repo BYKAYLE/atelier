@@ -28,3 +28,16 @@ src-tauri/WixTools/
 # OS
 .DS_Store
 Thumbs.db
+
+# Probe / QA artifacts (실행 결과물)
+probe-runs/
+probe-reports/
+
+# Tauri updater 서명 키 — 프로덕션 키는 절대 커밋 금지
+*.key
+*.pub
+src-tauri/keys/
+.tauri-signing/
+
+# 런타임 디버그 dump
+/tmp/atelier-*.json
