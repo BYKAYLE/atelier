@@ -3,6 +3,8 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { readDesignResource, saveDesignArtifact } from "../../../lib/tauri";
 import { askDesignClaude } from "../designClaude";
 import { PHILOSOPHIES, type DesignProject, type Philosophy } from "../useDesignProject";
+import { phiToFile, stripHtmlFence } from "../utils";
+import { useAutoTrigger, useAutoAdvance } from "../useAutoStage";
 
 interface Props {
   project: DesignProject;
@@ -22,6 +24,23 @@ interface Props {
 export default function Wireframe({ project, onChange, onPreview, onPrev, onNext, dark }: Props) {
   const [busyPhilosophy, setBusyPhilosophy] = useState<Philosophy | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Auto pipeline: 자동 모드 mount 시 모든 학파(3안) generateAll 단발 실행.
+  useAutoTrigger(
+    !!project.autoMode &&
+      !!project.brief &&
+      Object.keys(project.wireframes).length === 0 &&
+      !busyPhilosophy,
+    () => generateAll(),
+  );
+  // 학파 선택되면 자동으로 다음 단계 진행 (Stage 4 hi-fi)
+  useAutoAdvance(
+    !!project.autoMode &&
+      !!project.selectedWireframe &&
+      Object.keys(project.wireframes).length > 0 &&
+      !busyPhilosophy,
+    onNext,
+  );
 
   async function generateOne(phi: Philosophy) {
     if (!project.brief) {
@@ -57,7 +76,7 @@ export default function Wireframe({ project, onChange, onPreview, onPrev, onNext
 
       const html = await askDesignClaude(sysPrompt, userInput);
       // claude가 ```html ... ``` 으로 감쌀 수 있어 제거.
-      const cleaned = stripCodeFence(html);
+      const cleaned = stripHtmlFence(html);
       const savedPath = await saveDesignArtifact(
         project.projectId,
         `wireframe/${phi}.html`,
@@ -217,22 +236,3 @@ export default function Wireframe({ project, onChange, onPreview, onPrev, onNext
   );
 }
 
-function phiToFile(phi: Philosophy): string {
-  switch (phi) {
-    case "pentagram":
-      return "01-pentagram";
-    case "field-io":
-      return "02-field-io";
-    case "kenya-hara":
-      return "03-kenya-hara";
-    case "linear":
-      return "04-linear";
-  }
-}
-
-function stripCodeFence(s: string): string {
-  // ```html ... ``` 또는 ``` ... ``` 제거
-  const m = s.match(/```(?:html|HTML)?\s*\n([\s\S]*?)\n```/);
-  if (m) return m[1];
-  return s.trim();
-}

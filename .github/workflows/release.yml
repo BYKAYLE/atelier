@@ -19,10 +19,9 @@ jobs:
           - platform: "macos-latest"
             args: "--target aarch64-apple-darwin"
             arch_label: "macos-arm64"
-          # Windows 빌드는 후속 단계에서 활성. 우선 macOS arm64만.
-          # - platform: "windows-latest"
-          #   args: ""
-          #   arch_label: "windows-x64"
+          - platform: "windows-latest"
+            args: ""
+            arch_label: "windows-x64"
 
     runs-on: ${{ matrix.platform }}
     steps:

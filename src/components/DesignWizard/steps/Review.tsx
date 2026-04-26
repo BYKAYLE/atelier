@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import {
   readDesignResource,
@@ -9,6 +9,8 @@ import {
 } from "../../../lib/tauri";
 import { askDesignClaude } from "../designClaude";
 import { PHILOSOPHIES, type DesignProject, type Philosophy } from "../useDesignProject";
+import { phiToFile, stripCodeFence, stripHtmlFence } from "../utils";
+import { useAutoTrigger } from "../useAutoStage";
 
 interface Props {
   project: DesignProject;
@@ -33,57 +35,172 @@ export default function Review({ project, onChange, onPrev, dark }: Props) {
 
   const philLabel = (id: Philosophy) => PHILOSOPHIES.find((p) => p.id === id)?.label ?? id;
 
+  // Auto pipeline 종료 단계: review 자동 generate (단발 트리거)
+  useAutoTrigger(
+    !!project.autoMode &&
+      !!project.brief &&
+      !!project.selectedWireframe &&
+      !project.review &&
+      !busy,
+    () => generate(),
+  );
+
+  // review 완료되면 autoMode 자동 해제 (재진입 방지 + 사용자에게 컨트롤 반환)
+  // useAutoAdvance와 다르게 onChange 호출이라 별도 useEffect 유지.
+  useEffect(() => {
+    if (project.autoMode && project.review && !busy) {
+      onChange({ autoMode: false });
+    }
+  }, [project.autoMode, project.review, busy, onChange]);
+
   async function generate() {
     if (!project.brief) {
       setError("Stage 1 Brief가 비어 있습니다.");
       return;
     }
     if (!project.selectedWireframe) {
-      setError("Stage 3에서 wireframe을 선택해주세요.");
+      setError("Stage 3에서 학파를 선택해주세요.");
       return;
     }
     setBusy(true);
     setError(null);
     try {
       const phi = project.selectedWireframe;
-      const sysPrompt = await readDesignResource("prompts/06-review.md");
       const philosophyDoc = await readDesignResource(`philosophies/${phiToFile(phi)}.md`);
       const brand = await readDesignResource("brand/bykayle.md");
-
-      const wireframe = project.wireframes[phi];
-      const wireframeHtml = wireframe ? await readTextFile(wireframe.path) : "(없음)";
-      const hifiHtml = project.hifi ? await readTextFile(project.hifi.path) : "(Stage 4 미수행)";
-      const motionHtml = project.motion ? await readTextFile(project.motion.path) : "(Stage 5 미수행)";
       const systemTokens = project.system?.content ?? "(Stage 2 미수행)";
 
-      const userInput = [
-        "## BRIEF",
-        project.brief,
-        "",
-        "## SYSTEM_TOKENS",
-        systemTokens,
-        "",
-        "## SELECTED_PHILOSOPHY",
-        phi,
-        "",
-        "## PHILOSOPHY_DOC",
-        philosophyDoc,
-        "",
-        "## BRAND_PACK",
-        brand,
-        "",
-        "## WIREFRAME_HTML",
-        wireframeHtml,
-        "",
-        "## HIFI_HTML",
-        hifiHtml,
-        "",
-        "## MOTION_HTML",
-        motionHtml,
-        "",
-        "위 입력으로 Stage 6 review markdown 보고서를 출력하세요.",
-      ].join("\n");
+      let userInput: string;
+      let promptPath: string;
 
+      if (project.outputType === "ci") {
+        // CI 모드 — brand system + assets HTML 검토
+        promptPath = "prompts/ci/06-review.md";
+        const ciSystemMd = project.ci?.systemMd ?? "(Stage 3 미수행)";
+        const ciAssetsHtml = project.ci?.applicationsMd
+          ? await readTextFile(project.ci.applicationsMd)
+          : "(Stage 4 미수행)";
+        userInput = [
+          "## BRIEF",
+          project.brief,
+          "",
+          "## SYSTEM_TOKENS",
+          systemTokens,
+          "",
+          "## SELECTED_PHILOSOPHY",
+          phi,
+          "",
+          "## PHILOSOPHY_DOC",
+          philosophyDoc,
+          "",
+          "## BRAND_PACK",
+          brand,
+          "",
+          "## CI_SYSTEM_MD",
+          ciSystemMd,
+          "",
+          "## CI_ASSETS_HTML",
+          ciAssetsHtml,
+          "",
+          "위 입력으로 CI Review markdown 보고서를 출력하세요.",
+        ].join("\n");
+      } else if (project.outputType === "app") {
+        promptPath = "prompts/app/06-review.md";
+        const appFlowMd = project.app?.flowMd ?? "(Stage 3 미수행)";
+        const appScreensHtml = project.app?.screensPath
+          ? await readTextFile(project.app.screensPath)
+          : "(Stage 4 미수행)";
+        userInput = [
+          "## BRIEF",
+          project.brief,
+          "",
+          "## SYSTEM_TOKENS",
+          systemTokens,
+          "",
+          "## SELECTED_PHILOSOPHY",
+          phi,
+          "",
+          "## PHILOSOPHY_DOC",
+          philosophyDoc,
+          "",
+          "## BRAND_PACK",
+          brand,
+          "",
+          "## APP_FLOW_MD",
+          appFlowMd,
+          "",
+          "## APP_SCREENS_HTML",
+          appScreensHtml,
+          "",
+          "위 입력으로 App Review markdown 보고서를 출력하세요.",
+        ].join("\n");
+      } else if (project.outputType === "print") {
+        promptPath = "prompts/print/06-review.md";
+        const printLayoutMd = project.print?.layoutMd ?? "(Stage 3 미수행)";
+        const printFinalHtml = project.print?.finalPath
+          ? await readTextFile(project.print.finalPath)
+          : "(Stage 4 미수행)";
+        userInput = [
+          "## BRIEF",
+          project.brief,
+          "",
+          "## SYSTEM_TOKENS",
+          systemTokens,
+          "",
+          "## SELECTED_PHILOSOPHY",
+          phi,
+          "",
+          "## PHILOSOPHY_DOC",
+          philosophyDoc,
+          "",
+          "## BRAND_PACK",
+          brand,
+          "",
+          "## PRINT_LAYOUT_MD",
+          printLayoutMd,
+          "",
+          "## PRINT_FINAL_HTML",
+          printFinalHtml,
+          "",
+          "위 입력으로 Print Review markdown 보고서를 출력하세요.",
+        ].join("\n");
+      } else {
+        // Web 모드 — 기존 흐름
+        promptPath = "prompts/06-review.md";
+        const wireframe = project.wireframes[phi];
+        const wireframeHtml = wireframe ? await readTextFile(wireframe.path) : "(없음)";
+        const hifiHtml = project.hifi ? await readTextFile(project.hifi.path) : "(Stage 4 미수행)";
+        const motionHtml = project.motion ? await readTextFile(project.motion.path) : "(Stage 5 미수행)";
+        userInput = [
+          "## BRIEF",
+          project.brief,
+          "",
+          "## SYSTEM_TOKENS",
+          systemTokens,
+          "",
+          "## SELECTED_PHILOSOPHY",
+          phi,
+          "",
+          "## PHILOSOPHY_DOC",
+          philosophyDoc,
+          "",
+          "## BRAND_PACK",
+          brand,
+          "",
+          "## WIREFRAME_HTML",
+          wireframeHtml,
+          "",
+          "## HIFI_HTML",
+          hifiHtml,
+          "",
+          "## MOTION_HTML",
+          motionHtml,
+          "",
+          "위 입력으로 Stage 6 review markdown 보고서를 출력하세요.",
+        ].join("\n");
+      }
+
+      const sysPrompt = await readDesignResource(promptPath);
       const md = await askDesignClaude(sysPrompt, userInput);
       const cleaned = stripCodeFence(md);
       const score = parseScore(cleaned);
@@ -457,30 +574,6 @@ export default function Review({ project, onChange, onPrev, dark }: Props) {
   );
 }
 
-function phiToFile(phi: Philosophy): string {
-  switch (phi) {
-    case "pentagram":
-      return "01-pentagram";
-    case "field-io":
-      return "02-field-io";
-    case "kenya-hara":
-      return "03-kenya-hara";
-    case "linear":
-      return "04-linear";
-  }
-}
-
-function stripCodeFence(s: string): string {
-  const m = s.match(/```(?:markdown|md)?\s*\n([\s\S]*?)\n```/);
-  if (m) return m[1];
-  return s.trim();
-}
-
-function stripHtmlFence(s: string): string {
-  const m = s.match(/```(?:html|HTML)?\s*\n([\s\S]*?)\n```/);
-  if (m) return m[1];
-  return s.trim();
-}
 
 /**
  * "85/100" 또는 "**85/100**" 패턴에서 첫 번째 점수 파싱.

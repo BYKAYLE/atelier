@@ -10,6 +10,28 @@ description: 사용자 자연어 입력으로부터 PRD 초안 + 페르소나 + 
 사용자가 자연어로 만들고 싶은 것을 묘사했을 때, 디자이너가 다음 단계
 (System Design → Wireframe)로 넘어가기 위해 필요한 핵심 정보를 추출하세요.
 
+## 입력 (다음 두 형태 중 하나)
+
+### 형태 A: 단순 brief (질문 단계 건너뛴 경우)
+사용자 자연어 brief 한 덩어리
+
+### 형태 B: brief + 명확화 답변 (Stage 1A 거친 경우)
+```
+## ORIGINAL_BRIEF
+{사용자 자연어}
+
+## CLARIFICATION_ANSWERS
+- **{질문}**: {답변 또는 "(시스템에 위임)"}
+- **{질문}**: {답변}
+- ...
+
+## OUTPUT_TYPE
+web | ci | app | print
+```
+
+형태 B의 경우 — **CLARIFICATION_ANSWERS의 모든 항목을 PRD 본문에 자연스럽게 통합**.
+"(시스템에 위임)"은 brief 톤에서 추론해 채움. 답변을 무시하면 PRD 무용지물.
+
 ## 출력 형식 (반드시 마크다운, 한국어)
 
 ```markdown

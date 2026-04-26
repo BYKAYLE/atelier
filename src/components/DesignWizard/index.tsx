@@ -7,6 +7,13 @@ import HiFi from "./steps/HiFi";
 import Motion from "./steps/Motion";
 import Review from "./steps/Review";
 import Gallery from "./steps/Gallery";
+import CIBrandSystem from "./steps/CIBrandSystem";
+import CIAssets from "./steps/CIAssets";
+import AppFlow from "./steps/AppFlow";
+import AppScreens from "./steps/AppScreens";
+import PrintLayout from "./steps/PrintLayout";
+import PrintFinal from "./steps/PrintFinal";
+import AutoOverlay from "./AutoOverlay";
 
 interface Props {
   dark: boolean;
@@ -58,6 +65,19 @@ export default function DesignWizard({ dark, onPreviewUrl }: Props) {
             </div>
           </div>
           <div className="flex items-center gap-1 shrink-0">
+            {project.autoMode && (
+              <button
+                type="button"
+                onClick={() => update({ autoMode: false })}
+                className="text-[10.5px] px-2 h-6 rounded-[4px] text-white whitespace-nowrap inline-flex items-center gap-1"
+                style={{ background: accent }}
+                title="자동 모드 진행 중. 클릭해서 중단"
+                data-testid="design-auto-indicator"
+              >
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-white animate-pulse"></span>
+                AUTO
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setView(view === "wizard" ? "gallery" : "wizard")}
@@ -100,7 +120,15 @@ export default function DesignWizard({ dark, onPreviewUrl }: Props) {
               style={isCurrent ? { boxShadow: `0 0 0 1px ${accent}` } : undefined}
               data-testid={`design-step-${s.id}`}
             >
-              <div className={`text-[9px] font-mono ${subtle}`}>{s.id}</div>
+              <div className={`text-[9px] font-mono ${subtle} flex items-center gap-1`}>
+                {s.id}
+                {project.autoMode && isCurrent && !isDone && (
+                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" className="animate-spin" style={{ color: accent }}>
+                    <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" strokeOpacity="0.2" />
+                    <path d="M21 12a9 9 0 0 1-9 9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                  </svg>
+                )}
+              </div>
               <div className={`text-[11px] font-medium ${ink}`}>
                 {s.label} {isDone && <span style={{ color: accent }}>✓</span>}
               </div>
@@ -143,7 +171,7 @@ export default function DesignWizard({ dark, onPreviewUrl }: Props) {
             dark={dark}
           />
         )}
-        {project.stage === 3 && (
+        {project.stage === 3 && project.outputType === "web" && (
           <Wireframe
             project={project}
             onChange={update}
@@ -153,7 +181,34 @@ export default function DesignWizard({ dark, onPreviewUrl }: Props) {
             dark={dark}
           />
         )}
-        {project.stage === 4 && (
+        {project.stage === 3 && project.outputType === "ci" && (
+          <CIBrandSystem
+            project={project}
+            onChange={update}
+            onPrev={() => gotoPrevActive(3)}
+            onNext={() => gotoNextActive(3)}
+            dark={dark}
+          />
+        )}
+        {project.stage === 3 && project.outputType === "app" && (
+          <AppFlow
+            project={project}
+            onChange={update}
+            onPrev={() => gotoPrevActive(3)}
+            onNext={() => gotoNextActive(3)}
+            dark={dark}
+          />
+        )}
+        {project.stage === 3 && project.outputType === "print" && (
+          <PrintLayout
+            project={project}
+            onChange={update}
+            onPrev={() => gotoPrevActive(3)}
+            onNext={() => gotoNextActive(3)}
+            dark={dark}
+          />
+        )}
+        {project.stage === 4 && project.outputType === "web" && (
           <HiFi
             project={project}
             onChange={update}
@@ -163,7 +218,37 @@ export default function DesignWizard({ dark, onPreviewUrl }: Props) {
             dark={dark}
           />
         )}
-        {project.stage === 5 && (
+        {project.stage === 4 && project.outputType === "ci" && (
+          <CIAssets
+            project={project}
+            onChange={update}
+            onPrev={() => gotoPrevActive(4)}
+            onNext={() => gotoNextActive(4)}
+            onPreview={onPreviewUrl}
+            dark={dark}
+          />
+        )}
+        {project.stage === 4 && project.outputType === "app" && (
+          <AppScreens
+            project={project}
+            onChange={update}
+            onPrev={() => gotoPrevActive(4)}
+            onNext={() => gotoNextActive(4)}
+            onPreview={onPreviewUrl}
+            dark={dark}
+          />
+        )}
+        {project.stage === 4 && project.outputType === "print" && (
+          <PrintFinal
+            project={project}
+            onChange={update}
+            onPrev={() => gotoPrevActive(4)}
+            onNext={() => gotoNextActive(4)}
+            onPreview={onPreviewUrl}
+            dark={dark}
+          />
+        )}
+        {project.stage === 5 && project.outputType === "web" && (
           <Motion
             project={project}
             onChange={update}
@@ -172,6 +257,23 @@ export default function DesignWizard({ dark, onPreviewUrl }: Props) {
             onPreview={onPreviewUrl}
             dark={dark}
           />
+        )}
+        {project.stage === 5 && project.outputType !== "web" && (
+          <div className={`p-4 text-[12px] ${subtle}`}>
+            <div className={`text-[14px] mb-2 ${ink}`}>{
+              project.outputType === "ci" ? "CI 모드는 Motion 단계 사용 안 함" :
+              project.outputType === "app" ? "App 모드는 Motion을 Stage 4 안에서 처리" :
+              "Print 모드는 정적 인쇄물 — Motion 단계 사용 안 함"
+            }</div>
+            정적 산출물 중심이므로 Motion 단계는 스킵하고 바로 Review로 이동합니다.
+            <button
+              type="button"
+              onClick={() => gotoNextActive(5)}
+              className={`block mt-3 h-9 px-4 rounded-[6px] text-[12px] border ${dark ? "border-dline text-dink hover:bg-[#2a2a28]" : "border-line text-ink hover:bg-muted"}`}
+            >
+              Review →
+            </button>
+          </div>
         )}
         {project.stage === 6 && (
           <Review
@@ -183,6 +285,12 @@ export default function DesignWizard({ dark, onPreviewUrl }: Props) {
         )}
       </>)}
       </div>
+
+      <AutoOverlay
+        project={project}
+        onCancel={() => update({ autoMode: false })}
+        dark={dark}
+      />
     </div>
   );
 }
@@ -190,9 +298,19 @@ export default function DesignWizard({ dark, onPreviewUrl }: Props) {
 function isStageDone(project: ReturnType<typeof useDesignProject>["project"], stage: Stage): boolean {
   if (stage === 1) return !!project.brief;
   if (stage === 2) return !!project.system;
-  if (stage === 3) return Object.keys(project.wireframes).length > 0;
-  if (stage === 4) return !!project.hifi;
-  if (stage === 5) return !!project.motion;
+  if (stage === 3) {
+    if (project.outputType === "ci") return !!project.ci?.systemMd;
+    if (project.outputType === "app") return !!project.app?.flowMd;
+    if (project.outputType === "print") return !!project.print?.layoutMd;
+    return Object.keys(project.wireframes).length > 0;
+  }
+  if (stage === 4) {
+    if (project.outputType === "ci") return !!project.ci?.applicationsMd;
+    if (project.outputType === "app") return !!project.app?.screensPath;
+    if (project.outputType === "print") return !!project.print?.finalPath;
+    return !!project.hifi;
+  }
+  if (stage === 5) return project.outputType !== "web" ? true : !!project.motion;
   if (stage === 6) return !!project.review;
   return false;
 }

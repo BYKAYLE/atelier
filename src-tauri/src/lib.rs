@@ -216,9 +216,17 @@ async fn open_design_project_dir(project_id: String) -> std::result::Result<Stri
             .spawn()
             .map_err(|e| format!("open: {e}"))?;
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     {
-        // 비macOS는 경로만 반환 (UI에서 안내)
+        std::process::Command::new("explorer.exe")
+            .arg(&target)
+            .spawn()
+            .map_err(|e| format!("explorer: {e}"))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // xdg-open. 없으면 무시 (경로만 반환)
+        let _ = std::process::Command::new("xdg-open").arg(&target).spawn();
     }
     Ok(target.to_string_lossy().into_owned())
 }
@@ -263,24 +271,53 @@ async fn export_design_project_zip(
     let zip_name = format!("atelier-{}-{}.zip", project_id, ts);
     let zip_path = downloads.join(&zip_name);
 
-    // system zip — `cd projects_root && zip -r <out> <project_id>`
-    let status = std::process::Command::new("zip")
-        .current_dir(&projects_root)
-        .arg("-r")
-        .arg("-q")
-        .arg(&zip_path)
-        .arg(&project_id)
-        .status()
-        .map_err(|e| format!("zip spawn: {e}"))?;
-    if !status.success() {
-        return Err(format!("zip failed (exit {:?})", status.code()));
+    // 압축 — OS별 다른 도구. macOS/Linux는 `zip`, Windows는 PowerShell Compress-Archive
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let status = std::process::Command::new("zip")
+            .current_dir(&projects_root)
+            .arg("-r")
+            .arg("-q")
+            .arg(&zip_path)
+            .arg(&project_id)
+            .status()
+            .map_err(|e| format!("zip spawn: {e}"))?;
+        if !status.success() {
+            return Err(format!("zip failed (exit {:?})", status.code()));
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // PowerShell Compress-Archive — Windows 기본 내장
+        let src = project_dir.to_string_lossy().to_string();
+        let dst = zip_path.to_string_lossy().to_string();
+        let ps_cmd = format!(
+            "Compress-Archive -Path '{}' -DestinationPath '{}' -Force",
+            src, dst
+        );
+        let status = std::process::Command::new("powershell")
+            .arg("-NoProfile")
+            .arg("-Command")
+            .arg(&ps_cmd)
+            .status()
+            .map_err(|e| format!("powershell spawn: {e}"))?;
+        if !status.success() {
+            return Err(format!("Compress-Archive failed (exit {:?})", status.code()));
+        }
     }
 
+    // 결과 zip을 OS 파일 탐색기에서 reveal
     #[cfg(target_os = "macos")]
     {
         let _ = std::process::Command::new("open")
             .arg("-R")
             .arg(&zip_path)
+            .spawn();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("explorer.exe")
+            .arg(format!("/select,{}", zip_path.to_string_lossy()))
             .spawn();
     }
 
@@ -380,7 +417,7 @@ async fn save_profiles(json: String) -> std::result::Result<(), String> {
 }
 
 /// claude --print 모드 단발 호출. stdin으로 system+user prompt 전달, stdout 응답 한 번에 받기.
-/// PTY/TUI 의존 없음. 한글/긴 prompt 모두 안전. timeout 5분.
+/// PTY/TUI 의존 없음. 한글/긴 prompt 모두 안전. timeout 10분.
 #[tauri::command]
 async fn design_claude_call(
     system_prompt: String,
@@ -423,8 +460,8 @@ async fn design_claude_call(
         });
     }
 
-    // 5분 timeout
-    let timeout = Duration::from_secs(300);
+    // 10분 timeout (큰 컨텍스트 + 50KB+ 출력 hi-fi/CI assets/Print final 대응)
+    let timeout = Duration::from_secs(600);
     let start = std::time::Instant::now();
     loop {
         match child.try_wait() {
@@ -432,7 +469,7 @@ async fn design_claude_call(
             Ok(None) => {
                 if start.elapsed() > timeout {
                     let _ = child.kill();
-                    return Err("claude 응답 5분 초과".into());
+                    return Err("claude 응답 10분 초과".into());
                 }
                 std::thread::sleep(Duration::from_millis(200));
             }

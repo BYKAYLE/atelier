@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { readDesignResource, saveDesignArtifact, readTextFile } from "../../../lib/tauri";
-import { askDesignClaude } from "../designClaude";
+import { readDesignResource, saveDesignArtifact } from "../../../lib/tauri";
+import { askDesignClaude, validateHtmlOutput } from "../designClaude";
 import { PHILOSOPHIES, type DesignProject, type Philosophy } from "../useDesignProject";
 import { phiToFile, stripHtmlFence } from "../utils";
 import { useAutoTrigger, useAutoAdvance } from "../useAutoStage";
@@ -16,50 +16,52 @@ interface Props {
 }
 
 /**
- * Stage 5 — Motion.
- * Stage 4 hi-fi HTML에 학파 톤에 맞는 모션·micro-interaction·scroll reveal을 입힌 단일 HTML 생성.
- * 콘텐츠/레이아웃/색/타이포는 보존, 모션 추가만.
+ * Stage 4 — Print Final (outputType === "print").
+ * Layout markdown → 인쇄용 HTML (bleed + Print CSS) 정밀화.
  */
-export default function Motion({ project, onChange, onPrev, onNext, onPreview, dark }: Props) {
+export default function PrintFinal({ project, onChange, onPrev, onNext, onPreview, dark }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const philLabel = (id: Philosophy) => PHILOSOPHIES.find((p) => p.id === id)?.label ?? id;
+  const selected = project.selectedWireframe;
+
   useAutoTrigger(
     !!project.autoMode &&
-      !!project.hifi &&
-      !!project.brief &&
-      !project.motion &&
+      !!project.print?.layoutMd &&
+      !!selected &&
+      !project.print?.finalPath &&
       !busy,
     () => generate(),
   );
-  useAutoAdvance(!!project.autoMode && !!project.motion && !busy, onNext);
-
-  const philLabel = (id: Philosophy) => PHILOSOPHIES.find((p) => p.id === id)?.label ?? id;
+  useAutoAdvance(
+    !!project.autoMode && !!project.print?.finalPath && !busy,
+    onNext,
+  );
 
   async function generate() {
-    if (!project.hifi) {
-      setError("Stage 4 Hi-fi HTML이 없습니다. 먼저 Hi-fi를 생성해주세요.");
+    if (!project.print?.layoutMd) {
+      setError("Stage 3 layout이 비어 있습니다.");
       return;
     }
-    if (!project.brief) {
-      setError("Stage 1 Brief가 비어 있습니다.");
+    if (!selected) {
+      setError("선택된 학파가 없습니다.");
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      const phi = project.hifi.basePhilosophy;
-      const sysPrompt = await readDesignResource("prompts/05-motion.md");
-      const philosophyDoc = await readDesignResource(`philosophies/${phiToFile(phi)}.md`);
+      const sysPrompt = await readDesignResource("prompts/print/04-final.md");
+      const philosophyDoc = await readDesignResource(`philosophies/${phiToFile(selected)}.md`);
       const brand = await readDesignResource("brand/bykayle.md");
-      const hifiHtml = await readTextFile(project.hifi.path);
+      const tailwindBase = await readDesignResource("component-library/00-tailwind-base.md");
 
       const userInput = [
         "## BRIEF",
-        project.brief,
+        project.brief ?? "",
         "",
         "## PHILOSOPHY_NAME",
-        phi,
+        selected,
         "",
         "## PHILOSOPHY_DOC",
         philosophyDoc,
@@ -67,61 +69,71 @@ export default function Motion({ project, onChange, onPrev, onNext, onPreview, d
         "## BRAND_PACK",
         brand,
         "",
-        "## HIFI_HTML",
-        hifiHtml,
+        "## COMPONENT_LIBRARY",
+        tailwindBase,
         "",
-        "위 입력으로 Stage 5 motion HTML 한 개를 출력하세요. 콘텐츠/레이아웃/색/타이포는 보존하고 모션만 추가합니다.",
+        "## PRINT_LAYOUT_MD",
+        project.print.layoutMd,
+        "",
+        "위 입력으로 Print final HTML을 출력하세요. mm 사이즈를 px로 정확히 환산하고 bleed/Print CSS 포함.",
       ].join("\n");
 
       const html = await askDesignClaude(sysPrompt, userInput);
       const cleaned = stripHtmlFence(html);
+      validateHtmlOutput(cleaned);
       const savedPath = await saveDesignArtifact(
         project.projectId,
-        `motion/${phi}.html`,
+        `print/${selected}-final.html`,
         cleaned,
       );
       onChange({
-        motion: { path: savedPath, basePhilosophy: phi, createdAt: Date.now() },
+        print: {
+          ...project.print,
+          finalPath: savedPath,
+          createdAt: Date.now(),
+        },
       });
     } catch (e) {
-      setError(String(e));
+      setError(`Final 생성 실패: ${String(e)}`);
     } finally {
       setBusy(false);
     }
   }
 
-  function previewMotion() {
-    if (!project.motion) return;
-    onPreview(convertFileSrc(project.motion.path));
+  function previewFinal() {
+    if (!project.print?.finalPath) return;
+    onPreview(convertFileSrc(project.print.finalPath));
   }
 
   const subtle = dark ? "text-dsub" : "text-sub";
   const ink = dark ? "text-dink" : "text-ink";
   const surface = dark ? "bg-dmuted border-dline" : "bg-surface border-line";
   const accent = "#c96442";
+  const ready = !!project.print?.layoutMd && !!selected;
+  const generated = !!project.print?.finalPath;
 
   return (
-    <div className="flex flex-col gap-3 p-3">
+    <div className="flex flex-col gap-3 p-3" data-testid="design-print-final">
       <div>
-        <div className={`text-[11px] uppercase tracking-wider ${subtle}`}>Stage 5</div>
-        <div className={`text-[14px] font-medium ${ink}`}>Motion — 애니메이션</div>
+        <div className={`text-[11px] uppercase tracking-wider ${subtle}`}>Stage 4 · Print</div>
+        <div className={`text-[14px] font-medium ${ink}`}>Final — 인쇄용 정밀화</div>
         <div className={`text-[11px] mt-1 ${subtle}`}>
-          Hi-fi HTML에 학파 톤에 맞는 scroll reveal · hover · micro-interaction을 입힙니다. 콘텐츠는 보존됩니다.
+          Layout 기반으로 mm 사이즈·bleed·Print CSS를 적용한 인쇄용 HTML 생성.
         </div>
       </div>
 
       <div className={`p-3 rounded-[8px] border ${surface}`}>
-        <div className={`text-[10px] uppercase tracking-wider ${subtle} mb-2`}>입력 hi-fi</div>
-        {project.hifi ? (
+        <div className={`text-[10px] uppercase tracking-wider ${subtle} mb-2`}>입력 layout</div>
+        {project.print?.layoutMd ? (
           <div className="flex flex-col gap-1">
-            <div className={`text-[12px] font-medium ${ink}`}>{philLabel(project.hifi.basePhilosophy)}</div>
-            <div className={`text-[10px] font-mono truncate ${subtle}`} title={project.hifi.path}>
-              {project.hifi.path.split("/").slice(-3).join("/")}
+            <div className={`text-[12px] font-medium ${ink}`}>
+              {selected ? philLabel(selected) : "—"} · 사이즈·grid·위계 정의 완료
             </div>
+            <div className={`text-[10px] ${subtle}`}>{project.print.layoutMd.length}자</div>
           </div>
         ) : (
           <div className={`text-[11px] ${subtle}`}>
-            Stage 4에서 Hi-fi를 먼저 생성해주세요.
+            Stage 3에서 layout을 먼저 생성해주세요.
           </div>
         )}
       </div>
@@ -130,19 +142,19 @@ export default function Motion({ project, onChange, onPrev, onNext, onPreview, d
         <button
           type="button"
           onClick={generate}
-          disabled={busy || !project.hifi || !project.brief}
+          disabled={busy || !ready}
           className="h-9 px-4 rounded-[6px] text-[12px] font-medium text-white disabled:opacity-40 whitespace-nowrap"
           style={{ background: accent }}
-          data-testid="design-motion-generate"
+          data-testid="design-print-final-generate"
         >
-          {busy ? "모션 적용 중…" : project.motion ? "재생성" : "모션 적용"}
+          {busy ? "Final 생성 중…" : generated ? "재생성" : "Final 생성"}
         </button>
-        {project.motion && !busy && (
+        {generated && !busy && (
           <button
             type="button"
-            onClick={previewMotion}
+            onClick={previewFinal}
             className={`h-9 px-4 rounded-[6px] text-[12px] font-medium border whitespace-nowrap ${dark ? "border-dline text-dink hover:bg-[#2a2a28]" : "border-line text-ink hover:bg-muted"}`}
-            data-testid="design-motion-preview"
+            data-testid="design-print-final-preview"
           >
             Preview ↗
           </button>
@@ -152,14 +164,14 @@ export default function Motion({ project, onChange, onPrev, onNext, onPreview, d
           onClick={onPrev}
           className={`h-9 px-4 rounded-[6px] text-[12px] font-medium border whitespace-nowrap ${dark ? "border-dline text-dink hover:bg-[#2a2a28]" : "border-line text-ink hover:bg-muted"}`}
         >
-          ← Hi-fi
+          ← Layout
         </button>
-        {project.motion && !busy && (
+        {generated && !busy && (
           <button
             type="button"
             onClick={onNext}
             className={`h-9 px-4 rounded-[6px] text-[12px] font-medium border whitespace-nowrap ${dark ? "border-dline text-dink hover:bg-[#2a2a28]" : "border-line text-ink hover:bg-muted"}`}
-            data-testid="design-motion-next"
+            data-testid="design-print-final-next"
           >
             Review →
           </button>
@@ -172,12 +184,12 @@ export default function Motion({ project, onChange, onPrev, onNext, onPreview, d
         </div>
       )}
 
-      {project.motion && (
-        <div className={`p-3 rounded-[8px] border ${surface}`} data-testid="design-motion-result">
+      {generated && (
+        <div className={`p-3 rounded-[8px] border ${surface}`} data-testid="design-print-final-result">
           <div className={`text-[10px] uppercase tracking-wider ${subtle} mb-1`}>산출물</div>
-          <div className={`text-[12px] ${ink} mb-1`}>모션 HTML 저장 완료</div>
-          <div className={`text-[10px] font-mono truncate ${subtle}`} title={project.motion.path}>
-            {project.motion.path.split("/").slice(-3).join("/")}
+          <div className={`text-[12px] ${ink} mb-1`}>인쇄용 HTML 저장 완료</div>
+          <div className={`text-[10px] font-mono truncate ${subtle}`} title={project.print?.finalPath ?? ""}>
+            {(project.print?.finalPath ?? "").split("/").slice(-3).join("/")}
           </div>
         </div>
       )}

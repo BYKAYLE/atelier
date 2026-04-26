@@ -4,6 +4,8 @@ import { readDesignResource, saveDesignArtifact } from "../../../lib/tauri";
 import { askDesignClaude } from "../designClaude";
 import type { DesignProject, Philosophy } from "../useDesignProject";
 import { PHILOSOPHIES } from "../useDesignProject";
+import { stripCodeFence } from "../utils";
+import { useAutoTrigger, useAutoAdvance } from "../useAutoStage";
 
 interface Props {
   project: DesignProject;
@@ -26,6 +28,13 @@ export default function System({ project, onChange, onPrev, onNext, dark }: Prop
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<string>(project.system?.content ?? "");
   const [saving, setSaving] = useState(false);
+
+  // Auto pipeline — useAutoStage hook으로 통합 (이전 useRef + useEffect 2개 패턴 대체)
+  useAutoTrigger(
+    !!project.autoMode && !!project.brief && !project.system && !busy,
+    () => generate(),
+  );
+  useAutoAdvance(!!project.autoMode && !!project.system && !busy, onNext);
 
   async function generate() {
     if (!project.brief) {
@@ -272,12 +281,6 @@ export default function System({ project, onChange, onPrev, onNext, dark }: Prop
       )}
     </div>
   );
-}
-
-function stripCodeFence(s: string): string {
-  const m = s.match(/```(?:markdown|md)?\s*\n([\s\S]*?)\n```/);
-  if (m) return m[1];
-  return s.trim();
 }
 
 /**

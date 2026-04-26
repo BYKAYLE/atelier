@@ -706,17 +706,23 @@ const Main: React.FC<Props> = ({ tw }) => {
           const n = bin.length;
           if (n === 0) return;
           // 한 번에 큰 청크로 넣지 않고 chunk 쪼개 term.write 부하 분산.
+          // chunk 순서 보존이 핵심 — ANSI escape sequence는 byte 순서대로 읽혀야 한다.
+          // 이전 코드는 매 iteration unshift로 chunk 역순 재생 → ESC[?1;2c 같은 응답이
+          // raw 텍스트로 깨져 화면에 노출되는 회귀 발생.
           const CHUNK = 16384;
+          const chunks: Uint8Array[] = [];
           for (let i = 0; i < n; i += CHUNK) {
             const sub = new Uint8Array(Math.min(CHUNK, n - i));
             for (let j = 0; j < sub.length; j++) sub[j] = bin.charCodeAt(i + j);
-            pending.unshift(sub);
+            chunks.push(sub);
           }
           // 세션 구분자 — 새 탭 신규 출력과 시각적으로 분리.
           const marker = new TextEncoder().encode(
             `\r\n\x1b[90m── 이전 대화 복원 완료 ──\x1b[0m\r\n`,
           );
-          pending.push(marker);
+          // 모든 chunk를 정순으로 pending 앞에 한 번에 삽입 (이미 큐에 있던 새 PTY
+          // 출력보다 먼저 재생되도록). marker는 모든 복원 chunk 뒤에 위치.
+          pending.unshift(...chunks, marker);
         } catch (err) {
           console.warn("replay log failed", err);
         }
@@ -833,6 +839,7 @@ const Main: React.FC<Props> = ({ tw }) => {
         tab.hostEl.style.border = "";
         tab.hostEl.style.borderRadius = "";
         tab.hostEl.style.overflow = "";
+        tab.hostEl.style.boxShadow = "";
       }
     }
     // 모든 탭 fit 재측정 (grid는 cell 크기 변동, single은 활성만)
@@ -850,6 +857,36 @@ const Main: React.FC<Props> = ({ tw }) => {
       }, 30);
     }
   }, [activeId, tabs, codeLayout, dark]);
+
+  // 그리드 모드 — 멈춰 있는 터미널(idle: 마지막 PTY 출력 후 N초 무활동) 노란 outline.
+  // PTY 활동마다 lastActiveAt가 1초 스로틀로 갱신되니, interval 1초로 비교만 하면 됨.
+  // 선택된 탭(파란)이 우선 — idle보다 active 색이 위.
+  useEffect(() => {
+    if (codeLayout !== "grid" || tabs.length === 0) return;
+    const IDLE_THRESHOLD_MS = 5000; // 5초 무활동이면 멈춤으로 표시
+    const activeColor = dark ? "#5a8ae0" : "#4b5fbd";
+    const idleColor = dark ? "#d4a155" : "#c97e1e"; // 따뜻한 amber
+    const borderColor = dark ? "#3a3a37" : "#c8c5bd";
+
+    const refreshOutlines = () => {
+      const now = Date.now();
+      for (const tab of tabs) {
+        if (tab.id === activeId) {
+          tab.hostEl.style.border = `2px solid ${activeColor}`;
+        } else if (now - tab.lastActiveAt > IDLE_THRESHOLD_MS) {
+          tab.hostEl.style.border = `2px solid ${idleColor}`;
+          tab.hostEl.style.boxShadow = `0 0 0 1px ${idleColor}33`; // 미세 글로우
+        } else {
+          tab.hostEl.style.border = `1px solid ${borderColor}`;
+          tab.hostEl.style.boxShadow = "";
+        }
+      }
+    };
+
+    refreshOutlines(); // 즉시 1회
+    const intervalId = window.setInterval(refreshOutlines, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [codeLayout, activeId, tabs, dark]);
 
   // 탭 hostEl 최초 부착 시 1회 실행되는 초기화 — term.open + fit + pending flush +
   // IME beforeinput bridge + composition 리스너. 이전에는 매 activeId 변경마다
