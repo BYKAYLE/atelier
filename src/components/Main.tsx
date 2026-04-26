@@ -22,7 +22,6 @@ import {
   ptyWrite,
   readTextFile,
   sessionLogLoad,
-  sessionLogClear,
 } from "../lib/tauri";
 import FileTree from "./FileTree";
 

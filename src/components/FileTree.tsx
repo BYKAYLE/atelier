@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { cls } from "../lib/tokens";
 import { FsEntry, homeDir, isTauri, listDir } from "../lib/tauri";
-import { I } from "./Icons";
 
 interface Props {
   dark: boolean;

@@ -1,4 +1,4 @@
-import React, { useState, lazy, Suspense } from "react";
+import { useState, lazy, Suspense } from "react";
 import { cls, Tweaks } from "../lib/tokens";
 import { I } from "./Icons";
 

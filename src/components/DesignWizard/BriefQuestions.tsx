@@ -1,4 +1,3 @@
-import React from "react";
 import type { BriefQuestion, BriefAnswers } from "./useDesignProject";
 
 interface Props {

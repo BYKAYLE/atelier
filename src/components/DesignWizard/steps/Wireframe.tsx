@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { readDesignResource, saveDesignArtifact } from "../../../lib/tauri";
 import { askDesignClaude } from "../designClaude";

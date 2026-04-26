@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { useDesignProject, type Stage } from "./useDesignProject";
 import Brief from "./steps/Brief";
 import System from "./steps/System";

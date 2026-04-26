@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { readDesignResource, saveDesignArtifact } from "../../../lib/tauri";
 import { askDesignClaude } from "../designClaude";

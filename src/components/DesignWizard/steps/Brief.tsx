@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import { readDesignResource } from "../../../lib/tauri";
 import { askDesignClaude } from "../designClaude";
 import type {
   DesignProject,
-  OutputType,
   BriefQuestion,
   BriefAnswers,
 } from "../useDesignProject";
@@ -27,7 +26,6 @@ interface Props {
 export default function Brief({ project, onChange, onNext, dark }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [progressChars, setProgressChars] = useState(0);
   const [copied, setCopied] = useState(false);
   const [questionsBusy, setQuestionsBusy] = useState(false);
   const autoQuestionsTriggered = useRef(false);
@@ -89,7 +87,6 @@ export default function Brief({ project, onChange, onNext, dark }: Props) {
   async function generate() {
     setBusy(true);
     setError(null);
-    setProgressChars(0);
     try {
       const systemPrompt = await readDesignResource("prompts/01-brief.md");
       const answersBlock = formatAnswers(project.briefQuestions, project.briefAnswers);
