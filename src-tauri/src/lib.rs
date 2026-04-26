@@ -432,12 +432,27 @@ async fn design_claude_call(
         system_prompt, user_input
     );
 
-    // claude 실행 경로 — Finder PATH 누락 회피해 명시 추가
-    let home = std::env::var("HOME").unwrap_or_default();
-    let extra_path = format!(
-        "{home}/.claude/local:{home}/.local/bin:{home}/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-    );
-    let path = format!("{}:{}", extra_path, std::env::var("PATH").unwrap_or_default());
+    // claude 실행 경로 — Finder/Explorer launch PATH 누락 회피해 명시 추가
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let path = {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let extra = format!(
+            "{home}/.claude/local:{home}/.local/bin:{home}/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+        );
+        format!("{}:{}", extra, std::env::var("PATH").unwrap_or_default())
+    };
+    #[cfg(target_os = "windows")]
+    let path = {
+        // Windows는 npm global이 PATH에 자동 등록 — 명시 추가는 safety
+        let userprofile = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .unwrap_or_default();
+        let extra = format!(
+            "{up}\\AppData\\Roaming\\npm;{up}\\.claude\\local",
+            up = userprofile
+        );
+        format!("{};{}", extra, std::env::var("PATH").unwrap_or_default())
+    };
 
     let mut child = Command::new("claude")
         .arg("--print")
