@@ -125,6 +125,79 @@ fn home_dir() -> String {
     std::env::var("HOME").unwrap_or_else(|_| "/".into())
 }
 
+fn augmented_cli_path() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        let userprofile = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .unwrap_or_default();
+        let existing = std::env::var("PATH").unwrap_or_default();
+        let extra = format!(
+            "{up}\\AppData\\Roaming\\npm;{up}\\.claude\\local;{up}\\.local\\bin",
+            up = userprofile
+        );
+        if existing.is_empty() {
+            extra
+        } else {
+            format!("{extra};{existing}")
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let existing = std::env::var("PATH").unwrap_or_default();
+        let base = if cfg!(target_os = "macos") {
+            "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        } else {
+            "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        };
+        let extra = if home.is_empty() {
+            base.to_string()
+        } else {
+            format!("{home}/.claude/local:{home}/.local/bin:{home}/.npm-global/bin:{home}/bin:{base}")
+        };
+        if existing.is_empty() {
+            extra
+        } else {
+            format!("{extra}:{existing}")
+        }
+    }
+}
+
+fn valid_command_name(command: &str) -> bool {
+    !command.is_empty()
+        && command.len() <= 80
+        && command
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+}
+
+#[tauri::command]
+async fn command_exists(command: String) -> std::result::Result<bool, String> {
+    let command = command.trim().to_string();
+    if !valid_command_name(&command) {
+        return Err("invalid command name".into());
+    }
+    #[cfg(target_os = "windows")]
+    let status = std::process::Command::new("cmd.exe")
+        .arg("/C")
+        .arg("where")
+        .arg(&command)
+        .env("PATH", augmented_cli_path())
+        .status()
+        .map_err(|e| format!("where {command}: {e}"))?;
+    #[cfg(not(target_os = "windows"))]
+    let status = std::process::Command::new("sh")
+        .arg("-lc")
+        .arg("command -v \"$1\" >/dev/null 2>&1")
+        .arg("sh")
+        .arg(&command)
+        .env("PATH", augmented_cli_path())
+        .status()
+        .map_err(|e| format!("command -v {command}: {e}"))?;
+    Ok(status.success())
+}
+
 /// design-engine 리소스 읽기 — atelier 빌트인 디자인 두뇌. 번들된
 /// `resources/design-engine/` 하위만 접근 허용. path traversal 차단.
 #[tauri::command]
@@ -372,28 +445,17 @@ fn generate_project_index(project_dir: &std::path::Path) -> std::result::Result<
 }
 
 
-/// 프로필 JSON 저장 경로. macOS Sequoia+의 App Data Isolation 정책:
-/// 폴더명이 bundle identifier(com.atelier.app)와 다르면 "다른 앱 데이터"로 인식해
-/// 매 실행마다 권한 다이얼로그를 띄움. → bundle ID 기반 폴더 사용 + 레거시 자동 이전.
+/// 프로필 JSON 저장 경로.
+/// macOS Sequoia+ App Data Isolation은 `~/Library/Application Support/<다른 이름>` 접근을
+/// "다른 앱 데이터" 접근으로 보고 TCC 팝업을 띄울 수 있다. 그래서 실행 중에는 레거시
+/// `Application Support/Atelier` 경로를 조회하지 않고 bundle id 전용 경로만 사용한다.
 fn profiles_path() -> std::path::PathBuf {
     let base = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     #[cfg(target_os = "macos")]
-    let new_dir =
-        std::path::PathBuf::from(&base).join("Library/Application Support/com.atelier.app");
+    let dir = std::path::PathBuf::from(&base).join("Library/Application Support/com.atelier.app");
     #[cfg(not(target_os = "macos"))]
-    let new_dir = std::path::PathBuf::from(&base).join(".atelier");
-    let new_path = new_dir.join("profiles.json");
-
-    #[cfg(target_os = "macos")]
-    {
-        let old_path = std::path::PathBuf::from(&base)
-            .join("Library/Application Support/Atelier/profiles.json");
-        if !new_path.exists() && old_path.exists() {
-            let _ = std::fs::create_dir_all(&new_dir);
-            let _ = std::fs::copy(&old_path, &new_path);
-        }
-    }
-    new_path
+    let dir = std::path::PathBuf::from(&base).join(".atelier");
+    dir.join("profiles.json")
 }
 
 /// 프로필 JSON 읽기. 없으면 빈 문자열 반환 (JS가 DEFAULT로 fallback).
@@ -532,6 +594,7 @@ pub fn run() {
             list_dir,
             read_text_file,
             home_dir,
+            command_exists,
             load_profiles,
             save_profiles,
             read_design_resource,

@@ -74,6 +74,9 @@ export async function readTextFile(path: string): Promise<string> {
 export async function homeDir(): Promise<string> {
   return invoke("home_dir");
 }
+export async function commandExists(command: string): Promise<boolean> {
+  return invoke("command_exists", { command });
+}
 
 /** 세션 로그 읽기. base64 string 반환. 없으면 빈 문자열. */
 export async function sessionLogLoad(id: string): Promise<string> {

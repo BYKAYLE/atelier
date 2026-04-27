@@ -129,7 +129,7 @@ dependencies = [
 
 [[package]]
 name = "atelier"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -138,6 +138,7 @@ dependencies = [
  "dashmap",
  "env_logger",
  "image",
+ "libc",
  "log",
  "once_cell",
  "portable-pty",

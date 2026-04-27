@@ -21,11 +21,30 @@ export const IS_MAC = PLATFORM === "macos";
 // 플랫폼별 modifier 키 UI 라벨. paste 이벤트는 WebView가 OS 단축키를 자동 처리하므로 라벨만 바꾸면 됨.
 export const MOD_KEY = IS_MAC ? "⌘" : "Ctrl";
 
+export type AppLanguage = "ko" | "en";
+
+export const LANGUAGE_LABELS: Record<AppLanguage, string> = {
+  ko: "한국어",
+  en: "English",
+};
+
+export const WELCOME_COPY: Record<AppLanguage, { headline: string; sub: string }> = {
+  ko: {
+    headline: "당신의 명령어, 당신의 작업실.",
+    sub: "스크린샷을 붙여넣고, 결과를 미리 보고, 더 빠르게 작업하세요.",
+  },
+  en: {
+    headline: "Your commands, your atelier.",
+    sub: "Paste screenshots, preview results, and move faster.",
+  },
+};
+
 export interface Profile {
   id: string;
   name: string;
   cmd: string;
   dot: string;
+  autoInstall?: "claude" | "hermes" | "codex";
 }
 
 interface ProfileDef extends Profile {
@@ -33,7 +52,9 @@ interface ProfileDef extends Profile {
 }
 
 const ALL_PROFILES: ProfileDef[] = [
-  { id: "claude", name: "Claude Code", cmd: "claude", dot: "#c96442", platforms: ["macos", "windows", "linux"] },
+  { id: "claude", name: "Claude Code", cmd: "claude", dot: "#c96442", autoInstall: "claude", platforms: ["macos", "windows", "linux"] },
+  { id: "hermes", name: "Hermes", cmd: "hermes", dot: "#8b4a73", autoInstall: "hermes", platforms: ["macos", "windows", "linux"] },
+  { id: "codex", name: "Codex CLI", cmd: "codex", dot: "#4b7bd1", autoInstall: "codex", platforms: ["macos", "windows", "linux"] },
   { id: "zsh", name: "Zsh", cmd: "zsh", dot: "#9aae63", platforms: ["macos", "linux"] },
   { id: "bash", name: "Bash", cmd: "bash", dot: "#6b9a4a", platforms: ["macos", "linux", "windows"] },
   { id: "pwsh", name: "PowerShell", cmd: "pwsh", dot: "#4b7bd1", platforms: ["windows", "macos", "linux"] },
@@ -46,7 +67,25 @@ export const PROFILES: Profile[] = ALL_PROFILES
   .filter((p) => p.platforms.includes(PLATFORM))
   .map(({ platforms: _platforms, ...rest }) => rest);
 
+const CORE_PROFILE_IDS = ["claude", "hermes", "codex"];
+
+export function mergeDefaultProfiles(profiles: Profile[]): Profile[] {
+  const defaultsById = new Map(PROFILES.map((p) => [p.id, p]));
+  const merged = profiles.map((p) => {
+    const def = defaultsById.get(p.id);
+    return def ? { ...def, ...p, autoInstall: p.autoInstall ?? def.autoInstall } : p;
+  });
+  const present = new Set(merged.map((p) => p.id));
+  for (const id of CORE_PROFILE_IDS) {
+    if (present.has(id)) continue;
+    const def = defaultsById.get(id);
+    if (def) merged.push(def);
+  }
+  return merged;
+}
+
 export interface Tweaks {
+  language: AppLanguage;
   dark: boolean;
   accent: string;
   terminalFontPx: number;
@@ -59,11 +98,12 @@ export interface Tweaks {
 }
 
 export const DEFAULT_TWEAKS: Tweaks = {
+  language: "ko",
   dark: false,
   accent: "terracotta",
   terminalFontPx: 13,
-  welcomeHeadline: "당신의 명령어, 당신의 작업실.",
-  welcomeSub: "스크린샷을 붙여넣고, 결과를 미리 보고, 더 빠르게 작업하세요.",
+  welcomeHeadline: WELCOME_COPY.ko.headline,
+  welcomeSub: WELCOME_COPY.ko.sub,
   density: "cozy",
   cursorStyle: "block",
   profiles: PROFILES.filter((p) => p.id !== "custom"),

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { DEFAULT_TWEAKS, Profile, Tweaks } from "./tokens";
+import { DEFAULT_TWEAKS, mergeDefaultProfiles, Profile, Tweaks, WELCOME_COPY } from "./tokens";
 import { isTauri, loadProfilesFile, saveProfilesFile } from "./tauri";
 
 const KEY = "atelier.tweaks";
@@ -12,9 +12,20 @@ function load(): Tweaks {
     // profiles 유효성 검사 — localStorage 손상/누락 시 DEFAULT로 fallback.
     const profiles: Profile[] =
       Array.isArray(parsed.profiles) && parsed.profiles.length > 0
-        ? parsed.profiles
+        ? mergeDefaultProfiles(parsed.profiles)
         : DEFAULT_TWEAKS.profiles;
-    return { ...DEFAULT_TWEAKS, ...parsed, profiles };
+    const language = parsed.language === "en" ? "en" : "ko";
+    const defaultHeadlines = Object.values(WELCOME_COPY).map((v) => v.headline);
+    const defaultSubs = Object.values(WELCOME_COPY).map((v) => v.sub);
+    const welcomeHeadline =
+      !parsed.welcomeHeadline || defaultHeadlines.includes(parsed.welcomeHeadline)
+        ? WELCOME_COPY[language].headline
+        : parsed.welcomeHeadline;
+    const welcomeSub =
+      !parsed.welcomeSub || defaultSubs.includes(parsed.welcomeSub)
+        ? WELCOME_COPY[language].sub
+        : parsed.welcomeSub;
+    return { ...DEFAULT_TWEAKS, ...parsed, language, welcomeHeadline, welcomeSub, profiles };
   } catch {
     return { ...DEFAULT_TWEAKS };
   }
@@ -40,7 +51,7 @@ export function useTweaks(): [Tweaks, (patch: Partial<Tweaks>) => void] {
         if (raw.trim()) {
           const parsed = JSON.parse(raw) as Profile[];
           if (Array.isArray(parsed) && parsed.length > 0) {
-            setTw((prev) => ({ ...prev, profiles: parsed }));
+            setTw((prev) => ({ ...prev, profiles: mergeDefaultProfiles(parsed) }));
           }
         }
       } catch (err) {

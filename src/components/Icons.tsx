@@ -66,6 +66,22 @@ export const I = {
     />
   ),
   zap: <Icon d={<path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z" />} />,
+  fastPreview: (
+    <Icon
+      size={18}
+      stroke={1.9}
+      d={
+        <>
+          <path d="M4.5 18.5V6.8c0-1.2 1-2.2 2.2-2.2h11.1c1.2 0 2.2 1 2.2 2.2v2" />
+          <path d="M4.5 8.4h13.9" />
+          <path d="M7.5 6.5h.01M10.2 6.5h.01M12.9 6.5h.01" />
+          <path d="M8 12.5h5.8" />
+          <path d="M6.7 15.4h6.3" />
+          <path d="M15.7 12.8l3.7-4.9-.7 4h2.8l-4.1 5.4.7-4.5h-2.4z" />
+        </>
+      }
+    />
+  ),
   image: (
     <Icon
       d={
@@ -73,6 +89,23 @@ export const I = {
           <rect x="3" y="3" width="18" height="18" rx="2" />
           <circle cx="9" cy="9" r="2" />
           <path d="M21 15l-5-5L5 21" />
+        </>
+      }
+    />
+  ),
+  imagePaste: (
+    <Icon
+      size={18}
+      stroke={1.9}
+      d={
+        <>
+          <rect x="3.5" y="4" width="10.5" height="10.5" rx="2" strokeDasharray="2.6 2.6" />
+          <circle cx="7.2" cy="7.9" r="1" fill="currentColor" stroke="none" />
+          <path d="M5.9 12l2.8-2.7 2.2 1.9 2.4-2.5" />
+          <path d="M14.8 9.3h2.3a3.4 3.4 0 013.4 3.4v.3" />
+          <path d="M18.7 11.2l1.8 1.8-1.8 1.8" />
+          <rect x="14.6" y="15" width="6.1" height="5.5" rx="1.4" />
+          <path d="M16.5 15v-.9c0-.8.6-1.4 1.4-1.4h.3c.8 0 1.4.6 1.4 1.4v.9" />
         </>
       }
     />
@@ -93,6 +126,21 @@ export const I = {
         <>
           <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" />
           <circle cx="12" cy="12" r="3" />
+        </>
+      }
+    />
+  ),
+  preview: (
+    <Icon
+      size={18}
+      stroke={1.9}
+      d={
+        <>
+          <rect x="3.5" y="4.5" width="17" height="15" rx="2.3" />
+          <path d="M3.5 8.2h17" />
+          <path d="M7 6.4h.01M10 6.4h.01M13 6.4h.01" />
+          <path d="M6.5 13.6s2.2-3.2 5.5-3.2 5.5 3.2 5.5 3.2-2.2 3.2-5.5 3.2-5.5-3.2-5.5-3.2z" />
+          <circle cx="12" cy="13.6" r="1.35" />
         </>
       }
     />

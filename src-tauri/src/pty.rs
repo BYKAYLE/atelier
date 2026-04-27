@@ -10,6 +10,7 @@
 //!   - 이벤트 `pty://{id}/data`          → stdout 청크 방출
 //!   - 이벤트 `pty://{id}/exit`          → 종료 코드
 
+use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::sync::Arc;
 use std::thread;
@@ -62,6 +63,15 @@ fn session_log_path(id: &str) -> std::path::PathBuf {
 }
 
 const MAX_LOG_BYTES: u64 = 10 * 1024 * 1024; // 세션당 10MB 상한
+const MAX_REPLAY_LOG_BYTES: usize = 512 * 1024; // 앱 시작 복원은 tail만 읽어 WebView freeze 방지
+
+fn tail_bytes(bytes: &[u8], max_len: usize) -> &[u8] {
+    if bytes.len() <= max_len {
+        bytes
+    } else {
+        &bytes[bytes.len() - max_len..]
+    }
+}
 
 /// 세션 로그 읽기. 복원 시 JS가 호출 → term.write(bytes)로 재생.
 #[tauri::command]
@@ -73,7 +83,7 @@ pub async fn session_log_load(id: String) -> std::result::Result<String, String>
     // base64 인코딩해 ANSI escape byte-exact 보존.
     use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
     let bytes = std::fs::read(&p).map_err(|e| format!("session_log_load: {e}"))?;
-    Ok(B64.encode(&bytes))
+    Ok(B64.encode(tail_bytes(&bytes, MAX_REPLAY_LOG_BYTES)))
 }
 
 /// 세션 로그 삭제.
@@ -156,6 +166,82 @@ fn apply_default_env(cmd: &mut CommandBuilder) {
     apply_path_env(cmd);
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{split_command_line, tail_bytes};
+
+    #[test]
+    fn split_command_line_keeps_program_and_args_separate() {
+        assert_eq!(split_command_line("claude --continue"), vec!["claude", "--continue"]);
+    }
+
+    #[test]
+    fn split_command_line_preserves_quoted_arguments() {
+        assert_eq!(
+            split_command_line("/bin/zsh -lc 'echo hello world'"),
+            vec!["/bin/zsh", "-lc", "echo hello world"]
+        );
+    }
+
+    #[test]
+    fn tail_bytes_limits_large_replay_logs() {
+        let bytes: Vec<u8> = (0..200).map(|n| n as u8).collect();
+        let out = tail_bytes(&bytes, 32);
+        assert_eq!(out.len(), 32);
+        assert_eq!(out[0], 168);
+        assert_eq!(out[31], 199);
+    }
+}
+
+fn split_command_line(input: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut chars = input.chars().peekable();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+
+    while let Some(ch) = chars.next() {
+        if escaped {
+            cur.push(ch);
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' if quote != Some('\'') => escaped = true,
+            '\'' | '"' if quote == Some(ch) => quote = None,
+            '\'' | '"' if quote.is_none() => quote = Some(ch),
+            c if c.is_whitespace() && quote.is_none() => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+                while matches!(chars.peek(), Some(c) if c.is_whitespace()) {
+                    chars.next();
+                }
+            }
+            _ => cur.push(ch),
+        }
+    }
+
+    if escaped {
+        cur.push('\\');
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn command_from_line(line: &str) -> CommandBuilder {
+    let parts = split_command_line(line);
+    if parts.is_empty() {
+        CommandBuilder::new_default_prog()
+    } else if parts.len() == 1 {
+        CommandBuilder::new(&parts[0])
+    } else {
+        CommandBuilder::from_argv(parts.into_iter().map(OsString::from).collect())
+    }
+}
+
 /// 프로파일 id → 실제 실행 커맨드.
 /// 플랫폼별 기본값은 컴파일 타임 `#[cfg(target_os = ...)]`로 분기된다.
 fn profile_command(profile: &str) -> CommandBuilder {
@@ -175,6 +261,9 @@ fn profile_command(profile: &str) -> CommandBuilder {
             #[cfg(not(windows))]
             {
                 let mut cmd = CommandBuilder::new("claude");
+                // Disable Claude's Chrome integration when embedded in Atelier. Chrome/App discovery can
+                // trigger macOS App Data Isolation prompts attributed to the parent app.
+                cmd.arg("--no-chrome");
                 if let Ok(home) = std::env::var("HOME") {
                     cmd.cwd(home);
                 }
@@ -187,8 +276,9 @@ fn profile_command(profile: &str) -> CommandBuilder {
         #[cfg(windows)]
         "cmd" => CommandBuilder::new("cmd.exe"),
         "node" => CommandBuilder::new("node"),
-        // fallback: 그 외 id는 그대로 실행 파일 경로로 시도 (custom 프로필)
-        other => CommandBuilder::new(other),
+        // fallback: 그 외 id는 custom command line으로 해석. "claude --continue" 같은 문자열을
+        // 실행 파일명 하나로 넘기지 않고 argv로 분리해 lazy spawn 시 실패하지 않게 한다.
+        other => command_from_line(other),
     }
 }
 

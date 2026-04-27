@@ -1,5 +1,14 @@
 import React, { useState } from "react";
-import { ACCENTS, cls, MOD_KEY, Profile, Tweaks } from "../lib/tokens";
+import {
+  ACCENTS,
+  AppLanguage,
+  cls,
+  LANGUAGE_LABELS,
+  MOD_KEY,
+  Profile,
+  Tweaks,
+  WELCOME_COPY,
+} from "../lib/tokens";
 import { I } from "./Icons";
 
 interface Props {
@@ -7,17 +16,43 @@ interface Props {
   setTw: (p: Partial<Tweaks>) => void;
 }
 
+const SETTINGS_COPY = {
+  ko: {
+    title: "설정",
+    nav: {
+      terminal: "터미널",
+      appearance: "외관",
+      profiles: "프로필",
+      shortcuts: "단축키",
+      preview: "미리보기 패널",
+      updates: "업데이트",
+    },
+  },
+  en: {
+    title: "Settings",
+    nav: {
+      terminal: "Terminal",
+      appearance: "Appearance",
+      profiles: "Profiles",
+      shortcuts: "Shortcuts",
+      preview: "Preview panel",
+      updates: "Updates",
+    },
+  },
+} as const;
+
 const Settings: React.FC<Props> = ({ tw, setTw }) => {
   const dark = tw.dark;
   const [section, setSection] = useState<string>("terminal");
+  const copy = SETTINGS_COPY[tw.language];
 
   const nav: Array<[string, string, React.ReactNode]> = [
-    ["terminal", "터미널", I.terminal],
-    ["appearance", "외관", I.palette],
-    ["profiles", "프로필", I.zap],
-    ["shortcuts", "단축키", I.keyboard],
-    ["preview", "미리보기 패널", I.eye],
-    ["updates", "업데이트", I.gear],
+    ["terminal", copy.nav.terminal, I.terminal],
+    ["appearance", copy.nav.appearance, I.palette],
+    ["profiles", copy.nav.profiles, I.zap],
+    ["shortcuts", copy.nav.shortcuts, I.keyboard],
+    ["preview", copy.nav.preview, I.eye],
+    ["updates", copy.nav.updates, I.gear],
   ];
 
   return (
@@ -39,7 +74,7 @@ const Settings: React.FC<Props> = ({ tw, setTw }) => {
             dark ? "text-dink" : "text-ink",
           )}
         >
-          설정
+          {copy.title}
         </div>
         <nav className="space-y-0.5">
           {nav.map(([k, label, icon]) => (
@@ -69,9 +104,9 @@ const Settings: React.FC<Props> = ({ tw, setTw }) => {
           {section === "terminal" && <TerminalSection tw={tw} setTw={setTw} />}
           {section === "appearance" && <AppearanceSection tw={tw} setTw={setTw} />}
           {section === "profiles" && <ProfilesSection tw={tw} setTw={setTw} />}
-          {section === "shortcuts" && <ShortcutsSection dark={dark} />}
-          {section === "preview" && <PreviewSection dark={dark} />}
-          {section === "updates" && <UpdatesSection dark={dark} />}
+          {section === "shortcuts" && <ShortcutsSection dark={dark} language={tw.language} />}
+          {section === "preview" && <PreviewSection dark={dark} language={tw.language} />}
+          {section === "updates" && <UpdatesSection dark={dark} language={tw.language} />}
         </div>
       </div>
     </div>
@@ -165,10 +200,27 @@ const TerminalSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => voi
   setTw,
 }) => {
   const dark = tw.dark;
+  const copy = tw.language === "en"
+    ? {
+        title: "Terminal",
+        sub: "Adjust how the terminal reads and feels.",
+        fontSize: "Font size",
+        fontHint: "Affects line height proportionally.",
+        cursor: "Cursor style",
+        cursorOptions: { block: "Block", bar: "Bar", underline: "Underline" },
+      }
+    : {
+        title: "터미널",
+        sub: "터미널의 읽힘과 느낌을 조정합니다.",
+        fontSize: "글꼴 크기",
+        fontHint: "줄 높이에 비례해 영향을 줍니다.",
+        cursor: "커서 스타일",
+        cursorOptions: { block: "블록", bar: "바", underline: "밑줄" },
+      };
   return (
     <>
-      <SectionHeader dark={dark} title="터미널" sub="터미널의 읽힘과 느낌을 조정합니다." />
-      <Row dark={dark} label="글꼴 크기" hint="줄 높이에 비례해 영향을 줍니다.">
+      <SectionHeader dark={dark} title={copy.title} sub={copy.sub} />
+      <Row dark={dark} label={copy.fontSize} hint={copy.fontHint}>
         <div className="flex items-center gap-3">
           <input
             type="range"
@@ -190,15 +242,15 @@ const TerminalSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => voi
           </span>
         </div>
       </Row>
-      <Row dark={dark} label="커서 스타일">
+      <Row dark={dark} label={copy.cursor}>
         <SegControl
           dark={dark}
           value={tw.cursorStyle}
           onChange={(v) => setTw({ cursorStyle: v as Tweaks["cursorStyle"] })}
           options={[
-            { value: "block", label: "블록" },
-            { value: "bar", label: "바" },
-            { value: "underline", label: "밑줄" },
+            { value: "block", label: copy.cursorOptions.block },
+            { value: "bar", label: copy.cursorOptions.bar },
+            { value: "underline", label: copy.cursorOptions.underline },
           ]}
         />
       </Row>
@@ -211,21 +263,74 @@ const AppearanceSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => v
   setTw,
 }) => {
   const dark = tw.dark;
+  const copy = tw.language === "en"
+    ? {
+        title: "Appearance",
+        sub: "Set the theme, accent color, and app language.",
+        language: "App language",
+        languageHint: "Changes the main interface language. Custom home copy is preserved.",
+        theme: "Theme",
+        themeHint: "Light is the default. Dark uses a warm tone instead of pure black.",
+        light: "Light",
+        dark: "Dark",
+        accent: "Accent color",
+        accentHint: "Applies to buttons, prompts, links, and the cursor.",
+        headline: "Home headline",
+        headlineHint: "Edit the serif headline on the home screen.",
+      }
+    : {
+        title: "외관",
+        sub: "테마, 액센트 색상, 사용 언어를 설정합니다.",
+        language: "사용 언어",
+        languageHint: "주요 화면 언어를 바꿉니다. 직접 편집한 홈 문구는 유지됩니다.",
+        theme: "테마",
+        themeHint: "기본은 라이트입니다. 다크는 순수 블랙보다 따뜻한 톤이에요.",
+        light: "라이트",
+        dark: "다크",
+        accent: "액센트 색상",
+        accentHint: "버튼, 프롬프트, 링크, 커서에 적용됩니다.",
+        headline: "홈 헤드라인",
+        headlineHint: "홈 화면의 세리프 헤드라인을 편집합니다.",
+      };
+  const updateLanguage = (language: AppLanguage) => {
+    const defaultHeadlines = Object.values(WELCOME_COPY).map((v) => v.headline);
+    const defaultSubs = Object.values(WELCOME_COPY).map((v) => v.sub);
+    setTw({
+      language,
+      ...(defaultHeadlines.includes(tw.welcomeHeadline)
+        ? { welcomeHeadline: WELCOME_COPY[language].headline }
+        : {}),
+      ...(defaultSubs.includes(tw.welcomeSub)
+        ? { welcomeSub: WELCOME_COPY[language].sub }
+        : {}),
+    });
+  };
   return (
     <>
-      <SectionHeader dark={dark} title="외관" sub="테마와 액센트 색상을 설정합니다." />
-      <Row dark={dark} label="테마" hint="기본은 라이트입니다. 다크는 순수 블랙보다 따뜻한 톤이에요.">
+      <SectionHeader dark={dark} title={copy.title} sub={copy.sub} />
+      <Row dark={dark} label={copy.language} hint={copy.languageHint}>
+        <SegControl
+          dark={dark}
+          value={tw.language}
+          onChange={(v) => updateLanguage(v as AppLanguage)}
+          options={[
+            { value: "ko", label: LANGUAGE_LABELS.ko },
+            { value: "en", label: LANGUAGE_LABELS.en },
+          ]}
+        />
+      </Row>
+      <Row dark={dark} label={copy.theme} hint={copy.themeHint}>
         <SegControl
           dark={dark}
           value={tw.dark ? "dark" : "light"}
           onChange={(v) => setTw({ dark: v === "dark" })}
           options={[
-            { value: "light", label: "라이트" },
-            { value: "dark", label: "다크" },
+            { value: "light", label: copy.light },
+            { value: "dark", label: copy.dark },
           ]}
         />
       </Row>
-      <Row dark={dark} label="액센트 색상" hint="버튼, 프롬프트, 링크, 커서에 적용됩니다.">
+      <Row dark={dark} label={copy.accent} hint={copy.accentHint}>
         <div className="flex items-center gap-2">
           {Object.entries(ACCENTS).map(([key, a]) => (
             <button
@@ -245,7 +350,7 @@ const AppearanceSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => v
           ))}
         </div>
       </Row>
-      <Row dark={dark} label="홈 헤드라인" hint="홈 화면의 세리프 헤드라인을 편집합니다.">
+      <Row dark={dark} label={copy.headline} hint={copy.headlineHint}>
         <input
           value={tw.welcomeHeadline}
           onChange={(e) => setTw({ welcomeHeadline: e.target.value })}
@@ -269,6 +374,35 @@ const ProfilesSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => voi
 }) => {
   const dark = tw.dark;
   const profiles = tw.profiles;
+  const copy = tw.language === "en"
+    ? {
+        title: "Profiles",
+        sub: "Register the CLIs you use often. Add with + and remove with x.",
+        removeFallback: "this profile",
+        removeConfirm: (label: string) =>
+          `Delete "${label}" profile?\nTabs opened with this profile stay open, but you cannot create new ones until it is registered again.`,
+        colorDot: "Color dot",
+        name: "Name",
+        command: "Command (e.g. claude, python3)",
+        minOne: "At least one is required",
+        remove: "Remove",
+        add: "+ Add profile",
+        newProfile: "New profile",
+      }
+    : {
+        title: "프로필",
+        sub: "자주 쓰는 CLI를 등록하세요. + 버튼으로 추가, ✕ 버튼으로 삭제할 수 있습니다.",
+        removeFallback: "이 프로필",
+        removeConfirm: (label: string) =>
+          `"${label}" 프로필을 삭제하시겠습니까?\n이 프로필로 열려 있는 탭은 유지되지만, 재등록 전까지 새로 열 수 없습니다.`,
+        colorDot: "색 도트",
+        name: "이름",
+        command: "실행 명령 (예: claude, python3)",
+        minOne: "최소 1개 필요",
+        remove: "삭제",
+        add: "+ 프로필 추가",
+        newProfile: "새 프로필",
+      };
 
   const updateProfile = (idx: number, patch: Partial<Profile>) => {
     const next = profiles.map((p, i) => (i === idx ? { ...p, ...patch } : p));
@@ -277,25 +411,23 @@ const ProfilesSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => voi
   const removeProfile = (idx: number) => {
     if (profiles.length <= 1) return;
     const target = profiles[idx];
-    const label = target?.name?.trim() || "이 프로필";
-    const ok = window.confirm(
-      `"${label}" 프로필을 삭제하시겠습니까?\n이 프로필로 열려 있는 탭은 유지되지만, 재등록 전까지 새로 열 수 없습니다.`,
-    );
+    const label = target?.name?.trim() || copy.removeFallback;
+    const ok = window.confirm(copy.removeConfirm(label));
     if (!ok) return;
     setTw({ profiles: profiles.filter((_, i) => i !== idx) });
   };
   const addProfile = () => {
     const dot = DEFAULT_DOTS[profiles.length % DEFAULT_DOTS.length];
     const id = `custom-${Date.now().toString(36)}`;
-    setTw({ profiles: [...profiles, { id, name: "새 프로필", cmd: "", dot }] });
+    setTw({ profiles: [...profiles, { id, name: copy.newProfile, cmd: "", dot }] });
   };
 
   return (
     <>
       <SectionHeader
         dark={dark}
-        title="프로필"
-        sub="자주 쓰는 CLI를 등록하세요. + 버튼으로 추가, ✕ 버튼으로 삭제할 수 있습니다."
+        title={copy.title}
+        sub={copy.sub}
       />
       <div
         className={cls(
@@ -316,13 +448,13 @@ const ProfilesSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => voi
               value={p.dot}
               onChange={(e) => updateProfile(i, { dot: e.target.value })}
               className="h-6 w-6 rounded-full shrink-0 cursor-pointer border-0 p-0 bg-transparent"
-              title="색 도트"
+              title={copy.colorDot}
               style={{ appearance: "none" }}
             />
             <input
               value={p.name}
               onChange={(e) => updateProfile(i, { name: e.target.value })}
-              placeholder="이름"
+              placeholder={copy.name}
               className={cls(
                 "h-8 px-2.5 rounded-[6px] border text-[13px] w-[180px] outline-none",
                 dark
@@ -333,7 +465,7 @@ const ProfilesSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => voi
             <input
               value={p.cmd}
               onChange={(e) => updateProfile(i, { cmd: e.target.value })}
-              placeholder="실행 명령 (예: claude, python3)"
+              placeholder={copy.command}
               className={cls(
                 "flex-1 min-w-0 h-8 px-2.5 rounded-[6px] border font-mono text-[12px] outline-none",
                 dark
@@ -353,7 +485,7 @@ const ProfilesSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => voi
                     ? "text-dsub hover:bg-[#3d3d3b] hover:text-dink"
                     : "text-sub hover:bg-line hover:text-ink",
               )}
-              title={profiles.length <= 1 ? "최소 1개 필요" : "삭제"}
+              title={profiles.length <= 1 ? copy.minOne : copy.remove}
             >
               ✕
             </button>
@@ -368,7 +500,7 @@ const ProfilesSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => voi
               dark ? "text-dsub hover:bg-dmuted hover:text-dink" : "text-sub hover:bg-muted hover:text-ink",
             )}
           >
-            + 프로필 추가
+            {copy.add}
           </button>
         </div>
       </div>
@@ -376,22 +508,49 @@ const ProfilesSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => voi
   );
 };
 
-const ShortcutsSection: React.FC<{ dark: boolean }> = ({ dark }) => {
+const ShortcutsSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ dark, language }) => {
+  const copy = language === "en"
+    ? {
+        title: "Shortcuts",
+        sub: "Click a row to reassign it. Conflicts will be highlighted.",
+        shortcuts: [
+          "New tab",
+          "Close tab",
+          "Next / previous tab",
+          "Paste image",
+          "Toggle preview",
+          "Clear screen",
+          "Command palette",
+        ],
+      }
+    : {
+        title: "단축키",
+        sub: "행을 클릭해 재할당할 수 있어요. 충돌은 강조 표시됩니다.",
+        shortcuts: [
+          "새 탭",
+          "탭 닫기",
+          "다음 / 이전 탭",
+          "이미지 붙여넣기",
+          "미리보기 토글",
+          "화면 지우기",
+          "명령 팔레트",
+        ],
+      };
   const shortcuts: Array<[string, string[]]> = [
-    ["새 탭", [MOD_KEY, "T"]],
-    ["탭 닫기", [MOD_KEY, "W"]],
-    ["다음 / 이전 탭", [MOD_KEY, "Tab"]],
-    ["이미지 붙여넣기", [MOD_KEY, "V"]],
-    ["미리보기 토글", [MOD_KEY, "P"]],
-    ["화면 지우기", [MOD_KEY, "K"]],
-    ["명령 팔레트", [MOD_KEY, "Shift", "P"]],
+    [copy.shortcuts[0], [MOD_KEY, "T"]],
+    [copy.shortcuts[1], [MOD_KEY, "W"]],
+    [copy.shortcuts[2], [MOD_KEY, "Tab"]],
+    [copy.shortcuts[3], [MOD_KEY, "V"]],
+    [copy.shortcuts[4], [MOD_KEY, "P"]],
+    [copy.shortcuts[5], [MOD_KEY, "K"]],
+    [copy.shortcuts[6], [MOD_KEY, "Shift", "P"]],
   ];
   return (
     <>
       <SectionHeader
         dark={dark}
-        title="단축키"
-        sub="행을 클릭해 재할당할 수 있어요. 충돌은 강조 표시됩니다."
+        title={copy.title}
+        sub={copy.sub}
       />
       <div
         className={cls(
@@ -438,31 +597,90 @@ const ShortcutsSection: React.FC<{ dark: boolean }> = ({ dark }) => {
   );
 };
 
-const PreviewSection: React.FC<{ dark: boolean }> = ({ dark }) => (
-  <>
-    <SectionHeader
-      dark={dark}
-      title="미리보기 패널"
-      sub="Atelier가 언제 라이브 결과물을 보여줄지 설정합니다."
-    />
-    <Row
-      dark={dark}
-      label="결과물 자동 감지"
-      hint="세션이 HTML, 마크다운, 이미지 파일을 쓰면 미리보기를 자동으로 엽니다."
-    >
-      <div className={cls("text-[12px]", dark ? "text-dsub" : "text-sub")}>
-        (예정 — v0.2)
-      </div>
-    </Row>
-  </>
-);
+const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ dark, language }) => {
+  const copy = language === "en"
+    ? {
+        title: "Preview panel",
+        sub: "Choose when Atelier should show live output.",
+        detect: "Auto-detect output",
+        detectHint: "Automatically opens the preview when a session writes HTML, Markdown, or image files.",
+        planned: "(planned — v0.2)",
+      }
+    : {
+        title: "미리보기 패널",
+        sub: "Atelier가 언제 라이브 결과물을 보여줄지 설정합니다.",
+        detect: "결과물 자동 감지",
+        detectHint: "세션이 HTML, 마크다운, 이미지 파일을 쓰면 미리보기를 자동으로 엽니다.",
+        planned: "(예정 — v0.2)",
+      };
+  return (
+    <>
+      <SectionHeader dark={dark} title={copy.title} sub={copy.sub} />
+      <Row dark={dark} label={copy.detect} hint={copy.detectHint}>
+        <div className={cls("text-[12px]", dark ? "text-dsub" : "text-sub")}>
+          {copy.planned}
+        </div>
+      </Row>
+    </>
+  );
+};
 
 /**
  * UpdatesSection — Tauri auto-update plugin 기반.
  * GitHub Release latest.json을 폴링해 새 버전이 있으면 changelog와 함께 표시.
  * 사용자 동의 시 다운로드 → ED25519 서명 검증 → 자동 재시작.
  */
-const UpdatesSection: React.FC<{ dark: boolean }> = ({ dark }) => {
+const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
+  dark,
+  language,
+}) => {
+  const copy = language === "en"
+    ? {
+        title: "Updates",
+        sub: "Check for and install new Atelier versions. Updates are verified with an ED25519 signature.",
+        currentVersion: "Current version",
+        currentVersionHint: "Version embedded in the app bundle metadata (tauri.conf.json).",
+        check: "Check for updates",
+        checkHint: "Polls latest.json from the GitHub Release. Internet access is required for the first check.",
+        checking: "Checking...",
+        checkNow: "Check now",
+        checkingStatus: "Checking for the latest version...",
+        availableStatus: (version: string) => `v${version} available`,
+        upToDate: "You are up to date.",
+        checkFailed: (message: string) => `Check failed: ${message}`,
+        installingStatus: "Downloading and installing...",
+        noUpdateOnRetry: "A fresh check found no new version.",
+        downloadProgress: (pct: number, downloaded: number, total: number) =>
+          `Download ${pct}% (${downloaded.toFixed(1)}MB / ${total.toFixed(1)}MB)`,
+        installed: "Install complete. Restarting...",
+        installFailed: (message: string) => `Install failed: ${message}`,
+        availableTitle: (version: string) => `v${version} available`,
+        installing: "Installing...",
+        install: "Install + restart",
+      }
+    : {
+        title: "업데이트",
+        sub: "Atelier 새 버전을 확인하고 설치합니다. 모든 업데이트는 ED25519 서명으로 검증됩니다.",
+        currentVersion: "현재 버전",
+        currentVersionHint: "앱 번들 메타데이터에 박힌 버전 (tauri.conf.json).",
+        check: "업데이트 확인",
+        checkHint: "GitHub Release의 latest.json을 폴링합니다. 첫 확인 시 인터넷 연결이 필요합니다.",
+        checking: "확인 중…",
+        checkNow: "지금 확인",
+        checkingStatus: "최신 버전 확인 중…",
+        availableStatus: (version: string) => `v${version} 사용 가능`,
+        upToDate: "최신 버전입니다.",
+        checkFailed: (message: string) => `확인 실패: ${message}`,
+        installingStatus: "다운로드·설치 중…",
+        noUpdateOnRetry: "다시 확인하니 새 버전이 없습니다.",
+        downloadProgress: (pct: number, downloaded: number, total: number) =>
+          `다운로드 ${pct}% (${downloaded.toFixed(1)}MB / ${total.toFixed(1)}MB)`,
+        installed: "설치 완료. 재시작 중…",
+        installFailed: (message: string) => `설치 실패: ${message}`,
+        availableTitle: (version: string) => `v${version} 사용 가능`,
+        installing: "설치 중…",
+        install: "지금 설치 + 재시작",
+      };
   const [busy, setBusy] = React.useState(false);
   const [status, setStatus] = React.useState<string>("");
   const [available, setAvailable] = React.useState<{
@@ -476,19 +694,19 @@ const UpdatesSection: React.FC<{ dark: boolean }> = ({ dark }) => {
   async function checkForUpdate() {
     setBusy(true);
     setError(null);
-    setStatus("최신 버전 확인 중…");
+    setStatus(copy.checkingStatus);
     setAvailable(null);
     try {
       const { check } = await import("@tauri-apps/plugin-updater");
       const update = await check();
       if (update) {
         setAvailable({ version: update.version, notes: update.body, date: update.date });
-        setStatus(`v${update.version} 사용 가능`);
+        setStatus(copy.availableStatus(update.version));
       } else {
-        setStatus("최신 버전입니다.");
+        setStatus(copy.upToDate);
       }
     } catch (e) {
-      setError(`확인 실패: ${String(e)}`);
+      setError(copy.checkFailed(String(e)));
       setStatus("");
     } finally {
       setBusy(false);
@@ -498,12 +716,12 @@ const UpdatesSection: React.FC<{ dark: boolean }> = ({ dark }) => {
   async function installAndRestart() {
     setInstalling(true);
     setError(null);
-    setStatus("다운로드·설치 중…");
+    setStatus(copy.installingStatus);
     try {
       const { check } = await import("@tauri-apps/plugin-updater");
       const update = await check();
       if (!update) {
-        setError("다시 확인하니 새 버전이 없습니다.");
+        setError(copy.noUpdateOnRetry);
         return;
       }
       let downloaded = 0;
@@ -515,16 +733,16 @@ const UpdatesSection: React.FC<{ dark: boolean }> = ({ dark }) => {
           downloaded += event.data.chunkLength;
           if (total > 0) {
             const pct = Math.round((downloaded / total) * 100);
-            setStatus(`다운로드 ${pct}% (${(downloaded / 1024 / 1024).toFixed(1)}MB / ${(total / 1024 / 1024).toFixed(1)}MB)`);
+            setStatus(copy.downloadProgress(pct, downloaded / 1024 / 1024, total / 1024 / 1024));
           }
         } else if (event.event === "Finished") {
-          setStatus("설치 완료. 재시작 중…");
+          setStatus(copy.installed);
         }
       });
       const { relaunch } = await import("@tauri-apps/plugin-process");
       await relaunch();
     } catch (e) {
-      setError(`설치 실패: ${String(e)}`);
+      setError(copy.installFailed(String(e)));
       setStatus("");
     } finally {
       setInstalling(false);
@@ -535,22 +753,22 @@ const UpdatesSection: React.FC<{ dark: boolean }> = ({ dark }) => {
     <>
       <SectionHeader
         dark={dark}
-        title="업데이트"
-        sub="Atelier 새 버전을 확인하고 설치합니다. 모든 업데이트는 ED25519 서명으로 검증됩니다."
+        title={copy.title}
+        sub={copy.sub}
       />
       <Row
         dark={dark}
-        label="현재 버전"
-        hint="앱 번들 메타데이터에 박힌 버전 (tauri.conf.json)."
+        label={copy.currentVersion}
+        hint={copy.currentVersionHint}
       >
         <div className={cls("text-[12px] font-mono", dark ? "text-dink" : "text-ink")}>
-          v0.1.0
+          v0.1.1
         </div>
       </Row>
       <Row
         dark={dark}
-        label="업데이트 확인"
-        hint="GitHub Release의 latest.json을 폴링합니다. 첫 확인 시 인터넷 연결이 필요합니다."
+        label={copy.check}
+        hint={copy.checkHint}
       >
         <button
           type="button"
@@ -562,7 +780,7 @@ const UpdatesSection: React.FC<{ dark: boolean }> = ({ dark }) => {
           )}
           data-testid="settings-check-update"
         >
-          {busy ? "확인 중…" : "지금 확인"}
+          {busy ? copy.checking : copy.checkNow}
         </button>
       </Row>
       {status && !error && (
@@ -590,7 +808,7 @@ const UpdatesSection: React.FC<{ dark: boolean }> = ({ dark }) => {
           style={{ boxShadow: "0 0 0 1px #c96442" }}
         >
           <div className={cls("text-[14px] font-medium mb-1", dark ? "text-dink" : "text-ink")}>
-            v{available.version} 사용 가능
+            {copy.availableTitle(available.version)}
           </div>
           {available.date && (
             <div className={cls("text-[10px] mb-3", dark ? "text-dsub" : "text-sub")}>
@@ -615,7 +833,7 @@ const UpdatesSection: React.FC<{ dark: boolean }> = ({ dark }) => {
             style={{ background: "#c96442" }}
             data-testid="settings-install-update"
           >
-            {installing ? "설치 중…" : "지금 설치 + 재시작"}
+            {installing ? copy.installing : copy.install}
           </button>
         </div>
       )}

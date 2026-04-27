@@ -11,6 +11,19 @@ interface Props {
 
 const TopChrome: React.FC<Props> = ({ screen, setScreen, tw, setTw }) => {
   const dark = tw.dark;
+  const copy = tw.language === "en"
+    ? {
+        preview: "Preview",
+        nav: { welcome: "Home", main: "Code", settings: "Settings" },
+        theme: "Toggle theme",
+        settings: "Settings",
+      }
+    : {
+        preview: "미리보기",
+        nav: { welcome: "홈", main: "코드", settings: "설정" },
+        theme: "테마 전환",
+        settings: "설정",
+      };
   return (
     <div
       className={cls(
@@ -31,7 +44,7 @@ const TopChrome: React.FC<Props> = ({ screen, setScreen, tw, setTw }) => {
             dark ? "text-dsub" : "text-sub",
           )}
         >
-          미리보기
+          {copy.preview}
         </span>
       </div>
 
@@ -42,10 +55,10 @@ const TopChrome: React.FC<Props> = ({ screen, setScreen, tw, setTw }) => {
         )}
       >
         {[
-          ["welcome", "홈"],
-          ["main", "코드"],
-          ["design", "디자인"],
-          ["settings", "설정"],
+          ["welcome", copy.nav.welcome],
+          ["main", copy.nav.main],
+          // ["design", "디자인"],  // 보류 — 코드 모드 우선 (260427)
+          ["settings", copy.nav.settings],
         ].map(([k, label]) => (
           <button
             key={k}
@@ -67,20 +80,17 @@ const TopChrome: React.FC<Props> = ({ screen, setScreen, tw, setTw }) => {
       </div>
 
       <div className="flex items-center gap-1">
-        <IconBtn dark={dark} title="테마 전환" onClick={() => setTw({ dark: !dark })}>
+        <IconBtn dark={dark} title={copy.theme} onClick={() => setTw({ dark: !dark })}>
           {dark ? I.sun : I.moon}
         </IconBtn>
-        <IconBtn dark={dark} title="설정" onClick={() => setScreen("settings")}>
+        <IconBtn
+          dark={dark}
+          title={copy.settings}
+          active={screen === "settings"}
+          onClick={() => setScreen("settings")}
+        >
           {I.gear}
         </IconBtn>
-        <div
-          className={cls(
-            "ml-1 h-7 w-7 rounded-full grid place-items-center text-[11px] font-semibold",
-            dark ? "bg-[#3a3a37] text-dink" : "bg-muted text-ink",
-          )}
-        >
-          JK
-        </div>
       </div>
     </div>
   );
@@ -102,8 +112,10 @@ export const IconBtn: React.FC<IconBtnProps> = ({
   active,
 }) => (
   <button
+    type="button"
     onClick={onClick}
     title={title}
+    aria-label={title}
     className={cls(
       "h-7 w-7 rounded-[7px] grid place-items-center transition-colors duration-200",
       active

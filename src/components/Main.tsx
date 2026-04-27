@@ -9,10 +9,12 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { CanvasAddon } from "@xterm/addon-canvas";
 import "@xterm/xterm/css/xterm.css";
+import { autoInstallCommand, autoInstallExecutable } from "../lib/cliInstallers";
 import { cls, MOD_KEY, Tweaks } from "../lib/tokens";
 import { I } from "./Icons";
 import {
   clipboardSaveImage,
+  commandExists,
   isTauri,
   onPtyData,
   onPtyExit,
@@ -26,6 +28,9 @@ import {
 import FileTree from "./FileTree";
 
 interface Tab {
+  // UI 식별자 — 신규 탭은 ui-* 형식, 복원 탭은 replayLogId 그대로.
+  // PTY 식별자(ptyId)와 분리: 복원 탭은 사용자 첫 입력 시까지 PTY 미시작이라
+  // ptyId는 lazy로 부착된다.
   id: string;
   profile: string;
   // 프로필 기본 이름. 사용자가 rename한 경우 customName 우선.
@@ -36,6 +41,13 @@ interface Tab {
   dot: string;
   term: Terminal;
   fit: FitAddon;
+  // PTY 측 식별자. ptySpawn 완료 후 부착. autoConnect:false lazy 탭만 첫 입력 전까지 undefined.
+  ptyId?: string;
+  // lazy 탭이 PTY 미시작 상태인지. 첫 입력 시 activatePty가 false로 갱신.
+  pendingPtyActivation?: boolean;
+  // IME bridge / 외부 호출자가 PTY 입력을 흘릴 때 사용. ptyId 부착 전엔 큐에 적재.
+  // 활성화 후 큐 드레인. spawnTab closure가 정의해서 Tab에 부착.
+  sendInput?: (data: string) => void;
   unlistenData?: () => void;
   unlistenExit?: () => void;
   // 탭별 전용 DOM 컨테이너 — 생성 시 1회만 term.open()에 부착하고 이후
@@ -59,6 +71,7 @@ interface Tab {
 
 interface Props {
   tw: Tweaks;
+  isActive?: boolean;
 }
 
 // ANSI escape / 제어 문자 제거 — 채팅 말풍선에 평문 텍스트만 남기기 위함.
@@ -107,6 +120,54 @@ function detectServableUrl(text: string): string | null {
   return local[local.length - 1];
 }
 
+function plainReplayText(raw: string): string {
+  return raw
+    .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b\[[0-9;?]*[\x20-\x2f]*[\x40-\x7e]/g, "")
+    .replace(/\x1b[()][A-B0-2]/g, "")
+    .replace(/\x1b[=>]/g, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "")
+    .replace(/\n{4,}/g, "\n\n\n")
+    .trimEnd();
+}
+
+function writeTerminalChunksCooperatively(
+  term: Terminal,
+  chunks: Uint8Array[],
+  log: (entry: unknown) => void,
+  done: () => void,
+) {
+  const queue = chunks.slice();
+  const perFrame = 4;
+  let cancelled = false;
+
+  const writeOne = (writtenThisFrame: number) => {
+    if (cancelled) return;
+    const chunk = queue.shift();
+    if (!chunk) {
+      done();
+      return;
+    }
+    try {
+      term.write(chunk, () => {
+        if (writtenThisFrame + 1 >= perFrame) {
+          window.requestAnimationFrame(() => writeOne(0));
+        } else {
+          writeOne(writtenThisFrame + 1);
+        }
+      });
+    } catch (err) {
+      log({ kind: "flush-err", msg: String(err), at: Date.now() });
+      window.requestAnimationFrame(() => writeOne(0));
+    }
+  };
+
+  window.requestAnimationFrame(() => writeOne(0));
+  return () => { cancelled = true; };
+}
+
 // Ring buffer — IME 진단 로그. pty-recv/pty-write-err는 노이즈라 차단.
 const IME_LOG_MAX = 200;
 function imeLogPush(entry: unknown) {
@@ -126,7 +187,7 @@ function diagOn() {
   return !!(window as unknown as { __diagOn?: boolean }).__diagOn;
 }
 
-const Main: React.FC<Props> = ({ tw }) => {
+const Main: React.FC<Props> = ({ tw, isActive = true }) => {
   const dark = tw.dark;
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -259,7 +320,7 @@ const Main: React.FC<Props> = ({ tw }) => {
         profile: t.profile,
         name: t.name,
         customName: t.customName,
-        cmd: t.cmd,
+        cmd: normalizeClaudeCmd(t.profile, t.cmd, "persist"),
         dot: t.dot,
         firstPrompt: t.firstPrompt,
         lastSnippet: t.lastSnippet,
@@ -270,6 +331,56 @@ const Main: React.FC<Props> = ({ tw }) => {
   }, [tabs]);
 
   const termContainerRef = useRef<HTMLDivElement | null>(null);
+
+  const normalizeClaudeCmd = useCallback((profile: string, cmd: string, mode: "persist" | "launch") => {
+    if (profile !== "claude" && !cmd.trim().startsWith("claude")) return cmd.trim();
+    const parts = cmd.trim().split(/\s+/).filter(Boolean);
+    const withoutContinue = parts.filter((part) => part !== "--continue");
+    if (withoutContinue.length === 0) withoutContinue.push("claude");
+    if (withoutContinue[0] !== "claude") return cmd.trim();
+    if (mode === "persist") return "claude";
+    if (!withoutContinue.includes("--no-chrome")) withoutContinue.push("--no-chrome");
+    return withoutContinue.join(" ");
+  }, []);
+
+  const isTerminalHostMeasurable = useCallback((host: HTMLDivElement) => {
+    if (!isActive || !host.isConnected) return false;
+    const rect = host.getBoundingClientRect();
+    const style = window.getComputedStyle(host);
+    return (
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      rect.width > 200 &&
+      rect.height > 100
+    );
+  }, [isActive]);
+
+  const fitVisibleTab = useCallback((tab: Tab, label: string, notifyPty = true) => {
+    const host = tab.hostEl;
+    if (!isTerminalHostMeasurable(host)) {
+      imeLogPush({ kind: `fit-${label}-skip-hidden`, tabId: tab.id, hostW: host.clientWidth, hostH: host.clientHeight, at: Date.now() });
+      return false;
+    }
+    try {
+      tab.fit.fit();
+      const approxCharW = Math.max(6, tw.terminalFontPx * 0.62);
+      const approxCharH = Math.max(12, tw.terminalFontPx * 1.2);
+      const approxCols = Math.max(80, Math.floor(host.clientWidth / approxCharW) - 1);
+      const approxRows = Math.max(24, Math.floor(host.clientHeight / approxCharH) - 1);
+      if (tab.term.cols < approxCols * 0.85) {
+        tab.term.resize(approxCols, approxRows);
+        imeLogPush({ kind: `fit-${label}-override`, tabId: tab.id, fitCols: tab.term.cols, approxCols, hostW: host.clientWidth, at: Date.now() });
+      } else {
+        imeLogPush({ kind: `fit-${label}`, tabId: tab.id, rows: tab.term.rows, cols: tab.term.cols, hostW: host.clientWidth, at: Date.now() });
+      }
+      if (notifyPty && isTauri() && tab.ptyId && tab.term.cols >= 80) {
+        ptyResize(tab.ptyId, tab.term.cols, tab.term.rows).catch(() => {});
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }, [isTerminalHostMeasurable, tw.terminalFontPx]);
 
   const applyPreviewInput = () => {
     const u = previewInput.trim();
@@ -355,16 +466,36 @@ const Main: React.FC<Props> = ({ tw }) => {
   }, []);
 
   // showPreview / previewWidth / leftPanelWidth 변경 시 활성 탭 fit 재호출.
+  // Main 화면이 hidden인 동안(Settings/Home/Design) xterm fit을 호출하면 0폭/작은 폭이
+  // PTY로 전파되어 Claude가 hard-wrap한다. visible 상태일 때만 resize를 보낸다.
   useEffect(() => {
     const tab = tabs.find((t) => t.id === activeId);
-    if (!tab) return;
+    if (!tab || !isActive) return;
     window.setTimeout(() => {
-      try { tab.fit.fit(); } catch {}
-      if (isTauri() && tab.term.cols > 0) {
-        ptyResize(tab.id, tab.term.cols, tab.term.rows).catch(() => {});
-      }
+      fitVisibleTab(tab, "layout-effect");
     }, 50);
-  }, [showPreview, previewWidth, leftPanelWidth, activeId, tabs]);
+  }, [showPreview, previewWidth, leftPanelWidth, activeId, tabs, isActive, fitVisibleTab]);
+
+  // TopChrome에서 Settings/Home/Design으로 갔다가 Main으로 돌아오는 순간의 재측정.
+  // App.tsx는 Main을 unmount하지 않고 display:none으로 숨기므로, 복귀 직후 두 frame을 기다린 뒤
+  // 보이는 코드 화면에서만 fit/PTY resize를 다시 보낸다.
+  useEffect(() => {
+    if (!isActive) return;
+    const tab = tabs.find((t) => t.id === activeId);
+    if (!tab) return;
+    let raf1 = 0;
+    let raf2 = 0;
+    raf1 = window.requestAnimationFrame(() => {
+      raf2 = window.requestAnimationFrame(() => {
+        fitVisibleTab(tab, "screen-return");
+        try { tab.term.focus(); } catch {}
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(raf1);
+      window.cancelAnimationFrame(raf2);
+    };
+  }, [isActive, activeId, tabs, fitVisibleTab]);
 
   // document-level capture 로거 — IME 이벤트가 어느 element에 오는지 실측.
   // 진단 전용. 프로덕션 기본 OFF (diagOn() === false면 리스너 미등록 → 부하 0).
@@ -421,10 +552,14 @@ const Main: React.FC<Props> = ({ tw }) => {
   }, []);
 
   // 탭 하나 추가
-  async function spawnTab(
-    profileId: string,
-    opts?: { customName?: string; cmdOverride?: string; replayLogId?: string },
-  ) {
+  type SpawnTabOptions = {
+    customName?: string;
+    cmdOverride?: string;
+    replayLogId?: string;
+    autoConnect?: boolean;
+  };
+
+  async function spawnTab(profileId: string, opts?: SpawnTabOptions) {
     const tauri = isTauri();
     const pending: Uint8Array[] = [];
     // listener closure가 참조할 가변 state.
@@ -448,6 +583,10 @@ const Main: React.FC<Props> = ({ tw }) => {
     }
     const term = new Terminal({
       allowProposedApi: true,  // unicode11 addon (xterm.unicode.activeVersion="11") 사용 필수
+      // \e[2J(Erase in Display All)가 scrollback에 erased text를 push하도록 함 (PuTTY 동작).
+      // 기본 false면 viewport만 비워지고 scrollback 안 들어감 → replay log 위로 스크롤 불가.
+      // 우리가 spawnTab replay 블록에서 \e[2J + hint 패턴으로 viewport clear + scrollback 보존하려면 필수.
+      scrollOnEraseInDisplay: true,
       // 영문 monospace는 Menlo, 한글은 "Nanum Gothic Coding"으로 fallback.
       // Menlo는 한글 글리프가 없어 시스템 한글 폰트(AppleGothic 등)로 fallback되는데
       // 이 폰트는 한글을 1 cell 폭에 그리는 반면 xterm은 한글을 2 cell로 계산 →
@@ -506,90 +645,143 @@ const Main: React.FC<Props> = ({ tw }) => {
     const cols = 80;
     const rows = 24;
 
-    let id: string;
-    let logId: string;
+    // 탭 식별자 분리 — UI 식별자(uiId)는 즉시 확정.
+    // 복원 탭도 기본값은 자동 PTY 접속이다. macOS App Data Isolation 팝업은 사용자가
+    // 한 번 승인해 TCC에 저장되게 두어야 세션이 실제로 이어진다. 팝업 회피를 위해
+    // 자동 접속을 막으면 Atelier가 살아난 것처럼 보여도 Claude/Hermes가 시작되지 않는다.
+    // 단, 긴급 회피용으로 명시적으로 autoConnect: false를 넘기면 lazy 모드는 유지한다.
+    const restoreMode = tauri && !!opts?.replayLogId;
+    const autoConnect = opts?.autoConnect ?? true;
+    const lazyMode = tauri && !autoConnect;
+    const uiId = opts?.replayLogId
+      ? opts.replayLogId
+      : (tauri ? `tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+               : `dev-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    let ptyId: string | undefined;
+    let logId: string = opts?.replayLogId || uiId;
     let unlistenData: (() => void) | undefined;
     let unlistenExit: (() => void) | undefined;
-    if (tauri) {
-      // Rust pty.rs의 profile_command는 매칭 키를 "cmd"(실행명)으로 쓴다.
-      // effectiveCmd는 profile 기본 cmd 또는 "이어가기" 등 override된 전체 명령.
-      // replayLogId가 주어지면 같은 로그 파일에 이어서 append (재시작 시 누적).
-      const spawn = await ptySpawn(effectiveCmd, cols, rows, opts?.replayLogId);
-      id = spawn.id;
-      logId = spawn.log_id;
-      // Trust prompt 자동응답은 Rust reader thread에서 처리됨 (pty.rs).
-      // JS listen 타이밍이 PTY 첫 청크를 놓쳐 자동응답 실패한 경험 때문.
-      // URL 자동 감지용 누적 버퍼 (마지막 8KB만 유지).
-      // dev server URL(Vite/Next/Rails/Django 등)이 stdout에 찍히는 순간 감지해
-      // Preview에 바로 로드. iframe 내부에서 dev server의 HMR이 실시간 업데이트 수행.
-      const urlAccum = { text: "" };
-      const URL_LIMIT = 8192;
-      // 채팅 말풍선 스니펫용 ANSI 제거 텍스트 누적 (최근 4KB).
-      const snippetAccum = { text: "" };
-      const SNIP_LIMIT = 4096;
-      // PTY 수신 시 lastActiveAt / lastSnippet 갱신 — 너무 잦으면 setTabs 폭주하니 1초 스로틀.
-      let lastActiveBump = 0;
-      unlistenData = await onPtyData(id, (bytes) => {
-        imeLogPush({ kind: "pty-recv", len: bytes.length, at: Date.now() });
-        const now = Date.now();
-        // snippetAccum는 ANSI 제거 실패 여부와 무관하게 계속 누적(1초 스로틀에서 최종 사용).
-        try {
-          const decoded = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-          snippetAccum.text = (snippetAccum.text + decoded).slice(-SNIP_LIMIT);
-        } catch {}
-        if (now - lastActiveBump > 1000) {
-          lastActiveBump = now;
-          // 마지막 의미 있는 줄들(최근 3줄)을 스니펫으로 추출.
-          const plain = stripAnsi(snippetAccum.text);
-          const lines = plain.split("\n").filter((l) => l.trim()).slice(-3);
-          const snippet = lines.join("\n").slice(-240);
-          setTabs((prev) =>
-            prev.map((t) => (t.id === id ? { ...t, lastActiveAt: now, lastSnippet: snippet } : t)),
-          );
-        }
-        if (state.ready) {
-          try {
-            term.write(bytes);  // xterm 6: 자동 redraw, refresh hack 불필요
-          } catch (err) {
-            imeLogPush({ kind: "pty-write-err", msg: String(err), at: Date.now() });
-          }
-        } else {
-          pending.push(bytes);
-        }
+    let activating = false;
+    const inputQueue: string[] = [];
+    // 복원 로그를 안전한 plain transcript로 pending에 적재했는지.
+    // true면 live PTY 접속 직전 강제 clear를 하지 않아 scrollback/history를 보존한다.
+    let restoredTranscriptLoaded = false;
 
-        // URL 자동 감지 — ANSI escape/제어 문자 제외.
-        try {
-          const chunk = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-          urlAccum.text = (urlAccum.text + chunk).slice(-URL_LIMIT);
-          const url = detectServableUrl(urlAccum.text);
-          if (url) {
-            setPreviewUrl((prev) => {
-              if (prev === url) return prev;
-              imeLogPush({ kind: "preview-autoset", url, at: Date.now() });
-              return url;
-            });
-            setShowPreview(true);
-          }
-        } catch (err) {
-          imeLogPush({ kind: "preview-detect-err", msg: String(err), at: Date.now() });
+    // PTY spawn + listener attach. 기본은 spawnTab 끝에서 즉시 호출,
+    // autoConnect:false lazy 탭만 term.onData 첫 입력 시 호출.
+    async function activatePty(): Promise<void> {
+      if (!tauri || ptyId || activating) return;
+      activating = true;
+      try {
+        if (restoreMode && !restoredTranscriptLoaded) {
+          try { term.write("\x1b[0m\x1b[?25h\x1b[2J\x1b[H"); } catch {}
         }
-      });
-      unlistenExit = await onPtyExit(id, (code) => {
-        term.writeln(`\r\n\x1b[90m[exit ${code ?? "?"}]\x1b[0m`);
-      });
-    } else {
-      // dev-only: PTY mock. probe/Playwright가 IME 흐름을 관찰할 수 있도록 window.__imeLog에 기록.
-      // Math.random — StrictMode/restore mount이 같은 ms에 두 번 호출 시 React key 중복 방지.
-      id = `dev-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      logId = id;
-      (window as unknown as { __imeLog?: unknown[] }).__imeLog = [];
-      term.write("\x1b[32m[atelier dev mode · PTY mock · IME 검증용]\x1b[0m\r\n$ ");
+        const spawn = await ptySpawn(effectiveCmd, cols, rows, opts?.replayLogId);
+        ptyId = spawn.id;
+        logId = spawn.log_id;
+        const urlAccum = { text: "" };
+        const URL_LIMIT = 8192;
+        const snippetAccum = { text: "" };
+        const SNIP_LIMIT = 4096;
+        let lastActiveBump = 0;
+        unlistenData = await onPtyData(ptyId, (bytes) => {
+          imeLogPush({ kind: "pty-recv", len: bytes.length, at: Date.now() });
+          const now = Date.now();
+          try {
+            const decoded = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+            snippetAccum.text = (snippetAccum.text + decoded).slice(-SNIP_LIMIT);
+          } catch {}
+          if (now - lastActiveBump > 1000) {
+            lastActiveBump = now;
+            const plain = stripAnsi(snippetAccum.text);
+            const lines = plain.split("\n").filter((l) => l.trim()).slice(-3);
+            const snippet = lines.join("\n").slice(-240);
+            setTabs((prev) =>
+              prev.map((t) => (t.id === uiId ? { ...t, lastActiveAt: now, lastSnippet: snippet } : t)),
+            );
+          }
+          if (state.ready) {
+            try {
+              term.write(bytes);
+            } catch (err) {
+              imeLogPush({ kind: "pty-write-err", msg: String(err), at: Date.now() });
+            }
+          } else {
+            pending.push(bytes);
+          }
+          try {
+            const chunk = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+            urlAccum.text = (urlAccum.text + chunk).slice(-URL_LIMIT);
+            const url = detectServableUrl(urlAccum.text);
+            if (url) {
+              setPreviewUrl((prev) => {
+                if (prev === url) return prev;
+                imeLogPush({ kind: "preview-autoset", url, at: Date.now() });
+                return url;
+              });
+              setShowPreview(true);
+            }
+          } catch (err) {
+            imeLogPush({ kind: "preview-detect-err", msg: String(err), at: Date.now() });
+          }
+        });
+        unlistenExit = await onPtyExit(ptyId, (code) => {
+          term.writeln(`\r\n\x1b[90m[exit ${code ?? "?"}]\x1b[0m`);
+        });
+        // Tab 객체에 ptyId/listeners 부착 + pendingPtyActivation 해제.
+        setTabs((prev) =>
+          prev.map((t) =>
+            t.id === uiId
+              ? { ...t, ptyId, logId, unlistenData, unlistenExit, pendingPtyActivation: false }
+              : t,
+          ),
+        );
+        // term.onResize가 처음 fit 적용 후 PTY 크기 sync 필요.
+        if (term.cols > 0) {
+          ptyResize(ptyId, term.cols, term.rows).catch(() => {});
+        }
+        // 큐된 입력(첫 키 입력 + 빠른 후속 입력) 모두 PTY에 흘림.
+        for (const q of inputQueue) {
+          ptyWrite(ptyId, q).catch(console.error);
+        }
+        inputQueue.length = 0;
+      } catch (err) {
+        console.error("activatePty failed", err);
+      } finally {
+        activating = false;
+      }
     }
+
+    if (!tauri) {
+      // dev-only: PTY mock. probe/Playwright가 IME 흐름을 관찰할 수 있도록 window.__imeLog에 기록.
+      const wdev = window as unknown as { __imeLog?: unknown[]; __ptyWrites?: string[] };
+      wdev.__imeLog = [];
+      wdev.__ptyWrites = [];
+      // dev banner를 pending에 push — mount effect의 flush 시점에 그려져야 canvas가 첫 render에서 잡힘.
+      // term.write를 직접 호출하면 term.open 전이라 buffer에는 들어가지만 첫 RAF에 일관되게 안 그려지는 경우 발견.
+      pending.push(
+        new TextEncoder().encode(
+          "\x1b[32m[atelier dev mode · PTY mock · IME 검증용]\x1b[0m\r\n$ ",
+        ),
+      );
+    }
+
+    // term.onData가 사용자 키 입력에서 비롯됐는지 판별용 timestamp.
+    // xterm은 replay log 처리 중 query(\e[c, focus events 등)를 만나면 자기가 응답을
+    // onData로 emit한다. 이 자동 응답이 lazy 탭의 activatePty를 트리거하던 회귀 버그가 있었음.
+    // keydown이 직전(< 500ms)에 있었는지로 사용자 입력만 식별.
+    let lastKeyDownAt = 0;
 
     // 가설 B: composition 중 키 이벤트가 xterm에서 처리되면 textarea 상태 깨짐 가능 → 차단.
     term.attachCustomKeyEventHandler((ev: KeyboardEvent) => {
-      if (ev.type === "keydown" && (ev.isComposing || ev.keyCode === 229)) {
-        return false;
+      if (ev.type === "keydown") {
+        lastKeyDownAt = Date.now();
+        if (ev.isComposing || ev.keyCode === 229) {
+          // xterm 6의 native composition/input 경로에 맡긴다.
+          // 여기서 false를 반환하거나 별도 IME bridge로 ptyWrite하면 한 글자가 두 번 들어가는
+          // 중복 입력 회귀가 발생한다.
+          return true;
+        }
       }
       return true;
     });
@@ -609,32 +801,36 @@ const Main: React.FC<Props> = ({ tw }) => {
     let ansiMode: "normal" | "esc" | "csi" | "osc" = "normal";
     term.onData((d) => {
       if (diagOn()) imeLogPush({ kind: "onData", d, at: Date.now() });
-      // xterm CompositionHelper가 native compositionstart/end로 합성 음절만 한 번에 emit.
-      // 추가 차단 시 native IME path 깨져 자모 분리 회귀 — xterm 기본 경로 신뢰.
       if (tauri) {
-        ptyWrite(id, d).catch(console.error);
+        if (ptyId) {
+          ptyWrite(ptyId, d).catch(console.error);
+        } else {
+          // lazy mode: 사용자가 직접 키 입력해서 발생한 onData만 PTY 활성화 트리거.
+          // xterm이 replay log의 query(\e[c, focus events)에 자체 응답으로 발화하는 onData는
+          // 무시 (silently drop). 이 가드 없으면 매 restart마다 자동 PTY spawn → banner 누적.
+          const isUserInput = Date.now() - lastKeyDownAt < 500;
+          if (!isUserInput) return;
+          inputQueue.push(d);
+          if (lazyMode) activatePty();
+        }
       } else {
         term.write(d);
       }
       if (firstPromptSaved) return;
       for (const ch of d) {
         const code = ch.charCodeAt(0);
-        // ANSI state machine — ESC(0x1b) 만나면 이후 시퀀스 전부 스킵.
         if (ansiMode === "esc") {
           ansiMode = ch === "[" ? "csi" : ch === "]" ? "osc" : "normal";
           continue;
         }
         if (ansiMode === "csi") {
-          // CSI: 파라미터/intermediate(0x20-0x3F) + final byte(0x40-0x7E)
           if (code >= 0x40 && code <= 0x7e) ansiMode = "normal";
           continue;
         }
         if (ansiMode === "osc") {
-          // OSC 종료: BEL(0x07) 또는 ESC\ (ST). 단순화해 ESC 만나면 normal로.
           if (code === 0x07 || code === 0x1b) ansiMode = "normal";
           continue;
         }
-        // normal 모드
         if (code === 0x1b) { ansiMode = "esc"; continue; }
         if (ch === "\r" || ch === "\n") {
           const trimmed = inputBuf.trim();
@@ -642,7 +838,7 @@ const Main: React.FC<Props> = ({ tw }) => {
             firstPromptSaved = true;
             const preview = trimmed.slice(0, 60);
             setTabs((prev) =>
-              prev.map((t) => (t.id === id ? { ...t, firstPrompt: preview } : t)),
+              prev.map((t) => (t.id === uiId ? { ...t, firstPrompt: preview } : t)),
             );
           }
           inputBuf = "";
@@ -653,27 +849,41 @@ const Main: React.FC<Props> = ({ tw }) => {
           inputBuf += ch;
           if (inputBuf.length > 400) inputBuf = inputBuf.slice(-400);
         }
-        // 그 외 제어문자는 무시.
       }
     });
-    term.onResize(({ cols, rows }) => {
-      if (tauri) ptyResize(id, cols, rows).catch(console.error);
-    });
-
     // 탭 전용 DOM 컨테이너 — 생성 시 1회만 term.open, 이후 display 토글.
     const hostEl = document.createElement("div");
     hostEl.className = "h-full w-full";
     hostEl.style.display = "none";
-    // 그리드 모드 클릭 시 이 탭 활성화 + xterm focus. single 모드에서도 무해 (이미 활성).
+
+    term.onResize(({ cols, rows }) => {
+      if (tauri && ptyId && cols >= 80 && isTerminalHostMeasurable(hostEl)) {
+        ptyResize(ptyId, cols, rows).catch(console.error);
+      }
+    });
+
     hostEl.addEventListener("mousedown", () => {
-      setActiveId(id);
-      // 활성 전환 직후 xterm 내부 helper-textarea에 focus가 가도록 다음 frame에 호출.
+      setActiveId(uiId);
       window.setTimeout(() => {
         try { term.focus(); } catch {}
       }, 0);
     });
+    // IME bridge 등 외부 호출자가 PTY로 데이터를 흘릴 때 쓰는 단일 진입점.
+    // ptyId가 부착됐으면 즉시 ptyWrite, 아니면 큐 적재 + lazy 모드면 activate 트리거.
+    const sendInput = (d: string) => {
+      if (!tauri) return;
+      if (ptyId) {
+        ptyWrite(ptyId, d).catch(console.error);
+      } else {
+        // 복원(lazy) 탭에서는 xterm/helper-textarea가 replay 중 만든 input 이벤트가
+        // sendInput 경로로 들어와도 PTY를 켜면 안 된다. 실제 키 입력 직후만 허용.
+        if (lazyMode && Date.now() - lastKeyDownAt >= 500) return;
+        inputQueue.push(d);
+        if (lazyMode) activatePty();
+      }
+    };
     const tab: Tab = {
-      id,
+      id: uiId,
       profile: p.id,
       name: p.name,
       customName: opts?.customName,
@@ -681,52 +891,111 @@ const Main: React.FC<Props> = ({ tw }) => {
       dot: p.dot,
       term,
       fit,
-      unlistenData,
-      unlistenExit,
+      ptyId: undefined,
+      pendingPtyActivation: lazyMode,
+      sendInput,
+      unlistenData: undefined,
+      unlistenExit: undefined,
       hostEl,
       logId,
       pending,
       state,
       lastActiveAt: Date.now(),
     };
+    // 이전 세션 로그 재생 — setTabs **전**에 pending에 push 완료해야 mount effect 첫 flush에 포함됨.
+    // 비동기 IIFE로 두면 race: setTabs → render → mount effect setTimeout 50ms 안에 sessionLogLoad가
+    // 못 끝나면 빈 pending 그대로 flush + state.ready=true → 이후 push해도 안 그려짐.
+    // (실제 PTY는 새 세션이므로 claude의 대화 맥락은 claude --continue 옵션이 별도 처리.)
+    if (tauri && restoreMode && !autoConnect) {
+      const label = effectiveCmd.includes("claude")
+        ? "Claude 세션"
+        : effectiveCmd.includes("hermes")
+          ? "Hermes 세션"
+          : "터미널 세션";
+      pending.push(new TextEncoder().encode(
+        `\x1b[0m\x1b[?25h\x1b[2J\x1b[H\x1b[90m${label} 복원 준비됨. 입력하면 접속합니다.\x1b[0m\r\n`,
+      ));
+    }
+
+    // 재실행 복원 시 각 탭의 이전 터미널 로그를 raw TUI replay가 아니라 plain transcript로 적재한다.
+    // Claude/Hermes의 alternate-screen/cursor repaint ANSI를 그대로 먹이면 화면 밀림/뒤늦은 로딩/자동응답
+    // 회귀가 생기므로, tail-limited 로그를 텍스트 scrollback으로만 보여주고 live PTY 출력은 뒤에 이어 붙인다.
+    if (tauri && opts?.replayLogId) {
+      try {
+        const b64 = await sessionLogLoad(opts.replayLogId);
+        if (b64) {
+          const rawBin = atob(b64);
+          if (rawBin.length > 0) {
+            const rawBytes = new Uint8Array(rawBin.length);
+            for (let i = 0; i < rawBin.length; i++) rawBytes[i] = rawBin.charCodeAt(i);
+            const decoded = new TextDecoder("utf-8", { fatal: false }).decode(rawBytes);
+            const transcript = plainReplayText(decoded);
+            if (transcript.trim().length > 0) {
+              const CHUNK = 16384;
+              const replayBytes = new TextEncoder().encode(transcript);
+              const chunks: Uint8Array[] = [];
+              for (let i = 0; i < replayBytes.length; i += CHUNK) {
+                chunks.push(replayBytes.slice(i, i + CHUNK));
+              }
+              const header = new TextEncoder().encode(
+                `\x1b[0m\x1b[?25h\x1b[2J\x1b[H\x1b[90m── 이전 터미널 기록 (최근 로그 tail) ──\x1b[0m\r\n`,
+              );
+              const markerText = autoConnect
+                ? `\r\n\x1b[90m── 새 라이브 세션 연결 중 ──\x1b[0m\r\n`
+                : `\r\n\x1b[90m── 입력하면 새 라이브 세션에 접속합니다 ──\x1b[0m\r\n`;
+              const marker = new TextEncoder().encode(markerText);
+              pending.push(header, ...chunks, marker);
+              restoredTranscriptLoaded = true;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("transcript restore failed", err);
+      }
+    }
+
     setTabs((prev) => [...prev, tab]);
-    setActiveId(id);
+    setActiveId(uiId);
     setShowPicker(false);
 
-    // 이전 세션 로그 재생 — replayLogId가 있으면 Rust에서 base64 로그 읽어 pending 앞에 주입.
-    // term.open 이후 pending flush 단계에서 자동으로 term.write로 재생 → 이전 대화가 그대로 보임.
-    // (실제 PTY는 새 세션이므로 claude의 대화 맥락은 --continue 옵션이 별도 처리.)
-    if (tauri && opts?.replayLogId) {
-      void (async () => {
-        try {
-          const b64 = await sessionLogLoad(opts.replayLogId!);
-          if (!b64) return;
-          const bin = atob(b64);
-          const n = bin.length;
-          if (n === 0) return;
-          // 한 번에 큰 청크로 넣지 않고 chunk 쪼개 term.write 부하 분산.
-          // chunk 순서 보존이 핵심 — ANSI escape sequence는 byte 순서대로 읽혀야 한다.
-          // 이전 코드는 매 iteration unshift로 chunk 역순 재생 → ESC[?1;2c 같은 응답이
-          // raw 텍스트로 깨져 화면에 노출되는 회귀 발생.
-          const CHUNK = 16384;
-          const chunks: Uint8Array[] = [];
-          for (let i = 0; i < n; i += CHUNK) {
-            const sub = new Uint8Array(Math.min(CHUNK, n - i));
-            for (let j = 0; j < sub.length; j++) sub[j] = bin.charCodeAt(i + j);
-            chunks.push(sub);
-          }
-          // 세션 구분자 — 새 탭 신규 출력과 시각적으로 분리.
-          const marker = new TextEncoder().encode(
-            `\r\n\x1b[90m── 이전 대화 복원 완료 ──\x1b[0m\r\n`,
-          );
-          // 모든 chunk를 정순으로 pending 앞에 한 번에 삽입 (이미 큐에 있던 새 PTY
-          // 출력보다 먼저 재생되도록). marker는 모든 복원 chunk 뒤에 위치.
-          pending.unshift(...chunks, marker);
-        } catch (err) {
-          console.warn("replay log failed", err);
-        }
-      })();
+    // 신규 탭/복원 탭 모두 기본적으로 즉시 PTY spawn. macOS 권한 팝업은 승인되면
+    // TCC에 저장되어야 하므로 여기서 막지 않는다. autoConnect:false는 긴급 회피 옵션이다.
+    if (tauri && autoConnect) {
+      await activatePty();
     }
+  }
+
+  async function launchProfile(profileId: string, opts?: SpawnTabOptions) {
+    const p = tw.profiles.find((x) => x.id === profileId) || tw.profiles[0];
+    const executable = p ? autoInstallExecutable(p) : null;
+    const runCommand = opts?.cmdOverride?.trim() || p?.cmd?.trim() || "";
+    if (p && executable && isTauri()) {
+      try {
+        const exists = await commandExists(executable);
+        if (!exists) {
+          const installCmd = autoInstallCommand(p, tw.language, runCommand);
+          if (installCmd) {
+            const installLabel =
+              tw.language === "en" ? `${p.name} setup` : `${p.name} 설치`;
+            showToast(
+              tw.language === "en"
+                ? `${p.name} is not installed. Starting automatic setup.`
+                : `${p.name}이 설치되어 있지 않아 자동 설치를 시작합니다.`,
+            );
+            await spawnTab(p.id, {
+              ...opts,
+              customName: opts?.customName || installLabel,
+              cmdOverride: installCmd,
+              autoConnect: true,
+            });
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn("command exists check failed", err);
+      }
+    }
+    await spawnTab(profileId, opts);
   }
 
   // 윈도우 focus 시 활성 탭 helper-textarea 자동 focus.
@@ -764,17 +1033,28 @@ const Main: React.FC<Props> = ({ tw }) => {
         for (const meta of restored) {
           if (cancelled) break;
           try {
+            // Claude 탭 자동 복원은 `--continue`를 붙이지 않는다.
+            // `claude --continue`는 "마지막 Claude 대화" 하나로 붙기 때문에 Claude 탭 4개가
+            // 모두 같은 채팅을 보여주는 원인이 된다. 각 탭은 독립 PTY/log를 갖고,
+            // 명시적인 최근 세션 "이어가기" 액션에서만 --continue를 사용한다.
+            // macOS App Data Isolation 팝업 완화용 --no-chrome만 launch 시 보강한다.
+            const baseCmd = (meta.cmd || "").trim();
+            const cmdOverride =
+              meta.profile === "claude"
+                ? normalizeClaudeCmd(meta.profile, baseCmd || "claude", "launch")
+                : baseCmd || undefined;
             await spawnTab(meta.profile, {
               customName: meta.customName,
-              cmdOverride: meta.cmd,
+              cmdOverride,
               replayLogId: meta.logId,
+              autoConnect: true,
             });
           } catch (err) {
             console.warn("restore tab failed", meta, err);
           }
         }
       } else if (!cancelled && tabs.length === 0) {
-        await spawnTab("claude").catch(console.error);
+        await launchProfile("claude").catch(console.error);
       }
       if (!cancelled) openTabsInitRef.current = true;
     })();
@@ -790,11 +1070,13 @@ const Main: React.FC<Props> = ({ tw }) => {
   useEffect(() => {
     const parent = termContainerRef.current;
     if (!parent) return;
-    // 새 탭 감지 → hostEl을 parent에 append + term.open 1회만 + 초기 fit/리스너 부착.
+    // 새 탭 감지 → hostEl을 먼저 parent에 append만 한다.
+    // 중요: term.open/로그 flush는 아래에서 display 상태를 먼저 잡은 뒤 실행한다.
+    // hidden(display:none) 상태에서 xterm을 open하면 canvas/viewport가 0폭으로 잡혀
+    // 이전 채팅이 입력/포커스 이후에야 뒤늦게 그려지는 회귀가 생긴다.
     for (const tab of tabs) {
       if (parent.contains(tab.hostEl)) continue;
       parent.appendChild(tab.hostEl);
-      initializeTabDom(tab);
     }
     // 닫힌 탭 DOM 제거.
     for (const node of Array.from(parent.children)) {
@@ -841,21 +1123,29 @@ const Main: React.FC<Props> = ({ tw }) => {
         tab.hostEl.style.boxShadow = "";
       }
     }
-    // 모든 탭 fit 재측정 (grid는 cell 크기 변동, single은 활성만)
+    // display/layout 확정 후 visible 탭만 xterm open + replay flush.
+    // inactive hidden 탭은 클릭되어 visible이 되는 effect에서 처음 initialize한다.
+    for (const tab of tabs) {
+      if (!parent.contains(tab.hostEl)) continue;
+      if (tab.hostEl.dataset.atelierInitialized === "1") continue;
+      const shouldInit = codeLayout === "grid" || tab.id === activeId;
+      if (!shouldInit) continue;
+      tab.hostEl.dataset.atelierInitialized = "1";
+      initializeTabDom(tab);
+    }
+    // 모든 탭 fit 재측정 (grid는 cell 크기 변동, single은 활성만).
+    // Main이 Settings/Home 뒤에서 display:none인 동안에는 절대 fit/PTY resize를 보내지 않는다.
     const targets = codeLayout === "grid" ? tabs : tabs.filter((t) => t.id === activeId);
-    if (targets.length > 0) {
+    if (targets.length > 0 && isActive) {
       window.setTimeout(() => {
         for (const t of targets) {
-          try { t.fit.fit(); } catch {}
-          if (isTauri() && t.term.cols > 0) {
-            ptyResize(t.id, t.term.cols, t.term.rows).catch(() => {});
-          }
+          fitVisibleTab(t, "tab-layout");
         }
         const active = tabs.find((t) => t.id === activeId);
         if (active) try { active.term.focus(); } catch {}
       }, 30);
     }
-  }, [activeId, tabs, codeLayout, dark]);
+  }, [activeId, tabs, codeLayout, dark, isActive, fitVisibleTab]);
 
   // 그리드 모드 — 멈춰 있는 터미널(idle: 마지막 PTY 출력 후 N초 무활동) 노란 outline.
   // PTY 활동마다 lastActiveAt가 1초 스로틀로 갱신되니, interval 1초로 비교만 하면 됨.
@@ -894,63 +1184,120 @@ const Main: React.FC<Props> = ({ tw }) => {
     const host = tab.hostEl;
     tab.term.open(host);
     imeLogPush({ kind: "term-open", tabId: tab.id, hostW: host.clientWidth, hostH: host.clientHeight, at: Date.now() });
-    // fit addon이 macOS WKWebView에서 char width를 13.5px 정도로 과대 측정하는
-    // 증상 확인됨 (실제 Menlo 13px는 약 7.8px). 1040px 영역이 cols 77로 잘려 claude
-    // TUI가 옆줄로 wrap되는 증상.
-    // 해결: fit 결과에 하한 강제. 이론 최대(width / fontPx*0.6)의 90% 이상 확보.
-    const computeCols = () => {
-      const approxCharW = Math.max(6, tw.terminalFontPx * 0.62);
-      return Math.max(80, Math.floor(host.clientWidth / approxCharW) - 1);
-    };
-    const computeRows = () => {
-      const approxCharH = Math.max(12, tw.terminalFontPx * 1.2);
-      return Math.max(24, Math.floor(host.clientHeight / approxCharH) - 1);
-    };
-    const runFit = (label: string) => {
-      try {
-        tab.fit.fit();
-        // fit 결과가 이상하게 좁으면 수동 계산 값으로 대체.
-        const approxCols = computeCols();
-        const approxRows = computeRows();
-        if (tab.term.cols < approxCols * 0.85) {
-          tab.term.resize(approxCols, approxRows);
-          imeLogPush({ kind: `fit-${label}-override`, fitCols: tab.term.cols, approxCols, hostW: host.clientWidth, at: Date.now() });
-        } else {
-          imeLogPush({ kind: `fit-${label}`, rows: tab.term.rows, cols: tab.term.cols, hostW: host.clientWidth, at: Date.now() });
-        }
-      } catch {}
-    };
+    // fit addon이 macOS WKWebView에서 char width를 과대/과소 측정하는 증상 확인됨.
+    // 특히 Settings/Home 전환 중 Main이 display:none이면 fit 결과가 0폭/좁은 폭으로 깨지고,
+    // 그 값을 PTY에 보내면 Claude TUI가 실제로 hard-wrap한다.
+    const runFit = (label: string) => fitVisibleTab(tab, label, false);
     window.setTimeout(() => {
       runFit("first");
       tab.term.focus();
-      if (tab.pending && tab.pending.length) {
-        imeLogPush({ kind: "pending-flush", count: tab.pending.length, at: Date.now() });
-        for (const c of tab.pending) {
-          try { tab.term.write(c); } catch (err) {
-            imeLogPush({ kind: "flush-err", msg: String(err), at: Date.now() });
-          }
+      const flushPending = () => {
+        if (tab.pending && tab.pending.length) {
+          const pendingChunks = tab.pending.splice(0);
+          imeLogPush({ kind: "pending-flush", count: pendingChunks.length, at: Date.now() });
+          writeTerminalChunksCooperatively(
+            tab.term,
+            pendingChunks,
+            imeLogPush,
+            flushPending,
+          );
+        } else if (tab.state) {
+          tab.state.ready = true;
+          imeLogPush({ kind: "pending-flush-done", at: Date.now() });
         }
-        tab.pending.length = 0;
-      }
-      if (tab.state) tab.state.ready = true;
+      };
+      flushPending();
       // 폰트 늦게 로딩돼 cols 오산 가능 → 추가 fit + claude에 SIGWINCH 효과를 위한 resize 통보.
       window.setTimeout(() => {
         runFit("retry");
-        if (isTauri() && tab.term.cols > 0) {
-          ptyResize(tab.id, tab.term.cols, tab.term.rows).catch(() => {});
+        if (isTauri() && tab.ptyId && tab.term.cols >= 80) {
+          ptyResize(tab.ptyId, tab.term.cols, tab.term.rows).catch(() => {});
         }
       }, 500);
     }, 50);
     const onResize = () => {
-      try {
-        tab.fit.fit();
-      } catch {}
+      runFit("window-resize");
+      if (isTauri() && tab.ptyId && tab.term.cols >= 80) {
+        ptyResize(tab.ptyId, tab.term.cols, tab.term.rows).catch(() => {});
+      }
     };
     window.addEventListener("resize", onResize);
 
-    // helper-textarea IME hint 속성만 설정. xterm CompositionHelper의 native path 그대로 신뢰.
-    // (capture handler/imeOverlay/focus redirect 등 보강은 native path 깨뜨려 모두 제거됨.)
+    // 라운드 #5 fix — IME 자모 분리 차단.
+    // 배경: xterm 6.0.0의 Terminal._inputEvent는 helper-textarea의 input 이벤트를 capture phase로 직접 listen,
+    //       insertText로 들어오는 jamo("ㅎ", "ㅏ" 등)를 coreService.triggerDataEvent로 PTY에 흘림.
+    //       macOS WKWebView IME가 정상 composition을 못 만들고 jamo를 단독 insertText로 흘릴 때 이 경로로 분리됨.
+    // 대응: host(부모)에 capture 리스너 등록 → xterm의 textarea 직접 리스너보다 먼저 호출됨.
+    //       lastKeyCode===229 (IME) 가드로 영문은 우회. JAMO_ONLY 정규식으로 자모 단독 차단.
+    //       완성형 음절(insertText/insertFromComposition/insertFromPaste)만 ptyWrite.
+    //       compositionend 직후(<100ms)는 xterm 합성 경로가 처리하므로 중복 write 방지.
     let helper: HTMLTextAreaElement | null = null;
+    let lastKeyCode = -1;
+    let recentCompositionEndAt = 0;
+    // Hangul Jamo (U+1100-U+11FF) + Compatibility Jamo (U+3130-U+318F) +
+    // Jamo Extended-A (U+A960-U+A97F) + Jamo Extended-B (U+D7B0-U+D7FF, syllables 제외).
+    const JAMO_ONLY = /^[ᄀ-ᇿ㄰-㆏ꥠ-꥿ힰ-퟿]+$/;
+
+    const onTextareaKeyDown = (ev: Event) => {
+      const ke = ev as KeyboardEvent;
+      lastKeyCode = ke.keyCode;
+    };
+    const onTextareaCompositionEnd = () => {
+      recentCompositionEndAt = Date.now();
+    };
+    const onHostInputCapture = (ev: Event) => {
+      const ie = ev as InputEvent;
+      const inputType = ie.inputType;
+      const data = ie.data;
+      const targetEl = ev.target as HTMLElement | null;
+      // helper-textarea가 target이 아닌 input 이벤트는 통과 (다른 위젯의 InputEvent와 분리)
+      if (!targetEl || !targetEl.classList?.contains("xterm-helper-textarea")) return;
+      imeLogPush({
+        kind: "input(capture)",
+        inputType,
+        data,
+        isComposing: ie.isComposing,
+        lastKeyCode,
+        at: Date.now(),
+      });
+      // xterm 6 native IME 경로를 기본값으로 사용한다.
+      // 과거 custom bridge가 여기서 stopImmediatePropagation + tab.sendInput(data)를 수행했는데,
+      // WKWebView에서는 native onData도 함께 발생해 한 글자가 두 번 입력되는 문제가 생겼다.
+      // 지금은 진단 로그만 남기고 이벤트를 건드리지 않는다.
+      return;
+      // 영문 등 비-IME 경로는 우리가 안 건드림 — xterm native가 처리
+      if (lastKeyCode !== 229) return;
+      // IME 경로: xterm의 _inputEvent (jamo bypass path) 차단
+      ev.stopImmediatePropagation();
+      if (!data) return;
+      // 자모 단독 — 무시 (음절 만들어질 때까지 대기)
+      if (JAMO_ONLY.test(data)) {
+        imeLogPush({ kind: "jamo-blocked", data, at: Date.now() });
+        return;
+      }
+      // xterm composition path가 직전에 처리했으면 skip (이중 write 방지)
+      if (Date.now() - recentCompositionEndAt < 100) {
+        imeLogPush({ kind: "syllable-skip-comp", data, at: Date.now() });
+        return;
+      }
+      // 음절 input — ptyWrite + 시각 echo (dev) / __ptyWrites 추적 (probe 검증용)
+      if (
+        inputType === "insertText" ||
+        inputType === "insertFromComposition" ||
+        inputType === "insertFromPaste"
+      ) {
+        imeLogPush({ kind: "syllable-ptywrite", data, inputType, at: Date.now() });
+        const wins = window as unknown as { __ptyWrites?: string[] };
+        if (Array.isArray(wins.__ptyWrites)) wins.__ptyWrites.push(data);
+        if (isTauri()) {
+          // sendInput은 ptyId 부착 전엔 큐 적재 + lazy 활성화 트리거.
+          tab.sendInput?.(data);
+        } else {
+          try { tab.term.write(data); } catch {}
+        }
+      }
+    };
+
     const imeTimer = window.setTimeout(() => {
       helper =
         (host.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement | null) ||
@@ -962,12 +1309,23 @@ const Main: React.FC<Props> = ({ tw }) => {
         helper.setAttribute("autocorrect", "off");
         helper.setAttribute("autocomplete", "off");
         helper.setAttribute("spellcheck", "false");
+        // capture phase: textarea의 직접 리스너(xterm._inputEvent)보다 먼저 호출됨.
+        helper.addEventListener("keydown", onTextareaKeyDown, true);
+        helper.addEventListener("compositionend", onTextareaCompositionEnd, true);
+        // host에 capture 등록 → 이벤트 dispatch가 host → ... → textarea(target) 순으로 capture phase 진행.
+        // host의 capture 리스너가 textarea의 capture 리스너보다 먼저 호출됨 (DOM event flow).
+        host.addEventListener("input", onHostInputCapture, true);
       }
     }, 0);
 
     tab.cleanup = () => {
       window.removeEventListener("resize", onResize);
       window.clearTimeout(imeTimer);
+      if (helper) {
+        helper.removeEventListener("keydown", onTextareaKeyDown, true);
+        helper.removeEventListener("compositionend", onTextareaCompositionEnd, true);
+      }
+      host.removeEventListener("input", onHostInputCapture, true);
       helper = null;
     };
   }
@@ -1056,8 +1414,9 @@ const Main: React.FC<Props> = ({ tw }) => {
             const path = await clipboardSaveImage(buf);
             const tab = tabs.find((t) => t.id === activeId);
             if (tab) {
-              // 경로를 현재 세션 stdin에 주입 — Claude Code는 드랍된 파일을 첨부로 인식
-              await ptyWrite(tab.id, path);
+              // 경로를 현재 세션 stdin에 주입 — Claude Code는 드랍된 파일을 첨부로 인식.
+              // sendInput은 lazy 탭(ptyId 부착 전)도 큐 적재 + activate 트리거.
+              tab.sendInput?.(path);
             }
           } catch (err) {
             console.error("clipboard image error", err);
@@ -1096,6 +1455,7 @@ const Main: React.FC<Props> = ({ tw }) => {
       customName: s.name,
       cmdOverride: override,
       replayLogId: s.logSourceId || s.id,
+      autoConnect: true,
     });
     setClosedSessions((prev) => prev.filter((x) => x.id !== s.id));
   }
@@ -1109,7 +1469,7 @@ const Main: React.FC<Props> = ({ tw }) => {
       id: tab.id,
       name: tab.customName || tab.name,
       profile: tab.profile,
-      cmd: tab.cmd,
+      cmd: normalizeClaudeCmd(tab.profile, tab.cmd, "persist"),
       dot: tab.dot,
       closedAt: Date.now(),
       firstPrompt: tab.firstPrompt,
@@ -1120,9 +1480,12 @@ const Main: React.FC<Props> = ({ tw }) => {
     tab.cleanup?.();
     tab.unlistenData?.();
     tab.unlistenExit?.();
-    try {
-      await ptyKill(id);
-    } catch {}
+    // ptyId가 부착됐을 때만 PTY kill (lazy 탭이 활성화 안 된 채 닫히면 skip).
+    if (tab.ptyId) {
+      try {
+        await ptyKill(tab.ptyId);
+      } catch {}
+    }
     tab.term.dispose();
     tab.hostEl.remove();
     setTabs((prev) => prev.filter((t) => t.id !== id));
@@ -1478,7 +1841,7 @@ const Main: React.FC<Props> = ({ tw }) => {
                 <button
                   key={p.id}
                   onClick={() => {
-                    spawnTab(p.id).catch((err) => {
+                    launchProfile(p.id).catch((err) => {
                       showToast(`${p.name} 실행 실패: ${String(err)}`);
                     });
                   }}

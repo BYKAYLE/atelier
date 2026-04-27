@@ -1,6 +1,6 @@
 {
   "name": "atelier",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "Atelier — 이미지 붙여넣기가 되는 GUI 터미널",
@@ -11,7 +11,7 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build && npm run tauri:trust",
-    "tauri:trust": "xattr -dr com.apple.quarantine src-tauri/target/release/bundle/macos/Atelier.app 2>/dev/null; codesign -s 'Atelier Local Code Signing' --deep --force --identifier com.atelier.app src-tauri/target/release/bundle/macos/Atelier.app 2>/dev/null && echo 'Atelier.app signed with stable cert (TCC 권한 영구 유지)' || codesign -s - --deep --force src-tauri/target/release/bundle/macos/Atelier.app 2>/dev/null; echo done"
+    "tauri:trust": "APP=src-tauri/target/release/bundle/macos/Atelier.app; PLIST=\"$APP/Contents/Info.plist\"; xattr -dr com.apple.quarantine \"$APP\" 2>/dev/null; /usr/libexec/PlistBuddy -c 'Set :NSContactsUsageDescription Atelier runs Claude/Hermes sessions that may check Contacts metadata; approval is stored by macOS TCC.' \"$PLIST\" 2>/dev/null || /usr/libexec/PlistBuddy -c 'Add :NSContactsUsageDescription string Atelier runs Claude/Hermes sessions that may check Contacts metadata; approval is stored by macOS TCC.' \"$PLIST\"; /usr/libexec/PlistBuddy -c 'Set :NSPhotoLibraryUsageDescription Atelier runs Claude/Hermes sessions that may check Photos metadata; approval is stored by macOS TCC.' \"$PLIST\" 2>/dev/null || /usr/libexec/PlistBuddy -c 'Add :NSPhotoLibraryUsageDescription string Atelier runs Claude/Hermes sessions that may check Photos metadata; approval is stored by macOS TCC.' \"$PLIST\"; /usr/libexec/PlistBuddy -c 'Set :NSAppleEventsUsageDescription Atelier may automate approved local CLI/session workflows; approval is stored by macOS TCC.' \"$PLIST\" 2>/dev/null || /usr/libexec/PlistBuddy -c 'Add :NSAppleEventsUsageDescription string Atelier may automate approved local CLI/session workflows; approval is stored by macOS TCC.' \"$PLIST\"; /usr/libexec/PlistBuddy -c 'Set :NSMicrophoneUsageDescription Atelier terminal sessions may run tools that request microphone access; approval is stored by macOS TCC.' \"$PLIST\" 2>/dev/null || /usr/libexec/PlistBuddy -c 'Add :NSMicrophoneUsageDescription string Atelier terminal sessions may run tools that request microphone access; approval is stored by macOS TCC.' \"$PLIST\"; /usr/libexec/PlistBuddy -c 'Set :NSCameraUsageDescription Atelier terminal sessions may run tools that request camera access; approval is stored by macOS TCC.' \"$PLIST\" 2>/dev/null || /usr/libexec/PlistBuddy -c 'Add :NSCameraUsageDescription string Atelier terminal sessions may run tools that request camera access; approval is stored by macOS TCC.' \"$PLIST\"; codesign -s 'Atelier Local Code Signing' --deep --force --options runtime --entitlements src-tauri/Atelier.entitlements --identifier com.atelier.app \"$APP\" 2>/dev/null && echo 'Atelier.app signed with stable cert + hardened runtime + TCC entitlements' || codesign -s - --deep --force --options runtime --entitlements src-tauri/Atelier.entitlements \"$APP\" 2>/dev/null; echo done"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.1.1",

@@ -40,7 +40,7 @@ const App: React.FC = () => {
           className="absolute inset-0"
           style={{ display: screen === "main" ? "block" : "none" }}
         >
-          <Main tw={tw} />
+          <Main tw={tw} isActive={screen === "main"} />
         </div>
         <div
           className="absolute inset-0"
