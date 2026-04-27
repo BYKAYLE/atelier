@@ -43,7 +43,7 @@ const SETTINGS_COPY = {
 
 const Settings: React.FC<Props> = ({ tw, setTw }) => {
   const dark = tw.dark;
-  const [section, setSection] = useState<string>("terminal");
+  const [section, setSection] = useState<string>("appearance");
   const copy = SETTINGS_COPY[tw.language];
 
   const nav: Array<[string, string, React.ReactNode]> = [
@@ -690,6 +690,23 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
   } | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [installing, setInstalling] = React.useState(false);
+  const [currentVersion, setCurrentVersion] = React.useState<string>("...");
+
+  React.useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const { getVersion } = await import("@tauri-apps/api/app");
+        const version = await getVersion();
+        if (alive) setCurrentVersion(`v${version}`);
+      } catch {
+        if (alive) setCurrentVersion("dev");
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   async function checkForUpdate() {
     setBusy(true);
@@ -762,7 +779,7 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
         hint={copy.currentVersionHint}
       >
         <div className={cls("text-[12px] font-mono", dark ? "text-dink" : "text-ink")}>
-          v0.1.1
+          {currentVersion}
         </div>
       </Row>
       <Row
