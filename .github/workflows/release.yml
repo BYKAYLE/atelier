@@ -63,5 +63,5 @@ jobs:
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true   # latest.json 자동 생성
-          updaterJsonPreferNsis: false
+          updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
