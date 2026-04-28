@@ -54,12 +54,53 @@ body.dark {
   animation: fadeIn 180ms ease-out both;
 }
 
+.atelier-agent-spinner {
+  width: 14px;
+  height: 14px;
+  display: inline-block;
+  border: 2px solid rgba(86, 86, 82, 0.24);
+  border-top-color: rgba(86, 86, 82, 0.72);
+  border-radius: 9999px;
+  animation: atelierAgentSpin 0.9s linear infinite;
+}
+
+.dark .atelier-agent-spinner {
+  border-color: rgba(246, 243, 234, 0.14);
+  border-top-color: rgba(246, 243, 234, 0.48);
+}
+
+.atelier-agent-done-dot {
+  width: 9px;
+  height: 9px;
+  display: inline-block;
+  border-radius: 9999px;
+  background: #4b7bd1;
+  box-shadow: 0 0 0 3px rgba(75, 123, 209, 0.12);
+}
+
+.dark .atelier-agent-done-dot {
+  background: #5a8ae0;
+  box-shadow: 0 0 0 3px rgba(90, 138, 224, 0.16);
+}
+
 @keyframes fadeIn {
   from {
     opacity: 0;
   }
   to {
     opacity: 1;
+  }
+}
+
+@keyframes atelierAgentSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .atelier-agent-spinner {
+    animation-duration: 1.8s;
   }
 }
 
@@ -127,4 +168,3 @@ body.dark {
 .dark .atelier-markdown pre {
   background: rgba(255, 255, 255, 0.04);
 }
-

@@ -218,6 +218,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         renameHint: "Double-click to rename",
         model: "Agent workspace",
         running: "running",
+        done: "done",
       }
     : {
         title: "작업",
@@ -238,6 +239,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         renameHint: "더블클릭해 이름 변경",
         model: "에이전트 작업",
         running: "실행 중",
+        done: "완료",
       };
 
   const active = useMemo(
@@ -255,10 +257,13 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const activeProvider = active?.provider || fallbackProvider;
   const activeProviderMeta = providerMeta(activeProvider);
 
-  const isSessionDone = (session: AgentSession) => {
+  const lastAssistantStatus = (session: AgentSession) => {
     const lastAssistant = [...session.messages].reverse().find((m) => m.role === "assistant");
-    return lastAssistant?.status === "done";
+    return lastAssistant?.status;
   };
+
+  const isSessionDone = (session: AgentSession) => lastAssistantStatus(session) === "done";
+  const isSessionRunning = (session: AgentSession) => lastAssistantStatus(session) === "streaming";
 
   useEffect(() => {
     if (sessions.length > 0 && !activeId) {
@@ -597,12 +602,18 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
             >
               <div className="flex items-start gap-2">
                 <span
-                  className="mt-[7px] h-1.5 w-1.5 rounded-full shrink-0"
+                  className={cls(
+                    "mt-0.5 h-5 w-5 rounded-[6px] shrink-0 grid place-items-center text-[8.5px] font-semibold tracking-normal",
+                    dark ? "text-dink" : "text-ink",
+                  )}
                   style={{
-                    background: isSessionDone(s) ? "#4b7bd1" : s.profileDot || providerMeta(s.provider).dot,
+                    background: `${s.profileDot || providerMeta(s.provider).dot}22`,
+                    boxShadow: `inset 0 0 0 1px ${s.profileDot || providerMeta(s.provider).dot}66`,
                   }}
-                  title={isSessionDone(s) ? "완료" : s.profileName || providerMeta(s.provider).label}
-                />
+                  title={s.profileName || providerMeta(s.provider).label}
+                >
+                  {providerMeta(s.provider).short}
+                </span>
                 <div className="min-w-0 flex-1">
                   {editingSessionId === s.id ? (
                     <input
@@ -638,6 +649,24 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                     {s.profileName || providerMeta(s.provider).label} · {s.providerSessionId ? "resume" : "new"} · {relTime(s.updatedAt)}
                   </div>
                 </div>
+                {isSessionRunning(s) && (
+                  <span
+                    className="mt-0.5 h-5 w-5 shrink-0 grid place-items-center"
+                    aria-label={copy.running}
+                    title={copy.running}
+                  >
+                    <span className="atelier-agent-spinner" />
+                  </span>
+                )}
+                {!isSessionRunning(s) && isSessionDone(s) && (
+                  <span
+                    className="mt-0.5 h-5 w-5 shrink-0 grid place-items-center"
+                    aria-label={copy.done}
+                    title={copy.done}
+                  >
+                    <span className="atelier-agent-done-dot" />
+                  </span>
+                )}
                 <span
                   role="button"
                   onClick={(e) => {
