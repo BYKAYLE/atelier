@@ -12,6 +12,7 @@ jobs:
   build-and-release:
     permissions:
       contents: write  # GitHub Release 생성/업로드
+      id-token: write  # Azure OIDC 로그인
     strategy:
       fail-fast: false
       matrix:
@@ -46,25 +47,21 @@ jobs:
       - name: Install npm deps
         run: npm install --legacy-peer-deps
 
-      - name: Install Windows signing CLI
-        if: matrix.platform == 'windows-latest'
-        run: cargo install trusted-signing-cli --locked
-
-      - name: Check Windows signing secrets
+      - name: Check Windows signing configuration
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         env:
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
-          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
-          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT || secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME || secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ vars.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME || secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
         run: |
           $required = @(
             "AZURE_CLIENT_ID",
-            "AZURE_CLIENT_SECRET",
             "AZURE_TENANT_ID",
+            "AZURE_SUBSCRIPTION_ID",
             "AZURE_TRUSTED_SIGNING_ENDPOINT",
             "AZURE_TRUSTED_SIGNING_ACCOUNT_NAME",
             "AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME"
@@ -76,8 +73,16 @@ jobs:
             }
           }
           if ($missing.Count -gt 0) {
-            throw "Missing repository secret(s): $($missing -join ', ')"
+            throw "Missing repository signing value(s): $($missing -join ', ')"
           }
+
+      - name: Azure login for Windows signing
+        if: matrix.platform == 'windows-latest'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Build & sign Tauri bundle
         uses: tauri-apps/tauri-action@v0
@@ -85,13 +90,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
-          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
-          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
-          AZURE_TRUSTED_SIGNING_DESCRIPTION: ${{ secrets.AZURE_TRUSTED_SIGNING_DESCRIPTION }}
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT || secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME || secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ vars.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME || secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          AZURE_TRUSTED_SIGNING_DESCRIPTION: ${{ vars.AZURE_TRUSTED_SIGNING_DESCRIPTION || secrets.AZURE_TRUSTED_SIGNING_DESCRIPTION }}
+          AZURE_TRUSTED_SIGNING_CLIENT_VERSION: ${{ vars.AZURE_TRUSTED_SIGNING_CLIENT_VERSION || secrets.AZURE_TRUSTED_SIGNING_CLIENT_VERSION }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Atelier ${{ github.ref_name }}"
