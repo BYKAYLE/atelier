@@ -14,13 +14,13 @@ const TopChrome: React.FC<Props> = ({ screen, setScreen, tw, setTw }) => {
   const copy = tw.language === "en"
     ? {
         preview: "Preview",
-        nav: { welcome: "Home", main: "Code", settings: "Settings" },
+        nav: { welcome: "Home", agent: "Work", settings: "Settings" },
         theme: "Toggle theme",
         settings: "Settings",
       }
     : {
         preview: "미리보기",
-        nav: { welcome: "홈", main: "코드", settings: "설정" },
+        nav: { welcome: "홈", agent: "작업", settings: "설정" },
         theme: "테마 전환",
         settings: "설정",
       };
@@ -56,7 +56,7 @@ const TopChrome: React.FC<Props> = ({ screen, setScreen, tw, setTw }) => {
       >
         {[
           ["welcome", copy.nav.welcome],
-          ["main", copy.nav.main],
+          ["agent", copy.nav.agent],
           // ["design", "디자인"],  // 보류 — 코드 모드 우선 (260427)
           ["settings", copy.nav.settings],
         ].map(([k, label]) => (

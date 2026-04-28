@@ -53,6 +53,53 @@ export async function onPtyExit(
   });
 }
 
+export interface AgentStreamEvent {
+  kind: "status" | "delta" | "tool" | "result" | "error" | "raw";
+  text?: string | null;
+  status?: string | null;
+  raw?: string | null;
+  provider_session_id?: string | null;
+  is_error?: boolean | null;
+}
+
+export interface AgentRunResult {
+  text: string;
+  provider_session_id?: string | null;
+  raw_events: string[];
+  is_error: boolean;
+  error?: string | null;
+}
+
+export type AgentProvider = "claude" | "codex" | "hermes";
+
+export async function agentClaudeSend(args: {
+  turnId: string;
+  prompt: string;
+  resumeSessionId?: string | null;
+  cwd?: string | null;
+  model?: string | null;
+}): Promise<AgentRunResult> {
+  return invoke("agent_claude_send", args);
+}
+
+export async function agentSend(args: {
+  provider: AgentProvider;
+  turnId: string;
+  prompt: string;
+  resumeSessionId?: string | null;
+  cwd?: string | null;
+  model?: string | null;
+}): Promise<AgentRunResult> {
+  return invoke("agent_send", args);
+}
+
+export async function onAgentEvent(
+  turnId: string,
+  handler: (event: AgentStreamEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<AgentStreamEvent>(`agent://${turnId}/event`, (e) => handler(e.payload));
+}
+
 /** 클립보드 PNG 바이트를 임시파일로 저장하고 경로 반환 */
 export async function clipboardSaveImage(pngBytes: Uint8Array): Promise<string> {
   const b64 = btoa(String.fromCharCode(...pngBytes));

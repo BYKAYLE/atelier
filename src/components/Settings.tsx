@@ -512,7 +512,7 @@ const ShortcutsSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ 
   const copy = language === "en"
     ? {
         title: "Shortcuts",
-        sub: "Click a row to reassign it. Conflicts will be highlighted.",
+        sub: "Keyboard shortcuts available in the code screen.",
         shortcuts: [
           "New tab",
           "Close tab",
@@ -520,12 +520,12 @@ const ShortcutsSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ 
           "Paste image",
           "Toggle preview",
           "Clear screen",
-          "Command palette",
+          "Profile picker",
         ],
       }
     : {
         title: "단축키",
-        sub: "행을 클릭해 재할당할 수 있어요. 충돌은 강조 표시됩니다.",
+        sub: "코드 화면에서 바로 사용할 수 있는 단축키입니다.",
         shortcuts: [
           "새 탭",
           "탭 닫기",
@@ -533,13 +533,13 @@ const ShortcutsSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ 
           "이미지 붙여넣기",
           "미리보기 토글",
           "화면 지우기",
-          "명령 팔레트",
+          "프로필 선택",
         ],
       };
   const shortcuts: Array<[string, string[]]> = [
     [copy.shortcuts[0], [MOD_KEY, "T"]],
     [copy.shortcuts[1], [MOD_KEY, "W"]],
-    [copy.shortcuts[2], [MOD_KEY, "Tab"]],
+    [copy.shortcuts[2], ["Ctrl", "Tab"]],
     [copy.shortcuts[3], [MOD_KEY, "V"]],
     [copy.shortcuts[4], [MOD_KEY, "P"]],
     [copy.shortcuts[5], [MOD_KEY, "K"]],

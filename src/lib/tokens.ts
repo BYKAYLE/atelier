@@ -53,7 +53,7 @@ interface ProfileDef extends Profile {
 
 const ALL_PROFILES: ProfileDef[] = [
   { id: "claude", name: "Claude Code", cmd: "claude", dot: "#c96442", autoInstall: "claude", platforms: ["macos", "windows", "linux"] },
-  { id: "hermes", name: "Hermes", cmd: "hermes", dot: "#8b4a73", autoInstall: "hermes", platforms: ["macos", "windows", "linux"] },
+  { id: "hermes", name: "Hermes", cmd: "hermes chat -m gpt-5.4 --max-turns 25", dot: "#8b4a73", autoInstall: "hermes", platforms: ["macos", "windows", "linux"] },
   { id: "codex", name: "Codex CLI", cmd: "codex", dot: "#4b7bd1", autoInstall: "codex", platforms: ["macos", "windows", "linux"] },
   { id: "zsh", name: "Zsh", cmd: "zsh", dot: "#9aae63", platforms: ["macos", "linux"] },
   { id: "bash", name: "Bash", cmd: "bash", dot: "#6b9a4a", platforms: ["macos", "linux", "windows"] },
@@ -69,9 +69,19 @@ export const PROFILES: Profile[] = ALL_PROFILES
 
 const CORE_PROFILE_IDS = ["claude", "hermes", "codex"];
 
+function migrateLegacyProfileCommand(profile: Profile): Profile {
+  const command = profile.cmd.trim().replace(/\s+/g, " ");
+  if (command === "hermes") {
+    const hermesDefault = PROFILES.find((p) => p.id === "hermes");
+    if (hermesDefault) return { ...profile, cmd: hermesDefault.cmd };
+  }
+  return profile;
+}
+
 export function mergeDefaultProfiles(profiles: Profile[]): Profile[] {
   const defaultsById = new Map(PROFILES.map((p) => [p.id, p]));
-  const merged = profiles.map((p) => {
+  const merged = profiles.map((input) => {
+    const p = migrateLegacyProfileCommand(input);
     const def = defaultsById.get(p.id);
     return def ? { ...def, ...p, autoInstall: p.autoInstall ?? def.autoInstall } : p;
   });

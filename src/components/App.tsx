@@ -5,17 +5,25 @@ import TopChrome from "./TopChrome";
 import Welcome from "./Welcome";
 import Main from "./Main";
 import Settings from "./Settings";
+import AgentWorkspace from "./AgentWorkspace";
 const DesignPage = lazy(() => import("./DesignPage"));
 
 const App: React.FC = () => {
   const [tw, setTw] = useTweaks();
   const accent = ACCENTS[tw.accent] || ACCENTS.terracotta;
-  const [screen, setScreen] = useState<string>(
-    () => localStorage.getItem("atelier.screen") || "main",
-  );
+  const [screen, setScreen] = useState<string>(() => {
+    const migrated = localStorage.getItem("atelier.agentDefaultMigrated") === "1";
+    const saved = localStorage.getItem("atelier.screen");
+    if (!migrated) {
+      localStorage.setItem("atelier.agentDefaultMigrated", "1");
+      return "agent";
+    }
+    if (saved === "main") return "agent";
+    return saved || "agent";
+  });
 
   useEffect(() => {
-    localStorage.setItem("atelier.screen", screen);
+    localStorage.setItem("atelier.screen", screen === "main" ? "agent" : screen);
   }, [screen]);
 
   useEffect(() => {
@@ -36,6 +44,12 @@ const App: React.FC = () => {
       <div className="flex-1 min-h-0 relative">
         {/* Main과 Settings는 mount 유지 + display 토글. 화면 전환 시 탭/xterm
             상태(채팅 내역, 실행 중 claude 세션 등)가 초기화되는 현상 방지. */}
+        <div
+          className="absolute inset-0"
+          style={{ display: screen === "agent" ? "block" : "none" }}
+        >
+          <AgentWorkspace tw={tw} />
+        </div>
         <div
           className="absolute inset-0"
           style={{ display: screen === "main" ? "block" : "none" }}

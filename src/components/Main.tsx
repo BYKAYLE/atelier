@@ -23,6 +23,7 @@ import {
   ptySpawn,
   ptyWrite,
   readTextFile,
+  sessionLogClear,
   sessionLogLoad,
 } from "../lib/tauri";
 import FileTree from "./FileTree";
@@ -248,17 +249,6 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
   useEffect(() => {
     try { localStorage.setItem(LEFT_HIDDEN_KEY, leftHidden ? "1" : "0"); } catch {}
   }, [leftHidden]);
-  // Cmd+B / Ctrl+B 단축키
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "b") {
-        e.preventDefault();
-        setLeftHidden((v) => !v);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
   // 파일 클릭 시 Preview에 텍스트 표시용.
   const [fileViewer, setFileViewer] = useState<{ path: string; name: string; content: string } | null>(null);
   // 탭 이름 인라인 편집용 — 더블클릭 시 이 id 설정 → input 렌더.
@@ -452,18 +442,6 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
   }
 
   // Preview 드래그 리사이즈는 beginDrag/onDragMove/endDrag에서 일원화 처리 (pointer capture 기반).
-
-  // Cmd+P 미리보기 토글 + 토글 시 fit 재계산
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "p") {
-        e.preventDefault();
-        setShowPreview((v) => !v);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
 
   // showPreview / previewWidth / leftPanelWidth 변경 시 활성 탭 fit 재호출.
   // Main 화면이 hidden인 동안(Settings/Home/Design) xterm fit을 호출하면 0폭/작은 폭이
@@ -1180,10 +1158,31 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
   // 탭 hostEl 최초 부착 시 1회 실행되는 초기화 — term.open + fit + pending flush +
   // IME beforeinput bridge + composition 리스너. 이전에는 매 activeId 변경마다
   // 이 전체 로직이 재실행되며 xterm state가 깨졌다. 지금은 탭당 한 번만.
-  function initializeTabDom(tab: Tab) {
+  async function initializeTabDom(tab: Tab) {
     const host = tab.hostEl;
+    // 한글 cell 폭 안정화. term.open이 첫 cell metric을 측정하는데, 이 시점에
+    // "Nanum Gothic Coding"이 미로드면 Menlo(영문) 기준으로 cell 폭이 굳고,
+    // 한글 글리프는 시스템 fallback(AppleGothic, 1cell 폭)으로 그려져
+    // xterm 2cell 가정과 어긋나며 "한 글 자 사 이" 띄어짐 증상 발생.
+    // open 전 await로 첫 measure를 보장하고, ready 후에도 fontFamily 재설정으로
+    // metrics 강제 재측정(폰트 캐시 미스/Tauri asset:// 지연 대비).
+    try {
+      const fontSize = (tab.term.options.fontSize as number | undefined) ?? 14;
+      await document.fonts.load(`${fontSize}px "Nanum Gothic Coding"`);
+    } catch {}
     tab.term.open(host);
     imeLogPush({ kind: "term-open", tabId: tab.id, hostW: host.clientWidth, hostH: host.clientHeight, at: Date.now() });
+    document.fonts.ready.then(() => {
+      try {
+        const ff = tab.term.options.fontFamily;
+        tab.term.options.fontFamily = "monospace";
+        tab.term.options.fontFamily = ff;
+        fitVisibleTab(tab, "font-loaded", false);
+        if (isTauri() && tab.ptyId && tab.term.cols >= 80) {
+          ptyResize(tab.ptyId, tab.term.cols, tab.term.rows).catch(() => {});
+        }
+      } catch {}
+    }).catch(() => {});
     // fit addon이 macOS WKWebView에서 char width를 과대/과소 측정하는 증상 확인됨.
     // 특히 Settings/Home 전환 중 Main이 display:none이면 fit 결과가 0폭/좁은 폭으로 깨지고,
     // 그 값을 PTY에 보내면 Claude TUI가 실제로 hard-wrap한다.
@@ -1460,23 +1459,35 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
     setClosedSessions((prev) => prev.filter((x) => x.id !== s.id));
   }
 
+  function deleteClosedSession(s: ClosedSession) {
+    setClosedSessions((prev) => prev.filter((x) => x.id !== s.id));
+    if (isTauri()) {
+      sessionLogClear(s.logSourceId || s.id).catch((err) =>
+        console.warn("session log clear failed", err),
+      );
+    }
+  }
+
   // 탭 닫기
-  async function closeTab(id: string) {
+  async function closeTab(id: string, remember = true) {
     const tab = tabs.find((t) => t.id === id);
     if (!tab) return;
-    // "최근 세션"에 메타 저장 (가장 앞에 삽입, 상한 20개) + 마지막 대화 미리보기 같이.
-    const meta: ClosedSession = {
-      id: tab.id,
-      name: tab.customName || tab.name,
-      profile: tab.profile,
-      cmd: normalizeClaudeCmd(tab.profile, tab.cmd, "persist"),
-      dot: tab.dot,
-      closedAt: Date.now(),
-      firstPrompt: tab.firstPrompt,
-      lastSnippet: tab.lastSnippet,
-      logSourceId: tab.logId || tab.id,
-    };
-    setClosedSessions((prev) => [meta, ...prev.filter((s) => s.id !== id)].slice(0, 20));
+    const logSourceId = tab.logId || tab.id;
+    if (remember) {
+      // "최근 세션"에 메타 저장 (가장 앞에 삽입, 상한 20개) + 마지막 대화 미리보기 같이.
+      const meta: ClosedSession = {
+        id: tab.id,
+        name: tab.customName || tab.name,
+        profile: tab.profile,
+        cmd: normalizeClaudeCmd(tab.profile, tab.cmd, "persist"),
+        dot: tab.dot,
+        closedAt: Date.now(),
+        firstPrompt: tab.firstPrompt,
+        lastSnippet: tab.lastSnippet,
+        logSourceId,
+      };
+      setClosedSessions((prev) => [meta, ...prev.filter((s) => s.id !== id)].slice(0, 20));
+    }
     tab.cleanup?.();
     tab.unlistenData?.();
     tab.unlistenExit?.();
@@ -1485,6 +1496,13 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
       try {
         await ptyKill(tab.ptyId);
       } catch {}
+    }
+    if (!remember && isTauri()) {
+      try {
+        await sessionLogClear(logSourceId);
+      } catch (err) {
+        console.warn("session log clear failed", err);
+      }
     }
     tab.term.dispose();
     tab.hostEl.remove();
@@ -1495,6 +1513,94 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
       return rest.length ? rest[rest.length - 1].id : null;
     });
   }
+
+  useEffect(() => {
+    if (!isActive) return;
+    const isPrimaryModifier = (e: KeyboardEvent) => (MOD_KEY === "⌘" ? e.metaKey : e.ctrlKey);
+    const focusTab = (id: string | null) => {
+      if (!id) return;
+      window.setTimeout(() => {
+        const tab = tabs.find((t) => t.id === id);
+        try { tab?.term.focus(); } catch {}
+      }, 0);
+    };
+    const switchTab = (dir: 1 | -1) => {
+      if (tabs.length === 0) return;
+      const idx = Math.max(0, tabs.findIndex((t) => t.id === activeId));
+      const next = tabs[(idx + dir + tabs.length) % tabs.length];
+      setActiveId(next.id);
+      focusTab(next.id);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase();
+      const primary = isPrimaryModifier(e);
+      const ctrlTab = e.ctrlKey && !e.metaKey && key === "tab";
+
+      if (ctrlTab) {
+        e.preventDefault();
+        e.stopPropagation();
+        switchTab(e.shiftKey ? -1 : 1);
+        return;
+      }
+      if (!primary || e.altKey) return;
+
+      if (key === "t" && !e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.repeat) return;
+        const profile = tw.profiles.find((p) => p.id === "claude") || tw.profiles[0];
+        if (profile) {
+          launchProfile(profile.id).catch((err) => showToast(`${profile.name} 실행 실패: ${String(err)}`));
+        }
+        return;
+      }
+
+      if (key === "w" && !e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.repeat || !activeId) return;
+        closeTab(activeId).catch((err) => console.warn("shortcut close tab failed", err));
+        return;
+      }
+
+      if (key === "p" && e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.repeat) return;
+        setLeftHidden(false);
+        setLeftTab("sessions");
+        setShowPicker((v) => !v);
+        return;
+      }
+
+      if (key === "p" && !e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        setShowPreview((v) => !v);
+        return;
+      }
+
+      if (key === "b" && !e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        setLeftHidden((v) => !v);
+        return;
+      }
+
+      if (key === "k" && !e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        const tab = tabs.find((t) => t.id === activeId);
+        if (!tab) return;
+        tab.term.clear();
+        if (tab.ptyId) ptyWrite(tab.ptyId, "\x0c").catch(() => {});
+        focusTab(tab.id);
+      }
+    };
+
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [activeId, closeTab, isActive, launchProfile, showToast, tabs, tw.profiles]);
 
   return (
     <div
@@ -1689,7 +1795,7 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
                       role="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        setClosedSessions((prev) => prev.filter((x) => x.id !== s.id));
+                        deleteClosedSession(s);
                       }}
                       className={cls(
                         "opacity-0 group-hover:opacity-100 w-5 h-5 inline-flex items-center justify-center rounded-[4px] text-[12px] leading-none",
@@ -1791,13 +1897,13 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
                       role="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        closeTab(t.id);
+                        closeTab(t.id, false);
                       }}
                       className={cls(
                         "opacity-0 group-hover:opacity-100 shrink-0 h-5 w-5 grid place-items-center rounded-[4px]",
                         dark ? "hover:bg-[#3d3d3b] text-dsub" : "hover:bg-line text-sub",
                       )}
-                      title="탭 닫기"
+                      title="세션 삭제"
                     >
                       {I.x}
                     </span>
@@ -1908,28 +2014,39 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
               ? tabs.find((t) => t.id === activeId)?.name
               : "세션 없음"}
           </div>
-          {/* 코드 layout toggle — single (1+프리뷰) vs grid (멀티 터미널 정렬) */}
+          {/* 코드 layout toggle — preview+code vs grid. 기존 코드 탭의 보기 전환을 유지한다. */}
           <div className={cls(
             "shrink-0 inline-flex items-center rounded-[6px] overflow-hidden border",
             dark ? "border-dline" : "border-line",
           )}>
             {([
-              ["single", "▭", "싱글 (터미널 1 + 프리뷰)"],
-              ["grid", "▦", "그리드 (멀티 터미널)"],
-            ] as const).map(([k, icon, t]) => (
+              [
+                "single",
+                "▭",
+                tw.language === "en" ? "Code + Preview" : "코드+프리뷰",
+                tw.language === "en" ? "Code with preview" : "코드와 프리뷰만 보기",
+              ],
+              [
+                "grid",
+                "▦",
+                tw.language === "en" ? "Grid" : "그리드",
+                tw.language === "en" ? "Show code windows as a grid" : "창을 그리드로 보기",
+              ],
+            ] as const).map(([k, icon, label, t]) => (
               <button
                 key={k}
                 type="button"
                 onClick={() => setCodeLayout(k)}
                 title={t}
                 className={cls(
-                  "h-7 w-8 inline-flex items-center justify-center text-[13px]",
+                  "h-7 px-2 inline-flex items-center justify-center gap-1 text-[11px]",
                   codeLayout === k
                     ? dark ? "bg-dline text-dink" : "bg-line text-ink"
                     : dark ? "text-dsub hover:text-dink hover:bg-[#2a2a28]" : "text-sub hover:text-ink hover:bg-muted",
                 )}
               >
-                {icon}
+                <span className="text-[13px] leading-none">{icon}</span>
+                <span className="leading-none">{label}</span>
               </button>
             ))}
           </div>

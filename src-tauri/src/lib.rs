@@ -1,5 +1,6 @@
 mod pty;
 mod clipboard;
+mod agent;
 
 use serde::Serialize;
 use tauri::Manager;
@@ -125,7 +126,7 @@ fn home_dir() -> String {
     std::env::var("HOME").unwrap_or_else(|_| "/".into())
 }
 
-fn augmented_cli_path() -> String {
+pub(crate) fn augmented_cli_path() -> String {
     #[cfg(target_os = "windows")]
     {
         let userprofile = std::env::var("USERPROFILE")
@@ -602,6 +603,8 @@ pub fn run() {
             open_design_project_dir,
             export_design_project_zip,
             design_claude_call,
+            agent::agent_claude_send,
+            agent::agent_send,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
