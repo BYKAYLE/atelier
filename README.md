@@ -121,4 +121,4 @@ atelier/
 
 ## 라이선스
 
-Private.
+[MIT License](LICENSE) — Copyright (c) 2026 BYKAYLE

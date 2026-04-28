@@ -4,6 +4,16 @@
   "private": true,
   "type": "module",
   "description": "Atelier — 이미지 붙여넣기가 되는 GUI 터미널",
+  "license": "MIT",
+  "author": "BYKAYLE",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BYKAYLE/atelier.git"
+  },
+  "homepage": "https://github.com/BYKAYLE/atelier",
+  "bugs": {
+    "url": "https://github.com/BYKAYLE/atelier/issues"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",

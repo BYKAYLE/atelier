@@ -2,9 +2,13 @@
 name = "atelier"
 version = "0.1.5"
 description = "Atelier — 이미지 붙여넣기가 되는 GUI 터미널"
-authors = ["Atelier"]
+authors = ["BYKAYLE <indra850@gmail.com>"]
 edition = "2021"
 rust-version = "1.77"
+license = "MIT"
+repository = "https://github.com/BYKAYLE/atelier"
+homepage = "https://github.com/BYKAYLE/atelier"
+readme = "../README.md"
 
 [lib]
 name = "atelier_lib"
