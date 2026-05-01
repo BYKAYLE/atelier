@@ -112,6 +112,14 @@ atelier/
 - `pty://{id}/data` — stdout 청크
 - `pty://{id}/exit` — 종료 코드
 
+## Code signing policy
+
+Windows release signing is prepared for SignPath Foundation open-source code
+signing.
+
+- Code signing policy: [docs/code-signing-policy.md](docs/code-signing-policy.md)
+- Windows signing workflow notes: [docs/windows-code-signing.md](docs/windows-code-signing.md)
+
 ## 로드맵
 
 - [x] v0.1 — 프로토타입 (홈/코드/설정) + PTY + 클립보드 이미지

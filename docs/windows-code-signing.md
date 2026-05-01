@@ -1,54 +1,74 @@
 # Windows Code Signing
 
-Atelier signs Windows executables and installers through Tauri's
-`bundle.windows.signCommand`. The signing configuration is intentionally kept
-in `src-tauri/tauri.windows-signing.conf.json` so local macOS builds are not
-forced to use Windows signing tools.
+Atelier's Windows release path is prepared for SignPath Foundation open-source
+code signing. The app is built on GitHub-hosted Windows runners, uploaded as a
+GitHub Actions artifact, submitted to SignPath, then released only after the
+signed installers are returned.
 
-The release workflow uses GitHub OIDC plus Azure Artifact Signing. There is no
-long-lived Azure client secret in GitHub.
+This keeps the SignPath origin-verification chain intact and avoids the Azure
+subscription requirement.
 
-## Required Azure Setup
+## SignPath Foundation Application
 
-Artifact Signing requires three Azure-side resources:
+Apply here: <https://signpath.org/apply.html>
 
-- Artifact Signing account
-- Completed identity validation
-- Public Trust certificate profile
+Use these project values when applying:
 
-Microsoft currently requires identity validation to be completed in the Azure
-portal.
+- Project name: `Atelier`
+- Repository URL: `https://github.com/BYKAYLE/atelier`
+- License: MIT
+- Download/release page: `https://github.com/BYKAYLE/atelier-releases/releases`
+- Code signing policy: `docs/code-signing-policy.md`
 
-The Microsoft Entra app or managed identity used by GitHub Actions must have a
-federated credential for this repository and permission to sign with the
-selected certificate profile.
+SignPath's free Foundation certificate is not automatic. The project must be
+approved first, then a SignPath organization, project, signing policy and CI API
+token become available.
 
-## GitHub Variables
+## GitHub Configuration After Approval
 
-- `AZURE_CLIENT_ID`
-- `AZURE_TENANT_ID`
-- `AZURE_SUBSCRIPTION_ID`
-- `AZURE_TRUSTED_SIGNING_ENDPOINT`
-- `AZURE_TRUSTED_SIGNING_ACCOUNT_NAME`
-- `AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME`
+Add this repository secret:
 
-Optional:
+- `SIGNPATH_API_TOKEN`
 
-- `AZURE_TRUSTED_SIGNING_DESCRIPTION` defaults to `Atelier`
-- `AZURE_TRUSTED_SIGNING_CLIENT_VERSION` defaults to `1.0.95`
+Add these repository variables:
 
-These values can be repository variables because they are identifiers, not
-passwords. Use environment-scoped variables if release signing needs approval.
+- `SIGNPATH_ORGANIZATION_ID`
+- `SIGNPATH_PROJECT_SLUG`
+- `SIGNPATH_SIGNING_POLICY_SLUG` defaults to `release-signing`
+- `SIGNPATH_ARTIFACT_CONFIGURATION_SLUG` optional, use it if SignPath creates a
+  specific artifact configuration for Tauri Windows installers
+- `SIGNPATH_WAIT_TIMEOUT_SECONDS` optional, defaults to `3600`
 
-## Build Command
+If releases should continue to be published to `BYKAYLE/atelier-releases`
+instead of the source repository, also add:
 
-The Windows release job runs:
+- `RELEASE_OWNER=BYKAYLE`
+- `RELEASE_REPO=atelier-releases`
+- `RELEASE_GITHUB_TOKEN` secret with release write access to that repository
 
-```powershell
-npm run tauri -- build --config src-tauri/tauri.windows-signing.conf.json
-```
+Without `RELEASE_OWNER` and `RELEASE_REPO`, the workflow publishes to the source
+repository that runs the workflow.
 
-Tauri calls `src-tauri/scripts/windows-sign.ps1` for each Windows executable or
-installer it needs to sign. The script downloads Microsoft's Trusted Signing
-client package, writes the signing metadata, signs with `signtool.exe`, and
-verifies the Authenticode signature before the build continues.
+## Workflow
+
+`.github/workflows/release.yml` now uses three jobs:
+
+- `build-macos` builds and uploads the macOS release with Tauri Action.
+- `build-windows-unsigned` builds unsigned Windows MSI/NSIS installers and
+  uploads them as a GitHub Actions artifact.
+- `sign-windows` submits that artifact to SignPath, waits for completion,
+  regenerates Tauri updater `.sig` files from the signed installers, merges the
+  Windows entries into `latest.json`, and uploads the signed assets.
+
+## SignPath Project Notes
+
+For the SignPath project configuration:
+
+- Enable GitHub as a trusted build system.
+- Restrict release signing to this repository and release tags/branches.
+- Configure the Windows artifact to sign the Tauri MSI and NSIS installer.
+- If SignPath offers nested signing for the Tauri app executable inside the
+  installers, enable it.
+- Enforce file metadata restrictions with product name `Atelier`.
+
+The release workflow intentionally does not use Azure Artifact Signing anymore.
