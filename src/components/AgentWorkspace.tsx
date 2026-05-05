@@ -8,8 +8,9 @@ import {
   homeDir,
   isTauri,
   onAgentEvent,
+  previewHealthCheck,
 } from "../lib/tauri";
-import type { AgentChangeSummary, AgentProvider, AgentStreamEvent } from "../lib/tauri";
+import type { AgentChangeSummary, AgentProvider, AgentStreamEvent, PreviewCheckResult } from "../lib/tauri";
 import { cls, Profile, Tweaks } from "../lib/tokens";
 import { I } from "./Icons";
 
@@ -85,6 +86,16 @@ interface AgentSession {
 }
 
 type PreviewViewport = "mobile" | "tablet" | "desktop";
+type PreviewDiagnosticSource = "terminal" | "preview";
+type PreviewDiagnosticLevel = "info" | "ok" | "error";
+
+interface PreviewDiagnostic {
+  id: string;
+  source: PreviewDiagnosticSource;
+  level: PreviewDiagnosticLevel;
+  text: string;
+  createdAt: number;
+}
 
 const SESSIONS_KEY = "atelier.agent.sessions.v1";
 const ACTIVE_KEY = "atelier.agent.active.v1";
@@ -107,6 +118,9 @@ const PREVIEW_VP_SIZES: Record<Exclude<PreviewViewport, "desktop">, { w: number;
   mobile: { w: 390, h: 844 },
   tablet: { w: 834, h: 1194 },
 };
+const LOCAL_PREVIEW_RE = /^https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d+)?(?:[/?#]|$)/i;
+const TERMINAL_ISSUE_RE =
+  /\b(?:error|failed|failure|exception|panic|traceback|npm ERR|EADDRINUSE|ECONNREFUSED|ECONNRESET|vite error|compile failed|compilation failed)\b/i;
 
 function clampNumber(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -421,6 +435,10 @@ function findPreviewUrl(text?: string | null) {
   return matches[matches.length - 1].replace(/[.,;:]+$/, "");
 }
 
+function isLocalPreviewUrl(url?: string | null) {
+  return Boolean(url && LOCAL_PREVIEW_RE.test(url.trim()));
+}
+
 function parseRawJson(raw?: string | null): unknown {
   if (!raw) return null;
   try {
@@ -489,6 +507,18 @@ function cleanAgentDelta(text?: string | null) {
   return stripAnsi(text).replace(/\r\n?/g, "\n");
 }
 
+function terminalIssueFromEvent(event: AgentStreamEvent) {
+  const rawJson = parseRawJson(event.raw);
+  const parts = [event.text, event.status].filter(Boolean) as string[];
+  if (!rawJson && event.raw) parts.push(event.raw);
+  const text = cleanAgentText(parts.join("\n"));
+  if (!text) return null;
+  if (event.kind === "error" || event.is_error || TERMINAL_ISSUE_RE.test(text)) {
+    return clipActivityText(text, 180);
+  }
+  return null;
+}
+
 function formatAgentPrompt(text: string, language: "ko" | "en") {
   const instruction = language === "en"
     ? [
@@ -535,6 +565,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const [previewUrl, setPreviewUrl] = useState(() => localStorage.getItem(PREVIEW_KEY) || "");
   const [previewInput, setPreviewInput] = useState(() => localStorage.getItem(PREVIEW_KEY) || "");
   const [previewReloadKey, setPreviewReloadKey] = useState(0);
+  const [previewCheck, setPreviewCheck] = useState<PreviewCheckResult | null>(null);
+  const [previewChecking, setPreviewChecking] = useState(false);
+  const [previewDiagnostics, setPreviewDiagnostics] = useState<PreviewDiagnostic[]>([]);
   const [previewWidth, setPreviewWidth] = useState(() =>
     clampNumber(Number(localStorage.getItem(PREVIEW_WIDTH_KEY)) || 430, 320, 760),
   );
@@ -572,6 +605,15 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         previewUrl: "Preview URL",
         open: "Open",
         noPreview: "Paste a localhost URL or let an agent output one.",
+        previewLinked: "Linked",
+        previewChecking: "Checking",
+        previewOk: "No issues",
+        previewIssue: "Issue",
+        previewOnlyLocal: "Only localhost previews can be inspected.",
+        terminalIssue: "Terminal issue",
+        previewStatusOk: (status?: number | null, title?: string | null) =>
+          `Preview responded${status ? ` HTTP ${status}` : ""}${title ? ` · ${title}` : ""}`,
+        previewStatusError: (message: string) => `Preview check failed: ${message}`,
         cwd: "Working folder",
         noAgentProfiles: "No Claude/Hermes/Codex profiles in Settings.",
         placeholder: "Ask the selected agent to change, inspect, or explain this workspace...",
@@ -612,6 +654,15 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         previewUrl: "프리뷰 URL",
         open: "열기",
         noPreview: "localhost URL을 붙여넣거나 에이전트가 출력하면 자동으로 열립니다.",
+        previewLinked: "연결됨",
+        previewChecking: "검토 중",
+        previewOk: "문제 없음",
+        previewIssue: "문제 있음",
+        previewOnlyLocal: "localhost 프리뷰만 자동 검토할 수 있습니다.",
+        terminalIssue: "터미널 문제",
+        previewStatusOk: (status?: number | null, title?: string | null) =>
+          `프리뷰 응답 확인${status ? ` HTTP ${status}` : ""}${title ? ` · ${title}` : ""}`,
+        previewStatusError: (message: string) => `프리뷰 검토 실패: ${message}`,
         cwd: "작업 폴더",
         noAgentProfiles: "설정 프로필에 Claude/Hermes/Codex가 없습니다.",
         placeholder: "선택한 에이전트에게 이 작업공간의 수정, 분석, 설명을 요청하세요...",
@@ -667,6 +718,26 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const activeModelLabel = labelForOption(activeModelOptions, activeModel);
   const activeCodexEffort = normalizeCodexEffort(active?.codexEffort);
   const activeCodexSpeed = normalizeCodexSpeed(active?.codexSpeed);
+  const localPreview = isLocalPreviewUrl(previewUrl);
+  const previewBadgeTone = !previewUrl
+    ? "idle"
+    : previewChecking
+      ? "checking"
+      : previewCheck?.ok
+        ? "ok"
+        : previewCheck
+          ? "error"
+          : "linked";
+  const previewBadgeText = !previewUrl
+    ? copy.preview
+    : previewChecking
+      ? copy.previewChecking
+      : previewCheck?.ok
+        ? copy.previewOk
+        : previewCheck
+          ? copy.previewIssue
+          : copy.previewLinked;
+  const visiblePreviewDiagnostics = previewDiagnostics.slice(-3);
 
   const lastAssistantStatus = (session: AgentSession) => {
     const lastAssistant = [...session.messages].reverse().find((m) => m.role === "assistant");
@@ -877,6 +948,92 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     };
   }, []);
 
+  useEffect(() => {
+    if (!previewUrl) {
+      setPreviewCheck(null);
+      setPreviewChecking(false);
+      return;
+    }
+    if (!isLocalPreviewUrl(previewUrl)) {
+      setPreviewChecking(false);
+      const result: PreviewCheckResult = {
+        url: previewUrl,
+        ok: false,
+        status: null,
+        title: null,
+        error: copy.previewOnlyLocal,
+        checked_at: Date.now(),
+      };
+      setPreviewCheck(result);
+      setPreviewDiagnostics((prev) => [
+        ...prev,
+        {
+          id: nowId("preview-diagnostic"),
+          source: "preview" as const,
+          level: "info" as const,
+          text: copy.previewOnlyLocal,
+          createdAt: Date.now(),
+        },
+      ].slice(-5));
+      return;
+    }
+    if (!isTauri()) {
+      setPreviewChecking(false);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setPreviewChecking(true);
+      previewHealthCheck(previewUrl)
+        .then((result) => {
+          if (cancelled) return;
+          setPreviewCheck(result);
+          setPreviewDiagnostics((prev) => [
+            ...prev,
+            {
+              id: nowId("preview-diagnostic"),
+              source: "preview" as const,
+              level: result.ok ? ("ok" as const) : ("error" as const),
+              text: result.ok
+                ? copy.previewStatusOk(result.status, result.title)
+                : copy.previewStatusError(result.error || "unknown"),
+              createdAt: Date.now(),
+            },
+          ].slice(-5));
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          const message = String(err);
+          setPreviewCheck({
+            url: previewUrl,
+            ok: false,
+            status: null,
+            title: null,
+            error: message,
+            checked_at: Date.now(),
+          });
+          setPreviewDiagnostics((prev) => [
+            ...prev,
+            {
+              id: nowId("preview-diagnostic"),
+              source: "preview" as const,
+              level: "error" as const,
+              text: copy.previewStatusError(message),
+              createdAt: Date.now(),
+            },
+          ].slice(-5));
+        })
+        .finally(() => {
+          if (!cancelled) setPreviewChecking(false);
+        });
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [previewUrl, previewReloadKey, tw.language]);
+
   const patchSession = (id: string, patcher: (session: AgentSession) => AgentSession) => {
     setSessions((prev) => prev.map((s) => (s.id === id ? patcher(s) : s)));
   };
@@ -980,6 +1137,31 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   };
 
   const applyPreviewInput = () => loadPreviewUrl(previewInput);
+
+  const pushPreviewDiagnostic = (diagnostic: Omit<PreviewDiagnostic, "id" | "createdAt">) => {
+    setPreviewDiagnostics((prev) => {
+      const nextItem: PreviewDiagnostic = {
+        ...diagnostic,
+        id: nowId("preview-diagnostic"),
+        createdAt: Date.now(),
+      };
+      const last = prev[prev.length - 1];
+      if (last?.source === nextItem.source && last.level === nextItem.level && last.text === nextItem.text) {
+        return [...prev.slice(0, -1), nextItem];
+      }
+      return [...prev, nextItem].slice(-5);
+    });
+  };
+
+  const noteTerminalIssue = (event: AgentStreamEvent) => {
+    const issue = terminalIssueFromEvent(event);
+    if (!issue) return;
+    pushPreviewDiagnostic({
+      source: "terminal",
+      level: "error",
+      text: `${copy.terminalIssue}: ${issue}`,
+    });
+  };
 
   const updateActiveModel = (model: string) => {
     if (!active) return;
@@ -1133,6 +1315,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
 
   const handleAgentEvent = (sessionId: string, assistantId: string, event: AgentStreamEvent) => {
     maybeAutoPreview(event);
+    noteTerminalIssue(event);
     if (event.kind === "status" || event.kind === "tool" || event.kind === "raw") {
       pushActivity(sessionId, assistantId, event);
     }
@@ -1759,6 +1942,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                 <span className={cls("text-[11px] font-mono uppercase tracking-wider shrink-0", dark ? "text-dsub" : "text-sub")}>
                   {copy.preview}
                 </span>
+                <span className={cls("atelier-preview-badge", `atelier-preview-badge-${previewBadgeTone}`)}>
+                  {previewBadgeText}
+                </span>
                 <form
                   onSubmit={(e) => {
                     e.preventDefault();
@@ -1822,6 +2008,38 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                   ↻
                 </button>
               </div>
+              {previewUrl && (
+                <div className={cls("atelier-preview-diagnostics", dark ? "atelier-preview-diagnostics-dark" : "")}>
+                  <div className="atelier-preview-diagnostic atelier-preview-diagnostic-info">
+                    <span className="atelier-preview-diagnostic-source">
+                      {copy.previewLinked}
+                    </span>
+                    <span className="atelier-preview-diagnostic-text">{previewUrl}</span>
+                  </div>
+                  {previewChecking && (
+                    <div className="atelier-preview-diagnostic atelier-preview-diagnostic-info">
+                      <span className="atelier-preview-diagnostic-source">{copy.previewChecking}</span>
+                      <span className="atelier-preview-diagnostic-text">
+                        {localPreview ? copy.previewUrl : copy.previewOnlyLocal}
+                      </span>
+                    </div>
+                  )}
+                  {visiblePreviewDiagnostics.map((diagnostic) => (
+                    <div
+                      key={diagnostic.id}
+                      className={cls(
+                        "atelier-preview-diagnostic",
+                        `atelier-preview-diagnostic-${diagnostic.level}`,
+                      )}
+                    >
+                      <span className="atelier-preview-diagnostic-source">
+                        {diagnostic.source === "terminal" ? "Terminal" : copy.preview}
+                      </span>
+                      <span className="atelier-preview-diagnostic-text">{diagnostic.text}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className={cls("flex-1 min-h-0 relative overflow-auto", dark ? "bg-[#11110f]" : "bg-[#e8e6df]")}>
                 {previewUrl ? (
                   previewVP === "desktop" ? (

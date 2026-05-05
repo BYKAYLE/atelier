@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::process::{Command, Stdio};
 use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -44,6 +46,232 @@ pub struct AgentChangeSummary {
     additions: u64,
     deletions: u64,
     patch: String,
+}
+
+#[derive(Serialize, Clone)]
+pub struct PreviewCheckResult {
+    url: String,
+    ok: bool,
+    status: Option<u16>,
+    title: Option<String>,
+    error: Option<String>,
+    checked_at: i64,
+}
+
+#[derive(Debug)]
+struct LocalPreviewUrl {
+    url: String,
+    host: String,
+    connect_host: String,
+    port: u16,
+    path: String,
+}
+
+fn checked_at_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or_default()
+}
+
+fn is_local_preview_host(host: &str) -> bool {
+    let normalized = host
+        .trim_matches(|c| c == '[' || c == ']')
+        .to_ascii_lowercase();
+    normalized == "localhost"
+        || normalized == "127.0.0.1"
+        || normalized == "0.0.0.0"
+        || normalized == "::1"
+}
+
+fn parse_local_preview_url(input: &str) -> Result<LocalPreviewUrl, String> {
+    let url = input.trim().to_string();
+    let lower = url.to_ascii_lowercase();
+    if lower.starts_with("https://") {
+        return Err("HTTPS localhost preview checks are not supported yet".into());
+    }
+    if !lower.starts_with("http://") {
+        return Err("Only local http:// preview URLs can be checked".into());
+    }
+
+    let rest = &url["http://".len()..];
+    let (authority, path) = match rest.find(|c| c == '/' || c == '?' || c == '#') {
+        Some(idx) => (&rest[..idx], &rest[idx..]),
+        None => (rest, "/"),
+    };
+    if authority.contains('@') {
+        return Err("Preview URL must not contain credentials".into());
+    }
+    let (host, port) = if let Some(after_bracket) = authority.strip_prefix('[') {
+        let end = after_bracket
+            .find(']')
+            .ok_or_else(|| "Invalid IPv6 preview host".to_string())?;
+        let host = &after_bracket[..end];
+        let tail = &after_bracket[end + 1..];
+        let port = tail
+            .strip_prefix(':')
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                s.parse::<u16>()
+                    .map_err(|_| "Invalid preview port".to_string())
+            })
+            .transpose()?
+            .unwrap_or(80);
+        (host.to_string(), port)
+    } else {
+        let mut parts = authority.rsplitn(2, ':');
+        let maybe_port = parts.next().unwrap_or_default();
+        let maybe_host = parts.next();
+        if let Some(host) = maybe_host {
+            let port = maybe_port
+                .parse::<u16>()
+                .map_err(|_| "Invalid preview port".to_string())?;
+            (host.to_string(), port)
+        } else {
+            (authority.to_string(), 80)
+        }
+    };
+
+    if !is_local_preview_host(&host) {
+        return Err("Only localhost preview URLs are allowed".into());
+    }
+    let connect_host = match host.trim_matches(|c| c == '[' || c == ']') {
+        "0.0.0.0" | "localhost" => "127.0.0.1".to_string(),
+        "::1" => "[::1]".to_string(),
+        other => other.to_string(),
+    };
+    let path = if path.is_empty() {
+        "/".to_string()
+    } else {
+        path.to_string()
+    };
+
+    Ok(LocalPreviewUrl {
+        url,
+        host,
+        connect_host,
+        port,
+        path,
+    })
+}
+
+fn extract_title(html: &str) -> Option<String> {
+    let lower = html.to_ascii_lowercase();
+    let start = lower.find("<title")?;
+    let after_start = lower[start..].find('>')? + start + 1;
+    let end = lower[after_start..].find("</title>")? + after_start;
+    let title = html[after_start..end]
+        .replace('\n', " ")
+        .replace('\r', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if title.is_empty() {
+        None
+    } else {
+        Some(title)
+    }
+}
+
+fn run_preview_health_check(url: String) -> PreviewCheckResult {
+    let checked_at = checked_at_ms();
+    let parsed = match parse_local_preview_url(&url) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return PreviewCheckResult {
+                url,
+                ok: false,
+                status: None,
+                title: None,
+                error: Some(error),
+                checked_at,
+            };
+        }
+    };
+
+    let address = format!("{}:{}", parsed.connect_host, parsed.port);
+    let timeout = Duration::from_secs(3);
+    let mut stream = match address
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut addrs| addrs.next())
+        .and_then(|addr| TcpStream::connect_timeout(&addr, timeout).ok())
+    {
+        Some(stream) => stream,
+        None => {
+            return PreviewCheckResult {
+                url: parsed.url,
+                ok: false,
+                status: None,
+                title: None,
+                error: Some(format!("Cannot connect to local preview at {address}")),
+                checked_at,
+            };
+        }
+    };
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+
+    let request = format!(
+        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: AtelierPreviewCheck/1.0\r\nAccept: text/html,*/*;q=0.8\r\nConnection: close\r\n\r\n",
+        parsed.path, parsed.host
+    );
+    if let Err(e) = stream.write_all(request.as_bytes()) {
+        return PreviewCheckResult {
+            url: parsed.url,
+            ok: false,
+            status: None,
+            title: None,
+            error: Some(format!("Preview request failed: {e}")),
+            checked_at,
+        };
+    }
+
+    let mut bytes = Vec::new();
+    if let Err(e) = stream.read_to_end(&mut bytes) {
+        return PreviewCheckResult {
+            url: parsed.url,
+            ok: false,
+            status: None,
+            title: None,
+            error: Some(format!("Preview response failed: {e}")),
+            checked_at,
+        };
+    }
+    let response = String::from_utf8_lossy(&bytes);
+    let status = response
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse::<u16>().ok());
+    let body = response
+        .split("\r\n\r\n")
+        .nth(1)
+        .or_else(|| response.split("\n\n").nth(1))
+        .unwrap_or_default();
+    let ok = status.map(|s| (200..400).contains(&s)).unwrap_or(false);
+    PreviewCheckResult {
+        url: parsed.url,
+        ok,
+        status,
+        title: extract_title(body),
+        error: if ok {
+            None
+        } else {
+            Some(match status {
+                Some(s) => format!("Preview returned HTTP {s}"),
+                None => "Preview returned an invalid HTTP response".to_string(),
+            })
+        },
+        checked_at,
+    }
+}
+
+#[tauri::command]
+pub async fn preview_health_check(url: String) -> Result<PreviewCheckResult, String> {
+    tauri::async_runtime::spawn_blocking(move || run_preview_health_check(url))
+        .await
+        .map_err(|e| format!("preview health check join: {e}"))
 }
 
 fn run_git(root: &str, args: &[&str]) -> Result<String, String> {
@@ -916,4 +1144,23 @@ pub async fn agent_undo_changes(cwd: String, patch: String) -> std::result::Resu
     })
     .await
     .map_err(|e| format!("undo thread join: {e}"))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_local_preview_url_with_query() {
+        let parsed = parse_local_preview_url("http://localhost:5173?view=mobile").unwrap();
+        assert_eq!(parsed.connect_host, "127.0.0.1");
+        assert_eq!(parsed.port, 5173);
+        assert_eq!(parsed.path, "?view=mobile");
+    }
+
+    #[test]
+    fn rejects_remote_preview_url() {
+        let err = parse_local_preview_url("http://example.com:5173").unwrap_err();
+        assert!(err.contains("localhost"));
+    }
 }

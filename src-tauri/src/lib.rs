@@ -607,6 +607,7 @@ pub fn run() {
             agent::agent_send,
             agent::agent_change_summary,
             agent::agent_undo_changes,
+            agent::preview_health_check,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

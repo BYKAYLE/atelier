@@ -90,6 +90,15 @@ export interface AgentChangeSummary {
   undo_error?: string | null;
 }
 
+export interface PreviewCheckResult {
+  url: string;
+  ok: boolean;
+  status?: number | null;
+  title?: string | null;
+  error?: string | null;
+  checked_at: number;
+}
+
 export type AgentProvider = "claude" | "codex" | "hermes";
 
 export async function agentClaudeSend(args: {
@@ -129,6 +138,10 @@ export async function agentChangeSummary(cwd?: string | null): Promise<AgentChan
 
 export async function agentUndoChanges(cwd: string, patch: string): Promise<void> {
   return invoke("agent_undo_changes", { cwd, patch });
+}
+
+export async function previewHealthCheck(url: string): Promise<PreviewCheckResult> {
+  return invoke("preview_health_check", { url });
 }
 
 /** 클립보드 PNG 바이트를 임시파일로 저장하고 경로 반환 */
