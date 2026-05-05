@@ -56,6 +56,7 @@ pub struct PreviewCheckResult {
     ok: bool,
     status: Option<u16>,
     title: Option<String>,
+    body_text: Option<String>,
     error: Option<String>,
     checked_at: i64,
 }
@@ -446,6 +447,160 @@ fn extract_title(html: &str) -> Option<String> {
     }
 }
 
+fn html_entity(entity: &str) -> Option<char> {
+    match entity {
+        "amp" => Some('&'),
+        "lt" => Some('<'),
+        "gt" => Some('>'),
+        "quot" => Some('"'),
+        "apos" | "#39" => Some('\''),
+        "nbsp" => Some(' '),
+        _ if entity.starts_with("#x") || entity.starts_with("#X") => u32::from_str_radix(&entity[2..], 16)
+            .ok()
+            .and_then(char::from_u32),
+        _ if entity.starts_with('#') => entity[1..].parse::<u32>().ok().and_then(char::from_u32),
+        _ => None,
+    }
+}
+
+fn decode_html_entities(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '&' {
+            let mut j = i + 1;
+            while j < chars.len() && j - i <= 12 && chars[j] != ';' {
+                j += 1;
+            }
+            if j < chars.len() && chars[j] == ';' {
+                let entity = chars[i + 1..j].iter().collect::<String>();
+                if let Some(decoded) = html_entity(&entity) {
+                    out.push(decoded);
+                    i = j + 1;
+                    continue;
+                }
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+fn extract_body_text(html: &str) -> Option<String> {
+    let lower = html.to_ascii_lowercase();
+    let body = if let Some(start) = lower.find("<body") {
+        let after_start = lower[start..].find('>').map(|idx| start + idx + 1).unwrap_or(start);
+        let end = lower[after_start..]
+            .find("</body>")
+            .map(|idx| after_start + idx)
+            .unwrap_or(html.len());
+        &html[after_start..end]
+    } else {
+        html
+    };
+
+    let mut text = String::with_capacity(body.len());
+    let mut in_tag = false;
+    let mut tag = String::new();
+    let mut skip_until: Option<&'static str> = None;
+    let mut chars = body.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if let Some(end_tag) = skip_until {
+            if ch == '<' {
+                let mut possible = String::from("<");
+                while let Some(next) = chars.peek().copied() {
+                    possible.push(next);
+                    chars.next();
+                    if next == '>' || possible.len() > end_tag.len() + 4 {
+                        break;
+                    }
+                }
+                if possible.to_ascii_lowercase().starts_with(end_tag) {
+                    skip_until = None;
+                }
+            }
+            continue;
+        }
+
+        if in_tag {
+            if ch == '>' {
+                let tag_name = tag
+                    .trim()
+                    .trim_start_matches('/')
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                if matches!(tag_name.as_str(), "script" | "style" | "svg") && !tag.trim_start().starts_with('/') {
+                    skip_until = Some(match tag_name.as_str() {
+                        "script" => "</script",
+                        "style" => "</style",
+                        _ => "</svg",
+                    });
+                }
+                if matches!(tag_name.as_str(), "br" | "p" | "div" | "li" | "tr" | "h1" | "h2" | "h3" | "pre") {
+                    text.push(' ');
+                }
+                tag.clear();
+                in_tag = false;
+            } else {
+                tag.push(ch);
+            }
+            continue;
+        }
+
+        if ch == '<' {
+            in_tag = true;
+            tag.clear();
+        } else {
+            text.push(ch);
+        }
+    }
+
+    let decoded = decode_html_entities(&text)
+        .replace('\u{00a0}', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if decoded.is_empty() {
+        None
+    } else {
+        Some(decoded.chars().take(420).collect())
+    }
+}
+
+fn preview_connect_candidates(parsed: &LocalPreviewUrl) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let host = parsed.host.trim_matches(|c| c == '[' || c == ']');
+    let raw = match host {
+        "localhost" => vec!["127.0.0.1".to_string(), "[::1]".to_string(), "localhost".to_string()],
+        "0.0.0.0" => vec!["127.0.0.1".to_string(), "localhost".to_string()],
+        "::1" => vec!["[::1]".to_string(), "localhost".to_string()],
+        other => vec![parsed.connect_host.clone(), other.to_string()],
+    };
+    for candidate in raw {
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
+    }
+    candidates
+}
+
+fn preview_host_header(parsed: &LocalPreviewUrl) -> String {
+    let host = if parsed.host.contains(':') && !parsed.host.starts_with('[') {
+        format!("[{}]", parsed.host)
+    } else {
+        parsed.host.clone()
+    };
+    if parsed.port == 80 {
+        host
+    } else {
+        format!("{host}:{}", parsed.port)
+    }
+}
+
 fn run_preview_health_check(url: String) -> PreviewCheckResult {
     let checked_at = checked_at_ms();
     let parsed = match parse_local_preview_url(&url) {
@@ -456,38 +611,53 @@ fn run_preview_health_check(url: String) -> PreviewCheckResult {
                 ok: false,
                 status: None,
                 title: None,
+                body_text: None,
                 error: Some(error),
                 checked_at,
             };
         }
     };
 
-    let address = format!("{}:{}", parsed.connect_host, parsed.port);
     let timeout = Duration::from_secs(3);
-    let mut stream = match address
-        .to_socket_addrs()
-        .ok()
-        .and_then(|mut addrs| addrs.next())
-        .and_then(|addr| TcpStream::connect_timeout(&addr, timeout).ok())
-    {
-        Some(stream) => stream,
-        None => {
-            return PreviewCheckResult {
-                url: parsed.url,
-                ok: false,
-                status: None,
-                title: None,
-                error: Some(format!("Cannot connect to local preview at {address}")),
-                checked_at,
-            };
+    let candidates = preview_connect_candidates(&parsed);
+    let mut stream = None;
+    for candidate in &candidates {
+        let address = format!("{candidate}:{}", parsed.port);
+        if let Some(open) = address
+            .to_socket_addrs()
+            .ok()
+            .and_then(|mut addrs| addrs.next())
+            .and_then(|addr| TcpStream::connect_timeout(&addr, timeout).ok())
+        {
+            stream = Some(open);
+            break;
         }
+    }
+    let Some(mut stream) = stream else {
+        return PreviewCheckResult {
+            url: parsed.url,
+            ok: false,
+            status: None,
+            title: None,
+            body_text: None,
+            error: Some(format!(
+                "Cannot connect to local preview at {}",
+                candidates
+                    .iter()
+                    .map(|candidate| format!("{candidate}:{}", parsed.port))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )),
+            checked_at,
+        };
     };
     let _ = stream.set_read_timeout(Some(timeout));
     let _ = stream.set_write_timeout(Some(timeout));
 
     let request = format!(
         "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: AtelierPreviewCheck/1.0\r\nAccept: text/html,*/*;q=0.8\r\nConnection: close\r\n\r\n",
-        parsed.path, parsed.host
+        parsed.path,
+        preview_host_header(&parsed)
     );
     if let Err(e) = stream.write_all(request.as_bytes()) {
         return PreviewCheckResult {
@@ -495,6 +665,7 @@ fn run_preview_health_check(url: String) -> PreviewCheckResult {
             ok: false,
             status: None,
             title: None,
+            body_text: None,
             error: Some(format!("Preview request failed: {e}")),
             checked_at,
         };
@@ -507,6 +678,7 @@ fn run_preview_health_check(url: String) -> PreviewCheckResult {
             ok: false,
             status: None,
             title: None,
+            body_text: None,
             error: Some(format!("Preview response failed: {e}")),
             checked_at,
         };
@@ -528,6 +700,7 @@ fn run_preview_health_check(url: String) -> PreviewCheckResult {
         ok,
         status,
         title: extract_title(body),
+        body_text: extract_body_text(body),
         error: if ok {
             None
         } else {
@@ -1493,5 +1666,24 @@ mod tests {
     #[test]
     fn builds_stable_preview_service_id_from_port() {
         assert_eq!(preview_service_id("http://127.0.0.1:5173/admin/"), "preview-5173");
+    }
+
+    #[test]
+    fn extracts_preview_body_text_from_server_error_html() {
+        let text = extract_body_text(
+            r#"<html><body><script>ignored()</script><h1>The server is configured with a public base URL of /admin/</h1><p>did you mean to visit <a href="/admin/portal/">/admin/portal/</a> instead?</p></body></html>"#,
+        )
+        .unwrap();
+        assert!(text.contains("public base URL of /admin/"));
+        assert!(text.contains("/admin/portal/"));
+        assert!(!text.contains("ignored"));
+    }
+
+    #[test]
+    fn localhost_preview_checks_try_ipv4_and_ipv6() {
+        let parsed = parse_local_preview_url("http://localhost:5173/admin/").unwrap();
+        let candidates = preview_connect_candidates(&parsed);
+        assert!(candidates.contains(&"127.0.0.1".to_string()));
+        assert!(candidates.contains(&"[::1]".to_string()));
     }
 }

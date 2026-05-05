@@ -534,7 +534,65 @@ function isPreviewStartCommand(text: string) {
     .test(text);
 }
 
-function formatAgentPrompt(text: string, language: "ko" | "en") {
+function formatPreviewPromptContext(
+  language: "ko" | "en",
+  previewUrl: string,
+  previewCheck: PreviewCheckResult | null,
+  diagnostics: PreviewDiagnostic[],
+  service: PreviewServiceStatus | null,
+) {
+  if (!previewUrl) return "";
+  const lines: string[] = [];
+  const label = language === "en"
+    ? {
+        url: "URL",
+        status: "Health",
+        error: "Error",
+        title: "Title",
+        body: "Visible server text",
+        service: "Managed service",
+        command: "Start command",
+        log: "Recent service log",
+        diagnostic: "Recent diagnostic",
+      }
+    : {
+        url: "URL",
+        status: "검토 상태",
+        error: "에러",
+        title: "제목",
+        body: "화면/서버 본문",
+        service: "관리 서비스",
+        command: "시동 명령",
+        log: "최근 서비스 로그",
+        diagnostic: "최근 진단",
+      };
+
+  lines.push(`${label.url}: ${previewUrl}`);
+  if (previewCheck) {
+    lines.push(`${label.status}: ${previewCheck.ok ? "ok" : "error"}${previewCheck.status ? ` HTTP ${previewCheck.status}` : ""}`);
+    if (previewCheck.error) lines.push(`${label.error}: ${clipActivityText(previewCheck.error, 360)}`);
+    if (previewCheck.title) lines.push(`${label.title}: ${clipActivityText(previewCheck.title, 220)}`);
+    if (previewCheck.body_text) lines.push(`${label.body}: ${clipActivityText(previewCheck.body_text, 700)}`);
+  }
+  if (service?.managed) {
+    lines.push(`${label.service}: ${service.running ? "running" : "stopped"}${service.pid ? ` PID ${service.pid}` : ""}`);
+    if (service.command) lines.push(`${label.command}: ${clipActivityText(service.command, 260)}`);
+    service.recent_output.slice(-3).forEach((line) => {
+      lines.push(`${label.log}: ${clipActivityText(line, 300)}`);
+    });
+  }
+  diagnostics.slice(-3).forEach((diagnostic) => {
+    lines.push(`${label.diagnostic}: ${clipActivityText(diagnostic.text, 360)}`);
+  });
+  return lines.join("\n");
+}
+
+function formatAgentPrompt(text: string, language: "ko" | "en", previewContext?: string | null) {
+  const context = previewContext
+    ? language === "en"
+      ? ["", "", "---", "Atelier preview diagnostics:", previewContext].join("\n")
+      : ["", "", "---", "Atelier 프리뷰 진단:", previewContext].join("\n")
+    : "";
   const instruction = language === "en"
     ? [
         "",
@@ -554,7 +612,7 @@ function formatAgentPrompt(text: string, language: "ko" | "en") {
         "- 결과는 자연어 중심으로 보여주고, 진행 설명은 필요할 때만 짧게 정리하세요.",
         "- GitHub-flavored Markdown을 사용하고, 표가 필요하면 실제 Markdown 표로 작성하세요.",
       ].join("\n");
-  return `${text}${instruction}`;
+  return `${text}${context}${instruction}`;
 }
 
 function revealStepSize(remaining: number, elapsedMs: number) {
@@ -1017,6 +1075,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         ok: false,
         status: null,
         title: null,
+        body_text: null,
         error: copy.previewOnlyLocal,
         checked_at: Date.now(),
       };
@@ -1045,15 +1104,19 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         .then((result) => {
           if (cancelled) return;
           setPreviewCheck(result);
+          const previewText = result.ok
+            ? copy.previewStatusOk(result.status, result.title)
+            : [
+                copy.previewStatusError(result.error || "unknown"),
+                result.body_text ? clipActivityText(result.body_text, 360) : "",
+              ].filter(Boolean).join(" · ");
           setPreviewDiagnostics((prev) => [
             ...prev,
             {
               id: nowId("preview-diagnostic"),
               source: "preview" as const,
               level: result.ok ? ("ok" as const) : ("error" as const),
-              text: result.ok
-                ? copy.previewStatusOk(result.status, result.title)
-                : copy.previewStatusError(result.error || "unknown"),
+              text: previewText,
               createdAt: Date.now(),
             },
           ].slice(-5));
@@ -1066,6 +1129,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
             ok: false,
             status: null,
             title: null,
+            body_text: null,
             error: message,
             checked_at: Date.now(),
           });
@@ -1719,7 +1783,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         const result = await agentSend({
           provider: session.provider,
           turnId,
-          prompt: formatAgentPrompt(text, tw.language),
+          prompt: formatAgentPrompt(
+            text,
+            tw.language,
+            formatPreviewPromptContext(tw.language, previewUrl, previewCheck, previewDiagnostics, previewService),
+          ),
           resumeSessionId: session.providerSessionId || null,
           cwd: cwd || null,
           model: session.model || meta.defaultModel,

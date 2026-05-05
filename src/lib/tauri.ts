@@ -95,6 +95,7 @@ export interface PreviewCheckResult {
   ok: boolean;
   status?: number | null;
   title?: string | null;
+  body_text?: string | null;
   error?: string | null;
   checked_at: number;
 }
