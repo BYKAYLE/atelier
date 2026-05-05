@@ -30,6 +30,7 @@ type ModelOption = {
 type CodexEffort = "low" | "medium" | "high" | "xhigh";
 type CodexSpeed = "default" | "fast";
 type CodexMenuPanel = "root" | "model" | "speed";
+type HermesInferenceProvider = "anthropic" | "openai-codex" | "openrouter";
 
 interface ChatMessage {
   id: string;
@@ -48,6 +49,7 @@ interface AgentSession {
   profileName?: string;
   profileDot?: string;
   model: string;
+  hermesProvider?: HermesInferenceProvider;
   codexEffort?: CodexEffort;
   codexSpeed?: CodexSpeed;
   cwd: string;
@@ -66,6 +68,7 @@ const PREVIEW_KEY = "atelier.agent.preview.url.v1";
 const PREVIEW_VISIBLE_KEY = "atelier.agent.preview.visible.v1";
 const PREVIEW_VP_KEY = "atelier.agent.preview.viewport.v1";
 const DEFAULT_PROVIDER: AgentProvider = "claude";
+const DEFAULT_HERMES_PROVIDER: HermesInferenceProvider = "openai-codex";
 const DEFAULT_CODEX_EFFORT: CodexEffort = "xhigh";
 const DEFAULT_CODEX_SPEED: CodexSpeed = "default";
 const MAX_RAW_EVENTS = 120;
@@ -80,7 +83,7 @@ const PROVIDERS: ProviderMeta[] = [
     id: "claude",
     label: "Claude Code",
     short: "Cl",
-    defaultModel: "sonnet",
+    defaultModel: "claude-sonnet-4-6",
     dot: "#c96442",
     newTitleKo: "새 Claude 작업",
     newTitleEn: "New Claude workspace",
@@ -106,18 +109,25 @@ const PROVIDERS: ProviderMeta[] = [
 ];
 
 const CLAUDE_MODELS: ModelOption[] = [
-  { value: "sonnet", label: "Claude Sonnet 4" },
-  { value: "opus", label: "Claude Opus 4.1" },
-  { value: "haiku", label: "Claude Haiku 3.5" },
-  { value: "default", label: "Claude 기본값" },
+  { value: "claude-opus-4-7", label: "Claude Opus 4.7" },
+  { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
+  { value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5 · 20251001" },
 ];
 
-const HERMES_MODELS: ModelOption[] = [
+const OPENAI_CODEX_MODELS: ModelOption[] = [
   { value: "gpt-5.5", label: "GPT-5.5" },
   { value: "gpt-5.4", label: "GPT-5.4" },
   { value: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
   { value: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
   { value: "gpt-5.2", label: "GPT-5.2" },
+];
+
+const OPENROUTER_MODELS: ModelOption[] = [
+  { value: "openai/gpt-5.5", label: "OpenAI GPT-5.5" },
+  { value: "openai/gpt-5.5-pro", label: "OpenAI GPT-5.5 Pro" },
+  { value: "anthropic/claude-opus-4.7", label: "Claude Opus 4.7" },
+  { value: "anthropic/claude-sonnet-4.6", label: "Claude Sonnet 4.6" },
+  { value: "anthropic/claude-haiku-4.5", label: "Claude Haiku 4.5" },
 ];
 
 const CODEX_MODELS: ModelOption[] = [
@@ -130,8 +140,20 @@ const CODEX_MODELS: ModelOption[] = [
 
 const MODEL_OPTIONS: Record<AgentProvider, ModelOption[]> = {
   claude: CLAUDE_MODELS,
-  hermes: HERMES_MODELS,
+  hermes: OPENAI_CODEX_MODELS,
   codex: CODEX_MODELS,
+};
+
+const HERMES_PROVIDERS: Array<{ value: HermesInferenceProvider; label: string }> = [
+  { value: "anthropic", label: "Claude" },
+  { value: "openai-codex", label: "Codex" },
+  { value: "openrouter", label: "OpenRouter" },
+];
+
+const HERMES_MODEL_OPTIONS: Record<HermesInferenceProvider, ModelOption[]> = {
+  anthropic: CLAUDE_MODELS,
+  "openai-codex": OPENAI_CODEX_MODELS,
+  openrouter: OPENROUTER_MODELS,
 };
 
 const CODEX_EFFORTS: Array<{ value: CodexEffort; ko: string; en: string }> = [
@@ -148,6 +170,9 @@ const CODEX_SPEEDS: Array<{ value: CodexSpeed; ko: string; en: string }> = [
 
 const isProvider = (value: unknown): value is AgentProvider =>
   value === "claude" || value === "hermes" || value === "codex";
+
+const isHermesProvider = (value: unknown): value is HermesInferenceProvider =>
+  value === "anthropic" || value === "openai-codex" || value === "openrouter";
 
 const isCodexEffort = (value: unknown): value is CodexEffort =>
   value === "low" || value === "medium" || value === "high" || value === "xhigh";
@@ -181,8 +206,39 @@ function modelFromProfile(profile: Profile, provider: AgentProvider) {
   return providerMeta(provider).defaultModel;
 }
 
-function modelOptionsFor(provider: AgentProvider, selected?: string | null) {
-  const options = MODEL_OPTIONS[provider] || [];
+function hermesProviderFromProfile(profile?: Profile) {
+  const parts = profile?.cmd.trim().split(/\s+/) || [];
+  for (let i = 0; i < parts.length; i++) {
+    const current = parts[i];
+    const next = parts[i + 1];
+    if (current === "--provider" && next) return normalizeHermesProvider(next);
+    if (current.startsWith("--provider=")) return normalizeHermesProvider(current.slice("--provider=".length));
+  }
+  return DEFAULT_HERMES_PROVIDER;
+}
+
+function defaultHermesModel(hermesProvider: HermesInferenceProvider) {
+  if (hermesProvider === "anthropic") return "claude-sonnet-4-6";
+  if (hermesProvider === "openrouter") return "openai/gpt-5.5";
+  return "gpt-5.5";
+}
+
+function inferHermesProviderFromModel(model?: string | null) {
+  const trimmed = model?.trim();
+  if (!trimmed) return DEFAULT_HERMES_PROVIDER;
+  if (trimmed.startsWith("anthropic/") || trimmed.startsWith("openai/")) return "openrouter";
+  if (trimmed.startsWith("claude-") || trimmed === "sonnet" || trimmed === "opus" || trimmed === "haiku") return "anthropic";
+  return DEFAULT_HERMES_PROVIDER;
+}
+
+function modelOptionsFor(
+  provider: AgentProvider,
+  selected?: string | null,
+  hermesProvider: HermesInferenceProvider = DEFAULT_HERMES_PROVIDER,
+) {
+  const options = provider === "hermes"
+    ? HERMES_MODEL_OPTIONS[hermesProvider]
+    : MODEL_OPTIONS[provider] || [];
   const trimmed = selected?.trim();
   if (!trimmed || options.some((option) => option.value === trimmed)) return options;
   return [{ value: trimmed, label: `사용자 지정: ${trimmed}` }, ...options];
@@ -200,6 +256,10 @@ function normalizeCodexSpeed(value?: unknown): CodexSpeed {
   return isCodexSpeed(value) ? value : DEFAULT_CODEX_SPEED;
 }
 
+function normalizeHermesProvider(value?: unknown): HermesInferenceProvider {
+  return isHermesProvider(value) ? value : DEFAULT_HERMES_PROVIDER;
+}
+
 function labelForCodexSpeed(value: CodexSpeed, language: Tweaks["language"]) {
   const option = CODEX_SPEEDS.find((item) => item.value === value) || CODEX_SPEEDS[0];
   return language === "en" ? option.en : option.ko;
@@ -211,18 +271,48 @@ function normalizeModel(provider: AgentProvider, model?: string | null) {
 
   if (provider === "claude") {
     const legacy: Record<string, string> = {
-      best: "opus",
-      opusplan: "opus",
-      "sonnet[1m]": "sonnet",
-      "opus[1m]": "opus",
-      "claude-opus-4-7": "opus",
-      "claude-sonnet-4-6": "sonnet",
-      "claude-haiku-4-5": "haiku",
+      default: "claude-sonnet-4-6",
+      sonnet: "claude-sonnet-4-6",
+      opus: "claude-opus-4-7",
+      haiku: "claude-haiku-4-5-20251001",
+      best: "claude-opus-4-7",
+      opusplan: "claude-opus-4-7",
+      "sonnet[1m]": "claude-sonnet-4-6",
+      "opus[1m]": "claude-opus-4-7",
+      "claude-opus-4-1": "claude-opus-4-7",
+      "claude-opus-4-1-20250805": "claude-opus-4-7",
+      "claude-opus-4-20250514": "claude-opus-4-7",
+      "claude-sonnet-4": "claude-sonnet-4-6",
+      "claude-sonnet-4-20250514": "claude-sonnet-4-6",
+      "claude-haiku-4-5": "claude-haiku-4-5-20251001",
+      "claude-3-5-haiku-latest": "claude-haiku-4-5-20251001",
+      "claude-3-5-haiku-20241022": "claude-haiku-4-5-20251001",
     };
     return legacy[trimmed] || trimmed;
   }
 
   if (trimmed === "gpt-5.4-nano") return "gpt-5.4-mini";
+  return trimmed;
+}
+
+function normalizeHermesModel(hermesProvider: HermesInferenceProvider, model?: string | null) {
+  const trimmed = normalizeModel(hermesProvider === "anthropic" ? "claude" : "hermes", model);
+  if (!trimmed || trimmed === providerMeta("hermes").defaultModel) return defaultHermesModel(hermesProvider);
+  if (hermesProvider === "openrouter") {
+    const legacy: Record<string, string> = {
+      "gpt-5.5": "openai/gpt-5.5",
+      "gpt-5.4": "openai/gpt-5.4",
+      "gpt-5.4-mini": "openai/gpt-5.4-mini",
+      "gpt-5.3-codex": "openai/gpt-5.3-codex",
+      "claude-opus-4-7": "anthropic/claude-opus-4.7",
+      "claude-sonnet-4-6": "anthropic/claude-sonnet-4.6",
+      "claude-haiku-4-5-20251001": "anthropic/claude-haiku-4.5",
+    };
+    return legacy[trimmed] || trimmed;
+  }
+  if (hermesProvider === "openai-codex" && trimmed.startsWith("openai/")) {
+    return trimmed.slice("openai/".length);
+  }
   return trimmed;
 }
 
@@ -247,6 +337,9 @@ function loadSessions(): AgentSession[] {
       return parsed.map((session: Partial<AgentSession>) => {
         const provider = isProvider(session.provider) ? session.provider : DEFAULT_PROVIDER;
         const meta = providerMeta(provider);
+        const hermesProvider = provider === "hermes"
+          ? normalizeHermesProvider(session.hermesProvider || inferHermesProviderFromModel(session.model))
+          : undefined;
         return {
           id: session.id || nowId("agent"),
           title: session.title || meta.newTitleKo,
@@ -255,7 +348,10 @@ function loadSessions(): AgentSession[] {
           profileId: session.profileId || provider,
           profileName: session.profileName || meta.label,
           profileDot: session.profileDot || meta.dot,
-          model: normalizeModel(provider, session.model || meta.defaultModel),
+          model: provider === "hermes"
+            ? normalizeHermesModel(hermesProvider || DEFAULT_HERMES_PROVIDER, session.model || meta.defaultModel)
+            : normalizeModel(provider, session.model || meta.defaultModel),
+          hermesProvider,
           codexEffort: provider === "codex" ? normalizeCodexEffort(session.codexEffort) : undefined,
           codexSpeed: provider === "codex" ? normalizeCodexSpeed(session.codexSpeed) : undefined,
           cwd: session.cwd || "",
@@ -326,6 +422,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         events: "Events",
         emptyEvents: "No stream events yet.",
         renameHint: "Double-click to rename",
+        providerLabel: "Provider",
         modelLabel: "Model",
         intelligence: "Intelligence",
         speed: "Speed",
@@ -350,6 +447,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         events: "이벤트",
         emptyEvents: "아직 스트림 이벤트가 없습니다.",
         renameHint: "더블클릭해 이름 변경",
+        providerLabel: "제공자",
         modelLabel: "모델",
         intelligence: "인텔리전스",
         speed: "속도",
@@ -373,7 +471,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const activeProvider = active?.provider || fallbackProvider;
   const activeProviderMeta = providerMeta(activeProvider);
   const activeModel = active?.model || activeProviderMeta.defaultModel;
-  const activeModelOptions = modelOptionsFor(activeProvider, activeModel);
+  const activeHermesProvider = activeProvider === "hermes"
+    ? normalizeHermesProvider(active?.hermesProvider || inferHermesProviderFromModel(activeModel))
+    : DEFAULT_HERMES_PROVIDER;
+  const activeModelOptions = modelOptionsFor(activeProvider, activeModel, activeHermesProvider);
   const activeModelLabel = labelForOption(activeModelOptions, activeModel);
   const activeCodexEffort = normalizeCodexEffort(active?.codexEffort);
   const activeCodexSpeed = normalizeCodexSpeed(active?.codexSpeed);
@@ -465,6 +566,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     const meta = providerMeta(provider);
     const id = nowId("agent");
     const profileName = profile?.name || meta.label;
+    const hermesProvider = provider === "hermes" ? hermesProviderFromProfile(profile) : undefined;
     const defaultTitle = tw.language === "en"
       ? `New ${profileName} workspace`
       : `새 ${profileName} 작업`;
@@ -476,7 +578,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       profileId: profile?.id || provider,
       profileName,
       profileDot: profile?.dot || meta.dot,
-      model: normalizeModel(provider, profile ? modelFromProfile(profile, provider) : meta.defaultModel),
+      model: provider === "hermes"
+        ? normalizeHermesModel(hermesProvider || DEFAULT_HERMES_PROVIDER, profile ? modelFromProfile(profile, provider) : meta.defaultModel)
+        : normalizeModel(provider, profile ? modelFromProfile(profile, provider) : meta.defaultModel),
+      hermesProvider,
       codexEffort: provider === "codex" ? DEFAULT_CODEX_EFFORT : undefined,
       codexSpeed: provider === "codex" ? DEFAULT_CODEX_SPEED : undefined,
       cwd,
@@ -556,6 +661,18 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const updateActiveModel = (model: string) => {
     if (!active) return;
     patchSession(active.id, (session) => ({ ...session, model, updatedAt: Date.now() }));
+  };
+
+  const updateActiveHermesProvider = (hermesProvider: HermesInferenceProvider) => {
+    if (!active) return;
+    patchSession(active.id, (session) => ({
+      ...session,
+      hermesProvider,
+      model: HERMES_MODEL_OPTIONS[hermesProvider].some((option) => option.value === normalizeHermesModel(hermesProvider, session.model))
+        ? normalizeHermesModel(hermesProvider, session.model)
+        : defaultHermesModel(hermesProvider),
+      updatedAt: Date.now(),
+    }));
   };
 
   const updateActiveCodexEffort = (effort: CodexEffort) => {
@@ -641,6 +758,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           resumeSessionId: session.providerSessionId || null,
           cwd: cwd || null,
           model: session.model || meta.defaultModel,
+          hermesProvider: session.provider === "hermes"
+            ? normalizeHermesProvider(session.hermesProvider || inferHermesProviderFromModel(session.model))
+            : null,
           effort: session.provider === "codex" ? normalizeCodexEffort(session.codexEffort) : null,
           speed: session.provider === "codex" ? normalizeCodexSpeed(session.codexSpeed) : null,
         });
@@ -1097,6 +1217,32 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                 {busyTurnId ? copy.stopHint : "⌘/Ctrl + Enter"}
               </div>
               <div className="shrink-0 flex items-center gap-1.5">
+                {activeProvider === "hermes" && (
+                  <>
+                    <span className={cls("text-[10px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
+                      {copy.providerLabel}
+                    </span>
+                    <select
+                      value={activeHermesProvider}
+                      onChange={(e) => updateActiveHermesProvider(e.target.value as HermesInferenceProvider)}
+                      disabled={!active || !!busyTurnId}
+                      className={cls(
+                        "h-8 max-w-[132px] rounded-[7px] border px-2 text-[11px] font-mono outline-none",
+                        dark
+                          ? "bg-dsurf border-dline text-dink disabled:text-dsub"
+                          : "bg-surface border-line text-ink disabled:text-sub",
+                      )}
+                      aria-label={copy.providerLabel}
+                      title="Hermes provider"
+                    >
+                      {HERMES_PROVIDERS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                )}
                 <span className={cls("text-[10px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
                   {copy.modelLabel}
                 </span>

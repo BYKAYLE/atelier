@@ -29,6 +29,39 @@ fn emit_agent_event<R: Runtime>(app: &AppHandle<R>, turn_id: &str, event: AgentS
     let _ = app.emit(&format!("agent://{turn_id}/event"), event);
 }
 
+fn normalize_claude_model(model: Option<String>) -> String {
+    let value = model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("claude-sonnet-4-6");
+    match value {
+        "default" | "sonnet" | "sonnet[1m]" | "claude-sonnet-4" | "claude-sonnet-4-20250514" => {
+            "claude-sonnet-4-6".to_string()
+        }
+        "opus" | "best" | "opusplan" | "opus[1m]" | "claude-opus-4-1" | "claude-opus-4-1-20250805"
+        | "claude-opus-4-20250514" => "claude-opus-4-7".to_string(),
+        "haiku" | "claude-haiku-4-5" | "claude-3-5-haiku-latest" | "claude-3-5-haiku-20241022" => {
+            "claude-haiku-4-5-20251001".to_string()
+        }
+        other => other.to_string(),
+    }
+}
+
+fn normalize_hermes_provider(provider: Option<String>) -> String {
+    match provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("openai-codex")
+    {
+        "anthropic" => "anthropic".to_string(),
+        "openrouter" => "openrouter".to_string(),
+        "openai-codex" | "codex" => "openai-codex".to_string(),
+        _ => "openai-codex".to_string(),
+    }
+}
+
 fn text_from_assistant_message(v: &Value) -> Option<String> {
     let content = v.get("message")?.get("content")?.as_array()?;
     let mut out = String::new();
@@ -190,6 +223,7 @@ fn run_claude<R: Runtime>(
     cwd: Option<String>,
     model: Option<String>,
 ) -> Result<AgentRunResult, String> {
+    let model = normalize_claude_model(model);
     let mut cmd = Command::new("claude");
     cmd.arg("-p")
         .arg("--verbose")
@@ -197,7 +231,7 @@ fn run_claude<R: Runtime>(
         .arg("stream-json")
         .arg("--include-partial-messages")
         .arg("--model")
-        .arg(model.unwrap_or_else(|| "sonnet".to_string()))
+        .arg(model)
         .env("PATH", crate::augmented_cli_path())
         .env("LANG", "ko_KR.UTF-8")
         .env("LC_CTYPE", "ko_KR.UTF-8")
@@ -542,12 +576,16 @@ fn run_hermes<R: Runtime>(
     resume_session_id: Option<String>,
     cwd: Option<String>,
     model: Option<String>,
+    hermes_provider: Option<String>,
 ) -> Result<AgentRunResult, String> {
+    let hermes_provider = normalize_hermes_provider(hermes_provider);
     let mut cmd = Command::new("hermes");
     cmd.arg("chat")
         .arg("-Q")
         .arg("--max-turns")
         .arg("25")
+        .arg("--provider")
+        .arg(hermes_provider)
         .arg("-m")
         .arg(model.unwrap_or_else(|| "gpt-5.5".to_string()))
         .arg("-q")
@@ -658,13 +696,14 @@ pub async fn agent_send<R: Runtime>(
     resume_session_id: Option<String>,
     cwd: Option<String>,
     model: Option<String>,
+    hermes_provider: Option<String>,
     effort: Option<String>,
     speed: Option<String>,
 ) -> std::result::Result<AgentRunResult, String> {
     tauri::async_runtime::spawn_blocking(move || match provider.as_str() {
         "claude" => run_claude(app, turn_id, prompt, resume_session_id, cwd, model),
         "codex" => run_codex(app, turn_id, prompt, resume_session_id, cwd, model, effort, speed),
-        "hermes" => run_hermes(app, turn_id, prompt, resume_session_id, cwd, model),
+        "hermes" => run_hermes(app, turn_id, prompt, resume_session_id, cwd, model, hermes_provider),
         other => Err(format!("unsupported provider: {other}")),
     })
     .await

@@ -89,6 +89,7 @@ export async function agentSend(args: {
   resumeSessionId?: string | null;
   cwd?: string | null;
   model?: string | null;
+  hermesProvider?: string | null;
   effort?: string | null;
   speed?: string | null;
 }): Promise<AgentRunResult> {
