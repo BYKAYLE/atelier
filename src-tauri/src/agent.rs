@@ -250,8 +250,14 @@ fn preview_service_idle_status(url: String) -> PreviewServiceStatus {
 }
 
 fn refresh_preview_service(service: &mut ManagedPreviewService) {
-    let Some(child) = service.child.as_ref() else { return };
-    let status = child.lock().ok().and_then(|mut child| child.try_wait().ok()).flatten();
+    let Some(child) = service.child.as_ref() else {
+        return;
+    };
+    let status = child
+        .lock()
+        .ok()
+        .and_then(|mut child| child.try_wait().ok())
+        .flatten();
     if let Some(status) = status {
         service.child = None;
         service.pid = None;
@@ -270,22 +276,39 @@ fn infer_preview_command(cwd: &str, url: &str) -> Result<String, String> {
     let port = preview_service_port(url)?;
     let package_json = PathBuf::from(cwd).join("package.json");
     if !package_json.exists() {
-        return Err("No package.json found in the working folder. Enter a preview start command.".into());
+        return Err(
+            "No package.json found in the working folder. Enter a preview start command.".into(),
+        );
     }
-    let text = std::fs::read_to_string(&package_json)
-        .map_err(|e| format!("read package.json: {e}"))?;
-    let value: Value = serde_json::from_str(&text).map_err(|e| format!("parse package.json: {e}"))?;
+    let text =
+        std::fs::read_to_string(&package_json).map_err(|e| format!("read package.json: {e}"))?;
+    let value: Value =
+        serde_json::from_str(&text).map_err(|e| format!("parse package.json: {e}"))?;
     let scripts = value.get("scripts").and_then(Value::as_object);
-    let script = if scripts.and_then(|s| s.get("dev")).and_then(Value::as_str).is_some() {
+    let script = if scripts
+        .and_then(|s| s.get("dev"))
+        .and_then(Value::as_str)
+        .is_some()
+    {
         "dev"
-    } else if scripts.and_then(|s| s.get("start")).and_then(Value::as_str).is_some() {
+    } else if scripts
+        .and_then(|s| s.get("start"))
+        .and_then(Value::as_str)
+        .is_some()
+    {
         "start"
-    } else if scripts.and_then(|s| s.get("preview")).and_then(Value::as_str).is_some() {
+    } else if scripts
+        .and_then(|s| s.get("preview"))
+        .and_then(Value::as_str)
+        .is_some()
+    {
         "preview"
     } else {
         return Err("package.json has no dev, start, or preview script.".into());
     };
-    Ok(format!("npm run {script} -- --host 127.0.0.1 --port {port}"))
+    Ok(format!(
+        "npm run {script} -- --host 127.0.0.1 --port {port}"
+    ))
 }
 
 #[cfg(target_os = "windows")]
@@ -303,8 +326,12 @@ fn preview_shell_command(command: &str) -> Command {
 }
 
 fn push_preview_output(id: &str, line: String) {
-    let Ok(mut services) = preview_services().lock() else { return };
-    let Some(service) = services.get_mut(id) else { return };
+    let Ok(mut services) = preview_services().lock() else {
+        return;
+    };
+    let Some(service) = services.get_mut(id) else {
+        return;
+    };
     let clipped = if line.chars().count() > 260 {
         format!("{}…", line.chars().take(259).collect::<String>())
     } else {
@@ -365,10 +392,22 @@ fn spawn_preview_child<R: Runtime>(
     let pid = child.id();
     let child = Arc::new(Mutex::new(child));
     if let Some(stdout) = stdout {
-        spawn_preview_output_reader(app.clone(), id.to_string(), url.to_string(), "stdout", stdout);
+        spawn_preview_output_reader(
+            app.clone(),
+            id.to_string(),
+            url.to_string(),
+            "stdout",
+            stdout,
+        );
     }
     if let Some(stderr) = stderr {
-        spawn_preview_output_reader(app.clone(), id.to_string(), url.to_string(), "stderr", stderr);
+        spawn_preview_output_reader(
+            app.clone(),
+            id.to_string(),
+            url.to_string(),
+            "stderr",
+            stderr,
+        );
     }
     Ok((child, pid))
 }
@@ -381,9 +420,11 @@ fn start_preview_service<R: Runtime>(
     auto_restart: bool,
 ) -> Result<PreviewServiceStatus, String> {
     let parsed = parse_local_preview_url(&url)?;
-    let cwd = cwd
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| ".".into()));
+    let cwd = cwd.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| {
+        std::env::current_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| ".".into())
+    });
     let command = command
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -403,20 +444,25 @@ fn start_preview_service<R: Runtime>(
 
     let (child, pid) = spawn_preview_child(&app, &id, &parsed.url, &cwd, &command)?;
     let mut services = preview_services().lock().map_err(|e| e.to_string())?;
-    let restarts = services.get(&id).map(|s| s.restarts.saturating_add(1)).unwrap_or(0);
-    let service = services.entry(id.clone()).or_insert_with(|| ManagedPreviewService {
-        id: id.clone(),
-        url: parsed.url.clone(),
-        cwd: cwd.clone(),
-        command: command.clone(),
-        child: None,
-        pid: None,
-        started_at: None,
-        restarts,
-        auto_restart,
-        last_error: None,
-        recent_output: VecDeque::new(),
-    });
+    let restarts = services
+        .get(&id)
+        .map(|s| s.restarts.saturating_add(1))
+        .unwrap_or(0);
+    let service = services
+        .entry(id.clone())
+        .or_insert_with(|| ManagedPreviewService {
+            id: id.clone(),
+            url: parsed.url.clone(),
+            cwd: cwd.clone(),
+            command: command.clone(),
+            child: None,
+            pid: None,
+            started_at: None,
+            restarts,
+            auto_restart,
+            last_error: None,
+            recent_output: VecDeque::new(),
+        });
     service.url = parsed.url;
     service.cwd = cwd;
     service.command = command;
@@ -455,9 +501,11 @@ fn html_entity(entity: &str) -> Option<char> {
         "quot" => Some('"'),
         "apos" | "#39" => Some('\''),
         "nbsp" => Some(' '),
-        _ if entity.starts_with("#x") || entity.starts_with("#X") => u32::from_str_radix(&entity[2..], 16)
-            .ok()
-            .and_then(char::from_u32),
+        _ if entity.starts_with("#x") || entity.starts_with("#X") => {
+            u32::from_str_radix(&entity[2..], 16)
+                .ok()
+                .and_then(char::from_u32)
+        }
         _ if entity.starts_with('#') => entity[1..].parse::<u32>().ok().and_then(char::from_u32),
         _ => None,
     }
@@ -491,7 +539,10 @@ fn decode_html_entities(text: &str) -> String {
 fn extract_body_text(html: &str) -> Option<String> {
     let lower = html.to_ascii_lowercase();
     let body = if let Some(start) = lower.find("<body") {
-        let after_start = lower[start..].find('>').map(|idx| start + idx + 1).unwrap_or(start);
+        let after_start = lower[start..]
+            .find('>')
+            .map(|idx| start + idx + 1)
+            .unwrap_or(start);
         let end = lower[after_start..]
             .find("</body>")
             .map(|idx| after_start + idx)
@@ -533,14 +584,19 @@ fn extract_body_text(html: &str) -> Option<String> {
                     .next()
                     .unwrap_or_default()
                     .to_ascii_lowercase();
-                if matches!(tag_name.as_str(), "script" | "style" | "svg") && !tag.trim_start().starts_with('/') {
+                if matches!(tag_name.as_str(), "script" | "style" | "svg")
+                    && !tag.trim_start().starts_with('/')
+                {
                     skip_until = Some(match tag_name.as_str() {
                         "script" => "</script",
                         "style" => "</style",
                         _ => "</svg",
                     });
                 }
-                if matches!(tag_name.as_str(), "br" | "p" | "div" | "li" | "tr" | "h1" | "h2" | "h3" | "pre") {
+                if matches!(
+                    tag_name.as_str(),
+                    "br" | "p" | "div" | "li" | "tr" | "h1" | "h2" | "h3" | "pre"
+                ) {
                     text.push(' ');
                 }
                 tag.clear();
@@ -575,7 +631,11 @@ fn preview_connect_candidates(parsed: &LocalPreviewUrl) -> Vec<String> {
     let mut candidates = Vec::new();
     let host = parsed.host.trim_matches(|c| c == '[' || c == ']');
     let raw = match host {
-        "localhost" => vec!["127.0.0.1".to_string(), "[::1]".to_string(), "localhost".to_string()],
+        "localhost" => vec![
+            "127.0.0.1".to_string(),
+            "[::1]".to_string(),
+            "localhost".to_string(),
+        ],
         "0.0.0.0" => vec!["127.0.0.1".to_string(), "localhost".to_string()],
         "::1" => vec!["[::1]".to_string(), "localhost".to_string()],
         other => vec![parsed.connect_host.clone(), other.to_string()],
@@ -840,17 +900,26 @@ fn status_path(line: &str) -> Option<(String, String)> {
         return None;
     }
     let status = line.get(0..2)?.to_string();
-    let path = line.get(3..)?.rsplit(" -> ").next()?.trim_matches('"').to_string();
+    let path = line
+        .get(3..)?
+        .rsplit(" -> ")
+        .next()?
+        .trim_matches('"')
+        .to_string();
     Some((status, path))
 }
 
 fn count_text_lines(root: &str, path: &str) -> u64 {
     let path = std::path::Path::new(root).join(path);
-    let Ok(meta) = std::fs::metadata(&path) else { return 0 };
+    let Ok(meta) = std::fs::metadata(&path) else {
+        return 0;
+    };
     if !meta.is_file() || meta.len() > 512 * 1024 {
         return 0;
     }
-    let Ok(text) = std::fs::read_to_string(path) else { return 0 };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return 0;
+    };
     text.lines().count() as u64
 }
 
@@ -878,18 +947,25 @@ fn build_change_summary(cwd: Option<String>) -> Result<AgentChangeSummary, Strin
         }
     };
 
-    let status = run_git(&root, &["status", "--porcelain=v1", "--untracked-files=all"])?;
+    let status = run_git(
+        &root,
+        &["status", "--porcelain=v1", "--untracked-files=all"],
+    )?;
     let mut files: BTreeMap<String, AgentChangedFile> = BTreeMap::new();
     for line in status.lines().filter(|line| !line.trim().is_empty()) {
-        let Some((raw_status, path)) = status_path(line) else { continue };
-        files.entry(path.clone()).or_insert_with(|| AgentChangedFile {
-            path,
-            status: status_label(raw_status.trim()),
-            additions: 0,
-            deletions: 0,
-            binary: false,
-            diff: String::new(),
-        });
+        let Some((raw_status, path)) = status_path(line) else {
+            continue;
+        };
+        files
+            .entry(path.clone())
+            .or_insert_with(|| AgentChangedFile {
+                path,
+                status: status_label(raw_status.trim()),
+                additions: 0,
+                deletions: 0,
+                binary: false,
+                diff: String::new(),
+            });
     }
 
     let numstat = run_git(&root, &["diff", "--numstat", "HEAD", "--"]).unwrap_or_default();
@@ -901,14 +977,16 @@ fn build_change_summary(cwd: Option<String>) -> Result<AgentChangeSummary, Strin
         let binary = add_raw == "-" || del_raw == "-";
         let additions = add_raw.parse::<u64>().unwrap_or(0);
         let deletions = del_raw.parse::<u64>().unwrap_or(0);
-        let entry = files.entry(path.to_string()).or_insert_with(|| AgentChangedFile {
-            path: path.to_string(),
-            status: "modified".to_string(),
-            additions: 0,
-            deletions: 0,
-            binary,
-            diff: String::new(),
-        });
+        let entry = files
+            .entry(path.to_string())
+            .or_insert_with(|| AgentChangedFile {
+                path: path.to_string(),
+                status: "modified".to_string(),
+                additions: 0,
+                deletions: 0,
+                binary,
+                diff: String::new(),
+            });
         entry.additions = entry.additions.saturating_add(additions);
         entry.deletions = entry.deletions.saturating_add(deletions);
         entry.binary = entry.binary || binary;
@@ -920,7 +998,8 @@ fn build_change_summary(cwd: Option<String>) -> Result<AgentChangeSummary, Strin
             continue;
         }
         file.diff = clip_diff(
-            run_git(&root, &["diff", "--color=never", "HEAD", "--", &file.path]).unwrap_or_default(),
+            run_git(&root, &["diff", "--color=never", "HEAD", "--", &file.path])
+                .unwrap_or_default(),
         );
     }
 
@@ -954,7 +1033,12 @@ fn normalize_claude_model(model: Option<String>) -> String {
         "default" | "sonnet" | "sonnet[1m]" | "claude-sonnet-4" | "claude-sonnet-4-20250514" => {
             "claude-sonnet-4-6".to_string()
         }
-        "opus" | "best" | "opusplan" | "opus[1m]" | "claude-opus-4-1" | "claude-opus-4-1-20250805"
+        "opus"
+        | "best"
+        | "opusplan"
+        | "opus[1m]"
+        | "claude-opus-4-1"
+        | "claude-opus-4-1-20250805"
         | "claude-opus-4-20250514" => "claude-opus-4-7".to_string(),
         "haiku" | "claude-haiku-4-5" | "claude-3-5-haiku-latest" | "claude-3-5-haiku-20241022" => {
             "claude-haiku-4-5-20251001".to_string()
@@ -977,6 +1061,45 @@ fn normalize_hermes_provider(provider: Option<String>) -> String {
     }
 }
 
+fn normalize_agent_permission_mode(permission_mode: Option<String>) -> String {
+    match permission_mode
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+        .unwrap_or("full")
+    {
+        "basic" | "default" => "basic".to_string(),
+        "auto" | "autoreview" | "auto-review" => "auto".to_string(),
+        "full" | "bypass" | "danger" => "full".to_string(),
+        _ => "full".to_string(),
+    }
+}
+
+fn claude_permission_mode(permission_mode: &str) -> &'static str {
+    match permission_mode {
+        "basic" => "default",
+        "auto" => "auto",
+        "full" => "bypassPermissions",
+        _ => "bypassPermissions",
+    }
+}
+
+fn push_codex_permission_args(cmd: &mut Command, permission_mode: &str, can_set_sandbox: bool) {
+    match permission_mode {
+        "basic" if can_set_sandbox => {
+            cmd.arg("--sandbox").arg("workspace-write");
+        }
+        "auto" => {
+            cmd.arg("--full-auto");
+        }
+        "full" => {
+            cmd.arg("--dangerously-bypass-approvals-and-sandbox");
+        }
+        _ => {}
+    }
+}
+
 fn text_from_assistant_message(v: &Value) -> Option<String> {
     let content = v.get("message")?.get("content")?.as_array()?;
     let mut out = String::new();
@@ -987,7 +1110,11 @@ fn text_from_assistant_message(v: &Value) -> Option<String> {
             }
         }
     }
-    if out.is_empty() { None } else { Some(out) }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 fn parse_claude_line<R: Runtime>(
@@ -1000,14 +1127,18 @@ fn parse_claude_line<R: Runtime>(
     error: &mut Option<String>,
 ) {
     let Ok(v) = serde_json::from_str::<Value>(line) else {
-        emit_agent_event(app, turn_id, AgentStreamEvent {
-            kind: "raw".into(),
-            text: None,
-            status: None,
-            raw: Some(line.to_string()),
-            provider_session_id: provider_session_id.clone(),
-            is_error: None,
-        });
+        emit_agent_event(
+            app,
+            turn_id,
+            AgentStreamEvent {
+                kind: "raw".into(),
+                text: None,
+                status: None,
+                raw: Some(line.to_string()),
+                provider_session_id: provider_session_id.clone(),
+                is_error: None,
+            },
+        );
         return;
     };
 
@@ -1028,32 +1159,43 @@ fn parse_claude_line<R: Runtime>(
                 .or_else(|| v.get("status").and_then(Value::as_str))
                 .unwrap_or("system")
                 .to_string();
-            emit_agent_event(app, turn_id, AgentStreamEvent {
-                kind: "status".into(),
-                text: None,
-                status: Some(status),
-                raw: Some(line.to_string()),
-                provider_session_id: provider_session_id.clone(),
-                is_error: None,
-            });
+            emit_agent_event(
+                app,
+                turn_id,
+                AgentStreamEvent {
+                    kind: "status".into(),
+                    text: None,
+                    status: Some(status),
+                    raw: Some(line.to_string()),
+                    provider_session_id: provider_session_id.clone(),
+                    is_error: None,
+                },
+            );
         }
         "stream_event" => {
             let event = v.get("event").unwrap_or(&Value::Null);
-            let event_type = event.get("type").and_then(Value::as_str).unwrap_or_default();
+            let event_type = event
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             if event_type == "content_block_delta" {
                 if let Some(text) = event
                     .get("delta")
                     .and_then(|d| d.get("text"))
                     .and_then(Value::as_str)
                 {
-                    emit_agent_event(app, turn_id, AgentStreamEvent {
-                        kind: "delta".into(),
-                        text: Some(text.to_string()),
-                        status: None,
-                        raw: Some(line.to_string()),
-                        provider_session_id: provider_session_id.clone(),
-                        is_error: None,
-                    });
+                    emit_agent_event(
+                        app,
+                        turn_id,
+                        AgentStreamEvent {
+                            kind: "delta".into(),
+                            text: Some(text.to_string()),
+                            status: None,
+                            raw: Some(line.to_string()),
+                            provider_session_id: provider_session_id.clone(),
+                            is_error: None,
+                        },
+                    );
                 }
             } else if event_type == "content_block_start" {
                 if let Some(block_type) = event
@@ -1062,19 +1204,23 @@ fn parse_claude_line<R: Runtime>(
                     .and_then(Value::as_str)
                 {
                     if block_type != "text" {
-                        emit_agent_event(app, turn_id, AgentStreamEvent {
-                            kind: "tool".into(),
-                            text: event
-                                .get("content_block")
-                                .and_then(|b| b.get("name"))
-                                .and_then(Value::as_str)
-                                .map(str::to_string)
-                                .or_else(|| Some(block_type.to_string())),
-                            status: Some(block_type.to_string()),
-                            raw: Some(line.to_string()),
-                            provider_session_id: provider_session_id.clone(),
-                            is_error: None,
-                        });
+                        emit_agent_event(
+                            app,
+                            turn_id,
+                            AgentStreamEvent {
+                                kind: "tool".into(),
+                                text: event
+                                    .get("content_block")
+                                    .and_then(|b| b.get("name"))
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string)
+                                    .or_else(|| Some(block_type.to_string())),
+                                status: Some(block_type.to_string()),
+                                raw: Some(line.to_string()),
+                                provider_session_id: provider_session_id.clone(),
+                                is_error: None,
+                            },
+                        );
                     }
                 }
             }
@@ -1100,14 +1246,21 @@ fn parse_claude_line<R: Runtime>(
                         .to_string(),
                 );
             }
-            emit_agent_event(app, turn_id, AgentStreamEvent {
-                kind: "result".into(),
-                text: Some(final_text.clone()),
-                status: v.get("stop_reason").and_then(Value::as_str).map(str::to_string),
-                raw: Some(line.to_string()),
-                provider_session_id: provider_session_id.clone(),
-                is_error: Some(*is_error),
-            });
+            emit_agent_event(
+                app,
+                turn_id,
+                AgentStreamEvent {
+                    kind: "result".into(),
+                    text: Some(final_text.clone()),
+                    status: v
+                        .get("stop_reason")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    raw: Some(line.to_string()),
+                    provider_session_id: provider_session_id.clone(),
+                    is_error: Some(*is_error),
+                },
+            );
         }
         "error" => {
             *is_error = true;
@@ -1117,14 +1270,18 @@ fn parse_claude_line<R: Runtime>(
                 .unwrap_or("Claude stream error")
                 .to_string();
             *error = Some(msg.clone());
-            emit_agent_event(app, turn_id, AgentStreamEvent {
-                kind: "error".into(),
-                text: Some(msg),
-                status: Some("error".into()),
-                raw: Some(line.to_string()),
-                provider_session_id: provider_session_id.clone(),
-                is_error: Some(true),
-            });
+            emit_agent_event(
+                app,
+                turn_id,
+                AgentStreamEvent {
+                    kind: "error".into(),
+                    text: Some(msg),
+                    status: Some("error".into()),
+                    raw: Some(line.to_string()),
+                    provider_session_id: provider_session_id.clone(),
+                    is_error: Some(true),
+                },
+            );
         }
         _ => {}
     }
@@ -1137,8 +1294,10 @@ fn run_claude<R: Runtime>(
     resume_session_id: Option<String>,
     cwd: Option<String>,
     model: Option<String>,
+    permission_mode: Option<String>,
 ) -> Result<AgentRunResult, String> {
     let model = normalize_claude_model(model);
+    let permission_mode = normalize_agent_permission_mode(permission_mode);
     let mut cmd = Command::new("claude");
     cmd.arg("-p")
         .arg("--verbose")
@@ -1147,6 +1306,8 @@ fn run_claude<R: Runtime>(
         .arg("--include-partial-messages")
         .arg("--model")
         .arg(model)
+        .arg("--permission-mode")
+        .arg(claude_permission_mode(&permission_mode))
         .env("PATH", crate::augmented_cli_path())
         .env("LANG", "ko_KR.UTF-8")
         .env("LC_CTYPE", "ko_KR.UTF-8")
@@ -1161,14 +1322,18 @@ fn run_claude<R: Runtime>(
         cmd.current_dir(cwd);
     }
 
-    emit_agent_event(&app, &turn_id, AgentStreamEvent {
-        kind: "status".into(),
-        text: None,
-        status: Some("starting".into()),
-        raw: None,
-        provider_session_id: None,
-        is_error: None,
-    });
+    emit_agent_event(
+        &app,
+        &turn_id,
+        AgentStreamEvent {
+            kind: "status".into(),
+            text: None,
+            status: Some("starting".into()),
+            raw: None,
+            provider_session_id: None,
+            is_error: None,
+        },
+    );
 
     let mut child = cmd.spawn().map_err(|e| format!("claude spawn: {e}"))?;
     if let Some(mut stdin) = child.stdin.take() {
@@ -1193,7 +1358,10 @@ fn run_claude<R: Runtime>(
         })
     });
 
-    let stdout = child.stdout.take().ok_or_else(|| "claude stdout missing".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "claude stdout missing".to_string())?;
     let reader = BufReader::new(stdout);
     let mut raw_events = Vec::new();
     let mut final_text = String::new();
@@ -1231,14 +1399,18 @@ fn run_claude<R: Runtime>(
                 stderr_text.trim().to_string()
             });
         }
-        emit_agent_event(&app, &turn_id, AgentStreamEvent {
-            kind: "error".into(),
-            text: error.clone(),
-            status: Some("exit".into()),
-            raw: None,
-            provider_session_id: provider_session_id.clone(),
-            is_error: Some(true),
-        });
+        emit_agent_event(
+            &app,
+            &turn_id,
+            AgentStreamEvent {
+                kind: "error".into(),
+                text: error.clone(),
+                status: Some("exit".into()),
+                raw: None,
+                provider_session_id: provider_session_id.clone(),
+                is_error: Some(true),
+            },
+        );
     }
 
     Ok(AgentRunResult {
@@ -1260,14 +1432,18 @@ fn parse_codex_line<R: Runtime>(
     error: &mut Option<String>,
 ) {
     let Ok(v) = serde_json::from_str::<Value>(line) else {
-        emit_agent_event(app, turn_id, AgentStreamEvent {
-            kind: "raw".into(),
-            text: None,
-            status: None,
-            raw: Some(line.to_string()),
-            provider_session_id: provider_session_id.clone(),
-            is_error: None,
-        });
+        emit_agent_event(
+            app,
+            turn_id,
+            AgentStreamEvent {
+                kind: "raw".into(),
+                text: None,
+                status: None,
+                raw: Some(line.to_string()),
+                provider_session_id: provider_session_id.clone(),
+                is_error: None,
+            },
+        );
         return;
     };
 
@@ -1276,24 +1452,32 @@ fn parse_codex_line<R: Runtime>(
             if let Some(id) = v.get("thread_id").and_then(Value::as_str) {
                 *provider_session_id = Some(id.to_string());
             }
-            emit_agent_event(app, turn_id, AgentStreamEvent {
-                kind: "status".into(),
-                text: None,
-                status: Some("thread.started".into()),
-                raw: Some(line.to_string()),
-                provider_session_id: provider_session_id.clone(),
-                is_error: None,
-            });
+            emit_agent_event(
+                app,
+                turn_id,
+                AgentStreamEvent {
+                    kind: "status".into(),
+                    text: None,
+                    status: Some("thread.started".into()),
+                    raw: Some(line.to_string()),
+                    provider_session_id: provider_session_id.clone(),
+                    is_error: None,
+                },
+            );
         }
         "turn.started" => {
-            emit_agent_event(app, turn_id, AgentStreamEvent {
-                kind: "status".into(),
-                text: None,
-                status: Some("turn.started".into()),
-                raw: Some(line.to_string()),
-                provider_session_id: provider_session_id.clone(),
-                is_error: None,
-            });
+            emit_agent_event(
+                app,
+                turn_id,
+                AgentStreamEvent {
+                    kind: "status".into(),
+                    text: None,
+                    status: Some("turn.started".into()),
+                    raw: Some(line.to_string()),
+                    provider_session_id: provider_session_id.clone(),
+                    is_error: None,
+                },
+            );
         }
         "item.completed" => {
             let item = v.get("item").unwrap_or(&Value::Null);
@@ -1301,24 +1485,32 @@ fn parse_codex_line<R: Runtime>(
             if item_type == "agent_message" {
                 if let Some(text) = item.get("text").and_then(Value::as_str) {
                     *final_text = text.to_string();
-                    emit_agent_event(app, turn_id, AgentStreamEvent {
-                        kind: "result".into(),
-                        text: Some(text.to_string()),
-                        status: Some("agent_message".into()),
-                        raw: Some(line.to_string()),
-                        provider_session_id: provider_session_id.clone(),
-                        is_error: Some(false),
-                    });
+                    emit_agent_event(
+                        app,
+                        turn_id,
+                        AgentStreamEvent {
+                            kind: "result".into(),
+                            text: Some(text.to_string()),
+                            status: Some("agent_message".into()),
+                            raw: Some(line.to_string()),
+                            provider_session_id: provider_session_id.clone(),
+                            is_error: Some(false),
+                        },
+                    );
                 }
             } else {
-                emit_agent_event(app, turn_id, AgentStreamEvent {
-                    kind: "tool".into(),
-                    text: Some(item_type.to_string()),
-                    status: Some("item.completed".into()),
-                    raw: Some(line.to_string()),
-                    provider_session_id: provider_session_id.clone(),
-                    is_error: None,
-                });
+                emit_agent_event(
+                    app,
+                    turn_id,
+                    AgentStreamEvent {
+                        kind: "tool".into(),
+                        text: Some(item_type.to_string()),
+                        status: Some("item.completed".into()),
+                        raw: Some(line.to_string()),
+                        provider_session_id: provider_session_id.clone(),
+                        is_error: None,
+                    },
+                );
             }
         }
         "turn.failed" | "error" => {
@@ -1330,24 +1522,32 @@ fn parse_codex_line<R: Runtime>(
                 .unwrap_or("Codex returned an error")
                 .to_string();
             *error = Some(msg.clone());
-            emit_agent_event(app, turn_id, AgentStreamEvent {
-                kind: "error".into(),
-                text: Some(msg),
-                status: Some("error".into()),
-                raw: Some(line.to_string()),
-                provider_session_id: provider_session_id.clone(),
-                is_error: Some(true),
-            });
+            emit_agent_event(
+                app,
+                turn_id,
+                AgentStreamEvent {
+                    kind: "error".into(),
+                    text: Some(msg),
+                    status: Some("error".into()),
+                    raw: Some(line.to_string()),
+                    provider_session_id: provider_session_id.clone(),
+                    is_error: Some(true),
+                },
+            );
         }
         "turn.completed" => {
-            emit_agent_event(app, turn_id, AgentStreamEvent {
-                kind: "status".into(),
-                text: None,
-                status: Some("turn.completed".into()),
-                raw: Some(line.to_string()),
-                provider_session_id: provider_session_id.clone(),
-                is_error: Some(false),
-            });
+            emit_agent_event(
+                app,
+                turn_id,
+                AgentStreamEvent {
+                    kind: "status".into(),
+                    text: None,
+                    status: Some("turn.completed".into()),
+                    raw: Some(line.to_string()),
+                    provider_session_id: provider_session_id.clone(),
+                    is_error: Some(false),
+                },
+            );
         }
         _ => {}
     }
@@ -1362,7 +1562,9 @@ fn run_codex<R: Runtime>(
     model: Option<String>,
     effort: Option<String>,
     speed: Option<String>,
+    permission_mode: Option<String>,
 ) -> Result<AgentRunResult, String> {
+    let permission_mode = normalize_agent_permission_mode(permission_mode);
     let mut cmd = Command::new("codex");
     cmd.arg("exec");
     if let Some(cwd) = cwd.filter(|s| !s.trim().is_empty()) {
@@ -1391,27 +1593,29 @@ fn run_codex<R: Runtime>(
         .stderr(Stdio::piped());
 
     if let Some(session_id) = resume_session_id.filter(|s| !s.trim().is_empty()) {
-        cmd.arg("resume")
-            .arg("--json")
+        cmd.arg("resume");
+        push_codex_permission_args(&mut cmd, &permission_mode, false);
+        cmd.arg("--json")
             .arg("--skip-git-repo-check")
             .arg(session_id)
             .arg(prompt);
     } else {
-        cmd.arg("--json")
-            .arg("--sandbox")
-            .arg("workspace-write")
-            .arg("--skip-git-repo-check")
-            .arg(prompt);
+        push_codex_permission_args(&mut cmd, &permission_mode, true);
+        cmd.arg("--json").arg("--skip-git-repo-check").arg(prompt);
     }
 
-    emit_agent_event(&app, &turn_id, AgentStreamEvent {
-        kind: "status".into(),
-        text: None,
-        status: Some("codex.starting".into()),
-        raw: None,
-        provider_session_id: None,
-        is_error: None,
-    });
+    emit_agent_event(
+        &app,
+        &turn_id,
+        AgentStreamEvent {
+            kind: "status".into(),
+            text: None,
+            status: Some("codex.starting".into()),
+            raw: None,
+            provider_session_id: None,
+            is_error: None,
+        },
+    );
 
     let mut child = cmd.spawn().map_err(|e| format!("codex spawn: {e}"))?;
     let stderr = child.stderr.take();
@@ -1429,7 +1633,10 @@ fn run_codex<R: Runtime>(
         })
     });
 
-    let stdout = child.stdout.take().ok_or_else(|| "codex stdout missing".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "codex stdout missing".to_string())?;
     let reader = BufReader::new(stdout);
     let mut raw_events = Vec::new();
     let mut final_text = String::new();
@@ -1455,7 +1662,9 @@ fn run_codex<R: Runtime>(
     }
 
     let status = child.wait().map_err(|e| format!("codex wait: {e}"))?;
-    let stderr_text = stderr_handle.and_then(|h| h.join().ok()).unwrap_or_default();
+    let stderr_text = stderr_handle
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
     if !status.success() {
         is_error = true;
         if error.is_none() {
@@ -1465,14 +1674,18 @@ fn run_codex<R: Runtime>(
                 stderr_text.trim().to_string()
             });
         }
-        emit_agent_event(&app, &turn_id, AgentStreamEvent {
-            kind: "error".into(),
-            text: error.clone(),
-            status: Some("exit".into()),
-            raw: None,
-            provider_session_id: provider_session_id.clone(),
-            is_error: Some(true),
-        });
+        emit_agent_event(
+            &app,
+            &turn_id,
+            AgentStreamEvent {
+                kind: "error".into(),
+                text: error.clone(),
+                status: Some("exit".into()),
+                raw: None,
+                provider_session_id: provider_session_id.clone(),
+                is_error: Some(true),
+            },
+        );
     }
 
     Ok(AgentRunResult {
@@ -1492,8 +1705,10 @@ fn run_hermes<R: Runtime>(
     cwd: Option<String>,
     model: Option<String>,
     hermes_provider: Option<String>,
+    permission_mode: Option<String>,
 ) -> Result<AgentRunResult, String> {
     let hermes_provider = normalize_hermes_provider(hermes_provider);
+    let permission_mode = normalize_agent_permission_mode(permission_mode);
     let mut cmd = Command::new("hermes");
     cmd.arg("chat")
         .arg("-Q")
@@ -1510,6 +1725,15 @@ fn run_hermes<R: Runtime>(
         .env("LC_CTYPE", "ko_KR.UTF-8")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    match permission_mode.as_str() {
+        "auto" => {
+            cmd.arg("--checkpoints");
+        }
+        "full" => {
+            cmd.arg("--yolo");
+        }
+        _ => {}
+    }
     if let Some(session_id) = resume_session_id.filter(|s| !s.trim().is_empty()) {
         cmd.arg("--resume").arg(session_id);
     }
@@ -1517,14 +1741,18 @@ fn run_hermes<R: Runtime>(
         cmd.current_dir(cwd);
     }
 
-    emit_agent_event(&app, &turn_id, AgentStreamEvent {
-        kind: "status".into(),
-        text: None,
-        status: Some("hermes.starting".into()),
-        raw: None,
-        provider_session_id: None,
-        is_error: None,
-    });
+    emit_agent_event(
+        &app,
+        &turn_id,
+        AgentStreamEvent {
+            kind: "status".into(),
+            text: None,
+            status: Some("hermes.starting".into()),
+            raw: None,
+            provider_session_id: None,
+            is_error: None,
+        },
+    );
 
     let output = cmd.output().map_err(|e| format!("hermes spawn: {e}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -1568,14 +1796,26 @@ fn run_hermes<R: Runtime>(
         None
     };
 
-    emit_agent_event(&app, &turn_id, AgentStreamEvent {
-        kind: if is_error { "error".into() } else { "result".into() },
-        text: Some(if is_error { error.clone().unwrap_or_default() } else { text.clone() }),
-        status: Some("hermes.completed".into()),
-        raw: Some(raw_events.join("\n")),
-        provider_session_id: provider_session_id.clone(),
-        is_error: Some(is_error),
-    });
+    emit_agent_event(
+        &app,
+        &turn_id,
+        AgentStreamEvent {
+            kind: if is_error {
+                "error".into()
+            } else {
+                "result".into()
+            },
+            text: Some(if is_error {
+                error.clone().unwrap_or_default()
+            } else {
+                text.clone()
+            }),
+            status: Some("hermes.completed".into()),
+            raw: Some(raw_events.join("\n")),
+            provider_session_id: provider_session_id.clone(),
+            is_error: Some(is_error),
+        },
+    );
 
     Ok(AgentRunResult {
         text,
@@ -1594,9 +1834,18 @@ pub async fn agent_claude_send<R: Runtime>(
     resume_session_id: Option<String>,
     cwd: Option<String>,
     model: Option<String>,
+    permission_mode: Option<String>,
 ) -> std::result::Result<AgentRunResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        run_claude(app, turn_id, prompt, resume_session_id, cwd, model)
+        run_claude(
+            app,
+            turn_id,
+            prompt,
+            resume_session_id,
+            cwd,
+            model,
+            permission_mode,
+        )
     })
     .await
     .map_err(|e| format!("agent thread join: {e}"))?
@@ -1614,11 +1863,39 @@ pub async fn agent_send<R: Runtime>(
     hermes_provider: Option<String>,
     effort: Option<String>,
     speed: Option<String>,
+    permission_mode: Option<String>,
 ) -> std::result::Result<AgentRunResult, String> {
     tauri::async_runtime::spawn_blocking(move || match provider.as_str() {
-        "claude" => run_claude(app, turn_id, prompt, resume_session_id, cwd, model),
-        "codex" => run_codex(app, turn_id, prompt, resume_session_id, cwd, model, effort, speed),
-        "hermes" => run_hermes(app, turn_id, prompt, resume_session_id, cwd, model, hermes_provider),
+        "claude" => run_claude(
+            app,
+            turn_id,
+            prompt,
+            resume_session_id,
+            cwd,
+            model,
+            permission_mode,
+        ),
+        "codex" => run_codex(
+            app,
+            turn_id,
+            prompt,
+            resume_session_id,
+            cwd,
+            model,
+            effort,
+            speed,
+            permission_mode,
+        ),
+        "hermes" => run_hermes(
+            app,
+            turn_id,
+            prompt,
+            resume_session_id,
+            cwd,
+            model,
+            hermes_provider,
+            permission_mode,
+        ),
         other => Err(format!("unsupported provider: {other}")),
     })
     .await
@@ -1626,7 +1903,9 @@ pub async fn agent_send<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn agent_change_summary(cwd: Option<String>) -> std::result::Result<AgentChangeSummary, String> {
+pub async fn agent_change_summary(
+    cwd: Option<String>,
+) -> std::result::Result<AgentChangeSummary, String> {
     tauri::async_runtime::spawn_blocking(move || build_change_summary(cwd))
         .await
         .map_err(|e| format!("change summary thread join: {e}"))?
@@ -1665,7 +1944,10 @@ mod tests {
 
     #[test]
     fn builds_stable_preview_service_id_from_port() {
-        assert_eq!(preview_service_id("http://127.0.0.1:5173/admin/"), "preview-5173");
+        assert_eq!(
+            preview_service_id("http://127.0.0.1:5173/admin/"),
+            "preview-5173"
+        );
     }
 
     #[test]
@@ -1685,5 +1967,22 @@ mod tests {
         let candidates = preview_connect_candidates(&parsed);
         assert!(candidates.contains(&"127.0.0.1".to_string()));
         assert!(candidates.contains(&"[::1]".to_string()));
+    }
+
+    #[test]
+    fn normalizes_agent_permission_modes() {
+        assert_eq!(
+            normalize_agent_permission_mode(Some("basic".into())),
+            "basic"
+        );
+        assert_eq!(
+            normalize_agent_permission_mode(Some("auto-review".into())),
+            "auto"
+        );
+        assert_eq!(
+            normalize_agent_permission_mode(Some("bypass".into())),
+            "full"
+        );
+        assert_eq!(claude_permission_mode("full"), "bypassPermissions");
     }
 }

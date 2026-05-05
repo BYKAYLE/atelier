@@ -58,7 +58,10 @@ fn sessions_dir() -> std::path::PathBuf {
 
 fn session_log_path(id: &str) -> std::path::PathBuf {
     // id는 UUID 형식이라 path traversal 위험 낮지만 방어적으로 sanitize.
-    let safe: String = id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+    let safe: String = id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
     sessions_dir().join(format!("{safe}.log"))
 }
 
@@ -172,7 +175,10 @@ mod tests {
 
     #[test]
     fn split_command_line_keeps_program_and_args_separate() {
-        assert_eq!(split_command_line("claude --continue"), vec!["claude", "--continue"]);
+        assert_eq!(
+            split_command_line("claude --continue"),
+            vec!["claude", "--continue"]
+        );
     }
 
     #[test]
@@ -414,13 +420,20 @@ fn spawn_impl<R: Runtime>(
     let app_wait = app.clone();
     thread::spawn(move || {
         let ev = format!("pty://{}/exit", id_wait);
-        let code = child.wait().ok().and_then(|s| s.exit_code().try_into().ok());
+        let code = child
+            .wait()
+            .ok()
+            .and_then(|s| s.exit_code().try_into().ok());
         let _ = app_wait.emit(&ev, ExitPayload { code });
         state().sessions.remove(&id_wait);
         drop(child);
     });
 
-    Ok(SpawnResult { id, profile, log_id: resolved_log_id })
+    Ok(SpawnResult {
+        id,
+        profile,
+        log_id: resolved_log_id,
+    })
 }
 
 #[tauri::command]

@@ -116,6 +116,7 @@ export interface PreviewServiceStatus {
 }
 
 export type AgentProvider = "claude" | "codex" | "hermes";
+export type AgentPermissionMode = "basic" | "auto" | "full";
 
 export async function agentClaudeSend(args: {
   turnId: string;
@@ -123,6 +124,7 @@ export async function agentClaudeSend(args: {
   resumeSessionId?: string | null;
   cwd?: string | null;
   model?: string | null;
+  permissionMode?: AgentPermissionMode | null;
 }): Promise<AgentRunResult> {
   return invoke("agent_claude_send", args);
 }
@@ -137,6 +139,7 @@ export async function agentSend(args: {
   hermesProvider?: string | null;
   effort?: string | null;
   speed?: string | null;
+  permissionMode?: AgentPermissionMode | null;
 }): Promise<AgentRunResult> {
   return invoke("agent_send", args);
 }

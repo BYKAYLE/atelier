@@ -15,6 +15,7 @@ import {
 } from "../lib/tauri";
 import type {
   AgentChangeSummary,
+  AgentPermissionMode,
   AgentProvider,
   AgentStreamEvent,
   PreviewCheckResult,
@@ -87,6 +88,7 @@ interface AgentSession {
   hermesProvider?: HermesInferenceProvider;
   codexEffort?: CodexEffort;
   codexSpeed?: CodexSpeed;
+  permissionMode?: AgentPermissionMode;
   cwd: string;
   providerSessionId?: string;
   messages: ChatMessage[];
@@ -119,6 +121,7 @@ const DEFAULT_PROVIDER: AgentProvider = "claude";
 const DEFAULT_HERMES_PROVIDER: HermesInferenceProvider = "openai-codex";
 const DEFAULT_CODEX_EFFORT: CodexEffort = "xhigh";
 const DEFAULT_CODEX_SPEED: CodexSpeed = "default";
+const DEFAULT_PERMISSION_MODE: AgentPermissionMode = "full";
 const MAX_RAW_EVENTS = 120;
 const MAX_RAW_EVENT_CHARS = 12000;
 const STREAM_FLUSH_MS = 48;
@@ -234,6 +237,40 @@ const CODEX_SPEEDS: Array<{ value: CodexSpeed; ko: string; en: string }> = [
   { value: "fast", ko: "빠름", en: "Fast" },
 ];
 
+const PERMISSION_MODES: Array<{
+  value: AgentPermissionMode;
+  ko: string;
+  en: string;
+  detailKo: string;
+  detailEn: string;
+  icon: React.ReactNode;
+}> = [
+  {
+    value: "basic",
+    ko: "기본 권한",
+    en: "Basic permission",
+    detailKo: "확인 중심",
+    detailEn: "Confirm-first",
+    icon: I.hand,
+  },
+  {
+    value: "auto",
+    ko: "자동 검토",
+    en: "Auto review",
+    detailKo: "자동 실행 + 보호",
+    detailEn: "Auto with guardrails",
+    icon: I.shieldCheck,
+  },
+  {
+    value: "full",
+    ko: "전체 권한",
+    en: "Full permission",
+    detailKo: "승인 없이 진행",
+    detailEn: "No prompts",
+    icon: I.shieldAlert,
+  },
+];
+
 const isProvider = (value: unknown): value is AgentProvider =>
   value === "claude" || value === "hermes" || value === "codex";
 
@@ -245,6 +282,9 @@ const isCodexEffort = (value: unknown): value is CodexEffort =>
 
 const isCodexSpeed = (value: unknown): value is CodexSpeed =>
   value === "default" || value === "fast";
+
+const isPermissionMode = (value: unknown): value is AgentPermissionMode =>
+  value === "basic" || value === "auto" || value === "full";
 
 const providerMeta = (provider?: string | null) =>
   PROVIDERS.find((p) => p.id === provider) || PROVIDERS[0];
@@ -326,8 +366,17 @@ function normalizeHermesProvider(value?: unknown): HermesInferenceProvider {
   return isHermesProvider(value) ? value : DEFAULT_HERMES_PROVIDER;
 }
 
+function normalizePermissionMode(value?: unknown): AgentPermissionMode {
+  return isPermissionMode(value) ? value : DEFAULT_PERMISSION_MODE;
+}
+
 function labelForCodexSpeed(value: CodexSpeed, language: Tweaks["language"]) {
   const option = CODEX_SPEEDS.find((item) => item.value === value) || CODEX_SPEEDS[0];
+  return language === "en" ? option.en : option.ko;
+}
+
+function labelForPermissionMode(value: AgentPermissionMode, language: Tweaks["language"]) {
+  const option = PERMISSION_MODES.find((item) => item.value === value) || PERMISSION_MODES[0];
   return language === "en" ? option.en : option.ko;
 }
 
@@ -420,6 +469,7 @@ function loadSessions(): AgentSession[] {
           hermesProvider,
           codexEffort: provider === "codex" ? normalizeCodexEffort(session.codexEffort) : undefined,
           codexSpeed: provider === "codex" ? normalizeCodexSpeed(session.codexSpeed) : undefined,
+          permissionMode: normalizePermissionMode(session.permissionMode),
           cwd: session.cwd || "",
           providerSessionId: session.providerSessionId,
           messages: Array.isArray(session.messages) ? session.messages : [],
@@ -649,6 +699,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   );
   const [resizingPreview, setResizingPreview] = useState(false);
   const [showModelMenu, setShowModelMenu] = useState(false);
+  const [showPermissionMenu, setShowPermissionMenu] = useState(false);
   const [codexMenuPanel, setCodexMenuPanel] = useState<CodexMenuPanel>("root");
   const [previewVP, setPreviewVP] = useState<PreviewViewport>(() => {
     const saved = localStorage.getItem(PREVIEW_VP_KEY);
@@ -663,6 +714,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const [editingTitle, setEditingTitle] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
+  const permissionMenuRef = useRef<HTMLDivElement | null>(null);
   const skipRenameCommitRef = useRef(false);
   const pendingStreamRef = useRef<Record<string, PendingAgentStream>>({});
   const animatedAssistantIdsRef = useRef<Set<string>>(new Set());
@@ -717,6 +769,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         renameHint: "Double-click to rename",
         providerLabel: "Provider",
         modelLabel: "Model",
+        permissionLabel: "Permission",
         intelligence: "Intelligence",
         speed: "Speed",
         model: "Agent workspace",
@@ -779,6 +832,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         renameHint: "더블클릭해 이름 변경",
         providerLabel: "제공자",
         modelLabel: "모델",
+        permissionLabel: "권한",
         intelligence: "인텔리전스",
         speed: "속도",
         model: "에이전트 작업",
@@ -822,6 +876,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const activeModelLabel = labelForOption(activeModelOptions, activeModel);
   const activeCodexEffort = normalizeCodexEffort(active?.codexEffort);
   const activeCodexSpeed = normalizeCodexSpeed(active?.codexSpeed);
+  const activePermissionMode = normalizePermissionMode(active?.permissionMode);
+  const activePermissionOption = PERMISSION_MODES.find((option) => option.value === activePermissionMode) || PERMISSION_MODES[0];
+  const activePermissionLabel = labelForPermissionMode(activePermissionMode, tw.language);
   const localPreview = isLocalPreviewUrl(previewUrl);
   const previewBadgeTone = !previewUrl
     ? "idle"
@@ -995,6 +1052,25 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [showModelMenu]);
+
+  useEffect(() => {
+    if (!showPermissionMenu) return;
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (target && permissionMenuRef.current?.contains(target)) return;
+      setShowPermissionMenu(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setShowPermissionMenu(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [showPermissionMenu]);
 
   useEffect(() => {
     if (!resizingPreview) return;
@@ -1184,6 +1260,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       hermesProvider,
       codexEffort: provider === "codex" ? DEFAULT_CODEX_EFFORT : undefined,
       codexSpeed: provider === "codex" ? DEFAULT_CODEX_SPEED : undefined,
+      permissionMode: DEFAULT_PERMISSION_MODE,
       cwd,
       messages: [],
       rawEvents: [],
@@ -1420,6 +1497,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const updateActiveCodexSpeed = (speed: CodexSpeed) => {
     if (!active) return;
     patchSession(active.id, (session) => ({ ...session, codexSpeed: speed, updatedAt: Date.now() }));
+  };
+
+  const updateActivePermissionMode = (permissionMode: AgentPermissionMode) => {
+    if (!active) return;
+    patchSession(active.id, (session) => ({ ...session, permissionMode, updatedAt: Date.now() }));
+    setShowPermissionMenu(false);
   };
 
   const maybeAutoPreview = (event: AgentStreamEvent) => {
@@ -1796,6 +1879,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
             : null,
           effort: session.provider === "codex" ? normalizeCodexEffort(session.codexEffort) : null,
           speed: session.provider === "codex" ? normalizeCodexSpeed(session.codexSpeed) : null,
+          permissionMode: normalizePermissionMode(session.permissionMode),
         });
         flushAgentStream(assistantId);
         delete pendingStreamRef.current[assistantId];
@@ -2434,6 +2518,67 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                     </select>
                   </>
                 )}
+                <div ref={permissionMenuRef} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!active || busyTurnId) return;
+                      setShowPermissionMenu((value) => !value);
+                    }}
+                    disabled={!active || !!busyTurnId}
+                    className={cls(
+                      "h-8 min-w-[112px] max-w-[148px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2",
+                      dark
+                        ? "bg-dsurf border-dline text-dink disabled:text-dsub"
+                        : "bg-surface border-line text-ink disabled:text-sub",
+                    )}
+                    aria-label={copy.permissionLabel}
+                    aria-haspopup="menu"
+                    aria-expanded={showPermissionMenu}
+                    title={copy.permissionLabel}
+                  >
+                    <span className="shrink-0 opacity-80">{activePermissionOption.icon}</span>
+                    <span className="truncate">{activePermissionLabel}</span>
+                    <span className={cls("shrink-0 transition-transform", showPermissionMenu ? "rotate-180" : "")}>
+                      {I.chevron}
+                    </span>
+                  </button>
+                  {showPermissionMenu && (
+                    <div
+                      className={cls(
+                        "absolute bottom-10 right-0 z-50 w-[218px] rounded-[14px] border p-2 shadow-[0_16px_44px_rgba(0,0,0,0.34)]",
+                        dark
+                          ? "bg-[#2c2c2b]/95 border-[#444442] text-dink backdrop-blur"
+                          : "bg-[#f1efea]/95 border-[#d4d0c7] text-ink backdrop-blur",
+                      )}
+                      role="menu"
+                    >
+                      {PERMISSION_MODES.map((option) => {
+                        const selected = activePermissionMode === option.value;
+                        return (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => updateActivePermissionMode(option.value)}
+                            className={cls(
+                              "h-11 w-full rounded-[12px] px-3 flex items-center gap-3 text-[15px] text-left",
+                              selected
+                                ? dark ? "bg-[#444442] text-dink" : "bg-[#dedbd3] text-ink"
+                                : dark ? "hover:bg-[#393937]" : "hover:bg-[#e4e1da]",
+                            )}
+                            role="menuitemradio"
+                            aria-checked={selected}
+                            title={tw.language === "en" ? option.detailEn : option.detailKo}
+                          >
+                            <span className="shrink-0 opacity-85">{option.icon}</span>
+                            <span className="min-w-0 flex-1 truncate">{tw.language === "en" ? option.en : option.ko}</span>
+                            {selected && <span className="text-[20px] leading-none">✓</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
                 <span className={cls("text-[10px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
                   {copy.modelLabel}
                 </span>

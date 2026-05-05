@@ -1,6 +1,6 @@
-mod pty;
-mod clipboard;
 mod agent;
+mod clipboard;
+mod pty;
 
 use serde::Serialize;
 use tauri::Manager;
@@ -62,9 +62,13 @@ struct DirEntry {
 fn sandbox_path(input: &str) -> std::result::Result<std::path::PathBuf, String> {
     let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
     let home_c = std::fs::canonicalize(&home).map_err(|e| format!("canonicalize HOME: {e}"))?;
-    let target = if input.is_empty() { home.clone() } else { input.to_string() };
-    let target_c = std::fs::canonicalize(&target)
-        .map_err(|e| format!("canonicalize {target}: {e}"))?;
+    let target = if input.is_empty() {
+        home.clone()
+    } else {
+        input.to_string()
+    };
+    let target_c =
+        std::fs::canonicalize(&target).map_err(|e| format!("canonicalize {target}: {e}"))?;
     if !target_c.starts_with(&home_c) {
         return Err(format!("sandbox violation: {target} is outside HOME"));
     }
@@ -107,7 +111,13 @@ async fn list_dir(path: String) -> std::result::Result<Vec<DirEntry>, String> {
 async fn read_text_file(path: String) -> std::result::Result<String, String> {
     let resolved = sandbox_path(&path)?;
     // 민감 디렉토리/파일 블랙리스트. HOME 하위여도 이건 차단.
-    let banned = [".ssh", ".gnupg", ".aws", ".docker/config.json", "Library/Keychains"];
+    let banned = [
+        ".ssh",
+        ".gnupg",
+        ".aws",
+        ".docker/config.json",
+        "Library/Keychains",
+    ];
     let s = resolved.to_string_lossy();
     for b in &banned {
         if s.contains(b) {
@@ -155,7 +165,9 @@ pub(crate) fn augmented_cli_path() -> String {
         let extra = if home.is_empty() {
             base.to_string()
         } else {
-            format!("{home}/.claude/local:{home}/.local/bin:{home}/.npm-global/bin:{home}/bin:{base}")
+            format!(
+                "{home}/.claude/local:{home}/.local/bin:{home}/.npm-global/bin:{home}/bin:{base}"
+            )
         };
         if existing.is_empty() {
             extra
@@ -214,9 +226,7 @@ async fn read_design_resource<R: tauri::Runtime>(
         .path()
         .resource_dir()
         .map_err(|e| format!("resource_dir: {e}"))?;
-    let candidate1 = resource_dir
-        .join("resources/design-engine")
-        .join(&relpath);
+    let candidate1 = resource_dir.join("resources/design-engine").join(&relpath);
     if candidate1.exists() {
         return std::fs::read_to_string(&candidate1)
             .map_err(|e| format!("read resource {}: {e}", candidate1.display()));
@@ -250,7 +260,10 @@ async fn save_design_artifact(
     relpath: String,
     content: String,
 ) -> std::result::Result<String, String> {
-    let valid_id = |s: &str| s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    let valid_id = |s: &str| {
+        s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    };
     if !valid_id(&project_id) || project_id.is_empty() {
         return Err("invalid project_id".into());
     }
@@ -272,7 +285,10 @@ async fn save_design_artifact(
 /// 디자인 프로젝트 폴더를 Finder/탐색기에서 연다. project_id 검증 후 macOS=`open`, 기타=폴더 경로 반환만.
 #[tauri::command]
 async fn open_design_project_dir(project_id: String) -> std::result::Result<String, String> {
-    let valid_id = |s: &str| s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    let valid_id = |s: &str| {
+        s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    };
     if !valid_id(&project_id) || project_id.is_empty() {
         return Err("invalid project_id".into());
     }
@@ -311,10 +327,11 @@ async fn open_design_project_dir(project_id: String) -> std::result::Result<Stri
 /// 3) macOS에서는 Finder에서 reveal (`open -R`)
 /// 반환: zip 파일 절대 경로
 #[tauri::command]
-async fn export_design_project_zip(
-    project_id: String,
-) -> std::result::Result<String, String> {
-    let valid_id = |s: &str| s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+async fn export_design_project_zip(project_id: String) -> std::result::Result<String, String> {
+    let valid_id = |s: &str| {
+        s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    };
     if !valid_id(&project_id) || project_id.is_empty() {
         return Err("invalid project_id".into());
     }
@@ -327,9 +344,8 @@ async fn export_design_project_zip(
     }
 
     // INDEX.md 생성
-    let index_md = generate_project_index(&project_dir).unwrap_or_else(|e| {
-        format!("# Atelier Design Project\n\n(INDEX 생성 실패: {e})\n")
-    });
+    let index_md = generate_project_index(&project_dir)
+        .unwrap_or_else(|e| format!("# Atelier Design Project\n\n(INDEX 생성 실패: {e})\n"));
     let index_path = project_dir.join("INDEX.md");
     std::fs::write(&index_path, index_md).map_err(|e| format!("write INDEX.md: {e}"))?;
 
@@ -376,7 +392,10 @@ async fn export_design_project_zip(
             .status()
             .map_err(|e| format!("powershell spawn: {e}"))?;
         if !status.success() {
-            return Err(format!("Compress-Archive failed (exit {:?})", status.code()));
+            return Err(format!(
+                "Compress-Archive failed (exit {:?})",
+                status.code()
+            ));
         }
     }
 
@@ -444,7 +463,6 @@ fn generate_project_index(project_dir: &std::path::Path) -> std::result::Result<
     out.push_str("markdown은 텍스트 에디터로 열거나 GitHub 등에 붙여넣어 렌더링하세요.\n");
     Ok(out)
 }
-
 
 /// 프로필 JSON 저장 경로.
 /// macOS Sequoia+ App Data Isolation은 `~/Library/Application Support/<다른 이름>` 접근을
@@ -555,7 +573,9 @@ async fn design_claude_call(
         }
     }
 
-    let output = child.wait_with_output().map_err(|e| format!("output 수집: {e}"))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("output 수집: {e}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 

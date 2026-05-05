@@ -177,6 +177,39 @@ export const I = {
       }
     />
   ),
+  hand: (
+    <Icon
+      d={
+        <>
+          <path d="M18 11V7.5a1.5 1.5 0 00-3 0V10" />
+          <path d="M15 10V6.5a1.5 1.5 0 00-3 0V10" />
+          <path d="M12 10V7.5a1.5 1.5 0 00-3 0v5" />
+          <path d="M9 12.5l-1.4-1.4a1.6 1.6 0 00-2.3 2.2l4.2 5.1A6 6 0 0014.1 21H15a6 6 0 006-6v-4a1.5 1.5 0 00-3 0" />
+        </>
+      }
+    />
+  ),
+  shieldCheck: (
+    <Icon
+      d={
+        <>
+          <path d="M12 3l7 3v5c0 4.2-2.8 7.9-7 9-4.2-1.1-7-4.8-7-9V6l7-3z" />
+          <path d="M8.7 12.1l2.1 2.1 4.5-4.5" />
+        </>
+      }
+    />
+  ),
+  shieldAlert: (
+    <Icon
+      d={
+        <>
+          <path d="M12 3l7 3v5c0 4.2-2.8 7.9-7 9-4.2-1.1-7-4.8-7-9V6l7-3z" />
+          <path d="M12 8v5" />
+          <path d="M12 16h.01" />
+        </>
+      }
+    />
+  ),
   chevron: <Icon d={<path d="M6 9l6 6 6-6" />} />,
   dot: <Icon d={<circle cx="12" cy="12" r="3" fill="currentColor" stroke="none" />} />,
   paperclip: (
