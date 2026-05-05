@@ -89,7 +89,7 @@ const DEFAULT_CODEX_SPEED: CodexSpeed = "default";
 const MAX_RAW_EVENTS = 120;
 const MAX_RAW_EVENT_CHARS = 12000;
 const STREAM_FLUSH_MS = 48;
-const SMOOTH_OUTPUT_FPS = 30;
+const SMOOTH_OUTPUT_FPS = 60;
 const SMOOTH_FRAME_MS = 1000 / SMOOTH_OUTPUT_FPS;
 const PREVIEW_VP_SIZES: Record<Exclude<PreviewViewport, "desktop">, { w: number; h: number }> = {
   mobile: { w: 390, h: 844 },
@@ -456,12 +456,14 @@ function formatAgentPrompt(text: string, language: "ko" | "en") {
 }
 
 function revealStepSize(remaining: number, elapsedMs: number) {
-  const cps =
-    remaining > 3000 ? 1800
-      : remaining > 1200 ? 1100
-        : remaining > 420 ? 620
-          : 260;
-  return Math.max(1, Math.ceil((cps * elapsedMs) / 1000));
+  const frameScale = clampNumber(elapsedMs / SMOOTH_FRAME_MS, 0.75, 3);
+  const charsPerFrame =
+    remaining > 7000 ? 72
+      : remaining > 2600 ? 38
+        : remaining > 900 ? 20
+          : remaining > 280 ? 10
+            : 4;
+  return Math.max(1, Math.ceil(charsPerFrame * frameScale));
 }
 
 const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
@@ -1524,9 +1526,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
             ) : (
               <div className="max-w-[920px] mx-auto space-y-5">
                 {active.messages.map((m) => {
+                  const isAnimatedAssistant = m.role === "assistant" && animatedAssistantIdsRef.current.has(m.id);
                   const displayText = animatedAssistantIdsRef.current.has(m.id)
                     ? (visibleTextById[m.id] || "")
                     : m.text;
+                  const isRevealing = isAnimatedAssistant && displayText !== m.text;
+                  const useStreamingRenderer = isAnimatedAssistant && (m.status === "streaming" || isRevealing);
                   return (
                   <article key={m.id} className={cls("flex min-w-0 gap-3", m.role === "user" ? "justify-end" : "justify-start")}>
                     {m.role !== "user" && (
@@ -1546,11 +1551,18 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                       )}
                     >
                       {displayText ? (
-                        <div className="atelier-chat-markdown min-w-0 max-w-full">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]} components={CHAT_MARKDOWN_COMPONENTS}>
+                        useStreamingRenderer ? (
+                          <div className="atelier-streaming-text min-w-0 max-w-full" aria-live="polite">
                             {displayText}
-                          </ReactMarkdown>
-                        </div>
+                            <span className="atelier-streaming-caret" aria-hidden="true" />
+                          </div>
+                        ) : (
+                          <div className="atelier-chat-markdown min-w-0 max-w-full">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]} components={CHAT_MARKDOWN_COMPONENTS}>
+                              {m.text}
+                            </ReactMarkdown>
+                          </div>
+                        )
                       ) : (
                         <span className={cls("font-mono", dark ? "text-dsub" : "text-sub")}>
                           {copy.running}...

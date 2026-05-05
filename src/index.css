@@ -277,6 +277,33 @@ body.dark {
   opacity: 0.86;
 }
 
+.atelier-streaming-text {
+  white-space: pre-wrap;
+  word-break: normal;
+  overflow-wrap: anywhere;
+  contain: content;
+}
+.atelier-streaming-caret {
+  display: inline-block;
+  width: 0.48em;
+  height: 1.08em;
+  margin-left: 0.08em;
+  vertical-align: -0.16em;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.38;
+  animation: atelierStreamingCaret 900ms ease-in-out infinite;
+}
+@keyframes atelierStreamingCaret {
+  0%,
+  100% {
+    opacity: 0.18;
+  }
+  45% {
+    opacity: 0.56;
+  }
+}
+
 .atelier-change-panel {
   overflow: hidden;
   border: 1px solid rgba(45, 45, 45, 0.14);
