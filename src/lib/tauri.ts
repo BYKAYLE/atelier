@@ -89,6 +89,8 @@ export async function agentSend(args: {
   resumeSessionId?: string | null;
   cwd?: string | null;
   model?: string | null;
+  effort?: string | null;
+  speed?: string | null;
 }): Promise<AgentRunResult> {
   return invoke("agent_send", args);
 }

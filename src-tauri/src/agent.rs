@@ -411,6 +411,8 @@ fn run_codex<R: Runtime>(
     resume_session_id: Option<String>,
     cwd: Option<String>,
     model: Option<String>,
+    effort: Option<String>,
+    speed: Option<String>,
 ) -> Result<AgentRunResult, String> {
     let mut cmd = Command::new("codex");
     cmd.arg("exec");
@@ -419,6 +421,19 @@ fn run_codex<R: Runtime>(
     }
     if let Some(model) = model.filter(|s| !s.trim().is_empty()) {
         cmd.arg("--model").arg(model);
+    }
+    if let Some(effort) = effort
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| matches!(s.as_str(), "low" | "medium" | "high" | "xhigh"))
+    {
+        cmd.arg("-c")
+            .arg(format!("model_reasoning_effort=\"{effort}\""));
+    }
+    if speed
+        .map(|s| s.trim().eq_ignore_ascii_case("fast"))
+        .unwrap_or(false)
+    {
+        cmd.arg("-c").arg("service_tier=\"fast\"");
     }
     cmd.env("PATH", crate::augmented_cli_path())
         .env("LANG", "ko_KR.UTF-8")
@@ -643,10 +658,12 @@ pub async fn agent_send<R: Runtime>(
     resume_session_id: Option<String>,
     cwd: Option<String>,
     model: Option<String>,
+    effort: Option<String>,
+    speed: Option<String>,
 ) -> std::result::Result<AgentRunResult, String> {
     tauri::async_runtime::spawn_blocking(move || match provider.as_str() {
         "claude" => run_claude(app, turn_id, prompt, resume_session_id, cwd, model),
-        "codex" => run_codex(app, turn_id, prompt, resume_session_id, cwd, model),
+        "codex" => run_codex(app, turn_id, prompt, resume_session_id, cwd, model, effort, speed),
         "hermes" => run_hermes(app, turn_id, prompt, resume_session_id, cwd, model),
         other => Err(format!("unsupported provider: {other}")),
     })

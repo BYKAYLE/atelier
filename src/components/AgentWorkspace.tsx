@@ -25,8 +25,11 @@ type ProviderMeta = {
 type ModelOption = {
   value: string;
   label: string;
-  note?: string;
 };
+
+type CodexEffort = "low" | "medium" | "high" | "xhigh";
+type CodexSpeed = "default" | "fast";
+type CodexMenuPanel = "root" | "model" | "speed";
 
 interface ChatMessage {
   id: string;
@@ -45,6 +48,8 @@ interface AgentSession {
   profileName?: string;
   profileDot?: string;
   model: string;
+  codexEffort?: CodexEffort;
+  codexSpeed?: CodexSpeed;
   cwd: string;
   providerSessionId?: string;
   messages: ChatMessage[];
@@ -61,6 +66,8 @@ const PREVIEW_KEY = "atelier.agent.preview.url.v1";
 const PREVIEW_VISIBLE_KEY = "atelier.agent.preview.visible.v1";
 const PREVIEW_VP_KEY = "atelier.agent.preview.viewport.v1";
 const DEFAULT_PROVIDER: AgentProvider = "claude";
+const DEFAULT_CODEX_EFFORT: CodexEffort = "xhigh";
+const DEFAULT_CODEX_SPEED: CodexSpeed = "default";
 const MAX_RAW_EVENTS = 120;
 const MAX_RAW_EVENT_CHARS = 12000;
 const PREVIEW_VP_SIZES: Record<Exclude<PreviewViewport, "desktop">, { w: number; h: number }> = {
@@ -99,34 +106,26 @@ const PROVIDERS: ProviderMeta[] = [
 ];
 
 const CLAUDE_MODELS: ModelOption[] = [
-  { value: "default", label: "Default", note: "account" },
-  { value: "sonnet", label: "Sonnet", note: "latest" },
-  { value: "opus", label: "Opus", note: "latest" },
-  { value: "best", label: "Best", note: "Opus" },
-  { value: "opusplan", label: "Opus Plan", note: "plan/exe" },
-  { value: "haiku", label: "Haiku", note: "fast" },
-  { value: "sonnet[1m]", label: "Sonnet 1M", note: "long" },
-  { value: "opus[1m]", label: "Opus 1M", note: "long" },
-  { value: "claude-opus-4-7", label: "Opus 4.7", note: "pin" },
-  { value: "claude-sonnet-4-6", label: "Sonnet 4.6", note: "pin" },
-  { value: "claude-haiku-4-5", label: "Haiku 4.5", note: "pin" },
+  { value: "sonnet", label: "Claude Sonnet 4" },
+  { value: "opus", label: "Claude Opus 4.1" },
+  { value: "haiku", label: "Claude Haiku 3.5" },
+  { value: "default", label: "Claude 기본값" },
 ];
 
 const HERMES_MODELS: ModelOption[] = [
-  { value: "gpt-5.5", label: "GPT-5.5", note: "latest" },
-  { value: "gpt-5.4", label: "GPT-5.4", note: "balanced" },
-  { value: "gpt-5.4-mini", label: "GPT-5.4 mini", note: "fast" },
-  { value: "gpt-5.4-nano", label: "GPT-5.4 nano", note: "light" },
-  { value: "gpt-5.3-codex", label: "GPT-5.3 Codex", note: "coding" },
-  { value: "gpt-5.2", label: "GPT-5.2", note: "stable" },
+  { value: "gpt-5.5", label: "GPT-5.5" },
+  { value: "gpt-5.4", label: "GPT-5.4" },
+  { value: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
+  { value: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
+  { value: "gpt-5.2", label: "GPT-5.2" },
 ];
 
 const CODEX_MODELS: ModelOption[] = [
-  { value: "gpt-5.5", label: "GPT-5.5", note: "latest" },
-  { value: "gpt-5.4", label: "GPT-5.4", note: "everyday" },
-  { value: "gpt-5.4-mini", label: "GPT-5.4 mini", note: "fast" },
-  { value: "gpt-5.3-codex", label: "GPT-5.3 Codex", note: "coding" },
-  { value: "gpt-5.2", label: "GPT-5.2", note: "long" },
+  { value: "gpt-5.5", label: "GPT-5.5" },
+  { value: "gpt-5.4", label: "GPT-5.4" },
+  { value: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
+  { value: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
+  { value: "gpt-5.2", label: "GPT-5.2" },
 ];
 
 const MODEL_OPTIONS: Record<AgentProvider, ModelOption[]> = {
@@ -135,8 +134,26 @@ const MODEL_OPTIONS: Record<AgentProvider, ModelOption[]> = {
   codex: CODEX_MODELS,
 };
 
+const CODEX_EFFORTS: Array<{ value: CodexEffort; ko: string; en: string }> = [
+  { value: "low", ko: "낮음", en: "Low" },
+  { value: "medium", ko: "중간", en: "Medium" },
+  { value: "high", ko: "높음", en: "High" },
+  { value: "xhigh", ko: "매우 높음", en: "Very high" },
+];
+
+const CODEX_SPEEDS: Array<{ value: CodexSpeed; ko: string; en: string }> = [
+  { value: "default", ko: "기본", en: "Default" },
+  { value: "fast", ko: "빠름", en: "Fast" },
+];
+
 const isProvider = (value: unknown): value is AgentProvider =>
   value === "claude" || value === "hermes" || value === "codex";
+
+const isCodexEffort = (value: unknown): value is CodexEffort =>
+  value === "low" || value === "medium" || value === "high" || value === "xhigh";
+
+const isCodexSpeed = (value: unknown): value is CodexSpeed =>
+  value === "default" || value === "fast";
 
 const providerMeta = (provider?: string | null) =>
   PROVIDERS.find((p) => p.id === provider) || PROVIDERS[0];
@@ -168,7 +185,45 @@ function modelOptionsFor(provider: AgentProvider, selected?: string | null) {
   const options = MODEL_OPTIONS[provider] || [];
   const trimmed = selected?.trim();
   if (!trimmed || options.some((option) => option.value === trimmed)) return options;
-  return [{ value: trimmed, label: trimmed, note: "custom" }, ...options];
+  return [{ value: trimmed, label: `사용자 지정: ${trimmed}` }, ...options];
+}
+
+function labelForOption(options: ModelOption[], value: string) {
+  return options.find((option) => option.value === value)?.label || value;
+}
+
+function normalizeCodexEffort(value?: unknown): CodexEffort {
+  return isCodexEffort(value) ? value : DEFAULT_CODEX_EFFORT;
+}
+
+function normalizeCodexSpeed(value?: unknown): CodexSpeed {
+  return isCodexSpeed(value) ? value : DEFAULT_CODEX_SPEED;
+}
+
+function labelForCodexSpeed(value: CodexSpeed, language: Tweaks["language"]) {
+  const option = CODEX_SPEEDS.find((item) => item.value === value) || CODEX_SPEEDS[0];
+  return language === "en" ? option.en : option.ko;
+}
+
+function normalizeModel(provider: AgentProvider, model?: string | null) {
+  const trimmed = model?.trim();
+  if (!trimmed) return providerMeta(provider).defaultModel;
+
+  if (provider === "claude") {
+    const legacy: Record<string, string> = {
+      best: "opus",
+      opusplan: "opus",
+      "sonnet[1m]": "sonnet",
+      "opus[1m]": "opus",
+      "claude-opus-4-7": "opus",
+      "claude-sonnet-4-6": "sonnet",
+      "claude-haiku-4-5": "haiku",
+    };
+    return legacy[trimmed] || trimmed;
+  }
+
+  if (trimmed === "gpt-5.4-nano") return "gpt-5.4-mini";
+  return trimmed;
 }
 
 const nowId = (prefix: string) =>
@@ -200,7 +255,9 @@ function loadSessions(): AgentSession[] {
           profileId: session.profileId || provider,
           profileName: session.profileName || meta.label,
           profileDot: session.profileDot || meta.dot,
-          model: session.model || meta.defaultModel,
+          model: normalizeModel(provider, session.model || meta.defaultModel),
+          codexEffort: provider === "codex" ? normalizeCodexEffort(session.codexEffort) : undefined,
+          codexSpeed: provider === "codex" ? normalizeCodexSpeed(session.codexSpeed) : undefined,
           cwd: session.cwd || "",
           providerSessionId: session.providerSessionId,
           messages: Array.isArray(session.messages) ? session.messages : [],
@@ -237,6 +294,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const [previewUrl, setPreviewUrl] = useState(() => localStorage.getItem(PREVIEW_KEY) || "");
   const [previewInput, setPreviewInput] = useState(() => localStorage.getItem(PREVIEW_KEY) || "");
   const [previewReloadKey, setPreviewReloadKey] = useState(0);
+  const [showModelMenu, setShowModelMenu] = useState(false);
+  const [codexMenuPanel, setCodexMenuPanel] = useState<CodexMenuPanel>("root");
   const [previewVP, setPreviewVP] = useState<PreviewViewport>(() => {
     const saved = localStorage.getItem(PREVIEW_VP_KEY);
     return saved === "mobile" || saved === "tablet" || saved === "desktop" ? saved : "desktop";
@@ -246,6 +305,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const modelMenuRef = useRef<HTMLDivElement | null>(null);
   const skipRenameCommitRef = useRef(false);
 
   const copy = tw.language === "en"
@@ -267,6 +327,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         emptyEvents: "No stream events yet.",
         renameHint: "Double-click to rename",
         modelLabel: "Model",
+        intelligence: "Intelligence",
+        speed: "Speed",
         model: "Agent workspace",
         running: "running",
         done: "done",
@@ -289,6 +351,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         emptyEvents: "아직 스트림 이벤트가 없습니다.",
         renameHint: "더블클릭해 이름 변경",
         modelLabel: "모델",
+        intelligence: "인텔리전스",
+        speed: "속도",
         model: "에이전트 작업",
         running: "실행 중",
         done: "완료",
@@ -310,6 +374,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const activeProviderMeta = providerMeta(activeProvider);
   const activeModel = active?.model || activeProviderMeta.defaultModel;
   const activeModelOptions = modelOptionsFor(activeProvider, activeModel);
+  const activeModelLabel = labelForOption(activeModelOptions, activeModel);
+  const activeCodexEffort = normalizeCodexEffort(active?.codexEffort);
+  const activeCodexSpeed = normalizeCodexSpeed(active?.codexSpeed);
 
   const lastAssistantStatus = (session: AgentSession) => {
     const lastAssistant = [...session.messages].reverse().find((m) => m.role === "assistant");
@@ -355,6 +422,33 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   }, [cwd]);
 
   useEffect(() => {
+    if (activeProvider === "codex") return;
+    setShowModelMenu(false);
+    setCodexMenuPanel("root");
+  }, [activeProvider]);
+
+  useEffect(() => {
+    if (!showModelMenu) return;
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (target && modelMenuRef.current?.contains(target)) return;
+      setShowModelMenu(false);
+      setCodexMenuPanel("root");
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setShowModelMenu(false);
+      setCodexMenuPanel("root");
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [showModelMenu]);
+
+  useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [active?.messages, busyTurnId]);
@@ -382,7 +476,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       profileId: profile?.id || provider,
       profileName,
       profileDot: profile?.dot || meta.dot,
-      model: profile ? modelFromProfile(profile, provider) : meta.defaultModel,
+      model: normalizeModel(provider, profile ? modelFromProfile(profile, provider) : meta.defaultModel),
+      codexEffort: provider === "codex" ? DEFAULT_CODEX_EFFORT : undefined,
+      codexSpeed: provider === "codex" ? DEFAULT_CODEX_SPEED : undefined,
       cwd,
       messages: [],
       rawEvents: [],
@@ -462,6 +558,16 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     patchSession(active.id, (session) => ({ ...session, model, updatedAt: Date.now() }));
   };
 
+  const updateActiveCodexEffort = (effort: CodexEffort) => {
+    if (!active) return;
+    patchSession(active.id, (session) => ({ ...session, codexEffort: effort, updatedAt: Date.now() }));
+  };
+
+  const updateActiveCodexSpeed = (speed: CodexSpeed) => {
+    if (!active) return;
+    patchSession(active.id, (session) => ({ ...session, codexSpeed: speed, updatedAt: Date.now() }));
+  };
+
   const maybeAutoPreview = (event: AgentStreamEvent) => {
     const url = findPreviewUrl(event.text) || findPreviewUrl(event.raw);
     if (url) loadPreviewUrl(url);
@@ -535,6 +641,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           resumeSessionId: session.providerSessionId || null,
           cwd: cwd || null,
           model: session.model || meta.defaultModel,
+          effort: session.provider === "codex" ? normalizeCodexEffort(session.codexEffort) : null,
+          speed: session.provider === "codex" ? normalizeCodexSpeed(session.codexSpeed) : null,
         });
         patchSession(session.id, (s) => ({
           ...s,
@@ -992,25 +1100,203 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                 <span className={cls("text-[10px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
                   {copy.modelLabel}
                 </span>
-                <select
-                  value={activeModel}
-                  onChange={(e) => updateActiveModel(e.target.value)}
-                  disabled={!active || !!busyTurnId}
-                  className={cls(
-                    "h-8 max-w-[180px] rounded-[7px] border px-2 text-[11px] font-mono outline-none",
-                    dark
-                      ? "bg-dsurf border-dline text-dink disabled:text-dsub"
-                      : "bg-surface border-line text-ink disabled:text-sub",
-                  )}
-                  aria-label={copy.modelLabel}
-                  title={activeProviderMeta.label}
-                >
-                  {activeModelOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.note ? `${option.label} · ${option.note}` : option.label}
-                    </option>
-                  ))}
-                </select>
+                {activeProvider === "codex" ? (
+                  <div ref={modelMenuRef} className="relative">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!active || busyTurnId) return;
+                        setShowModelMenu((value) => !value);
+                        setCodexMenuPanel("root");
+                      }}
+                      disabled={!active || !!busyTurnId}
+                      className={cls(
+                        "h-8 min-w-[134px] max-w-[190px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2",
+                        dark
+                          ? "bg-dsurf border-dline text-dink disabled:text-dsub"
+                          : "bg-surface border-line text-ink disabled:text-sub",
+                      )}
+                      aria-label={copy.modelLabel}
+                      aria-haspopup="menu"
+                      aria-expanded={showModelMenu}
+                      title={activeProviderMeta.label}
+                    >
+                      <span className="truncate">{activeModelLabel}</span>
+                      <span className={cls("shrink-0 transition-transform", showModelMenu ? "rotate-180" : "")}>
+                        {I.chevron}
+                      </span>
+                    </button>
+                    {showModelMenu && (
+                      <div
+                        className={cls(
+                          "absolute bottom-10 right-0 z-50 w-[292px] rounded-[16px] border p-2 shadow-[0_16px_44px_rgba(0,0,0,0.34)]",
+                          dark
+                            ? "bg-[#2c2c2b]/95 border-[#444442] text-dink backdrop-blur"
+                            : "bg-[#f1efea]/95 border-[#d4d0c7] text-ink backdrop-blur",
+                        )}
+                        role="menu"
+                        data-testid="codex-model-menu"
+                      >
+                        {codexMenuPanel === "root" && (
+                          <>
+                            <div className={cls("px-3 pt-1 pb-2 text-[13px]", dark ? "text-dsub" : "text-sub")}>
+                              {copy.intelligence}
+                            </div>
+                            {CODEX_EFFORTS.map((option) => {
+                              const selected = activeCodexEffort === option.value;
+                              return (
+                                <button
+                                  key={option.value}
+                                  type="button"
+                                  onClick={() => updateActiveCodexEffort(option.value)}
+                                  className={cls(
+                                    "h-10 w-full rounded-[12px] px-3 flex items-center justify-between text-[15px] text-left",
+                                    selected
+                                      ? dark ? "bg-[#444442] text-dink" : "bg-[#dedbd3] text-ink"
+                                      : dark ? "hover:bg-[#393937]" : "hover:bg-[#e4e1da]",
+                                  )}
+                                  role="menuitemradio"
+                                  aria-checked={selected}
+                                >
+                                  <span>{tw.language === "en" ? option.en : option.ko}</span>
+                                  {selected && <span className="text-[20px] leading-none">✓</span>}
+                                </button>
+                              );
+                            })}
+                            <div className={cls("my-2 border-t", dark ? "border-[#444442]" : "border-[#d8d4cc]")} />
+                            <button
+                              type="button"
+                              onClick={() => setCodexMenuPanel("model")}
+                              className={cls(
+                                "h-10 w-full rounded-[12px] px-3 flex items-center justify-between gap-3 text-[15px] text-left",
+                                dark ? "hover:bg-[#393937]" : "hover:bg-[#e4e1da]",
+                              )}
+                              role="menuitem"
+                            >
+                              <span className="truncate">{activeModelLabel}</span>
+                              <span className={cls("text-[22px]", dark ? "text-dsub" : "text-sub")}>›</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setCodexMenuPanel("speed")}
+                              className={cls(
+                                "h-10 w-full rounded-[12px] px-3 flex items-center justify-between gap-3 text-[15px] text-left",
+                                dark ? "hover:bg-[#393937]" : "hover:bg-[#e4e1da]",
+                              )}
+                              role="menuitem"
+                            >
+                              <span>{copy.speed}</span>
+                              <span className="ml-auto text-[13px] opacity-70">
+                                {labelForCodexSpeed(activeCodexSpeed, tw.language)}
+                              </span>
+                              <span className={cls("text-[22px]", dark ? "text-dsub" : "text-sub")}>›</span>
+                            </button>
+                          </>
+                        )}
+                        {codexMenuPanel === "model" && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setCodexMenuPanel("root")}
+                              className={cls(
+                                "h-9 w-full rounded-[10px] px-3 flex items-center gap-2 text-[13px]",
+                                dark ? "text-dsub hover:bg-[#393937]" : "text-sub hover:bg-[#e4e1da]",
+                              )}
+                            >
+                              <span className="text-[18px]">‹</span>
+                              <span>{copy.modelLabel}</span>
+                            </button>
+                            <div className={cls("my-1 border-t", dark ? "border-[#444442]" : "border-[#d8d4cc]")} />
+                            {activeModelOptions.map((option) => {
+                              const selected = activeModel === option.value;
+                              return (
+                                <button
+                                  key={option.value}
+                                  type="button"
+                                  onClick={() => {
+                                    updateActiveModel(option.value);
+                                    setCodexMenuPanel("root");
+                                  }}
+                                  className={cls(
+                                    "h-10 w-full rounded-[12px] px-3 flex items-center justify-between gap-3 text-[15px] text-left",
+                                    selected
+                                      ? dark ? "bg-[#444442] text-dink" : "bg-[#dedbd3] text-ink"
+                                      : dark ? "hover:bg-[#393937]" : "hover:bg-[#e4e1da]",
+                                  )}
+                                  role="menuitemradio"
+                                  aria-checked={selected}
+                                >
+                                  <span className="truncate">{option.label}</span>
+                                  {selected && <span className="text-[20px] leading-none">✓</span>}
+                                </button>
+                              );
+                            })}
+                          </>
+                        )}
+                        {codexMenuPanel === "speed" && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setCodexMenuPanel("root")}
+                              className={cls(
+                                "h-9 w-full rounded-[10px] px-3 flex items-center gap-2 text-[13px]",
+                                dark ? "text-dsub hover:bg-[#393937]" : "text-sub hover:bg-[#e4e1da]",
+                              )}
+                            >
+                              <span className="text-[18px]">‹</span>
+                              <span>{copy.speed}</span>
+                            </button>
+                            <div className={cls("my-1 border-t", dark ? "border-[#444442]" : "border-[#d8d4cc]")} />
+                            {CODEX_SPEEDS.map((option) => {
+                              const selected = activeCodexSpeed === option.value;
+                              return (
+                                <button
+                                  key={option.value}
+                                  type="button"
+                                  onClick={() => {
+                                    updateActiveCodexSpeed(option.value);
+                                    setCodexMenuPanel("root");
+                                  }}
+                                  className={cls(
+                                    "h-10 w-full rounded-[12px] px-3 flex items-center justify-between text-[15px] text-left",
+                                    selected
+                                      ? dark ? "bg-[#444442] text-dink" : "bg-[#dedbd3] text-ink"
+                                      : dark ? "hover:bg-[#393937]" : "hover:bg-[#e4e1da]",
+                                  )}
+                                  role="menuitemradio"
+                                  aria-checked={selected}
+                                >
+                                  <span>{tw.language === "en" ? option.en : option.ko}</span>
+                                  {selected && <span className="text-[20px] leading-none">✓</span>}
+                                </button>
+                              );
+                            })}
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <select
+                    value={activeModel}
+                    onChange={(e) => updateActiveModel(e.target.value)}
+                    disabled={!active || !!busyTurnId}
+                    className={cls(
+                      "h-8 max-w-[180px] rounded-[7px] border px-2 text-[11px] font-mono outline-none",
+                      dark
+                        ? "bg-dsurf border-dline text-dink disabled:text-dsub"
+                        : "bg-surface border-line text-ink disabled:text-sub",
+                    )}
+                    aria-label={copy.modelLabel}
+                    title={activeProviderMeta.label}
+                  >
+                    {activeModelOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
               <button
                 type="submit"
