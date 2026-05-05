@@ -42,6 +42,18 @@ interface ChatMessage {
   createdAt: number;
   status?: "streaming" | "done" | "error";
   changes?: AgentChangeSummary | null;
+  activities?: AgentActivity[];
+}
+
+type AgentActivityKind = "thinking" | "running" | "tool" | "status";
+
+interface AgentActivity {
+  id: string;
+  kind: AgentActivityKind;
+  label: string;
+  detail?: string;
+  active?: boolean;
+  createdAt: number;
 }
 
 type PendingAgentStream = {
@@ -409,6 +421,51 @@ function findPreviewUrl(text?: string | null) {
   return matches[matches.length - 1].replace(/[.,;:]+$/, "");
 }
 
+function parseRawJson(raw?: string | null): unknown {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function commandFromValue(value: unknown, depth = 0): string | null {
+  if (!value || depth > 6) return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = commandFromValue(item, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  for (const key of ["command", "cmd", "shell_command", "script"]) {
+    const candidate = record[key];
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim().replace(/\s+/g, " ");
+    }
+  }
+  for (const key of ["args", "argv"]) {
+    const candidate = record[key];
+    if (Array.isArray(candidate) && candidate.every((item) => typeof item === "string")) {
+      const joined = candidate.join(" ").trim();
+      if (joined) return joined.replace(/\s+/g, " ");
+    }
+  }
+  for (const nested of Object.values(record)) {
+    const found = commandFromValue(nested, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+function clipActivityText(text: string, max = 120) {
+  const clean = text.replace(/\s+/g, " ").trim();
+  return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
+}
+
 function stripAnsi(text: string) {
   return text.replace(
     // eslint-disable-next-line no-control-regex
@@ -532,6 +589,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         model: "Agent workspace",
         running: "running",
         done: "done",
+        thinking: "thinking",
+        preparing: "preparing",
+        runningPrefix: "running",
+        usingTool: "using tool",
         changedFiles: (count: number) => `${count} files changed`,
         undo: "Undo",
         review: "Review",
@@ -568,6 +629,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         model: "에이전트 작업",
         running: "실행 중",
         done: "완료",
+        thinking: "생각 중",
+        preparing: "준비 중",
+        runningPrefix: "실행 중",
+        usingTool: "도구 사용 중",
         changedFiles: (count: number) => `${count}개 파일 변경됨`,
         undo: "실행 취소",
         review: "리뷰",
@@ -948,6 +1013,72 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     if (url) loadPreviewUrl(url);
   };
 
+  const activityFromEvent = (event: AgentStreamEvent): Omit<AgentActivity, "id" | "createdAt" | "active"> | null => {
+    const rawJson = parseRawJson(event.raw);
+    const command = commandFromValue(rawJson);
+    if (event.kind === "tool") {
+      if (command) {
+        return {
+          kind: "running",
+          label: `${copy.runningPrefix} ${clipActivityText(command)}`,
+        };
+      }
+      const tool = clipActivityText(event.text || event.status || "");
+      return tool ? { kind: "tool", label: `${copy.usingTool} ${tool}` } : null;
+    }
+    if (event.kind === "status") {
+      const status = event.status || "";
+      if (/starting|started|init|system|turn\.started|thread\.started/i.test(status)) {
+        return { kind: "thinking", label: copy.thinking };
+      }
+      if (/completed|complete|done|finish/i.test(status)) return null;
+      return status ? { kind: "status", label: clipActivityText(status) } : { kind: "thinking", label: copy.thinking };
+    }
+    if (event.kind === "raw" && command) {
+      return {
+        kind: "running",
+        label: `${copy.runningPrefix} ${clipActivityText(command)}`,
+      };
+    }
+    return null;
+  };
+
+  const pushActivity = (sessionId: string, assistantId: string, event: AgentStreamEvent) => {
+    const activity = activityFromEvent(event);
+    if (!activity) return;
+    patchSession(sessionId, (session) => ({
+      ...session,
+      messages: session.messages.map((m) => {
+        if (m.id !== assistantId) return m;
+        const prev = m.activities || [];
+        const last = prev[prev.length - 1];
+        const nextActivity: AgentActivity = {
+          ...activity,
+          id: nowId("activity"),
+          createdAt: Date.now(),
+          active: m.status === "streaming",
+        };
+        const next = last?.label === nextActivity.label
+          ? [...prev.slice(0, -1), { ...last, active: nextActivity.active, createdAt: nextActivity.createdAt }]
+          : [...prev.map((item) => ({ ...item, active: false })), nextActivity].slice(-4);
+        return { ...m, activities: next };
+      }),
+      updatedAt: Date.now(),
+    }));
+  };
+
+  const finishActivities = (sessionId: string, assistantId: string) => {
+    patchSession(sessionId, (session) => ({
+      ...session,
+      messages: session.messages.map((m) =>
+        m.id === assistantId && m.activities?.length
+          ? { ...m, activities: m.activities.map((item) => ({ ...item, active: false })) }
+          : m,
+      ),
+      updatedAt: Date.now(),
+    }));
+  };
+
   const flushAgentStream = (assistantId: string) => {
     const pending = pendingStreamRef.current[assistantId];
     if (!pending) return;
@@ -1002,6 +1133,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
 
   const handleAgentEvent = (sessionId: string, assistantId: string, event: AgentStreamEvent) => {
     maybeAutoPreview(event);
+    if (event.kind === "status" || event.kind === "tool" || event.kind === "raw") {
+      pushActivity(sessionId, assistantId, event);
+    }
     if (event.kind === "delta") {
       enqueueAgentStream(sessionId, assistantId, event);
       return;
@@ -1014,6 +1148,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     }
     flushAgentStream(assistantId);
     if (event.kind !== "result" && event.kind !== "error") return;
+    finishActivities(sessionId, assistantId);
     patchSession(sessionId, (session) => {
       const providerSessionId = event.provider_session_id || session.providerSessionId;
       const messages = session.messages.map((m) => {
@@ -1159,6 +1294,31 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         {summary.undo_error && (
           <div className="atelier-change-error">{copy.undoFailed(summary.undo_error)}</div>
         )}
+      </div>
+    );
+  };
+
+  const renderAgentActivity = (message: ChatMessage) => {
+    if (message.role !== "assistant" || message.status !== "streaming") return null;
+    const activities = message.activities?.length
+      ? message.activities.slice(-3)
+      : [{
+          id: "fallback-thinking",
+          kind: "thinking" as const,
+          label: copy.thinking,
+          active: true,
+          createdAt: Date.now(),
+        }];
+    return (
+      <div className="atelier-activity-stack" aria-live="polite">
+        {activities.map((activity) => (
+          <div className={cls("atelier-activity-line", activity.active ? "atelier-activity-active" : "")} key={activity.id}>
+            <span className="atelier-activity-icon" aria-hidden="true">
+              {activity.kind === "thinking" ? "…" : I.terminal}
+            </span>
+            <span className="atelier-activity-label">{activity.label}</span>
+          </div>
+        ))}
       </div>
     );
   };
@@ -1569,9 +1729,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                         </span>
                       )}
                       {m.status === "streaming" && (
-                        <div className={cls("mt-2 text-[10px] font-mono", dark ? "text-dsub" : "text-sub")}>
-                          {copy.running}
-                        </div>
+                        renderAgentActivity(m)
                       )}
                       {m.role === "assistant" && renderChangeSummary(m)}
                     </div>
