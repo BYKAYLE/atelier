@@ -534,7 +534,7 @@ fn run_hermes<R: Runtime>(
         .arg("--max-turns")
         .arg("25")
         .arg("-m")
-        .arg(model.unwrap_or_else(|| "gpt-5.4".to_string()))
+        .arg(model.unwrap_or_else(|| "gpt-5.5".to_string()))
         .arg("-q")
         .arg(prompt)
         .env("PATH", crate::augmented_cli_path())

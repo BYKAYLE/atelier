@@ -22,6 +22,12 @@ type ProviderMeta = {
   newTitleEn: string;
 };
 
+type ModelOption = {
+  value: string;
+  label: string;
+  note?: string;
+};
+
 interface ChatMessage {
   id: string;
   role: Role;
@@ -76,7 +82,7 @@ const PROVIDERS: ProviderMeta[] = [
     id: "hermes",
     label: "Hermes",
     short: "Hm",
-    defaultModel: "gpt-5.4",
+    defaultModel: "gpt-5.5",
     dot: "#8b4a73",
     newTitleKo: "새 Hermes 작업",
     newTitleEn: "New Hermes workspace",
@@ -91,6 +97,43 @@ const PROVIDERS: ProviderMeta[] = [
     newTitleEn: "New Codex workspace",
   },
 ];
+
+const CLAUDE_MODELS: ModelOption[] = [
+  { value: "default", label: "Default", note: "account" },
+  { value: "sonnet", label: "Sonnet", note: "latest" },
+  { value: "opus", label: "Opus", note: "latest" },
+  { value: "best", label: "Best", note: "Opus" },
+  { value: "opusplan", label: "Opus Plan", note: "plan/exe" },
+  { value: "haiku", label: "Haiku", note: "fast" },
+  { value: "sonnet[1m]", label: "Sonnet 1M", note: "long" },
+  { value: "opus[1m]", label: "Opus 1M", note: "long" },
+  { value: "claude-opus-4-7", label: "Opus 4.7", note: "pin" },
+  { value: "claude-sonnet-4-6", label: "Sonnet 4.6", note: "pin" },
+  { value: "claude-haiku-4-5", label: "Haiku 4.5", note: "pin" },
+];
+
+const HERMES_MODELS: ModelOption[] = [
+  { value: "gpt-5.5", label: "GPT-5.5", note: "latest" },
+  { value: "gpt-5.4", label: "GPT-5.4", note: "balanced" },
+  { value: "gpt-5.4-mini", label: "GPT-5.4 mini", note: "fast" },
+  { value: "gpt-5.4-nano", label: "GPT-5.4 nano", note: "light" },
+  { value: "gpt-5.3-codex", label: "GPT-5.3 Codex", note: "coding" },
+  { value: "gpt-5.2", label: "GPT-5.2", note: "stable" },
+];
+
+const CODEX_MODELS: ModelOption[] = [
+  { value: "gpt-5.5", label: "GPT-5.5", note: "latest" },
+  { value: "gpt-5.4", label: "GPT-5.4", note: "everyday" },
+  { value: "gpt-5.4-mini", label: "GPT-5.4 mini", note: "fast" },
+  { value: "gpt-5.3-codex", label: "GPT-5.3 Codex", note: "coding" },
+  { value: "gpt-5.2", label: "GPT-5.2", note: "long" },
+];
+
+const MODEL_OPTIONS: Record<AgentProvider, ModelOption[]> = {
+  claude: CLAUDE_MODELS,
+  hermes: HERMES_MODELS,
+  codex: CODEX_MODELS,
+};
 
 const isProvider = (value: unknown): value is AgentProvider =>
   value === "claude" || value === "hermes" || value === "codex";
@@ -119,6 +162,13 @@ function modelFromProfile(profile: Profile, provider: AgentProvider) {
     if (current.startsWith("--model=")) return current.slice("--model=".length);
   }
   return providerMeta(provider).defaultModel;
+}
+
+function modelOptionsFor(provider: AgentProvider, selected?: string | null) {
+  const options = MODEL_OPTIONS[provider] || [];
+  const trimmed = selected?.trim();
+  if (!trimmed || options.some((option) => option.value === trimmed)) return options;
+  return [{ value: trimmed, label: trimmed, note: "custom" }, ...options];
 }
 
 const nowId = (prefix: string) =>
@@ -216,6 +266,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         events: "Events",
         emptyEvents: "No stream events yet.",
         renameHint: "Double-click to rename",
+        modelLabel: "Model",
         model: "Agent workspace",
         running: "running",
         done: "done",
@@ -237,6 +288,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         events: "이벤트",
         emptyEvents: "아직 스트림 이벤트가 없습니다.",
         renameHint: "더블클릭해 이름 변경",
+        modelLabel: "모델",
         model: "에이전트 작업",
         running: "실행 중",
         done: "완료",
@@ -256,6 +308,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const fallbackProvider = agentProfiles[0]?.provider || DEFAULT_PROVIDER;
   const activeProvider = active?.provider || fallbackProvider;
   const activeProviderMeta = providerMeta(activeProvider);
+  const activeModel = active?.model || activeProviderMeta.defaultModel;
+  const activeModelOptions = modelOptionsFor(activeProvider, activeModel);
 
   const lastAssistantStatus = (session: AgentSession) => {
     const lastAssistant = [...session.messages].reverse().find((m) => m.role === "assistant");
@@ -402,6 +456,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   };
 
   const applyPreviewInput = () => loadPreviewUrl(previewInput);
+
+  const updateActiveModel = (model: string) => {
+    if (!active) return;
+    patchSession(active.id, (session) => ({ ...session, model, updatedAt: Date.now() }));
+  };
 
   const maybeAutoPreview = (event: AgentStreamEvent) => {
     const url = findPreviewUrl(event.text) || findPreviewUrl(event.raw);
@@ -928,6 +987,30 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
             <div className="mt-2 flex items-center gap-2">
               <div className={cls("flex-1 text-[10.5px]", dark ? "text-dsub" : "text-sub")}>
                 {busyTurnId ? copy.stopHint : "⌘/Ctrl + Enter"}
+              </div>
+              <div className="shrink-0 flex items-center gap-1.5">
+                <span className={cls("text-[10px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
+                  {copy.modelLabel}
+                </span>
+                <select
+                  value={activeModel}
+                  onChange={(e) => updateActiveModel(e.target.value)}
+                  disabled={!active || !!busyTurnId}
+                  className={cls(
+                    "h-8 max-w-[180px] rounded-[7px] border px-2 text-[11px] font-mono outline-none",
+                    dark
+                      ? "bg-dsurf border-dline text-dink disabled:text-dsub"
+                      : "bg-surface border-line text-ink disabled:text-sub",
+                  )}
+                  aria-label={copy.modelLabel}
+                  title={activeProviderMeta.label}
+                >
+                  {activeModelOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.note ? `${option.label} · ${option.note}` : option.label}
+                    </option>
+                  ))}
+                </select>
               </div>
               <button
                 type="submit"
