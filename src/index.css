@@ -168,3 +168,111 @@ body.dark {
 .dark .atelier-markdown pre {
   background: rgba(255, 255, 255, 0.04);
 }
+
+/* Agent workspace chat Markdown. Keep long CLI/model output inside the bubble
+   while rendering GFM tables as aligned tables instead of pipe text. */
+.atelier-chat-markdown {
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+.atelier-chat-markdown > :first-child {
+  margin-top: 0;
+}
+.atelier-chat-markdown > :last-child {
+  margin-bottom: 0;
+}
+.atelier-chat-markdown p {
+  margin: 0 0 0.55em;
+}
+.atelier-chat-markdown h1,
+.atelier-chat-markdown h2,
+.atelier-chat-markdown h3 {
+  margin: 0.9em 0 0.35em;
+  font-weight: 700;
+  line-height: 1.35;
+}
+.atelier-chat-markdown h1 {
+  font-size: 17px;
+}
+.atelier-chat-markdown h2 {
+  font-size: 15px;
+}
+.atelier-chat-markdown h3 {
+  font-size: 13.5px;
+}
+.atelier-chat-markdown ul,
+.atelier-chat-markdown ol {
+  margin: 0 0 0.65em;
+  padding-left: 1.35em;
+}
+.atelier-chat-markdown li {
+  margin: 0.15em 0;
+}
+.atelier-chat-markdown strong {
+  font-weight: 700;
+}
+.atelier-chat-markdown code {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
+  padding: 0.08em 0.28em;
+  border-radius: 4px;
+  background: rgba(201, 100, 66, 0.11);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.atelier-chat-markdown pre {
+  max-width: 100%;
+  margin: 0.65em 0;
+  padding: 0.7em;
+  overflow-x: auto;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.05);
+  white-space: pre-wrap;
+}
+.dark .atelier-chat-markdown pre {
+  background: rgba(255, 255, 255, 0.055);
+}
+.atelier-chat-markdown pre code {
+  display: block;
+  padding: 0;
+  background: transparent;
+}
+.atelier-chat-table-wrap {
+  max-width: 100%;
+  margin: 0.75em 0;
+  overflow-x: auto;
+  border: 1px solid rgba(128, 128, 128, 0.24);
+  border-radius: 7px;
+}
+.atelier-chat-table-wrap table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  line-height: 1.55;
+  font-variant-numeric: tabular-nums;
+}
+.atelier-chat-table-wrap th,
+.atelier-chat-table-wrap td {
+  padding: 0.5em 0.65em;
+  vertical-align: top;
+  border-top: 1px solid rgba(128, 128, 128, 0.18);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.atelier-chat-table-wrap thead th {
+  border-top: 0;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.24);
+  font-weight: 700;
+  white-space: nowrap;
+  background: rgba(128, 128, 128, 0.08);
+}
+.atelier-chat-markdown blockquote {
+  margin: 0.7em 0;
+  padding-left: 0.85em;
+  border-left: 2px solid rgba(128, 128, 128, 0.36);
+  color: inherit;
+  opacity: 0.86;
+}

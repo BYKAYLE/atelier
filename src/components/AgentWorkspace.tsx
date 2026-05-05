@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   agentSend,
   homeDir,
@@ -40,6 +41,15 @@ interface ChatMessage {
   status?: "streaming" | "done" | "error";
 }
 
+type PendingAgentStream = {
+  sessionId: string;
+  assistantId: string;
+  text: string;
+  rawEvents: string[];
+  providerSessionId?: string | null;
+  timer?: number;
+};
+
 interface AgentSession {
   id: string;
   title: string;
@@ -73,9 +83,18 @@ const DEFAULT_CODEX_EFFORT: CodexEffort = "xhigh";
 const DEFAULT_CODEX_SPEED: CodexSpeed = "default";
 const MAX_RAW_EVENTS = 120;
 const MAX_RAW_EVENT_CHARS = 12000;
+const STREAM_FLUSH_MS = 48;
 const PREVIEW_VP_SIZES: Record<Exclude<PreviewViewport, "desktop">, { w: number; h: number }> = {
   mobile: { w: 390, h: 844 },
   tablet: { w: 834, h: 1194 },
+};
+
+const CHAT_MARKDOWN_COMPONENTS = {
+  table: ({ children }: { children?: React.ReactNode }) => (
+    <div className="atelier-chat-table-wrap">
+      <table>{children}</table>
+    </div>
+  ),
 };
 
 const PROVIDERS: ProviderMeta[] = [
@@ -379,6 +398,52 @@ function findPreviewUrl(text?: string | null) {
   return matches[matches.length - 1].replace(/[.,;:]+$/, "");
 }
 
+function stripAnsi(text: string) {
+  return text.replace(
+    // eslint-disable-next-line no-control-regex
+    /[\u001b\u009b][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[a-zA-Z\d]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g,
+    "",
+  );
+}
+
+function cleanAgentText(text?: string | null) {
+  if (!text) return "";
+  return stripAnsi(text)
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("session_id:"))
+    .join("\n")
+    .trim();
+}
+
+function cleanAgentDelta(text?: string | null) {
+  if (!text) return "";
+  return stripAnsi(text).replace(/\r\n?/g, "\n");
+}
+
+function formatAgentPrompt(text: string, language: "ko" | "en") {
+  const instruction = language === "en"
+    ? [
+        "",
+        "",
+        "---",
+        "Atelier display guidance:",
+        "- Keep terminal commands, JSON events, internal routing, and raw tool logs out of the user-facing answer.",
+        "- Show the result in natural language, with concise progress only when it helps.",
+        "- Use GitHub-flavored Markdown. Use real Markdown tables when a table is useful.",
+      ].join("\n")
+    : [
+        "",
+        "",
+        "---",
+        "Atelier 표시 지침:",
+        "- 터미널 명령, JSON 이벤트, 내부 라우팅, 원본 도구 로그를 사용자 답변에 그대로 쓰지 마세요.",
+        "- 결과는 자연어 중심으로 보여주고, 진행 설명은 필요할 때만 짧게 정리하세요.",
+        "- GitHub-flavored Markdown을 사용하고, 표가 필요하면 실제 Markdown 표로 작성하세요.",
+      ].join("\n");
+  return `${text}${instruction}`;
+}
+
 const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const dark = tw.dark;
   const [sessions, setSessions] = useState<AgentSession[]>(() => loadSessions());
@@ -403,6 +468,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
   const skipRenameCommitRef = useRef(false);
+  const pendingStreamRef = useRef<Record<string, PendingAgentStream>>({});
 
   const copy = tw.language === "en"
     ? {
@@ -418,6 +484,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         placeholder: "Ask the selected agent to change, inspect, or explain this workspace...",
         send: "Send",
         stopHint: "A running turn finishes through the selected CLI; terminal fallback remains available.",
+        draftHint: "You can keep typing the next message while this turn runs.",
         noMessages: "Start a structured agent session. Messages and raw events are saved locally.",
         events: "Events",
         emptyEvents: "No stream events yet.",
@@ -443,6 +510,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         placeholder: "선택한 에이전트에게 이 작업공간의 수정, 분석, 설명을 요청하세요...",
         send: "보내기",
         stopHint: "실행 중인 턴은 선택한 CLI가 끝낼 때 완료됩니다. 터미널은 보조 화면으로 남겨둡니다.",
+        draftHint: "실행 중에도 다음 메시지를 계속 입력할 수 있습니다.",
         noMessages: "구조화된 에이전트 세션을 시작하세요. 메시지와 원본 이벤트가 로컬에 저장됩니다.",
         events: "이벤트",
         emptyEvents: "아직 스트림 이벤트가 없습니다.",
@@ -553,6 +621,15 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [active?.messages, busyTurnId]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(pendingStreamRef.current).forEach((pending) => {
+        if (pending.timer) window.clearTimeout(pending.timer);
+      });
+      pendingStreamRef.current = {};
+    };
+  }, []);
 
   const patchSession = (id: string, patcher: (session: AgentSession) => AgentSession) => {
     setSessions((prev) => prev.map((s) => (s.id === id ? patcher(s) : s)));
@@ -690,31 +767,94 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     if (url) loadPreviewUrl(url);
   };
 
+  const flushAgentStream = (assistantId: string) => {
+    const pending = pendingStreamRef.current[assistantId];
+    if (!pending) return;
+    if (pending.timer) {
+      window.clearTimeout(pending.timer);
+      pending.timer = undefined;
+    }
+
+    const text = cleanAgentDelta(pending.text);
+    const rawEvents = pending.rawEvents;
+    const providerSessionId = pending.providerSessionId;
+    pending.text = "";
+    pending.rawEvents = [];
+    pending.providerSessionId = undefined;
+
+    if (!text && rawEvents.length === 0 && !providerSessionId) return;
+    patchSession(pending.sessionId, (session) => ({
+      ...session,
+      providerSessionId: providerSessionId || session.providerSessionId,
+      rawEvents: rawEvents.length
+        ? [...session.rawEvents, ...rawEvents].slice(-MAX_RAW_EVENTS)
+        : session.rawEvents,
+      messages: text
+        ? session.messages.map((m) =>
+            m.id === pending.assistantId
+              ? { ...m, text: `${m.text}${text}`, status: "streaming" as const }
+              : m,
+          )
+        : session.messages,
+      updatedAt: Date.now(),
+    }));
+  };
+
+  const enqueueAgentStream = (sessionId: string, assistantId: string, event: AgentStreamEvent) => {
+    const pending = pendingStreamRef.current[assistantId] || {
+      sessionId,
+      assistantId,
+      text: "",
+      rawEvents: [],
+    };
+    pending.sessionId = sessionId;
+    pending.assistantId = assistantId;
+    pendingStreamRef.current[assistantId] = pending;
+
+    if (event.text) pending.text += event.text;
+    if (event.raw) pending.rawEvents.push(clipRawEvent(event.raw));
+    if (event.provider_session_id) pending.providerSessionId = event.provider_session_id;
+    if (!pending.timer) {
+      pending.timer = window.setTimeout(() => flushAgentStream(assistantId), STREAM_FLUSH_MS);
+    }
+  };
+
   const handleAgentEvent = (sessionId: string, assistantId: string, event: AgentStreamEvent) => {
     maybeAutoPreview(event);
+    if (event.kind === "delta") {
+      enqueueAgentStream(sessionId, assistantId, event);
+      return;
+    }
+    if (event.raw || event.provider_session_id) {
+      enqueueAgentStream(sessionId, assistantId, {
+        ...event,
+        text: null,
+      });
+    }
+    flushAgentStream(assistantId);
+    if (event.kind !== "result" && event.kind !== "error") return;
     patchSession(sessionId, (session) => {
-      const rawEvents = event.raw
-        ? [...session.rawEvents, clipRawEvent(event.raw)].slice(-MAX_RAW_EVENTS)
-        : session.rawEvents;
       const providerSessionId = event.provider_session_id || session.providerSessionId;
       const messages = session.messages.map((m) => {
         if (m.id !== assistantId) return m;
-        if (event.kind === "delta" && event.text) {
-          return { ...m, text: m.text + event.text, status: "streaming" as const };
-        }
         if (event.kind === "result") {
+          const text = cleanAgentText(event.text) || m.text;
           return {
             ...m,
-            text: event.text || m.text,
+            text,
             status: event.is_error ? "error" as const : "done" as const,
           };
         }
         if (event.kind === "error") {
-          return { ...m, text: event.text || m.text || "Agent error", status: "error" as const };
+          return {
+            ...m,
+            text: cleanAgentText(event.text) || m.text || "Agent error",
+            status: "error" as const,
+          };
         }
         return m;
       });
-      return { ...session, providerSessionId, rawEvents, messages, updatedAt: Date.now() };
+      return { ...session, providerSessionId, messages, updatedAt: Date.now() };
     });
   };
 
@@ -754,7 +894,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         const result = await agentSend({
           provider: session.provider,
           turnId,
-          prompt: text,
+          prompt: formatAgentPrompt(text, tw.language),
           resumeSessionId: session.providerSessionId || null,
           cwd: cwd || null,
           model: session.model || meta.defaultModel,
@@ -764,6 +904,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           effort: session.provider === "codex" ? normalizeCodexEffort(session.codexEffort) : null,
           speed: session.provider === "codex" ? normalizeCodexSpeed(session.codexSpeed) : null,
         });
+        flushAgentStream(assistantId);
+        delete pendingStreamRef.current[assistantId];
         patchSession(session.id, (s) => ({
           ...s,
           providerSessionId: result.provider_session_id || s.providerSessionId,
@@ -773,7 +915,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
             m.id === assistantId
               ? {
                   ...m,
-                  text: result.text || m.text || result.error || "",
+                  text: cleanAgentText(result.text) || m.text || cleanAgentText(result.error) || "",
                   status: result.is_error ? "error" : "done",
                 }
               : m,
@@ -792,6 +934,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         }));
       }
     } catch (err) {
+      flushAgentStream(assistantId);
+      delete pendingStreamRef.current[assistantId];
       patchSession(session.id, (s) => ({
         ...s,
         messages: s.messages.map((m) =>
@@ -802,6 +946,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       }));
     } finally {
       unlisten?.();
+      flushAgentStream(assistantId);
+      delete pendingStreamRef.current[assistantId];
       setBusyTurnId(null);
     }
   };
@@ -1033,10 +1179,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
             ) : (
               <div className="max-w-[920px] mx-auto space-y-5">
                 {active.messages.map((m) => (
-                  <article key={m.id} className={cls("flex gap-3", m.role === "user" ? "justify-end" : "justify-start")}>
+                  <article key={m.id} className={cls("flex min-w-0 gap-3", m.role === "user" ? "justify-end" : "justify-start")}>
                     {m.role !== "user" && (
                       <div
-                        className="mt-1 h-7 w-7 rounded-[7px] text-white grid place-items-center text-[10px] font-semibold"
+                        className="mt-1 h-7 w-7 shrink-0 rounded-[7px] text-white grid place-items-center text-[10px] font-semibold"
                         style={{ background: active?.profileDot || activeProviderMeta.dot }}
                       >
                         {activeProviderMeta.short}
@@ -1044,15 +1190,17 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                     )}
                     <div
                       className={cls(
-                        "max-w-[78%] rounded-[8px] px-3.5 py-2.5 border text-[13px] leading-[1.65]",
+                        "min-w-0 max-w-[min(78%,760px)] overflow-hidden rounded-[8px] px-3.5 py-2.5 border text-[13px] leading-[1.65] break-words",
                         m.role === "user"
                           ? dark ? "bg-[#34312e] border-[#4a4039] text-dink" : "bg-[#fff8f2] border-[#eed7c8] text-ink"
                           : dark ? "bg-dmuted border-dline text-dink" : "bg-surface border-line text-ink",
                       )}
                     >
                       {m.text ? (
-                        <div className="prose prose-sm max-w-none dark:prose-invert prose-pre:bg-transparent prose-pre:p-0">
-                          <ReactMarkdown>{m.text}</ReactMarkdown>
+                        <div className="atelier-chat-markdown min-w-0 max-w-full">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]} components={CHAT_MARKDOWN_COMPONENTS}>
+                            {m.text}
+                          </ReactMarkdown>
                         </div>
                       ) : (
                         <span className={cls("font-mono", dark ? "text-dsub" : "text-sub")}>
@@ -1210,11 +1358,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                 "w-full min-h-[76px] max-h-[180px] resize-y bg-transparent outline-none text-[13px] leading-[1.6] px-1",
                 dark ? "text-dink placeholder:text-dsub" : "text-ink placeholder:text-sub",
               )}
-              disabled={!!busyTurnId}
             />
             <div className="mt-2 flex items-center gap-2">
               <div className={cls("flex-1 text-[10.5px]", dark ? "text-dsub" : "text-sub")}>
-                {busyTurnId ? copy.stopHint : "⌘/Ctrl + Enter"}
+                {busyTurnId ? copy.draftHint : "⌘/Ctrl + Enter"}
               </div>
               <div className="shrink-0 flex items-center gap-1.5">
                 {activeProvider === "hermes" && (

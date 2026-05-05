@@ -1,6 +1,6 @@
 {
   "name": "atelier",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "private": true,
   "type": "module",
   "description": "Atelier — 이미지 붙여넣기가 되는 GUI 터미널",
@@ -38,7 +38,8 @@
     "@xterm/xterm": "^6.0.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-markdown": "^9.1.0"
+    "react-markdown": "^9.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.1.0",
