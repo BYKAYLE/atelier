@@ -1,6 +1,6 @@
 [package]
 name = "atelier"
-version = "0.1.9"
+version = "0.1.10"
 description = "Atelier — 이미지 붙여넣기가 되는 GUI 터미널"
 authors = ["BYKAYLE <indra850@gmail.com>"]
 edition = "2021"

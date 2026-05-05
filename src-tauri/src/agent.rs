@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -23,6 +24,193 @@ pub struct AgentRunResult {
     raw_events: Vec<String>,
     is_error: bool,
     error: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct AgentChangedFile {
+    path: String,
+    status: String,
+    additions: u64,
+    deletions: u64,
+    binary: bool,
+    diff: String,
+}
+
+#[derive(Serialize, Clone)]
+pub struct AgentChangeSummary {
+    cwd: String,
+    is_git: bool,
+    files: Vec<AgentChangedFile>,
+    additions: u64,
+    deletions: u64,
+    patch: String,
+}
+
+fn run_git(root: &str, args: &[&str]) -> Result<String, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .env("PATH", crate::augmented_cli_path())
+        .output()
+        .map_err(|e| format!("git {}: {e}", args.join(" ")))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn run_git_with_input(root: &str, args: &[&str], input: &str) -> Result<(), String> {
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .env("PATH", crate::augmented_cli_path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("git {}: {e}", args.join(" ")))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(input.as_bytes())
+            .map_err(|e| format!("git apply stdin: {e}"))?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("git wait: {e}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+}
+
+fn git_root(cwd: Option<String>) -> Result<String, String> {
+    let cwd = cwd
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| ".".to_string());
+    run_git(&cwd, &["rev-parse", "--show-toplevel"]).map(|s| s.trim().to_string())
+}
+
+fn status_label(raw: &str) -> String {
+    if raw == "??" {
+        return "untracked".to_string();
+    }
+    if raw.contains('R') {
+        return "renamed".to_string();
+    }
+    if raw.contains('D') {
+        return "deleted".to_string();
+    }
+    if raw.contains('A') {
+        return "added".to_string();
+    }
+    "modified".to_string()
+}
+
+fn status_path(line: &str) -> Option<(String, String)> {
+    if line.len() < 4 {
+        return None;
+    }
+    let status = line.get(0..2)?.to_string();
+    let path = line.get(3..)?.rsplit(" -> ").next()?.trim_matches('"').to_string();
+    Some((status, path))
+}
+
+fn count_text_lines(root: &str, path: &str) -> u64 {
+    let path = std::path::Path::new(root).join(path);
+    let Ok(meta) = std::fs::metadata(&path) else { return 0 };
+    if !meta.is_file() || meta.len() > 512 * 1024 {
+        return 0;
+    }
+    let Ok(text) = std::fs::read_to_string(path) else { return 0 };
+    text.lines().count() as u64
+}
+
+fn clip_diff(diff: String) -> String {
+    const MAX_DIFF_CHARS: usize = 14000;
+    if diff.chars().count() <= MAX_DIFF_CHARS {
+        return diff;
+    }
+    let clipped = diff.chars().take(MAX_DIFF_CHARS).collect::<String>();
+    format!("{clipped}\n... diff truncated ...")
+}
+
+fn build_change_summary(cwd: Option<String>) -> Result<AgentChangeSummary, String> {
+    let root = match git_root(cwd) {
+        Ok(root) => root,
+        Err(_) => {
+            return Ok(AgentChangeSummary {
+                cwd: ".".to_string(),
+                is_git: false,
+                files: Vec::new(),
+                additions: 0,
+                deletions: 0,
+                patch: String::new(),
+            });
+        }
+    };
+
+    let status = run_git(&root, &["status", "--porcelain=v1", "--untracked-files=all"])?;
+    let mut files: BTreeMap<String, AgentChangedFile> = BTreeMap::new();
+    for line in status.lines().filter(|line| !line.trim().is_empty()) {
+        let Some((raw_status, path)) = status_path(line) else { continue };
+        files.entry(path.clone()).or_insert_with(|| AgentChangedFile {
+            path,
+            status: status_label(raw_status.trim()),
+            additions: 0,
+            deletions: 0,
+            binary: false,
+            diff: String::new(),
+        });
+    }
+
+    let numstat = run_git(&root, &["diff", "--numstat", "HEAD", "--"]).unwrap_or_default();
+    for line in numstat.lines() {
+        let mut parts = line.splitn(3, '\t');
+        let add_raw = parts.next().unwrap_or_default();
+        let del_raw = parts.next().unwrap_or_default();
+        let Some(path) = parts.next() else { continue };
+        let binary = add_raw == "-" || del_raw == "-";
+        let additions = add_raw.parse::<u64>().unwrap_or(0);
+        let deletions = del_raw.parse::<u64>().unwrap_or(0);
+        let entry = files.entry(path.to_string()).or_insert_with(|| AgentChangedFile {
+            path: path.to_string(),
+            status: "modified".to_string(),
+            additions: 0,
+            deletions: 0,
+            binary,
+            diff: String::new(),
+        });
+        entry.additions = entry.additions.saturating_add(additions);
+        entry.deletions = entry.deletions.saturating_add(deletions);
+        entry.binary = entry.binary || binary;
+    }
+
+    for file in files.values_mut() {
+        if file.status == "untracked" {
+            file.additions = count_text_lines(&root, &file.path);
+            continue;
+        }
+        file.diff = clip_diff(
+            run_git(&root, &["diff", "--color=never", "HEAD", "--", &file.path]).unwrap_or_default(),
+        );
+    }
+
+    let mut files = files.into_values().collect::<Vec<_>>();
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    let additions = files.iter().map(|f| f.additions).sum();
+    let deletions = files.iter().map(|f| f.deletions).sum();
+    let patch = run_git(&root, &["diff", "--binary", "HEAD", "--"]).unwrap_or_default();
+
+    Ok(AgentChangeSummary {
+        cwd: root,
+        is_git: true,
+        files,
+        additions,
+        deletions,
+        patch,
+    })
 }
 
 fn emit_agent_event<R: Runtime>(app: &AppHandle<R>, turn_id: &str, event: AgentStreamEvent) {
@@ -708,4 +896,24 @@ pub async fn agent_send<R: Runtime>(
     })
     .await
     .map_err(|e| format!("agent thread join: {e}"))?
+}
+
+#[tauri::command]
+pub async fn agent_change_summary(cwd: Option<String>) -> std::result::Result<AgentChangeSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || build_change_summary(cwd))
+        .await
+        .map_err(|e| format!("change summary thread join: {e}"))?
+}
+
+#[tauri::command]
+pub async fn agent_undo_changes(cwd: String, patch: String) -> std::result::Result<(), String> {
+    if patch.trim().is_empty() {
+        return Err("empty patch".to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = git_root(Some(cwd))?;
+        run_git_with_input(&root, &["apply", "-R", "--whitespace=nowarn", "-"], &patch)
+    })
+    .await
+    .map_err(|e| format!("undo thread join: {e}"))?
 }

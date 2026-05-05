@@ -605,6 +605,8 @@ pub fn run() {
             design_claude_call,
             agent::agent_claude_send,
             agent::agent_send,
+            agent::agent_change_summary,
+            agent::agent_undo_changes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

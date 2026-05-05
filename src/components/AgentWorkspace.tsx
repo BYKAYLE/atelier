@@ -2,12 +2,14 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  agentChangeSummary,
   agentSend,
+  agentUndoChanges,
   homeDir,
   isTauri,
   onAgentEvent,
 } from "../lib/tauri";
-import type { AgentProvider, AgentStreamEvent } from "../lib/tauri";
+import type { AgentChangeSummary, AgentProvider, AgentStreamEvent } from "../lib/tauri";
 import { cls, Profile, Tweaks } from "../lib/tokens";
 import { I } from "./Icons";
 
@@ -39,6 +41,7 @@ interface ChatMessage {
   text: string;
   createdAt: number;
   status?: "streaming" | "done" | "error";
+  changes?: AgentChangeSummary | null;
 }
 
 type PendingAgentStream = {
@@ -77,6 +80,8 @@ const CWD_KEY = "atelier.agent.cwd.v1";
 const PREVIEW_KEY = "atelier.agent.preview.url.v1";
 const PREVIEW_VISIBLE_KEY = "atelier.agent.preview.visible.v1";
 const PREVIEW_VP_KEY = "atelier.agent.preview.viewport.v1";
+const PREVIEW_WIDTH_KEY = "atelier.agent.preview.width.v1";
+const TASK_LIST_VISIBLE_KEY = "atelier.agent.tasklist.visible.v1";
 const DEFAULT_PROVIDER: AgentProvider = "claude";
 const DEFAULT_HERMES_PROVIDER: HermesInferenceProvider = "openai-codex";
 const DEFAULT_CODEX_EFFORT: CodexEffort = "xhigh";
@@ -84,10 +89,16 @@ const DEFAULT_CODEX_SPEED: CodexSpeed = "default";
 const MAX_RAW_EVENTS = 120;
 const MAX_RAW_EVENT_CHARS = 12000;
 const STREAM_FLUSH_MS = 48;
+const SMOOTH_OUTPUT_FPS = 30;
+const SMOOTH_FRAME_MS = 1000 / SMOOTH_OUTPUT_FPS;
 const PREVIEW_VP_SIZES: Record<Exclude<PreviewViewport, "desktop">, { w: number; h: number }> = {
   mobile: { w: 390, h: 844 },
   tablet: { w: 834, h: 1194 },
 };
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
 
 const CHAT_MARKDOWN_COMPONENTS = {
   table: ({ children }: { children?: React.ReactNode }) => (
@@ -444,6 +455,15 @@ function formatAgentPrompt(text: string, language: "ko" | "en") {
   return `${text}${instruction}`;
 }
 
+function revealStepSize(remaining: number, elapsedMs: number) {
+  const cps =
+    remaining > 3000 ? 1800
+      : remaining > 1200 ? 1100
+        : remaining > 420 ? 620
+          : 260;
+  return Math.max(1, Math.ceil((cps * elapsedMs) / 1000));
+}
+
 const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const dark = tw.dark;
   const [sessions, setSessions] = useState<AgentSession[]>(() => loadSessions());
@@ -451,10 +471,15 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const [input, setInput] = useState("");
   const [cwd, setCwd] = useState(() => localStorage.getItem(CWD_KEY) || "");
   const [showEvents, setShowEvents] = useState(false);
+  const [showTaskList, setShowTaskList] = useState(() => localStorage.getItem(TASK_LIST_VISIBLE_KEY) !== "0");
   const [showPreview, setShowPreview] = useState(() => localStorage.getItem(PREVIEW_VISIBLE_KEY) !== "0");
   const [previewUrl, setPreviewUrl] = useState(() => localStorage.getItem(PREVIEW_KEY) || "");
   const [previewInput, setPreviewInput] = useState(() => localStorage.getItem(PREVIEW_KEY) || "");
   const [previewReloadKey, setPreviewReloadKey] = useState(0);
+  const [previewWidth, setPreviewWidth] = useState(() =>
+    clampNumber(Number(localStorage.getItem(PREVIEW_WIDTH_KEY)) || 430, 320, 760),
+  );
+  const [resizingPreview, setResizingPreview] = useState(false);
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [codexMenuPanel, setCodexMenuPanel] = useState<CodexMenuPanel>("root");
   const [previewVP, setPreviewVP] = useState<PreviewViewport>(() => {
@@ -462,6 +487,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     return saved === "mobile" || saved === "tablet" || saved === "desktop" ? saved : "desktop";
   });
   const [busyTurnId, setBusyTurnId] = useState<string | null>(null);
+  const [visibleTextById, setVisibleTextById] = useState<Record<string, string>>({});
+  const [reviewOpenById, setReviewOpenById] = useState<Record<string, boolean>>({});
+  const [expandedDiffByKey, setExpandedDiffByKey] = useState<Record<string, boolean>>({});
   const [showProfilePicker, setShowProfilePicker] = useState(false);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
@@ -469,6 +497,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
   const skipRenameCommitRef = useRef(false);
   const pendingStreamRef = useRef<Record<string, PendingAgentStream>>({});
+  const animatedAssistantIdsRef = useRef<Set<string>>(new Set());
+  const smoothTargetsRef = useRef<Record<string, string>>({});
+  const smoothFrameRef = useRef<number | null>(null);
+  const smoothLastTickRef = useRef(0);
+  const autoScrollRef = useRef(true);
+  const previewResizeRef = useRef<{ startX: number; startW: number } | null>(null);
 
   const copy = tw.language === "en"
     ? {
@@ -496,6 +530,16 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         model: "Agent workspace",
         running: "running",
         done: "done",
+        changedFiles: (count: number) => `${count} files changed`,
+        undo: "Undo",
+        review: "Review",
+        expandAll: "Expand",
+        collapseAll: "Collapse",
+        hideTaskList: "Hide task list",
+        showTaskList: "Show task list",
+        noDiff: "No text diff available.",
+        undoDone: "Undo applied.",
+        undoFailed: (message: string) => `Undo failed: ${message}`,
       }
     : {
         title: "작업",
@@ -522,6 +566,16 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         model: "에이전트 작업",
         running: "실행 중",
         done: "완료",
+        changedFiles: (count: number) => `${count}개 파일 변경됨`,
+        undo: "실행 취소",
+        review: "리뷰",
+        expandAll: "펼치기",
+        collapseAll: "접기",
+        hideTaskList: "작업 목록 숨기기",
+        showTaskList: "작업 목록 보이기",
+        noDiff: "표시할 텍스트 diff가 없습니다.",
+        undoDone: "실행 취소가 적용되었습니다.",
+        undoFailed: (message: string) => `실행 취소 실패: ${message}`,
       };
 
   const active = useMemo(
@@ -555,6 +609,71 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const isSessionDone = (session: AgentSession) => lastAssistantStatus(session) === "done";
   const isSessionRunning = (session: AgentSession) => lastAssistantStatus(session) === "streaming";
 
+  const scrollTranscriptToBottom = () => {
+    const el = scrollRef.current;
+    if (!el || !autoScrollRef.current) return;
+    el.scrollTop = el.scrollHeight;
+  };
+
+  const handleTranscriptScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    autoScrollRef.current = distanceFromBottom < 56;
+  };
+
+  const startPreviewResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    previewResizeRef.current = { startX: event.clientX, startW: previewWidth };
+    setResizingPreview(true);
+  };
+
+  const scheduleSmoothOutput = () => {
+    if (smoothFrameRef.current !== null) return;
+    smoothFrameRef.current = window.requestAnimationFrame(revealSmoothOutput);
+  };
+
+  const revealSmoothOutput = (now: number) => {
+    const elapsed = smoothLastTickRef.current
+      ? Math.min(90, now - smoothLastTickRef.current)
+      : SMOOTH_FRAME_MS;
+    if (elapsed < SMOOTH_FRAME_MS * 0.72) {
+      smoothFrameRef.current = window.requestAnimationFrame(revealSmoothOutput);
+      return;
+    }
+    smoothLastTickRef.current = now;
+
+    let hasPending = false;
+    setVisibleTextById((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const [id, target] of Object.entries(smoothTargetsRef.current)) {
+        const current = next[id] || "";
+        if (current === target) continue;
+        if (!target.startsWith(current)) {
+          next[id] = target.slice(0, Math.min(current.length, target.length));
+          changed = true;
+          hasPending = next[id].length < target.length;
+          continue;
+        }
+        const remaining = target.length - current.length;
+        if (remaining <= 0) continue;
+        const step = revealStepSize(remaining, elapsed);
+        next[id] = target.slice(0, current.length + step);
+        changed = true;
+        hasPending = true;
+      }
+      return changed ? next : prev;
+    });
+
+    if (hasPending) {
+      smoothFrameRef.current = window.requestAnimationFrame(revealSmoothOutput);
+    } else {
+      smoothFrameRef.current = null;
+      smoothLastTickRef.current = 0;
+    }
+  };
+
   useEffect(() => {
     if (sessions.length > 0 && !activeId) {
       setActiveId(sessions[0].id);
@@ -574,12 +693,20 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   }, [cwd]);
 
   useEffect(() => {
+    localStorage.setItem(TASK_LIST_VISIBLE_KEY, showTaskList ? "1" : "0");
+  }, [showTaskList]);
+
+  useEffect(() => {
     localStorage.setItem(PREVIEW_VISIBLE_KEY, showPreview ? "1" : "0");
   }, [showPreview]);
 
   useEffect(() => {
     localStorage.setItem(PREVIEW_KEY, previewUrl);
   }, [previewUrl]);
+
+  useEffect(() => {
+    localStorage.setItem(PREVIEW_WIDTH_KEY, String(previewWidth));
+  }, [previewWidth]);
 
   useEffect(() => {
     localStorage.setItem(PREVIEW_VP_KEY, previewVP);
@@ -618,16 +745,68 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   }, [showModelMenu]);
 
   useEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [active?.messages, busyTurnId]);
+    if (!resizingPreview) return;
+    const onPointerMove = (event: PointerEvent) => {
+      const state = previewResizeRef.current;
+      if (!state) return;
+      const max = clampNumber(window.innerWidth - 640, 360, 920);
+      setPreviewWidth(clampNumber(state.startW + state.startX - event.clientX, 320, max));
+    };
+    const onPointerUp = () => {
+      previewResizeRef.current = null;
+      setResizingPreview(false);
+    };
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+    };
+  }, [resizingPreview]);
+
+  useEffect(() => {
+    scrollTranscriptToBottom();
+  }, [active?.messages, visibleTextById, busyTurnId]);
+
+  useEffect(() => {
+    autoScrollRef.current = true;
+    window.requestAnimationFrame(scrollTranscriptToBottom);
+  }, [activeId]);
+
+  useEffect(() => {
+    const targets: Record<string, string> = {};
+    active?.messages.forEach((message) => {
+      if (message.role !== "assistant") return;
+      if (!animatedAssistantIdsRef.current.has(message.id)) return;
+      targets[message.id] = message.text;
+    });
+    smoothTargetsRef.current = targets;
+    setVisibleTextById((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const id of Object.keys(targets)) {
+        if (next[id] === undefined) {
+          next[id] = "";
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+    if (Object.keys(targets).some((id) => (visibleTextById[id] || "") !== targets[id])) {
+      scheduleSmoothOutput();
+    }
+  }, [active?.messages, visibleTextById]);
 
   useEffect(() => {
     return () => {
       Object.values(pendingStreamRef.current).forEach((pending) => {
         if (pending.timer) window.clearTimeout(pending.timer);
       });
+      if (smoothFrameRef.current !== null) {
+        window.cancelAnimationFrame(smoothFrameRef.current);
+      }
       pendingStreamRef.current = {};
+      smoothTargetsRef.current = {};
     };
   }, []);
 
@@ -858,6 +1037,130 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     });
   };
 
+  const attachChangeSummary = async (sessionId: string, assistantId: string, sessionCwd: string) => {
+    if (!isTauri()) return;
+    try {
+      const summary = await agentChangeSummary(sessionCwd || cwd || null);
+      if (!summary.is_git || summary.files.length === 0) return;
+      patchSession(sessionId, (session) => ({
+        ...session,
+        messages: session.messages.map((m) =>
+          m.id === assistantId ? { ...m, changes: summary } : m,
+        ),
+        updatedAt: Date.now(),
+      }));
+    } catch (err) {
+      console.warn("agent change summary failed", err);
+    }
+  };
+
+  const undoMessageChanges = async (sessionId: string, messageId: string, summary: AgentChangeSummary) => {
+    if (!summary.patch.trim()) return;
+    try {
+      await agentUndoChanges(summary.cwd || cwd, summary.patch);
+      const refreshed = await agentChangeSummary(summary.cwd || cwd || null);
+      patchSession(sessionId, (session) => ({
+        ...session,
+        messages: session.messages.map((m) =>
+          m.id === messageId
+            ? { ...m, changes: { ...refreshed, undo_applied: true } }
+            : m,
+        ),
+        updatedAt: Date.now(),
+      }));
+    } catch (err) {
+      const message = String(err);
+      patchSession(sessionId, (session) => ({
+        ...session,
+        messages: session.messages.map((m) =>
+          m.id === messageId
+            ? { ...m, changes: { ...summary, undo_error: message } }
+            : m,
+        ),
+        updatedAt: Date.now(),
+      }));
+    }
+  };
+
+  const toggleReview = (messageId: string, open?: boolean) => {
+    setReviewOpenById((prev) => ({ ...prev, [messageId]: open ?? !prev[messageId] }));
+  };
+
+  const toggleFileDiff = (messageId: string, filePath: string) => {
+    const key = `${messageId}:${filePath}`;
+    setExpandedDiffByKey((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const setAllDiffs = (messageId: string, summary: AgentChangeSummary, open: boolean) => {
+    setReviewOpenById((prev) => ({ ...prev, [messageId]: open }));
+    setExpandedDiffByKey((prev) => {
+      const next = { ...prev };
+      summary.files.forEach((file) => {
+        next[`${messageId}:${file.path}`] = open;
+      });
+      return next;
+    });
+  };
+
+  const renderChangeSummary = (message: ChatMessage) => {
+    const summary = message.changes;
+    if (!summary || (!summary.files.length && !summary.undo_applied)) return null;
+    const allOpen = summary.files.length > 0
+      && summary.files.every((file) => expandedDiffByKey[`${message.id}:${file.path}`]);
+    return (
+      <div className={cls("atelier-change-panel mt-3", dark ? "atelier-change-panel-dark" : "")}>
+        <div className="atelier-change-header">
+          <div className="atelier-change-title">
+            <span>{copy.changedFiles(summary.files.length)}</span>
+            <span className="atelier-change-add">+{summary.additions}</span>
+            <span className="atelier-change-del">-{summary.deletions}</span>
+          </div>
+          <div className="atelier-change-actions">
+            <button
+              type="button"
+              disabled={!summary.patch.trim() || summary.undo_applied}
+              onClick={() => active && undoMessageChanges(active.id, message.id, summary)}
+              title={copy.undo}
+            >
+              {copy.undo} ↶
+            </button>
+            <button type="button" onClick={() => toggleReview(message.id, true)}>
+              {copy.review} ↗
+            </button>
+            <button type="button" onClick={() => setAllDiffs(message.id, summary, !allOpen)}>
+              {allOpen ? copy.collapseAll : copy.expandAll} ↕
+            </button>
+          </div>
+        </div>
+        {summary.files.map((file) => {
+          const key = `${message.id}:${file.path}`;
+          const open = reviewOpenById[message.id] || expandedDiffByKey[key];
+          return (
+            <div className="atelier-change-file" key={file.path}>
+              <button type="button" className="atelier-change-row" onClick={() => toggleFileDiff(message.id, file.path)}>
+                <span className="atelier-change-path">{file.path}</span>
+                <span className="atelier-change-add">+{file.additions}</span>
+                <span className="atelier-change-del">-{file.deletions}</span>
+                <span className={cls("atelier-change-chevron", open ? "atelier-change-chevron-open" : "")}>⌄</span>
+              </button>
+              {open && (
+                <pre className="atelier-change-diff">
+                  {file.diff.trim() || copy.noDiff}
+                </pre>
+              )}
+            </div>
+          );
+        })}
+        {summary.undo_applied && (
+          <div className="atelier-change-note">{copy.undoDone}</div>
+        )}
+        {summary.undo_error && (
+          <div className="atelier-change-error">{copy.undoFailed(summary.undo_error)}</div>
+        )}
+      </div>
+    );
+  };
+
   const send = async () => {
     const text = input.trim();
     if (!text || busyTurnId) return;
@@ -873,6 +1176,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     const assistantId = nowId("assistant");
     const turnId = nowId("turn");
     const createdAt = Date.now();
+    animatedAssistantIdsRef.current.add(assistantId);
+    autoScrollRef.current = true;
+    setVisibleTextById((prev) => ({ ...prev, [assistantId]: "" }));
     setInput("");
     setBusyTurnId(turnId);
     patchSession(session.id, (s) => ({
@@ -922,6 +1228,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           ),
           updatedAt: Date.now(),
         }));
+        if (!result.is_error) {
+          await attachChangeSummary(session.id, assistantId, cwd || session.cwd);
+        }
       } else {
         await new Promise((resolve) => window.setTimeout(resolve, 500));
         patchSession(session.id, (s) => ({
@@ -959,9 +1268,22 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
 
   return (
     <div className={cls("h-full w-full flex", dark ? "bg-dbg text-dink" : "bg-cream text-ink")}>
+      {showTaskList ? (
       <aside className={cls("w-[280px] shrink-0 border-r flex flex-col", dark ? "border-dline" : "border-line")}>
         <div className={cls("h-12 px-3 flex items-center gap-2 border-b relative", dark ? "border-dline" : "border-line")}>
           <div className="font-display text-[18px] font-medium flex-1">{copy.title}</div>
+          <button
+            type="button"
+            onClick={() => setShowTaskList(false)}
+            className={cls(
+              "h-8 w-8 rounded-[7px] text-[14px] grid place-items-center",
+              dark ? "text-dsub hover:bg-dmuted hover:text-dink" : "text-sub hover:bg-muted hover:text-ink",
+            )}
+            title={copy.hideTaskList}
+            aria-label={copy.hideTaskList}
+          >
+            ‹
+          </button>
           <button
             type="button"
             onClick={handleNewSessionClick}
@@ -1119,6 +1441,25 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           ))}
         </div>
       </aside>
+      ) : (
+        <aside className={cls("w-11 shrink-0 border-r flex flex-col items-center py-2", dark ? "border-dline" : "border-line")}>
+          <button
+            type="button"
+            onClick={() => setShowTaskList(true)}
+            className={cls(
+              "h-8 w-8 rounded-[7px] text-[14px] grid place-items-center",
+              dark ? "text-dsub hover:bg-dmuted hover:text-dink" : "text-sub hover:bg-muted hover:text-ink",
+            )}
+            title={copy.showTaskList}
+            aria-label={copy.showTaskList}
+          >
+            ›
+          </button>
+          <div className={cls("mt-3 text-[10px] font-mono [writing-mode:vertical-rl]", dark ? "text-dsub" : "text-sub")}>
+            {copy.title}
+          </div>
+        </aside>
+      )}
 
       <main className="flex-1 min-w-0 flex flex-col">
         <div className={cls("h-12 px-4 border-b flex items-center gap-3", dark ? "border-dline" : "border-line")}>
@@ -1166,7 +1507,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         </div>
 
         <div className="flex-1 min-h-0 flex">
-          <div ref={scrollRef} className="flex-1 min-w-0 overflow-auto px-5 py-4">
+          <div
+            ref={scrollRef}
+            onScroll={handleTranscriptScroll}
+            className="flex-1 min-w-0 overflow-auto px-5 py-4"
+          >
             {!active || active.messages.length === 0 ? (
               <div className={cls("h-full flex items-center justify-center text-center text-[13px]", dark ? "text-dsub" : "text-sub")}>
                 <div>
@@ -1178,7 +1523,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
               </div>
             ) : (
               <div className="max-w-[920px] mx-auto space-y-5">
-                {active.messages.map((m) => (
+                {active.messages.map((m) => {
+                  const displayText = animatedAssistantIdsRef.current.has(m.id)
+                    ? (visibleTextById[m.id] || "")
+                    : m.text;
+                  return (
                   <article key={m.id} className={cls("flex min-w-0 gap-3", m.role === "user" ? "justify-end" : "justify-start")}>
                     {m.role !== "user" && (
                       <div
@@ -1193,13 +1542,13 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                         "min-w-0 max-w-[min(78%,760px)] overflow-hidden rounded-[8px] px-3.5 py-2.5 border text-[13px] leading-[1.65] break-words",
                         m.role === "user"
                           ? dark ? "bg-[#34312e] border-[#4a4039] text-dink" : "bg-[#fff8f2] border-[#eed7c8] text-ink"
-                          : dark ? "bg-dmuted border-dline text-dink" : "bg-surface border-line text-ink",
+                        : dark ? "bg-dmuted border-dline text-dink" : "bg-surface border-line text-ink",
                       )}
                     >
-                      {m.text ? (
+                      {displayText ? (
                         <div className="atelier-chat-markdown min-w-0 max-w-full">
                           <ReactMarkdown remarkPlugins={[remarkGfm]} components={CHAT_MARKDOWN_COMPONENTS}>
-                            {m.text}
+                            {displayText}
                           </ReactMarkdown>
                         </div>
                       ) : (
@@ -1212,15 +1561,30 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                           {copy.running}
                         </div>
                       )}
+                      {m.role === "assistant" && renderChangeSummary(m)}
                     </div>
                   </article>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
 
           {showPreview && (
-            <aside className={cls("w-[430px] shrink-0 border-l flex flex-col", dark ? "border-dline bg-dsurf" : "border-line bg-surface")}>
+            <aside
+              className={cls("relative shrink-0 border-l flex flex-col", dark ? "border-dline bg-dsurf" : "border-line bg-surface")}
+              style={{ width: previewWidth }}
+            >
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                onPointerDown={startPreviewResize}
+                className={cls(
+                  "absolute left-[-4px] top-0 z-20 h-full w-2 cursor-col-resize",
+                  resizingPreview ? "bg-terra/30" : "hover:bg-terra/20",
+                )}
+                title="resize preview"
+              />
               <div className={cls("h-10 px-3 border-b flex items-center gap-2", dark ? "border-dline" : "border-line")}>
                 <span className={cls("text-[11px] font-mono uppercase tracking-wider shrink-0", dark ? "text-dsub" : "text-sub")}>
                   {copy.preview}

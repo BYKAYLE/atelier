@@ -70,6 +70,26 @@ export interface AgentRunResult {
   error?: string | null;
 }
 
+export interface AgentChangedFile {
+  path: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  binary: boolean;
+  diff: string;
+}
+
+export interface AgentChangeSummary {
+  cwd: string;
+  is_git: boolean;
+  files: AgentChangedFile[];
+  additions: number;
+  deletions: number;
+  patch: string;
+  undo_applied?: boolean;
+  undo_error?: string | null;
+}
+
 export type AgentProvider = "claude" | "codex" | "hermes";
 
 export async function agentClaudeSend(args: {
@@ -101,6 +121,14 @@ export async function onAgentEvent(
   handler: (event: AgentStreamEvent) => void,
 ): Promise<UnlistenFn> {
   return listen<AgentStreamEvent>(`agent://${turnId}/event`, (e) => handler(e.payload));
+}
+
+export async function agentChangeSummary(cwd?: string | null): Promise<AgentChangeSummary> {
+  return invoke("agent_change_summary", { cwd: cwd || null });
+}
+
+export async function agentUndoChanges(cwd: string, patch: string): Promise<void> {
+  return invoke("agent_undo_changes", { cwd, patch });
 }
 
 /** 클립보드 PNG 바이트를 임시파일로 저장하고 경로 반환 */

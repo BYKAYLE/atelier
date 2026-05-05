@@ -276,3 +276,117 @@ body.dark {
   color: inherit;
   opacity: 0.86;
 }
+
+.atelier-change-panel {
+  overflow: hidden;
+  border: 1px solid rgba(45, 45, 45, 0.14);
+  border-radius: 10px;
+  background: rgba(45, 45, 45, 0.025);
+}
+.atelier-change-panel-dark {
+  border-color: rgba(250, 249, 245, 0.1);
+  background: rgba(255, 255, 255, 0.035);
+}
+.atelier-change-header {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 12px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.16);
+}
+.atelier-change-title {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 650;
+}
+.atelier-change-add {
+  color: #31d17a;
+  font-variant-numeric: tabular-nums;
+}
+.atelier-change-del {
+  color: #ff4d4d;
+  font-variant-numeric: tabular-nums;
+}
+.atelier-change-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.atelier-change-actions button {
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: inherit;
+  opacity: 0.72;
+}
+.atelier-change-actions button:hover:not(:disabled) {
+  opacity: 1;
+  background: rgba(128, 128, 128, 0.12);
+}
+.atelier-change-actions button:disabled {
+  cursor: default;
+  opacity: 0.3;
+}
+.atelier-change-file + .atelier-change-file {
+  border-top: 1px solid rgba(128, 128, 128, 0.12);
+}
+.atelier-change-row {
+  width: 100%;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  color: inherit;
+  text-align: left;
+}
+.atelier-change-row:hover {
+  background: rgba(128, 128, 128, 0.08);
+}
+.atelier-change-path {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.atelier-change-chevron {
+  margin-left: 4px;
+  opacity: 0.72;
+  transition: transform 120ms ease;
+}
+.atelier-change-chevron-open {
+  transform: rotate(180deg);
+}
+.atelier-change-diff {
+  max-height: 320px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-top: 1px solid rgba(128, 128, 128, 0.12);
+  background: rgba(0, 0, 0, 0.08);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  line-height: 1.5;
+  white-space: pre;
+}
+.atelier-change-note,
+.atelier-change-error {
+  padding: 9px 12px;
+  border-top: 1px solid rgba(128, 128, 128, 0.12);
+  font-size: 11px;
+}
+.atelier-change-note {
+  color: #31d17a;
+}
+.atelier-change-error {
+  color: #ff6969;
+}
