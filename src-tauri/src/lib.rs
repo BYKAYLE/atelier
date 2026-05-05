@@ -608,6 +608,9 @@ pub fn run() {
             agent::agent_change_summary,
             agent::agent_undo_changes,
             agent::preview_health_check,
+            agent::preview_service_start,
+            agent::preview_service_status,
+            agent::preview_service_stop,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

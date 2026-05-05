@@ -1,7 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::process::{Command, Stdio};
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -56,6 +58,44 @@ pub struct PreviewCheckResult {
     title: Option<String>,
     error: Option<String>,
     checked_at: i64,
+}
+
+#[derive(Serialize, Clone)]
+pub struct PreviewServiceStatus {
+    id: String,
+    url: String,
+    cwd: String,
+    command: String,
+    managed: bool,
+    running: bool,
+    auto_restart: bool,
+    pid: Option<u32>,
+    started_at: Option<i64>,
+    restarts: u32,
+    last_error: Option<String>,
+    recent_output: Vec<String>,
+}
+
+#[derive(Serialize, Clone)]
+struct PreviewServiceEvent {
+    id: String,
+    url: String,
+    kind: String,
+    line: Option<String>,
+}
+
+struct ManagedPreviewService {
+    id: String,
+    url: String,
+    cwd: String,
+    command: String,
+    child: Option<Arc<Mutex<Child>>>,
+    pid: Option<u32>,
+    started_at: Option<i64>,
+    restarts: u32,
+    auto_restart: bool,
+    last_error: Option<String>,
+    recent_output: VecDeque<String>,
 }
 
 #[derive(Debug)]
@@ -153,6 +193,239 @@ fn parse_local_preview_url(input: &str) -> Result<LocalPreviewUrl, String> {
         port,
         path,
     })
+}
+
+static PREVIEW_SERVICES: OnceLock<Mutex<HashMap<String, ManagedPreviewService>>> = OnceLock::new();
+
+fn preview_services() -> &'static Mutex<HashMap<String, ManagedPreviewService>> {
+    PREVIEW_SERVICES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn preview_service_id(url: &str) -> String {
+    match parse_local_preview_url(url) {
+        Ok(parsed) => format!("preview-{}", parsed.port),
+        Err(_) => {
+            let safe = url
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                .collect::<String>();
+            format!("preview-{}", safe.trim_matches('-'))
+        }
+    }
+}
+
+fn preview_service_status_from(service: &ManagedPreviewService) -> PreviewServiceStatus {
+    PreviewServiceStatus {
+        id: service.id.clone(),
+        url: service.url.clone(),
+        cwd: service.cwd.clone(),
+        command: service.command.clone(),
+        managed: true,
+        running: service.child.is_some(),
+        auto_restart: service.auto_restart,
+        pid: service.pid,
+        started_at: service.started_at,
+        restarts: service.restarts,
+        last_error: service.last_error.clone(),
+        recent_output: service.recent_output.iter().cloned().collect(),
+    }
+}
+
+fn preview_service_idle_status(url: String) -> PreviewServiceStatus {
+    PreviewServiceStatus {
+        id: preview_service_id(&url),
+        url,
+        cwd: String::new(),
+        command: String::new(),
+        managed: false,
+        running: false,
+        auto_restart: false,
+        pid: None,
+        started_at: None,
+        restarts: 0,
+        last_error: None,
+        recent_output: Vec::new(),
+    }
+}
+
+fn refresh_preview_service(service: &mut ManagedPreviewService) {
+    let Some(child) = service.child.as_ref() else { return };
+    let status = child.lock().ok().and_then(|mut child| child.try_wait().ok()).flatten();
+    if let Some(status) = status {
+        service.child = None;
+        service.pid = None;
+        service.last_error = Some(match status.code() {
+            Some(code) => format!("Preview service exited with code {code}"),
+            None => "Preview service exited".to_string(),
+        });
+    }
+}
+
+fn preview_service_port(url: &str) -> Result<u16, String> {
+    parse_local_preview_url(url).map(|parsed| parsed.port)
+}
+
+fn infer_preview_command(cwd: &str, url: &str) -> Result<String, String> {
+    let port = preview_service_port(url)?;
+    let package_json = PathBuf::from(cwd).join("package.json");
+    if !package_json.exists() {
+        return Err("No package.json found in the working folder. Enter a preview start command.".into());
+    }
+    let text = std::fs::read_to_string(&package_json)
+        .map_err(|e| format!("read package.json: {e}"))?;
+    let value: Value = serde_json::from_str(&text).map_err(|e| format!("parse package.json: {e}"))?;
+    let scripts = value.get("scripts").and_then(Value::as_object);
+    let script = if scripts.and_then(|s| s.get("dev")).and_then(Value::as_str).is_some() {
+        "dev"
+    } else if scripts.and_then(|s| s.get("start")).and_then(Value::as_str).is_some() {
+        "start"
+    } else if scripts.and_then(|s| s.get("preview")).and_then(Value::as_str).is_some() {
+        "preview"
+    } else {
+        return Err("package.json has no dev, start, or preview script.".into());
+    };
+    Ok(format!("npm run {script} -- --host 127.0.0.1 --port {port}"))
+}
+
+#[cfg(target_os = "windows")]
+fn preview_shell_command(command: &str) -> Command {
+    let mut cmd = Command::new("cmd.exe");
+    cmd.arg("/C").arg(command);
+    cmd
+}
+
+#[cfg(not(target_os = "windows"))]
+fn preview_shell_command(command: &str) -> Command {
+    let mut cmd = Command::new("sh");
+    cmd.arg("-lc").arg(command);
+    cmd
+}
+
+fn push_preview_output(id: &str, line: String) {
+    let Ok(mut services) = preview_services().lock() else { return };
+    let Some(service) = services.get_mut(id) else { return };
+    let clipped = if line.chars().count() > 260 {
+        format!("{}…", line.chars().take(259).collect::<String>())
+    } else {
+        line
+    };
+    service.recent_output.push_back(clipped);
+    while service.recent_output.len() > 8 {
+        service.recent_output.pop_front();
+    }
+}
+
+fn spawn_preview_output_reader<R, T>(
+    app: AppHandle<R>,
+    id: String,
+    url: String,
+    kind: &'static str,
+    stream: T,
+) where
+    R: Runtime,
+    T: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let reader = BufReader::new(stream);
+        for line in reader.lines().flatten() {
+            push_preview_output(&id, line.clone());
+            let _ = app.emit(
+                &format!("preview-service://{id}/event"),
+                PreviewServiceEvent {
+                    id: id.clone(),
+                    url: url.clone(),
+                    kind: kind.to_string(),
+                    line: Some(line),
+                },
+            );
+        }
+    });
+}
+
+fn spawn_preview_child<R: Runtime>(
+    app: &AppHandle<R>,
+    id: &str,
+    url: &str,
+    cwd: &str,
+    command: &str,
+) -> Result<(Arc<Mutex<Child>>, u32), String> {
+    let mut cmd = preview_shell_command(command);
+    cmd.current_dir(cwd)
+        .env("PATH", crate::augmented_cli_path())
+        .env("BROWSER", "none")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("preview service spawn: {e}"))?;
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let pid = child.id();
+    let child = Arc::new(Mutex::new(child));
+    if let Some(stdout) = stdout {
+        spawn_preview_output_reader(app.clone(), id.to_string(), url.to_string(), "stdout", stdout);
+    }
+    if let Some(stderr) = stderr {
+        spawn_preview_output_reader(app.clone(), id.to_string(), url.to_string(), "stderr", stderr);
+    }
+    Ok((child, pid))
+}
+
+fn start_preview_service<R: Runtime>(
+    app: AppHandle<R>,
+    url: String,
+    cwd: Option<String>,
+    command: Option<String>,
+    auto_restart: bool,
+) -> Result<PreviewServiceStatus, String> {
+    let parsed = parse_local_preview_url(&url)?;
+    let cwd = cwd
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| ".".into()));
+    let command = command
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(Ok)
+        .unwrap_or_else(|| infer_preview_command(&cwd, &parsed.url))?;
+    let id = preview_service_id(&parsed.url);
+
+    {
+        let mut services = preview_services().lock().map_err(|e| e.to_string())?;
+        if let Some(service) = services.get_mut(&id) {
+            refresh_preview_service(service);
+            if service.child.is_some() {
+                return Ok(preview_service_status_from(service));
+            }
+        }
+    }
+
+    let (child, pid) = spawn_preview_child(&app, &id, &parsed.url, &cwd, &command)?;
+    let mut services = preview_services().lock().map_err(|e| e.to_string())?;
+    let restarts = services.get(&id).map(|s| s.restarts.saturating_add(1)).unwrap_or(0);
+    let service = services.entry(id.clone()).or_insert_with(|| ManagedPreviewService {
+        id: id.clone(),
+        url: parsed.url.clone(),
+        cwd: cwd.clone(),
+        command: command.clone(),
+        child: None,
+        pid: None,
+        started_at: None,
+        restarts,
+        auto_restart,
+        last_error: None,
+        recent_output: VecDeque::new(),
+    });
+    service.url = parsed.url;
+    service.cwd = cwd;
+    service.command = command;
+    service.child = Some(child);
+    service.pid = Some(pid);
+    service.started_at = Some(checked_at_ms());
+    service.auto_restart = auto_restart;
+    service.last_error = None;
+    service.restarts = restarts;
+    Ok(preview_service_status_from(service))
 }
 
 fn extract_title(html: &str) -> Option<String> {
@@ -272,6 +545,59 @@ pub async fn preview_health_check(url: String) -> Result<PreviewCheckResult, Str
     tauri::async_runtime::spawn_blocking(move || run_preview_health_check(url))
         .await
         .map_err(|e| format!("preview health check join: {e}"))
+}
+
+#[tauri::command]
+pub async fn preview_service_start<R: Runtime>(
+    app: AppHandle<R>,
+    url: String,
+    cwd: Option<String>,
+    command: Option<String>,
+    auto_restart: Option<bool>,
+) -> Result<PreviewServiceStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        start_preview_service(app, url, cwd, command, auto_restart.unwrap_or(true))
+    })
+    .await
+    .map_err(|e| format!("preview service start join: {e}"))?
+}
+
+#[tauri::command]
+pub async fn preview_service_status(url: String) -> Result<PreviewServiceStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let id = preview_service_id(&url);
+        let mut services = preview_services().lock().map_err(|e| e.to_string())?;
+        let Some(service) = services.get_mut(&id) else {
+            return Ok(preview_service_idle_status(url));
+        };
+        refresh_preview_service(service);
+        Ok(preview_service_status_from(service))
+    })
+    .await
+    .map_err(|e| format!("preview service status join: {e}"))?
+}
+
+#[tauri::command]
+pub async fn preview_service_stop(url: String) -> Result<PreviewServiceStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let id = preview_service_id(&url);
+        let mut services = preview_services().lock().map_err(|e| e.to_string())?;
+        let Some(service) = services.get_mut(&id) else {
+            return Ok(preview_service_idle_status(url));
+        };
+        service.auto_restart = false;
+        if let Some(child) = service.child.take() {
+            if let Ok(mut child) = child.lock() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+        service.pid = None;
+        service.last_error = Some("Preview service stopped by Atelier".into());
+        Ok(preview_service_status_from(service))
+    })
+    .await
+    .map_err(|e| format!("preview service stop join: {e}"))?
 }
 
 fn run_git(root: &str, args: &[&str]) -> Result<String, String> {
@@ -1162,5 +1488,10 @@ mod tests {
     fn rejects_remote_preview_url() {
         let err = parse_local_preview_url("http://example.com:5173").unwrap_err();
         assert!(err.contains("localhost"));
+    }
+
+    #[test]
+    fn builds_stable_preview_service_id_from_port() {
+        assert_eq!(preview_service_id("http://127.0.0.1:5173/admin/"), "preview-5173");
     }
 }

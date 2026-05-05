@@ -9,8 +9,17 @@ import {
   isTauri,
   onAgentEvent,
   previewHealthCheck,
+  previewServiceStart,
+  previewServiceStatus,
+  previewServiceStop,
 } from "../lib/tauri";
-import type { AgentChangeSummary, AgentProvider, AgentStreamEvent, PreviewCheckResult } from "../lib/tauri";
+import type {
+  AgentChangeSummary,
+  AgentProvider,
+  AgentStreamEvent,
+  PreviewCheckResult,
+  PreviewServiceStatus,
+} from "../lib/tauri";
 import { cls, Profile, Tweaks } from "../lib/tokens";
 import { I } from "./Icons";
 
@@ -104,6 +113,7 @@ const PREVIEW_KEY = "atelier.agent.preview.url.v1";
 const PREVIEW_VISIBLE_KEY = "atelier.agent.preview.visible.v1";
 const PREVIEW_VP_KEY = "atelier.agent.preview.viewport.v1";
 const PREVIEW_WIDTH_KEY = "atelier.agent.preview.width.v1";
+const PREVIEW_SERVICE_COMMAND_KEY = "atelier.agent.preview.service.command.v1";
 const TASK_LIST_VISIBLE_KEY = "atelier.agent.tasklist.visible.v1";
 const DEFAULT_PROVIDER: AgentProvider = "claude";
 const DEFAULT_HERMES_PROVIDER: HermesInferenceProvider = "openai-codex";
@@ -519,6 +529,11 @@ function terminalIssueFromEvent(event: AgentStreamEvent) {
   return null;
 }
 
+function isPreviewStartCommand(text: string) {
+  return /\b(npm\s+run\s+(dev|start|preview)|pnpm\s+(dev|start|preview)|yarn\s+(dev|start|preview)|bun\s+(run\s+)?(dev|start|preview)|vite\b|next\s+dev|python3?\s+-m\s+http\.server|ollama\s+serve)\b/i
+    .test(text);
+}
+
 function formatAgentPrompt(text: string, language: "ko" | "en") {
   const instruction = language === "en"
     ? [
@@ -568,6 +583,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const [previewCheck, setPreviewCheck] = useState<PreviewCheckResult | null>(null);
   const [previewChecking, setPreviewChecking] = useState(false);
   const [previewDiagnostics, setPreviewDiagnostics] = useState<PreviewDiagnostic[]>([]);
+  const [previewService, setPreviewService] = useState<PreviewServiceStatus | null>(null);
+  const [previewServiceCommand, setPreviewServiceCommand] = useState(() => localStorage.getItem(PREVIEW_SERVICE_COMMAND_KEY) || "");
+  const [previewServiceBusy, setPreviewServiceBusy] = useState(false);
   const [previewWidth, setPreviewWidth] = useState(() =>
     clampNumber(Number(localStorage.getItem(PREVIEW_WIDTH_KEY)) || 430, 320, 760),
   );
@@ -595,6 +613,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const smoothLastTickRef = useRef(0);
   const autoScrollRef = useRef(true);
   const previewResizeRef = useRef<{ startX: number; startW: number } | null>(null);
+  const previewAutoStartRef = useRef<Record<string, number>>({});
+  const lastPreviewCommandRef = useRef<string | null>(null);
 
   const copy = tw.language === "en"
     ? {
@@ -611,6 +631,19 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         previewIssue: "Issue",
         previewOnlyLocal: "Only localhost previews can be inspected.",
         terminalIssue: "Terminal issue",
+        previewService: "Service",
+        previewServiceManaged: "Managed by Atelier",
+        previewServiceExternal: "External process",
+        previewServiceIdle: "Not managed",
+        previewServiceCommand: "Start command",
+        previewServicePlaceholder: "Auto-detect from package.json or enter a command",
+        previewServiceStart: "Start",
+        previewServiceStop: "Stop",
+        previewServiceStarting: "Starting",
+        previewServiceStarted: (pid?: number | null) => `Preview service started${pid ? ` · PID ${pid}` : ""}`,
+        previewServiceStopped: "Preview service stopped",
+        previewServiceStartFailed: (message: string) => `Preview service failed: ${message}`,
+        previewServiceRestarting: "Preview service restarted by Atelier",
         previewStatusOk: (status?: number | null, title?: string | null) =>
           `Preview responded${status ? ` HTTP ${status}` : ""}${title ? ` · ${title}` : ""}`,
         previewStatusError: (message: string) => `Preview check failed: ${message}`,
@@ -660,6 +693,19 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         previewIssue: "문제 있음",
         previewOnlyLocal: "localhost 프리뷰만 자동 검토할 수 있습니다.",
         terminalIssue: "터미널 문제",
+        previewService: "서비스",
+        previewServiceManaged: "Atelier 관리 중",
+        previewServiceExternal: "외부 프로세스",
+        previewServiceIdle: "관리 안 됨",
+        previewServiceCommand: "시동 명령",
+        previewServicePlaceholder: "package.json에서 자동 감지하거나 명령 입력",
+        previewServiceStart: "시동",
+        previewServiceStop: "정지",
+        previewServiceStarting: "시동 중",
+        previewServiceStarted: (pid?: number | null) => `프리뷰 서비스 시동됨${pid ? ` · PID ${pid}` : ""}`,
+        previewServiceStopped: "프리뷰 서비스 정지됨",
+        previewServiceStartFailed: (message: string) => `프리뷰 서비스 실패: ${message}`,
+        previewServiceRestarting: "Atelier가 프리뷰 서비스를 다시 시동했습니다",
         previewStatusOk: (status?: number | null, title?: string | null) =>
           `프리뷰 응답 확인${status ? ` HTTP ${status}` : ""}${title ? ` · ${title}` : ""}`,
         previewStatusError: (message: string) => `프리뷰 검토 실패: ${message}`,
@@ -738,6 +784,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           ? copy.previewIssue
           : copy.previewLinked;
   const visiblePreviewDiagnostics = previewDiagnostics.slice(-3);
+  const previewServiceLabel = previewService?.running
+    ? `${copy.previewServiceManaged}${previewService.pid ? ` · ${previewService.pid}` : ""}`
+    : previewService?.managed
+      ? copy.previewServiceIdle
+      : copy.previewServiceExternal;
+  const previewServiceOutput = previewService?.recent_output?.slice(-2) || [];
 
   const lastAssistantStatus = (session: AgentSession) => {
     const lastAssistant = [...session.messages].reverse().find((m) => m.role === "assistant");
@@ -849,6 +901,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   useEffect(() => {
     localStorage.setItem(PREVIEW_VP_KEY, previewVP);
   }, [previewVP]);
+
+  useEffect(() => {
+    localStorage.setItem(PREVIEW_SERVICE_COMMAND_KEY, previewServiceCommand);
+  }, [previewServiceCommand]);
 
   useEffect(() => {
     if (cwd) return;
@@ -1163,6 +1219,118 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     });
   };
 
+  const rememberPreviewStartCommand = (event: AgentStreamEvent) => {
+    const command = commandFromValue(parseRawJson(event.raw)) || event.text || event.status || "";
+    const clean = clipActivityText(command, 220);
+    if (!clean || !isPreviewStartCommand(clean)) return;
+    lastPreviewCommandRef.current = clean;
+    if (!previewServiceCommand) setPreviewServiceCommand(clean);
+  };
+
+  const startManagedPreviewService = async (silent = false) => {
+    if (!previewUrl || !isLocalPreviewUrl(previewUrl) || previewServiceBusy || !isTauri()) return;
+    setPreviewServiceBusy(true);
+    if (!silent) {
+      pushPreviewDiagnostic({
+        source: "preview",
+        level: "info",
+        text: copy.previewServiceStarting,
+      });
+    }
+    try {
+      const status = await previewServiceStart({
+        url: previewUrl,
+        cwd: cwd || null,
+        command: previewServiceCommand || null,
+        autoRestart: true,
+      });
+      setPreviewService(status);
+      if (status.command && !previewServiceCommand) setPreviewServiceCommand(status.command);
+      pushPreviewDiagnostic({
+        source: "preview",
+        level: "ok",
+        text: silent ? copy.previewServiceRestarting : copy.previewServiceStarted(status.pid),
+      });
+      setPreviewReloadKey((n) => n + 1);
+    } catch (err) {
+      const message = String(err);
+      pushPreviewDiagnostic({
+        source: "preview",
+        level: "error",
+        text: copy.previewServiceStartFailed(message),
+      });
+    } finally {
+      setPreviewServiceBusy(false);
+    }
+  };
+
+  const stopManagedPreviewService = async () => {
+    if (!previewUrl || !isLocalPreviewUrl(previewUrl) || previewServiceBusy || !isTauri()) return;
+    setPreviewServiceBusy(true);
+    try {
+      const status = await previewServiceStop(previewUrl);
+      setPreviewService(status);
+      pushPreviewDiagnostic({
+        source: "preview",
+        level: "info",
+        text: copy.previewServiceStopped,
+      });
+    } catch (err) {
+      pushPreviewDiagnostic({
+        source: "preview",
+        level: "error",
+        text: copy.previewServiceStartFailed(String(err)),
+      });
+    } finally {
+      setPreviewServiceBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!previewUrl || !isLocalPreviewUrl(previewUrl) || !isTauri()) {
+      setPreviewService(null);
+      return;
+    }
+    let cancelled = false;
+    const syncStatus = () => {
+      previewServiceStatus(previewUrl)
+        .then((status) => {
+          if (cancelled) return;
+          setPreviewService(status);
+        })
+        .catch(() => {
+          if (!cancelled) setPreviewService(null);
+        });
+    };
+    syncStatus();
+    const timer = window.setInterval(syncStatus, 2200);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [previewUrl]);
+
+  useEffect(() => {
+    if (!previewUrl || !isLocalPreviewUrl(previewUrl) || previewServiceBusy) return;
+    const error = previewCheck?.error || "";
+    const needsStart = Boolean(previewCheck && !previewCheck.ok && /connect|ECONN|refused|연결/i.test(error));
+    if (!needsStart) return;
+    const now = Date.now();
+    if (now - (previewAutoStartRef.current[previewUrl] || 0) < 30000) return;
+    if (previewService?.running) return;
+    previewAutoStartRef.current[previewUrl] = now;
+    startManagedPreviewService(true);
+  }, [previewCheck?.checked_at, previewUrl, previewService?.running, previewServiceBusy]);
+
+  useEffect(() => {
+    if (!previewUrl || !isLocalPreviewUrl(previewUrl) || previewServiceBusy) return;
+    if (!previewService?.managed || !previewService.auto_restart || previewService.running || !previewService.command) return;
+    const now = Date.now();
+    if (now - (previewAutoStartRef.current[previewUrl] || 0) < 8000) return;
+    previewAutoStartRef.current[previewUrl] = now;
+    startManagedPreviewService(true);
+  }, [previewService?.running, previewService?.managed, previewService?.last_error, previewUrl, previewServiceBusy]);
+
   const updateActiveModel = (model: string) => {
     if (!active) return;
     patchSession(active.id, (session) => ({ ...session, model, updatedAt: Date.now() }));
@@ -1192,7 +1360,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
 
   const maybeAutoPreview = (event: AgentStreamEvent) => {
     const url = findPreviewUrl(event.text) || findPreviewUrl(event.raw);
-    if (url) loadPreviewUrl(url);
+    if (url) {
+      if (!previewServiceCommand && lastPreviewCommandRef.current) {
+        setPreviewServiceCommand(lastPreviewCommandRef.current);
+      }
+      loadPreviewUrl(url);
+    }
   };
 
   const activityFromEvent = (event: AgentStreamEvent): Omit<AgentActivity, "id" | "createdAt" | "active"> | null => {
@@ -1314,6 +1487,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   };
 
   const handleAgentEvent = (sessionId: string, assistantId: string, event: AgentStreamEvent) => {
+    rememberPreviewStartCommand(event);
     maybeAutoPreview(event);
     noteTerminalIssue(event);
     if (event.kind === "status" || event.kind === "tool" || event.kind === "raw") {
@@ -2016,6 +2190,56 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                     </span>
                     <span className="atelier-preview-diagnostic-text">{previewUrl}</span>
                   </div>
+                  {localPreview && (
+                    <div className="atelier-preview-service">
+                      <div className="atelier-preview-diagnostic atelier-preview-diagnostic-info">
+                        <span className="atelier-preview-diagnostic-source">{copy.previewService}</span>
+                        <span className="atelier-preview-diagnostic-text">{previewServiceLabel}</span>
+                      </div>
+                      <div className="atelier-preview-service-controls">
+                        <input
+                          value={previewServiceCommand}
+                          onChange={(e) => setPreviewServiceCommand(e.target.value)}
+                          placeholder={copy.previewServicePlaceholder}
+                          className={cls(
+                            "atelier-preview-service-input",
+                            dark ? "atelier-preview-service-input-dark" : "",
+                          )}
+                          aria-label={copy.previewServiceCommand}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => startManagedPreviewService(false)}
+                          disabled={previewServiceBusy}
+                          className={cls(
+                            "atelier-preview-service-button",
+                            dark ? "atelier-preview-service-button-dark" : "",
+                          )}
+                        >
+                          {previewServiceBusy ? copy.previewServiceStarting : copy.previewServiceStart}
+                        </button>
+                        {previewService?.running && (
+                          <button
+                            type="button"
+                            onClick={stopManagedPreviewService}
+                            disabled={previewServiceBusy}
+                            className={cls(
+                              "atelier-preview-service-button atelier-preview-service-stop",
+                              dark ? "atelier-preview-service-button-dark" : "",
+                            )}
+                          >
+                            {copy.previewServiceStop}
+                          </button>
+                        )}
+                      </div>
+                      {previewServiceOutput.map((line, index) => (
+                        <div key={`${line}-${index}`} className="atelier-preview-diagnostic atelier-preview-diagnostic-info">
+                          <span className="atelier-preview-diagnostic-source">log</span>
+                          <span className="atelier-preview-diagnostic-text">{line}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   {previewChecking && (
                     <div className="atelier-preview-diagnostic atelier-preview-diagnostic-info">
                       <span className="atelier-preview-diagnostic-source">{copy.previewChecking}</span>

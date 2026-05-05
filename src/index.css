@@ -413,6 +413,56 @@ body.dark {
 .atelier-preview-diagnostic-error .atelier-preview-diagnostic-text {
   color: #d94b4b;
 }
+.atelier-preview-service {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  padding: 6px 0 2px;
+  border-top: 1px solid rgba(128, 128, 128, 0.12);
+}
+.atelier-preview-service-controls {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.atelier-preview-service-input {
+  min-width: 0;
+  flex: 1 1 auto;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid rgba(128, 128, 128, 0.22);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.6);
+  color: inherit;
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  outline: none;
+}
+.atelier-preview-service-input-dark {
+  background: rgba(255, 255, 255, 0.055);
+  border-color: rgba(250, 249, 245, 0.12);
+}
+.atelier-preview-service-button {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid rgba(128, 128, 128, 0.22);
+  border-radius: 5px;
+  background: rgba(128, 128, 128, 0.1);
+  color: inherit;
+  font-size: 11px;
+}
+.atelier-preview-service-button:disabled {
+  opacity: 0.55;
+}
+.atelier-preview-service-button-dark {
+  border-color: rgba(250, 249, 245, 0.12);
+  background: rgba(255, 255, 255, 0.07);
+}
+.atelier-preview-service-stop {
+  color: #d94b4b;
+}
 
 .atelier-change-panel {
   overflow: hidden;

@@ -99,6 +99,21 @@ export interface PreviewCheckResult {
   checked_at: number;
 }
 
+export interface PreviewServiceStatus {
+  id: string;
+  url: string;
+  cwd: string;
+  command: string;
+  managed: boolean;
+  running: boolean;
+  auto_restart: boolean;
+  pid?: number | null;
+  started_at?: number | null;
+  restarts: number;
+  last_error?: string | null;
+  recent_output: string[];
+}
+
 export type AgentProvider = "claude" | "codex" | "hermes";
 
 export async function agentClaudeSend(args: {
@@ -142,6 +157,23 @@ export async function agentUndoChanges(cwd: string, patch: string): Promise<void
 
 export async function previewHealthCheck(url: string): Promise<PreviewCheckResult> {
   return invoke("preview_health_check", { url });
+}
+
+export async function previewServiceStart(args: {
+  url: string;
+  cwd?: string | null;
+  command?: string | null;
+  autoRestart?: boolean | null;
+}): Promise<PreviewServiceStatus> {
+  return invoke("preview_service_start", args);
+}
+
+export async function previewServiceStatus(url: string): Promise<PreviewServiceStatus> {
+  return invoke("preview_service_status", { url });
+}
+
+export async function previewServiceStop(url: string): Promise<PreviewServiceStatus> {
+  return invoke("preview_service_stop", { url });
 }
 
 /** 클립보드 PNG 바이트를 임시파일로 저장하고 경로 반환 */
