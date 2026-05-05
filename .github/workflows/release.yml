@@ -56,6 +56,13 @@ jobs:
             아래 자동 생성된 changelog 또는 직접 수정해주세요.
 
             <!-- changelog 자동 생성 영역 -->
+
+            ## Code signing policy
+            Windows release signing is prepared for SignPath Foundation open-source code signing.
+
+            Free code signing provided by SignPath.io, certificate by SignPath Foundation.
+
+            Full policy: https://github.com/BYKAYLE/atelier/blob/main/docs/code-signing-policy.md
           releaseDraft: false
           prerelease: false
           uploadUpdaterJson: true
