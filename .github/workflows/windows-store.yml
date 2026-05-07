@@ -15,6 +15,10 @@ on:
         description: "Partner Center publisher display name"
         required: false
         default: "BYKAYLE"
+      app_display_name:
+        description: "App display name shown in Windows"
+        required: false
+        default: "Atelier Agent"
       package_version:
         description: "MSIX four-part version. Empty uses package.json version + .0"
         required: false
@@ -62,6 +66,7 @@ jobs:
           ATELIER_STORE_PACKAGE_NAME: ${{ inputs.package_name }}
           ATELIER_STORE_PUBLISHER_NAME: ${{ inputs.publisher_name }}
           ATELIER_STORE_PUBLISHER_DISPLAY_NAME: ${{ inputs.publisher_display_name }}
+          ATELIER_STORE_APP_DISPLAY_NAME: ${{ inputs.app_display_name }}
           ATELIER_STORE_PACKAGE_VERSION: ${{ inputs.package_version }}
         run: npm run store:msix
 

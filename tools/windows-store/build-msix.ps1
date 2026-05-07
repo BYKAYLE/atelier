@@ -2,6 +2,7 @@ param(
   [string]$PackageName = $env:ATELIER_STORE_PACKAGE_NAME,
   [string]$PublisherName = $env:ATELIER_STORE_PUBLISHER_NAME,
   [string]$PublisherDisplayName = $env:ATELIER_STORE_PUBLISHER_DISPLAY_NAME,
+  [string]$AppDisplayName = $env:ATELIER_STORE_APP_DISPLAY_NAME,
   [string]$PackageVersion = $env:ATELIER_STORE_PACKAGE_VERSION,
   [string]$Description = $env:ATELIER_STORE_DESCRIPTION,
   [switch]$SkipTauriBuild
@@ -47,6 +48,10 @@ if ([string]::IsNullOrWhiteSpace($PublisherName)) {
 
 if ([string]::IsNullOrWhiteSpace($PublisherDisplayName)) {
   $PublisherDisplayName = if ($PublisherName.StartsWith("CN=")) { $PublisherName.Substring(3) } else { $PublisherName }
+}
+
+if ([string]::IsNullOrWhiteSpace($AppDisplayName)) {
+  $AppDisplayName = "Atelier Agent"
 }
 
 if ([string]::IsNullOrWhiteSpace($PackageVersion)) {
@@ -110,11 +115,18 @@ finally {
 [xml]$manifest = Get-Content -Raw -LiteralPath $manifestPath
 $ns = New-Object System.Xml.XmlNamespaceManager($manifest.NameTable)
 $ns.AddNamespace("appx", "http://schemas.microsoft.com/appx/manifest/foundation/windows10")
+$ns.AddNamespace("uap", "http://schemas.microsoft.com/appx/manifest/uap/windows10")
 $properties = $manifest.SelectSingleNode("/appx:Package/appx:Properties", $ns)
 if (-not $properties) {
   throw "Generated manifest is missing the Package/Properties node."
 }
+$properties.DisplayName = $AppDisplayName
 $properties.PublisherDisplayName = $PublisherDisplayName
+$visualElements = $manifest.SelectSingleNode("/appx:Package/appx:Applications/appx:Application/uap:VisualElements", $ns)
+if (-not $visualElements) {
+  throw "Generated manifest is missing the Application/VisualElements node."
+}
+$visualElements.SetAttribute("DisplayName", $AppDisplayName)
 $manifest.Save($manifestPath)
 
 Invoke-Checked {
@@ -135,5 +147,6 @@ Write-Host ""
 Write-Host "Package identity used:"
 Write-Host "  Package name: $PackageName"
 Write-Host "  Publisher:    $PublisherName"
-Write-Host "  Display name: $PublisherDisplayName"
+Write-Host "  App name:     $AppDisplayName"
+Write-Host "  Publisher display name: $PublisherDisplayName"
 Write-Host "  Version:      $PackageVersion"
