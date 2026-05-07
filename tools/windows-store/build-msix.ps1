@@ -1,6 +1,7 @@
 param(
   [string]$PackageName = $env:ATELIER_STORE_PACKAGE_NAME,
   [string]$PublisherName = $env:ATELIER_STORE_PUBLISHER_NAME,
+  [string]$PublisherDisplayName = $env:ATELIER_STORE_PUBLISHER_DISPLAY_NAME,
   [string]$PackageVersion = $env:ATELIER_STORE_PACKAGE_VERSION,
   [string]$Description = $env:ATELIER_STORE_DESCRIPTION,
   [switch]$SkipTauriBuild
@@ -42,6 +43,10 @@ if ([string]::IsNullOrWhiteSpace($PackageName)) {
 if ([string]::IsNullOrWhiteSpace($PublisherName)) {
   $PublisherName = "CN=BYKAYLE"
   Write-Warning "Using development publisher '$PublisherName'. For final Store upload, set ATELIER_STORE_PUBLISHER_NAME to the Publisher value from Partner Center."
+}
+
+if ([string]::IsNullOrWhiteSpace($PublisherDisplayName)) {
+  $PublisherDisplayName = if ($PublisherName.StartsWith("CN=")) { $PublisherName.Substring(3) } else { $PublisherName }
 }
 
 if ([string]::IsNullOrWhiteSpace($PackageVersion)) {
@@ -102,6 +107,16 @@ finally {
   Pop-Location
 }
 
+[xml]$manifest = Get-Content -Raw -LiteralPath $manifestPath
+$ns = New-Object System.Xml.XmlNamespaceManager($manifest.NameTable)
+$ns.AddNamespace("appx", "http://schemas.microsoft.com/appx/manifest/foundation/windows10")
+$properties = $manifest.SelectSingleNode("/appx:Package/appx:Properties", $ns)
+if (-not $properties) {
+  throw "Generated manifest is missing the Package/Properties node."
+}
+$properties.PublisherDisplayName = $PublisherDisplayName
+$manifest.Save($manifestPath)
+
 Invoke-Checked {
   winapp cert generate --manifest $manifestPath --output $devCert --if-exists Overwrite
 } "winapp cert generate"
@@ -120,4 +135,5 @@ Write-Host ""
 Write-Host "Package identity used:"
 Write-Host "  Package name: $PackageName"
 Write-Host "  Publisher:    $PublisherName"
+Write-Host "  Display name: $PublisherDisplayName"
 Write-Host "  Version:      $PackageVersion"
