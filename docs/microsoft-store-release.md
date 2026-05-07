@@ -10,10 +10,15 @@ is optional and depends on SignPath approval.
 
 ## Current Store Build Paths
 
-Two Windows artifacts are prepared by `.github/workflows/windows-store.yml`:
+The primary Windows artifact is prepared by
+`.github/workflows/windows-store.yml`:
 
 - `atelier-windows-store-msix`: primary Store package candidate produced with
   Microsoft's `winapp` CLI.
+
+The workflow can also build this optional fallback artifact when
+`build_msi_candidate` is enabled:
+
 - `atelier-windows-store-msi-candidate`: fallback Win32 MSI candidate produced
   by Tauri with the WebView2 offline installer embedded.
 
@@ -42,8 +47,10 @@ Run:
 1. GitHub Actions -> `Windows Store Package`.
 2. Select `Run workflow`.
 3. Fill the Partner Center identity values.
-4. Download the generated `atelier-windows-store-msix` artifact.
-5. Upload the `.msix` package in Partner Center for certification.
+4. Leave `build_msi_candidate` off unless Microsoft explicitly asks for a
+   Win32 MSI package.
+5. Download the generated `atelier-windows-store-msix` artifact.
+6. Upload the `.msix` package in Partner Center for certification.
 
 The workflow installs `@microsoft/winappcli`, builds the Tauri release
 executable, generates an MSIX manifest, creates a development certificate for

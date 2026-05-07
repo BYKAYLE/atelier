@@ -15,6 +15,11 @@ on:
         description: "MSIX four-part version. Empty uses package.json version + .0"
         required: false
         default: ""
+      build_msi_candidate:
+        description: "Also build the slower offline-WebView2 MSI candidate"
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-store-packages:
@@ -45,17 +50,13 @@ jobs:
       - name: Install winapp CLI
         run: npm install -g @microsoft/winappcli@0.3.1
 
-      - name: Build Tauri Store MSI candidate
-        shell: pwsh
-        run: npm run tauri:store:msi
-
       - name: Build Microsoft Store MSIX package
         shell: pwsh
         env:
           ATELIER_STORE_PACKAGE_NAME: ${{ inputs.package_name }}
           ATELIER_STORE_PUBLISHER_NAME: ${{ inputs.publisher_name }}
           ATELIER_STORE_PACKAGE_VERSION: ${{ inputs.package_version }}
-        run: npm run store:msix -- -SkipTauriBuild
+        run: npm run store:msix
 
       - name: Upload Store MSIX package
         uses: actions/upload-artifact@v4
@@ -64,7 +65,13 @@ jobs:
           path: output/windows-store/*.msix
           if-no-files-found: error
 
+      - name: Build Tauri Store MSI candidate
+        if: ${{ inputs.build_msi_candidate }}
+        shell: pwsh
+        run: npm run tauri:store:msi
+
       - name: Upload Store MSI candidate
+        if: ${{ inputs.build_msi_candidate }}
         uses: actions/upload-artifact@v4
         with:
           name: atelier-windows-store-msi-candidate
