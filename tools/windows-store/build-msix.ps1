@@ -13,6 +13,18 @@ if (-not $isWindowsHost) {
   throw "Microsoft Store MSIX packaging must run on Windows."
 }
 
+function Invoke-Checked {
+  param(
+    [scriptblock]$Command,
+    [string]$Name
+  )
+
+  & $Command
+  if ($LASTEXITCODE -ne 0) {
+    throw "$Name failed with exit code $LASTEXITCODE"
+  }
+}
+
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 Set-Location $repoRoot
 
@@ -58,6 +70,7 @@ $storeRoot = Join-Path $repoRoot "output\windows-store"
 $contentDir = Join-Path $storeRoot "msix-content"
 $outputMsix = Join-Path $storeRoot ("Atelier_{0}_x64.msix" -f $PackageVersion)
 $devCert = Join-Path $storeRoot "devcert.pfx"
+$manifestPath = Join-Path $contentDir "Package.appxmanifest"
 
 if (Test-Path -LiteralPath $contentDir) {
   Remove-Item -LiteralPath $contentDir -Recurse -Force
@@ -72,17 +85,34 @@ Copy-Item -LiteralPath $sourceExe -Destination (Join-Path $contentDir "Atelier.e
 
 $iconPath = Join-Path $repoRoot "src-tauri\icons\icon.png"
 
-winapp manifest generate $contentDir `
-  --package-name $PackageName `
-  --publisher-name $PublisherName `
-  --version $PackageVersion `
-  --description $Description `
-  --executable "Atelier.exe" `
-  --logo-path $iconPath `
-  --if-exists overwrite
+Push-Location $contentDir
+try {
+  Invoke-Checked {
+    winapp manifest generate . `
+      --package-name $PackageName `
+      --publisher-name $PublisherName `
+      --version $PackageVersion `
+      --description $Description `
+      --executable "Atelier.exe" `
+      --logo-path $iconPath `
+      --if-exists Overwrite
+  } "winapp manifest generate"
+}
+finally {
+  Pop-Location
+}
 
-winapp cert generate --publisher $PublisherName --output $devCert --if-exists overwrite
-winapp package $contentDir --output $outputMsix --cert $devCert --executable "Atelier.exe"
+Invoke-Checked {
+  winapp cert generate --manifest $manifestPath --output $devCert --if-exists Overwrite
+} "winapp cert generate"
+
+Invoke-Checked {
+  winapp package $contentDir `
+    --manifest $manifestPath `
+    --output $outputMsix `
+    --cert $devCert `
+    --executable "Atelier.exe"
+} "winapp package"
 
 Write-Host "Prepared Microsoft Store MSIX package:"
 Write-Host $outputMsix
