@@ -114,9 +114,11 @@ atelier/
 
 ## Code signing policy
 
-Windows release signing is prepared for SignPath Foundation open-source code
-signing.
+Windows distribution is prepared for Microsoft Store MSIX packaging first, with
+SignPath kept as an optional direct-installer signing path.
 
+- Microsoft Store release: [docs/microsoft-store-release.md](docs/microsoft-store-release.md)
+- Privacy policy: [docs/privacy-policy.md](docs/privacy-policy.md)
 - Code signing policy: [docs/code-signing-policy.md](docs/code-signing-policy.md)
 - Windows signing workflow notes: [docs/windows-code-signing.md](docs/windows-code-signing.md)
 

@@ -1,0 +1,72 @@
+name: Windows Store Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_name:
+        description: "Partner Center package identity name"
+        required: false
+        default: "Atelier"
+      publisher_name:
+        description: "Partner Center publisher, for example CN=..."
+        required: false
+        default: "CN=BYKAYLE"
+      package_version:
+        description: "MSIX four-part version. Empty uses package.json version + .0"
+        required: false
+        default: ""
+
+jobs:
+  build-store-packages:
+    name: Build Windows Store packages
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install npm deps
+        run: npm install --legacy-peer-deps
+
+      - name: Install winapp CLI
+        run: npm install -g @microsoft/winappcli@0.3.1
+
+      - name: Build Tauri Store MSI candidate
+        shell: pwsh
+        run: npm run tauri:store:msi
+
+      - name: Build Microsoft Store MSIX package
+        shell: pwsh
+        env:
+          ATELIER_STORE_PACKAGE_NAME: ${{ inputs.package_name }}
+          ATELIER_STORE_PUBLISHER_NAME: ${{ inputs.publisher_name }}
+          ATELIER_STORE_PACKAGE_VERSION: ${{ inputs.package_version }}
+        run: npm run store:msix -- -SkipTauriBuild
+
+      - name: Upload Store MSIX package
+        uses: actions/upload-artifact@v4
+        with:
+          name: atelier-windows-store-msix
+          path: output/windows-store/*.msix
+          if-no-files-found: error
+
+      - name: Upload Store MSI candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: atelier-windows-store-msi-candidate
+          path: src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: error

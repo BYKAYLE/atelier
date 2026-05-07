@@ -30,6 +30,7 @@ src-tauri/WixTools/
 Thumbs.db
 
 # Probe / QA artifacts (실행 결과물)
+output/
 probe-runs/
 probe-reports/
 

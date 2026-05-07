@@ -36,6 +36,7 @@
     "active": true,
     "createUpdaterArtifacts": true,
     "targets": ["app", "dmg", "msi", "nsis"],
+    "publisher": "BYKAYLE",
     "resources": [
       "resources/design-engine/**/*"
     ],

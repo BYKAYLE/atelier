@@ -1,12 +1,16 @@
 # Windows Code Signing
 
-Atelier's Windows release path is prepared for SignPath Foundation open-source
-code signing. The app is built on GitHub-hosted Windows runners, uploaded as a
-GitHub Actions artifact, submitted to SignPath, then released only after the
-signed installers are returned.
+Atelier keeps a SignPath Foundation workflow for direct GitHub installers, but
+the primary Windows trust path is now Microsoft Store distribution. See
+`docs/microsoft-store-release.md` for the Store MSIX workflow.
 
-This keeps the SignPath origin-verification chain intact and avoids the Azure
-subscription requirement.
+The SignPath path builds on GitHub-hosted Windows runners, uploads the unsigned
+installer as a GitHub Actions artifact, submits it to SignPath, then releases
+only after the signed installers are returned.
+
+This keeps the SignPath origin-verification chain intact if the project is
+approved. New projects can be declined for insufficient public reputation, so
+Microsoft Store/MSIX is the preferred route for normal Windows users.
 
 ## SignPath Foundation Application
 
