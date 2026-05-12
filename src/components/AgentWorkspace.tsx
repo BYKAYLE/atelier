@@ -45,6 +45,7 @@ type CodexEffort = "low" | "medium" | "high" | "xhigh";
 type CodexSpeed = "default" | "fast";
 type CodexMenuPanel = "root" | "model" | "speed";
 type HermesInferenceProvider = "anthropic" | "openai-codex" | "openrouter";
+type AgentOrchestrationMode = "direct" | "stella" | "ouroboros" | "evidence";
 
 interface ChatMessage {
   id: string;
@@ -76,6 +77,11 @@ type PendingAgentStream = {
   timer?: number;
 };
 
+type SmoothRevealState = {
+  carry: number;
+  pauseUntil: number;
+};
+
 interface AgentSession {
   id: string;
   title: string;
@@ -86,6 +92,7 @@ interface AgentSession {
   profileDot?: string;
   model: string;
   hermesProvider?: HermesInferenceProvider;
+  orchestrationMode?: AgentOrchestrationMode;
   codexEffort?: CodexEffort;
   codexSpeed?: CodexSpeed;
   permissionMode?: AgentPermissionMode;
@@ -119,6 +126,7 @@ const PREVIEW_SERVICE_COMMAND_KEY = "atelier.agent.preview.service.command.v1";
 const TASK_LIST_VISIBLE_KEY = "atelier.agent.tasklist.visible.v1";
 const DEFAULT_PROVIDER: AgentProvider = "claude";
 const DEFAULT_HERMES_PROVIDER: HermesInferenceProvider = "openai-codex";
+const DEFAULT_ORCHESTRATION_MODE: AgentOrchestrationMode = "direct";
 const DEFAULT_CODEX_EFFORT: CodexEffort = "xhigh";
 const DEFAULT_CODEX_SPEED: CodexSpeed = "default";
 const DEFAULT_PERMISSION_MODE: AgentPermissionMode = "full";
@@ -271,11 +279,51 @@ const PERMISSION_MODES: Array<{
   },
 ];
 
+const ORCHESTRATION_MODES: Array<{
+  value: AgentOrchestrationMode;
+  ko: string;
+  en: string;
+  detailKo: string;
+  detailEn: string;
+}> = [
+  {
+    value: "direct",
+    ko: "직접",
+    en: "Direct",
+    detailKo: "선택한 에이전트에게 그대로 전달",
+    detailEn: "Send straight to the selected agent",
+  },
+  {
+    value: "stella",
+    ko: "스텔라",
+    en: "Stella",
+    detailKo: "대표님 클론 지휘 모드",
+    detailEn: "Owner-clone command mode",
+  },
+  {
+    value: "ouroboros",
+    ko: "Seed",
+    en: "Seed",
+    detailKo: "우로보로스 Seed 기준으로 업무 정리",
+    detailEn: "Shape work through an Ouroboros Seed",
+  },
+  {
+    value: "evidence",
+    ko: "근거",
+    en: "Evidence",
+    detailKo: "RLM/TraceGuard식 근거 검증",
+    detailEn: "RLM/TraceGuard-style evidence check",
+  },
+];
+
 const isProvider = (value: unknown): value is AgentProvider =>
   value === "claude" || value === "hermes" || value === "codex";
 
 const isHermesProvider = (value: unknown): value is HermesInferenceProvider =>
   value === "anthropic" || value === "openai-codex" || value === "openrouter";
+
+const isOrchestrationMode = (value: unknown): value is AgentOrchestrationMode =>
+  value === "direct" || value === "stella" || value === "ouroboros" || value === "evidence";
 
 const isCodexEffort = (value: unknown): value is CodexEffort =>
   value === "low" || value === "medium" || value === "high" || value === "xhigh";
@@ -368,6 +416,19 @@ function normalizeHermesProvider(value?: unknown): HermesInferenceProvider {
 
 function normalizePermissionMode(value?: unknown): AgentPermissionMode {
   return isPermissionMode(value) ? value : DEFAULT_PERMISSION_MODE;
+}
+
+function defaultOrchestrationMode(provider?: AgentProvider | null): AgentOrchestrationMode {
+  return provider === "hermes" ? "stella" : DEFAULT_ORCHESTRATION_MODE;
+}
+
+function normalizeOrchestrationMode(value?: unknown, provider?: AgentProvider | null): AgentOrchestrationMode {
+  return isOrchestrationMode(value) ? value : defaultOrchestrationMode(provider);
+}
+
+function labelForOrchestrationMode(value: AgentOrchestrationMode, language: Tweaks["language"]) {
+  const option = ORCHESTRATION_MODES.find((item) => item.value === value) || ORCHESTRATION_MODES[0];
+  return language === "en" ? option.en : option.ko;
 }
 
 function labelForCodexSpeed(value: CodexSpeed, language: Tweaks["language"]) {
@@ -467,6 +528,7 @@ function loadSessions(): AgentSession[] {
             ? normalizeHermesModel(hermesProvider || DEFAULT_HERMES_PROVIDER, session.model || meta.defaultModel)
             : normalizeModel(provider, session.model || meta.defaultModel),
           hermesProvider,
+          orchestrationMode: normalizeOrchestrationMode(session.orchestrationMode, provider),
           codexEffort: provider === "codex" ? normalizeCodexEffort(session.codexEffort) : undefined,
           codexSpeed: provider === "codex" ? normalizeCodexSpeed(session.codexSpeed) : undefined,
           permissionMode: normalizePermissionMode(session.permissionMode),
@@ -665,15 +727,175 @@ function formatAgentPrompt(text: string, language: "ko" | "en", previewContext?:
   return `${text}${context}${instruction}`;
 }
 
-function revealStepSize(remaining: number, elapsedMs: number) {
-  const frameScale = clampNumber(elapsedMs / SMOOTH_FRAME_MS, 0.75, 3);
-  const charsPerFrame =
-    remaining > 7000 ? 72
-      : remaining > 2600 ? 38
-        : remaining > 900 ? 20
-          : remaining > 280 ? 10
-            : 4;
-  return Math.max(1, Math.ceil(charsPerFrame * frameScale));
+function formatOrchestrationInstruction(
+  mode: AgentOrchestrationMode,
+  language: "ko" | "en",
+  provider: AgentProvider,
+  cwd?: string | null,
+) {
+  if (mode === "direct") return "";
+  const providerLabel = providerMeta(provider).label;
+  const workspaceLine = cwd?.trim()
+    ? language === "en"
+      ? `Workspace: ${cwd.trim()}`
+      : `작업공간: ${cwd.trim()}`
+    : "";
+
+  if (language === "en") {
+    const common = [
+      "Atelier orchestration mode:",
+      `- Runtime: ${providerLabel}. ${workspaceLine}`.trim(),
+      "- Do not expose raw routing notes, terminal logs, or JSON events in the final user-facing answer.",
+    ].filter(Boolean);
+
+    if (mode === "stella") {
+      return [
+        ...common,
+        "- Act as Stella: the representative's digital clone, not a passive product owner or advisory judge.",
+        "- When the representative cannot stay attached to the session, own the command flow: decide, assign work, execute where possible, verify, and report the outcome.",
+        "- Do not return routine decisions for approval. Make reasonable assumptions and continue until a concrete result or a hard blocker.",
+        "- Never delete databases or user data.",
+        "- If Hermes/Ouroboros tools are available, use them when they materially improve delegation, investigation, or evidence quality.",
+        "- Report in concise, respectful Korean unless the user explicitly asks otherwise.",
+      ].join("\n");
+    }
+
+    if (mode === "ouroboros") {
+      return [
+        ...common,
+        "- Route the request through an Ouroboros Seed discipline before execution.",
+        "- Create a compact Seed with intent, constraints, acceptance criteria, risks, and the most suitable executor.",
+        "- If Ouroboros MCP or local `ouroboros`/`ooo` commands are available, use them for seed/run/evaluate flow when useful.",
+        "- Execute directly when the request is clearly actionable; otherwise return the Seed plus exact next execution instructions.",
+        "- Never delete databases or user data.",
+      ].join("\n");
+    }
+
+    return [
+      ...common,
+      "- Use RLM-FORGE / TraceGuard-style evidence discipline.",
+      "- Separate observed evidence, inference, unsupported claims, and recommended action.",
+      "- Verify current or external facts with available tools where appropriate. Mark unknowns instead of guessing.",
+      "- Never delete databases or user data.",
+    ].join("\n");
+  }
+
+  const common = [
+    "Atelier 오케스트레이션 모드:",
+    `- 실행 런타임: ${providerLabel}. ${workspaceLine}`.trim(),
+    "- 최종 답변에는 내부 라우팅 메모, 터미널 원본 로그, JSON 이벤트를 그대로 노출하지 마세요.",
+  ].filter(Boolean);
+
+  if (mode === "stella") {
+    return [
+      ...common,
+      "- 당신은 스텔라입니다. 스텔라는 제품책임자나 단순 판단자가 아니라 대표님의 디지털 분신입니다.",
+      "- 대표님이 세션에 붙어있을 수 없을 때, 대표님처럼 판단하고 직접 지시하며 업무분장, 실행, 검증, 결과 보고까지 맡습니다.",
+      "- 일반적인 중간 확인을 대표님께 되돌리지 말고, 합리적으로 가정한 뒤 구체적인 결과가 나오거나 명확한 하드 블로커가 나올 때까지 진행하세요.",
+      "- DB 삭제나 사용자 데이터 삭제는 절대 하지 마세요.",
+      "- Hermes/Ouroboros 도구가 사용 가능하고 업무분장, 조사, 근거 품질에 도움이 되면 활용하세요.",
+      "- 답변은 대표님께 존댓말 한국어로, 결과 중심으로 간결하게 보고하세요.",
+    ].join("\n");
+  }
+
+  if (mode === "ouroboros") {
+    return [
+      ...common,
+      "- 요청을 우로보로스 Seed 기준으로 먼저 정리한 뒤 실행하세요.",
+      "- Seed에는 의도, 제약, 수용 기준, 위험, 적합한 실행자를 짧게 포함하세요.",
+      "- Ouroboros MCP 또는 로컬 `ouroboros`/`ooo` 명령이 있으면 필요할 때 seed/run/evaluate 흐름에 사용하세요.",
+      "- 바로 실행 가능한 요청은 실행까지 진행하고, 불명확한 요청은 Seed와 정확한 다음 실행 지시까지 남기세요.",
+      "- DB 삭제나 사용자 데이터 삭제는 절대 하지 마세요.",
+    ].join("\n");
+  }
+
+  return [
+    ...common,
+    "- RLM-FORGE / TraceGuard 방식의 근거 검증 규율로 처리하세요.",
+    "- 관찰 근거, 추론, 아직 확인되지 않은 주장, 권장 행동을 분리하세요.",
+    "- 최신 사실이나 외부 사실은 가능한 도구로 확인하고, 확인 못 한 것은 모른다고 표시하세요.",
+    "- DB 삭제나 사용자 데이터 삭제는 절대 하지 마세요.",
+  ].join("\n");
+}
+
+function formatOrchestratedPrompt(
+  text: string,
+  language: "ko" | "en",
+  previewContext: string,
+  mode: AgentOrchestrationMode,
+  provider: AgentProvider,
+  cwd?: string | null,
+) {
+  const base = formatAgentPrompt(text, language, previewContext);
+  const orchestration = formatOrchestrationInstruction(mode, language, provider, cwd);
+  if (!orchestration) return base;
+  const requestLabel = language === "en" ? "User request:" : "대표님 요청:";
+  return `${orchestration}\n\n---\n${requestLabel}\n${base}`;
+}
+
+function revealCharsPerSecond(remaining: number) {
+  if (remaining > 9000) return 150;
+  if (remaining > 4200) return 132;
+  if (remaining > 1600) return 112;
+  if (remaining > 520) return 104;
+  return 60;
+}
+
+function revealFrameCap(remaining: number) {
+  if (remaining > 520) return 2;
+  return 1;
+}
+
+function revealPauseMs(target: string, nextLength: number, remainingAfter: number) {
+  const ch = target[nextLength - 1];
+  if (!ch) return 0;
+  const longAnswerScale = remainingAfter > 4200 ? 0.45 : remainingAfter > 1200 ? 0.7 : 1;
+  if (ch === "\n") return Math.round((target[nextLength] === "\n" ? 140 : 70) * longAnswerScale);
+  if (/[.!?。！？]/.test(ch)) return Math.round(130 * longAnswerScale);
+  if (/[,;:，、]/.test(ch)) return Math.round(55 * longAnswerScale);
+  return 0;
+}
+
+function avoidHalfSurrogate(target: string, nextLength: number) {
+  if (nextLength <= 0 || nextLength >= target.length) return nextLength;
+  const prev = target.charCodeAt(nextLength - 1);
+  const next = target.charCodeAt(nextLength);
+  if (prev >= 0xd800 && prev <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
+    return nextLength + 1;
+  }
+  return nextLength;
+}
+
+function revealNextLength(
+  target: string,
+  currentLength: number,
+  elapsedMs: number,
+  now: number,
+  state: SmoothRevealState,
+) {
+  const remaining = target.length - currentLength;
+  if (remaining <= 0) return currentLength;
+  if (now < state.pauseUntil) return currentLength;
+
+  state.carry += (revealCharsPerSecond(remaining) * elapsedMs) / 1000;
+  let step = Math.floor(state.carry);
+  if (step < 1) return currentLength;
+
+  const cappedStep = Math.min(step, revealFrameCap(remaining), remaining);
+  state.carry -= cappedStep;
+  let nextLength = avoidHalfSurrogate(target, currentLength + cappedStep);
+
+  if (nextLength < target.length && /\s/.test(target[nextLength]) && cappedStep < revealFrameCap(remaining)) {
+    nextLength += 1;
+  }
+
+  const pause = revealPauseMs(target, nextLength, target.length - nextLength);
+  if (pause > 0) {
+    state.pauseUntil = now + pause;
+    state.carry = Math.min(state.carry, 0.25);
+  }
+
+  return nextLength;
 }
 
 const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
@@ -719,6 +941,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const pendingStreamRef = useRef<Record<string, PendingAgentStream>>({});
   const animatedAssistantIdsRef = useRef<Set<string>>(new Set());
   const smoothTargetsRef = useRef<Record<string, string>>({});
+  const smoothRevealStateRef = useRef<Record<string, SmoothRevealState>>({});
   const smoothFrameRef = useRef<number | null>(null);
   const smoothLastTickRef = useRef(0);
   const autoScrollRef = useRef(true);
@@ -768,6 +991,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         emptyEvents: "No stream events yet.",
         renameHint: "Double-click to rename",
         providerLabel: "Provider",
+        orchestrationLabel: "Mode",
         modelLabel: "Model",
         permissionLabel: "Permission",
         intelligence: "Intelligence",
@@ -831,6 +1055,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         emptyEvents: "아직 스트림 이벤트가 없습니다.",
         renameHint: "더블클릭해 이름 변경",
         providerLabel: "제공자",
+        orchestrationLabel: "모드",
         modelLabel: "모델",
         permissionLabel: "권한",
         intelligence: "인텔리전스",
@@ -876,6 +1101,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const activeModelLabel = labelForOption(activeModelOptions, activeModel);
   const activeCodexEffort = normalizeCodexEffort(active?.codexEffort);
   const activeCodexSpeed = normalizeCodexSpeed(active?.codexSpeed);
+  const activeOrchestrationMode = normalizeOrchestrationMode(active?.orchestrationMode, activeProvider);
   const activePermissionMode = normalizePermissionMode(active?.permissionMode);
   const activePermissionOption = PERMISSION_MODES.find((option) => option.value === activePermissionMode) || PERMISSION_MODES[0];
   const activePermissionLabel = labelForPermissionMode(activePermissionMode, tw.language);
@@ -957,14 +1183,21 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         if (current === target) continue;
         if (!target.startsWith(current)) {
           next[id] = target.slice(0, Math.min(current.length, target.length));
+          smoothRevealStateRef.current[id] = { carry: 0, pauseUntil: 0 };
           changed = true;
           hasPending = next[id].length < target.length;
           continue;
         }
         const remaining = target.length - current.length;
         if (remaining <= 0) continue;
-        const step = revealStepSize(remaining, elapsed);
-        next[id] = target.slice(0, current.length + step);
+        const revealState = smoothRevealStateRef.current[id] || { carry: 0, pauseUntil: 0 };
+        smoothRevealStateRef.current[id] = revealState;
+        const nextLength = revealNextLength(target, current.length, elapsed, now, revealState);
+        if (nextLength <= current.length) {
+          hasPending = true;
+          continue;
+        }
+        next[id] = target.slice(0, nextLength);
         changed = true;
         hasPending = true;
       }
@@ -1109,6 +1342,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       targets[message.id] = message.text;
     });
     smoothTargetsRef.current = targets;
+    for (const id of Object.keys(smoothRevealStateRef.current)) {
+      if (!(id in targets)) delete smoothRevealStateRef.current[id];
+    }
     setVisibleTextById((prev) => {
       let changed = false;
       const next = { ...prev };
@@ -1135,6 +1371,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       }
       pendingStreamRef.current = {};
       smoothTargetsRef.current = {};
+      smoothRevealStateRef.current = {};
     };
   }, []);
 
@@ -1258,6 +1495,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         ? normalizeHermesModel(hermesProvider || DEFAULT_HERMES_PROVIDER, profile ? modelFromProfile(profile, provider) : meta.defaultModel)
         : normalizeModel(provider, profile ? modelFromProfile(profile, provider) : meta.defaultModel),
       hermesProvider,
+      orchestrationMode: defaultOrchestrationMode(provider),
       codexEffort: provider === "codex" ? DEFAULT_CODEX_EFFORT : undefined,
       codexSpeed: provider === "codex" ? DEFAULT_CODEX_SPEED : undefined,
       permissionMode: DEFAULT_PERMISSION_MODE,
@@ -1497,6 +1735,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const updateActiveCodexSpeed = (speed: CodexSpeed) => {
     if (!active) return;
     patchSession(active.id, (session) => ({ ...session, codexSpeed: speed, updatedAt: Date.now() }));
+  };
+
+  const updateActiveOrchestrationMode = (orchestrationMode: AgentOrchestrationMode) => {
+    if (!active) return;
+    patchSession(active.id, (session) => ({ ...session, orchestrationMode, updatedAt: Date.now() }));
   };
 
   const updateActivePermissionMode = (permissionMode: AgentPermissionMode) => {
@@ -1837,6 +2080,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       return fresh;
     })();
     const meta = providerMeta(session.provider);
+    const orchestrationMode = normalizeOrchestrationMode(session.orchestrationMode, session.provider);
 
     const userId = nowId("user");
     const assistantId = nowId("assistant");
@@ -1866,10 +2110,13 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         const result = await agentSend({
           provider: session.provider,
           turnId,
-          prompt: formatAgentPrompt(
+          prompt: formatOrchestratedPrompt(
             text,
             tw.language,
             formatPreviewPromptContext(tw.language, previewUrl, previewCheck, previewDiagnostics, previewService),
+            orchestrationMode,
+            session.provider,
+            cwd || session.cwd,
           ),
           resumeSessionId: session.providerSessionId || null,
           cwd: cwd || null,
@@ -2072,7 +2319,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                     </div>
                   )}
                   <div className={cls("mt-0.5 text-[9.5px] font-mono truncate", dark ? "text-dsub" : "text-sub")}>
-                    {s.profileName || providerMeta(s.provider).label} · {s.providerSessionId ? "resume" : "new"} · {relTime(s.updatedAt)}
+                    {s.profileName || providerMeta(s.provider).label} · {labelForOrchestrationMode(normalizeOrchestrationMode(s.orchestrationMode, s.provider), tw.language)} · {s.providerSessionId ? "resume" : "new"} · {relTime(s.updatedAt)}
                   </div>
                 </div>
                 {isSessionRunning(s) && (
@@ -2518,6 +2765,32 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                     </select>
                   </>
                 )}
+                <span className={cls("text-[10px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
+                  {copy.orchestrationLabel}
+                </span>
+                <select
+                  value={activeOrchestrationMode}
+                  onChange={(e) => updateActiveOrchestrationMode(e.target.value as AgentOrchestrationMode)}
+                  disabled={!active || !!busyTurnId}
+                  className={cls(
+                    "h-8 max-w-[108px] rounded-[7px] border px-2 text-[11px] font-mono outline-none",
+                    dark
+                      ? "bg-dsurf border-dline text-dink disabled:text-dsub"
+                      : "bg-surface border-line text-ink disabled:text-sub",
+                  )}
+                  aria-label={copy.orchestrationLabel}
+                  title={copy.orchestrationLabel}
+                >
+                  {ORCHESTRATION_MODES.map((option) => (
+                    <option
+                      key={option.value}
+                      value={option.value}
+                      title={tw.language === "en" ? option.detailEn : option.detailKo}
+                    >
+                      {tw.language === "en" ? option.en : option.ko}
+                    </option>
+                  ))}
+                </select>
                 <div ref={permissionMenuRef} className="relative">
                   <button
                     type="button"
