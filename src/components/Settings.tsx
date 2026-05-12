@@ -10,6 +10,7 @@ import {
   WELCOME_COPY,
 } from "../lib/tokens";
 import { I } from "./Icons";
+import ConnectionsPanel from "./ConnectionsPanel";
 
 interface Props {
   tw: Tweaks;
@@ -25,6 +26,7 @@ const SETTINGS_COPY = {
       profiles: "프로필",
       shortcuts: "단축키",
       preview: "미리보기 패널",
+      connections: "연결",
       updates: "업데이트",
     },
   },
@@ -36,6 +38,7 @@ const SETTINGS_COPY = {
       profiles: "Profiles",
       shortcuts: "Shortcuts",
       preview: "Preview panel",
+      connections: "Connections",
       updates: "Updates",
     },
   },
@@ -52,6 +55,7 @@ const Settings: React.FC<Props> = ({ tw, setTw }) => {
     ["profiles", copy.nav.profiles, I.zap],
     ["shortcuts", copy.nav.shortcuts, I.keyboard],
     ["preview", copy.nav.preview, I.eye],
+    ["connections", copy.nav.connections, I.zap],
     ["updates", copy.nav.updates, I.gear],
   ];
 
@@ -106,6 +110,7 @@ const Settings: React.FC<Props> = ({ tw, setTw }) => {
           {section === "profiles" && <ProfilesSection tw={tw} setTw={setTw} />}
           {section === "shortcuts" && <ShortcutsSection dark={dark} language={tw.language} />}
           {section === "preview" && <PreviewSection dark={dark} language={tw.language} />}
+          {section === "connections" && <ConnectionsPanel tw={tw} />}
           {section === "updates" && <UpdatesSection dark={dark} language={tw.language} />}
         </div>
       </div>

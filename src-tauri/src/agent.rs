@@ -11,6 +11,16 @@ use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Runtime};
 
+use crate::credentials::{env_var_for, read_api_key};
+
+/// CLI subprocess 호출 직전, 사용자가 Settings → Connections 에 저장한 API 키를
+/// 해당 provider 의 환경변수로 주입한다. 키가 없으면 기존 환경(시스템 env, OAuth 캐시) 그대로 사용.
+fn inject_credential_env(cmd: &mut Command, provider: &str) {
+    if let (Some(var), Some(key)) = (env_var_for(provider), read_api_key(provider)) {
+        cmd.env(var, key);
+    }
+}
+
 #[derive(Serialize, Clone)]
 struct AgentStreamEvent {
     kind: String,
@@ -1299,6 +1309,7 @@ fn run_claude<R: Runtime>(
     let model = normalize_claude_model(model);
     let permission_mode = normalize_agent_permission_mode(permission_mode);
     let mut cmd = Command::new("claude");
+    inject_credential_env(&mut cmd, "claude");
     cmd.arg("-p")
         .arg("--verbose")
         .arg("--output-format")
@@ -1566,6 +1577,7 @@ fn run_codex<R: Runtime>(
 ) -> Result<AgentRunResult, String> {
     let permission_mode = normalize_agent_permission_mode(permission_mode);
     let mut cmd = Command::new("codex");
+    inject_credential_env(&mut cmd, "codex");
     cmd.arg("exec");
     if let Some(cwd) = cwd.filter(|s| !s.trim().is_empty()) {
         cmd.arg("--cd").arg(cwd);
@@ -1710,6 +1722,14 @@ fn run_hermes<R: Runtime>(
     let hermes_provider = normalize_hermes_provider(hermes_provider);
     let permission_mode = normalize_agent_permission_mode(permission_mode);
     let mut cmd = Command::new("hermes");
+    // Hermes 의 sub-provider 별로 그에 맞는 사용자 키를 주입.
+    let hermes_credential_provider = match hermes_provider.as_str() {
+        "anthropic" => "claude",
+        "openai-codex" => "codex",
+        "openrouter" => "openrouter",
+        _ => "openrouter",
+    };
+    inject_credential_env(&mut cmd, hermes_credential_provider);
     cmd.arg("chat")
         .arg("-Q")
         .arg("--max-turns")

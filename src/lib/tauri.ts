@@ -256,3 +256,42 @@ export async function openDesignProjectDir(projectId: string): Promise<string> {
 export async function exportDesignProjectZip(projectId: string): Promise<string> {
   return invoke("export_design_project_zip", { projectId });
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// 자격증명 (구독·API 키) — credentials.rs
+// 키 자체는 OS keychain에만 저장. 프론트는 상태(boolean + 마스킹 표시) 만 받음.
+
+export interface ProviderStatus {
+  provider: string;
+  cli_installed: boolean;
+  oauth_logged_in: boolean;
+  api_key_present: boolean;
+  api_key_masked: string;
+  supports_oauth: boolean;
+  supports_api: boolean;
+}
+
+export async function providerStatus(provider: string): Promise<ProviderStatus> {
+  return invoke("provider_status", { provider });
+}
+
+export async function providerSaveApiKey(provider: string, apiKey: string): Promise<void> {
+  return invoke("provider_save_api_key", { provider, apiKey });
+}
+
+export async function providerClearCredentials(provider: string): Promise<void> {
+  return invoke("provider_clear_credentials", { provider });
+}
+
+/**
+ * CLI 가 사용자 기본 브라우저로 OAuth(Google/Apple/GitHub 등 SNS) 진입.
+ * 즉시 반환 — 사용자가 브라우저에서 로그인 완료할 때까지 폴링으로 status 재확인.
+ */
+export async function providerLoginOauth(provider: string): Promise<void> {
+  return invoke("provider_login_oauth", { provider });
+}
+
+/** npm 글로벌로 claude-code / codex CLI 자동 설치. 백그라운드 실행, 즉시 반환. */
+export async function providerInstallCli(provider: string): Promise<void> {
+  return invoke("provider_install_cli", { provider });
+}

@@ -1,5 +1,6 @@
 mod agent;
 mod clipboard;
+mod credentials;
 mod pty;
 
 use serde::Serialize;
@@ -631,6 +632,11 @@ pub fn run() {
             agent::preview_service_start,
             agent::preview_service_status,
             agent::preview_service_stop,
+            credentials::provider_status,
+            credentials::provider_save_api_key,
+            credentials::provider_clear_credentials,
+            credentials::provider_login_oauth,
+            credentials::provider_install_cli,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

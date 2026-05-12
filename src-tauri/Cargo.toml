@@ -1,6 +1,6 @@
 [package]
 name = "atelier"
-version = "0.1.16"
+version = "0.1.17"
 description = "Atelier — 이미지 붙여넣기가 되는 GUI 터미널"
 authors = ["BYKAYLE <indra850@gmail.com>"]
 edition = "2021"
@@ -39,6 +39,7 @@ once_cell = "1"
 dashmap = "6"
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
