@@ -38,16 +38,15 @@ if (-not $winapp) {
 $packageJson = Get-Content -Raw -LiteralPath "package.json" | ConvertFrom-Json
 
 if ([string]::IsNullOrWhiteSpace($PackageName)) {
-  $PackageName = "Atelier"
+  $PackageName = "kansic.AtelierAgent"
 }
 
 if ([string]::IsNullOrWhiteSpace($PublisherName)) {
-  $PublisherName = "CN=BYKAYLE"
-  Write-Warning "Using development publisher '$PublisherName'. For final Store upload, set ATELIER_STORE_PUBLISHER_NAME to the Publisher value from Partner Center."
+  $PublisherName = "CN=E75CA449-69F2-4960-A78F-8A7AFCFAC54F"
 }
 
 if ([string]::IsNullOrWhiteSpace($PublisherDisplayName)) {
-  $PublisherDisplayName = if ($PublisherName.StartsWith("CN=")) { $PublisherName.Substring(3) } else { $PublisherName }
+  $PublisherDisplayName = "kansic"
 }
 
 if ([string]::IsNullOrWhiteSpace($AppDisplayName)) {

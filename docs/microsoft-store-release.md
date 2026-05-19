@@ -34,11 +34,14 @@ manual GitHub workflow inputs:
 
 - `package_name`: the package identity name reserved by Partner Center.
 - `publisher_name`: the publisher value, usually shaped like `CN=...`.
+- `publisher_display_name`: the publisher display name shown in Partner Center.
 - `package_version`: a four-part MSIX version such as `0.1.16.0`.
 
-If those values are not available yet, the workflow can still create a local
-development MSIX with `Atelier` and `CN=BYKAYLE`, but that package identity is
-not the final Store identity.
+Atelier Agent's current Partner Center identity values are:
+
+- `package_name`: `kansic.AtelierAgent`
+- `publisher_name`: `CN=E75CA449-69F2-4960-A78F-8A7AFCFAC54F`
+- `publisher_display_name`: `kansic`
 
 ## Build from GitHub
 
@@ -70,8 +73,9 @@ npm install -g @microsoft/winappcli@0.3.1
 Set the final Partner Center identity when available:
 
 ```powershell
-$env:ATELIER_STORE_PACKAGE_NAME = "Atelier"
-$env:ATELIER_STORE_PUBLISHER_NAME = "CN=YOUR_PARTNER_CENTER_PUBLISHER"
+$env:ATELIER_STORE_PACKAGE_NAME = "kansic.AtelierAgent"
+$env:ATELIER_STORE_PUBLISHER_NAME = "CN=E75CA449-69F2-4960-A78F-8A7AFCFAC54F"
+$env:ATELIER_STORE_PUBLISHER_DISPLAY_NAME = "kansic"
 $env:ATELIER_STORE_PACKAGE_VERSION = "0.1.16.0"
 npm run store:msix
 ```

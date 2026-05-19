@@ -6,15 +6,15 @@ on:
       package_name:
         description: "Partner Center package identity name"
         required: false
-        default: "Atelier"
+        default: "kansic.AtelierAgent"
       publisher_name:
         description: "Partner Center publisher, for example CN=..."
         required: false
-        default: "CN=BYKAYLE"
+        default: "CN=E75CA449-69F2-4960-A78F-8A7AFCFAC54F"
       publisher_display_name:
         description: "Partner Center publisher display name"
         required: false
-        default: "BYKAYLE"
+        default: "kansic"
       app_display_name:
         description: "App display name shown in Windows"
         required: false
