@@ -6,6 +6,31 @@ mod pty;
 use serde::Serialize;
 use tauri::Manager;
 
+fn reveal_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+
+    match tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
+        .title("Atelier")
+        .inner_size(1600.0, 900.0)
+        .min_inner_size(900.0, 600.0)
+        .resizable(true)
+        .decorations(true)
+        .build()
+    {
+        Ok(window) => {
+            let _ = window.center();
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+        Err(err) => eprintln!("reveal main window: {err}"),
+    }
+}
+
 /// 진단 파일들이 저장되는 비공개 앱 캐시 디렉토리. macOS는 ~/Library/Caches/com.atelier.app.
 /// /tmp 대신 사용자 전용 디렉토리로 옮겨 world-readable 노출을 차단한다.
 fn app_cache_dir() -> std::path::PathBuf {
@@ -591,12 +616,50 @@ async fn design_claude_call(
     Ok(stdout.trim().to_string())
 }
 
+/// macOS/Linux GUI 앱은 로그인 셸 PATH 를 상속받지 못해 /opt/homebrew/bin 같은
+/// 사용자 도구(npm, node, git, claude, codex …)를 못 찾는다. 표준 설치 위치를 PATH 앞에
+/// prepend 해 모든 subprocess 호출이 동작하도록 한다.
+fn bootstrap_path() {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mut extras: Vec<String> = vec![
+        "/opt/homebrew/bin".into(),
+        "/opt/homebrew/sbin".into(),
+        "/usr/local/bin".into(),
+        "/usr/local/sbin".into(),
+    ];
+    if !home.is_empty() {
+        // npm 글로벌 prefix 와 사용자 로컬 bin. ~/.npm-global/bin 은 npm config 가
+        // 표준 /usr/local 외부를 가리킬 때 codex/claude-code CLI 가 떨어지는 곳.
+        extras.push(format!("{home}/.npm-global/bin"));
+        extras.push(format!("{home}/.local/bin"));
+    }
+    let current = std::env::var("PATH").unwrap_or_default();
+    let mut prefix = String::new();
+    for p in &extras {
+        if !current.split(':').any(|s| s == p) {
+            if !prefix.is_empty() {
+                prefix.push(':');
+            }
+            prefix.push_str(p);
+        }
+    }
+    if !prefix.is_empty() {
+        let new_path = if current.is_empty() {
+            prefix
+        } else {
+            format!("{prefix}:{current}")
+        };
+        std::env::set_var("PATH", new_path);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     env_logger::try_init().ok();
+    bootstrap_path();
     pty::init_state();
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -626,6 +689,9 @@ pub fn run() {
             design_claude_call,
             agent::agent_claude_send,
             agent::agent_send,
+            agent::agent_cli_command,
+            agent::agent_cancel,
+            agent::agent_change_baseline,
             agent::agent_change_summary,
             agent::agent_undo_changes,
             agent::preview_health_check,
@@ -637,7 +703,23 @@ pub fn run() {
             credentials::provider_clear_credentials,
             credentials::provider_login_oauth,
             credentials::provider_install_cli,
+            credentials::hermes_check_update,
+            credentials::hermes_update,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| match event {
+        tauri::RunEvent::Ready => reveal_main_window(app_handle),
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen {
+            has_visible_windows,
+            ..
+        } => {
+            if !has_visible_windows {
+                reveal_main_window(app_handle);
+            }
+        }
+        _ => {}
+    });
 }

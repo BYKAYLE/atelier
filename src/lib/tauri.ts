@@ -82,12 +82,29 @@ export interface AgentChangedFile {
 export interface AgentChangeSummary {
   cwd: string;
   is_git: boolean;
+  scope?: "run" | "workspace" | string;
   files: AgentChangedFile[];
   additions: number;
   deletions: number;
   patch: string;
   undo_applied?: boolean;
   undo_error?: string | null;
+}
+
+export interface AgentChangeBaseline {
+  id: string;
+  cwd: string;
+  is_git: boolean;
+}
+
+export interface AgentCliCommandResult {
+  provider: AgentProvider;
+  args: string[];
+  stdout: string;
+  stderr: string;
+  code?: number | null;
+  success: boolean;
+  timed_out: boolean;
 }
 
 export interface PreviewCheckResult {
@@ -144,6 +161,10 @@ export async function agentSend(args: {
   return invoke("agent_send", args);
 }
 
+export async function agentCancel(turnId: string): Promise<boolean> {
+  return invoke("agent_cancel", { turnId });
+}
+
 export async function onAgentEvent(
   turnId: string,
   handler: (event: AgentStreamEvent) => void,
@@ -151,12 +172,28 @@ export async function onAgentEvent(
   return listen<AgentStreamEvent>(`agent://${turnId}/event`, (e) => handler(e.payload));
 }
 
-export async function agentChangeSummary(cwd?: string | null): Promise<AgentChangeSummary> {
-  return invoke("agent_change_summary", { cwd: cwd || null });
+export async function agentChangeBaseline(cwd?: string | null): Promise<AgentChangeBaseline> {
+  return invoke("agent_change_baseline", { cwd: cwd || null });
+}
+
+export async function agentChangeSummary(cwd?: string | null, baselineId?: string | null): Promise<AgentChangeSummary> {
+  return invoke("agent_change_summary", { cwd: cwd || null, baselineId: baselineId || null });
 }
 
 export async function agentUndoChanges(cwd: string, patch: string): Promise<void> {
   return invoke("agent_undo_changes", { cwd, patch });
+}
+
+export async function agentCliCommand(args: {
+  provider: AgentProvider;
+  args: string[];
+  cwd?: string | null;
+}): Promise<AgentCliCommandResult> {
+  return invoke("agent_cli_command", {
+    provider: args.provider,
+    args: args.args,
+    cwd: args.cwd || null,
+  });
 }
 
 export async function previewHealthCheck(url: string): Promise<PreviewCheckResult> {
@@ -182,7 +219,12 @@ export async function previewServiceStop(url: string): Promise<PreviewServiceSta
 
 /** 클립보드 PNG 바이트를 임시파일로 저장하고 경로 반환 */
 export async function clipboardSaveImage(pngBytes: Uint8Array): Promise<string> {
-  const b64 = btoa(String.fromCharCode(...pngBytes));
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < pngBytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...pngBytes.subarray(i, i + chunkSize));
+  }
+  const b64 = btoa(binary);
   return invoke("clipboard_save_image", { pngBase64: b64 });
 }
 
@@ -294,4 +336,22 @@ export async function providerLoginOauth(provider: string): Promise<void> {
 /** npm 글로벌로 claude-code / codex CLI 자동 설치. 백그라운드 실행, 즉시 반환. */
 export async function providerInstallCli(provider: string): Promise<void> {
   return invoke("provider_install_cli", { provider });
+}
+
+export interface HermesUpdateStatus {
+  installed: boolean;
+  current_version: string | null;
+  update_available: boolean;
+  commits_behind: number | null;
+  message: string | null;
+}
+
+/** Hermes CLI 의 GitHub 기반 업데이트 체크. `hermes --version` 출력의 "Update available" 라인을 파싱. */
+export async function hermesCheckUpdate(): Promise<HermesUpdateStatus> {
+  return invoke("hermes_check_update");
+}
+
+/** `hermes update` 백그라운드 실행. 즉시 반환. */
+export async function hermesUpdate(): Promise<void> {
+  return invoke("hermes_update");
 }

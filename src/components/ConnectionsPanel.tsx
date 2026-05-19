@@ -6,7 +6,10 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { cls, Tweaks } from "../lib/tokens";
 import {
+  HermesUpdateStatus,
   ProviderStatus,
+  hermesCheckUpdate,
+  hermesUpdate,
   providerClearCredentials,
   providerInstallCli,
   providerLoginOauth,
@@ -121,6 +124,7 @@ const COPY = {
     title: "연결",
     sub: "사용하실 모델의 구독 또는 API 키를 연결하세요. 키는 OS 보안 저장소(Keychain / Credential Manager)에만 보관됩니다.",
     statusOk: "연결됨",
+    statusCliReady: "CLI 설치됨",
     statusNoCli: "CLI 미설치",
     statusNoKey: "키 미입력",
     apiInputLabel: "API 키",
@@ -147,11 +151,21 @@ const COPY = {
     hermesNotInstalled: "Hermes binary가 설치되어 있지 않습니다.",
     hermesNeedCred: (label: string) =>
       `선택된 백엔드(${label})의 자격증명이 없습니다. 위 카드에서 먼저 연결하세요.`,
+    hermesUpdateLabel: "업데이트",
+    hermesUpdateChecking: "확인 중…",
+    hermesUpdateLatest: "최신 버전",
+    hermesUpdateAvailable: (n: number) => `업데이트 가능 · ${n} 커밋 뒤`,
+    hermesUpdateAvailableNoCount: "업데이트 가능",
+    hermesUpdating: "업데이트 중…",
+    hermesUpdateButton: "업데이트",
+    hermesRecheck: "다시 확인",
+    hermesVersionPrefix: "버전",
   },
   en: {
     title: "Connections",
     sub: "Connect a subscription or API key for the providers you want to use. Keys are stored only in the OS secure store (Keychain / Credential Manager).",
     statusOk: "Connected",
+    statusCliReady: "CLI installed",
     statusNoCli: "CLI not installed",
     statusNoKey: "No key",
     apiInputLabel: "API key",
@@ -178,6 +192,15 @@ const COPY = {
     hermesNotInstalled: "Hermes binary is not installed.",
     hermesNeedCred: (label: string) =>
       `No credential for the selected backend (${label}). Connect it in the card above first.`,
+    hermesUpdateLabel: "Update",
+    hermesUpdateChecking: "Checking…",
+    hermesUpdateLatest: "Up to date",
+    hermesUpdateAvailable: (n: number) => `Update available · ${n} commits behind`,
+    hermesUpdateAvailableNoCount: "Update available",
+    hermesUpdating: "Updating…",
+    hermesUpdateButton: "Update",
+    hermesRecheck: "Re-check",
+    hermesVersionPrefix: "Version",
   },
 } as const;
 
@@ -202,14 +225,17 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
 
   const refresh = useCallback(async (only?: ProviderId) => {
     const targets = only ? [only] : (["claude", "codex", "openrouter", "hermes"] as ProviderId[]);
-    for (const pid of targets) {
-      try {
-        const s = await providerStatus(pid);
-        setStatuses((prev) => ({ ...prev, [pid]: s }));
-      } catch {
-        setStatuses((prev) => ({ ...prev, [pid]: null }));
-      }
-    }
+    const results = await Promise.all(
+      targets.map(async (pid) => {
+        const status = await providerStatus(pid).catch(() => null);
+        return [pid, status] as const;
+      }),
+    );
+    setStatuses((prev) => {
+      const next = { ...prev };
+      for (const [pid, status] of results) next[pid] = status;
+      return next;
+    });
   }, []);
 
   useEffect(() => {
@@ -346,11 +372,15 @@ const ProviderCard: React.FC<CardProps> = ({
     ? copy.statusOk
     : supportsOauth && !cliInstalled
     ? copy.statusNoCli
+    : supportsOauth && cliInstalled
+    ? copy.statusCliReady
     : copy.statusNoKey;
-  const statusTone: "ok" | "warn" | "neutral" = connected
+  const statusTone: "ok" | "info" | "warn" | "neutral" = connected
     ? "ok"
     : supportsOauth && !cliInstalled
     ? "warn"
+    : supportsOauth && cliInstalled
+    ? "info"
     : "neutral";
 
   async function handleSave() {
@@ -431,8 +461,9 @@ const ProviderCard: React.FC<CardProps> = ({
                 onClick={() => void handleAutoInstall()}
                 disabled={installing}
                 className={cls(
-                  "text-[12px] h-8 px-3 rounded-md border",
-                  dark ? "border-dline text-dsub hover:text-dink" : "border-line text-sub hover:text-ink",
+                  "text-[12.5px] h-8 px-3 rounded-md border font-medium transition-colors",
+                  "bg-[var(--accent)]/10 text-[var(--accent)] border-[var(--accent)]/40 hover:bg-[var(--accent)]/20",
+                  "disabled:opacity-50 disabled:cursor-not-allowed",
                 )}
               >
                 {installing ? copy.installing : `+ ${copy.installAuto}`}
@@ -561,6 +592,58 @@ const HermesCard: React.FC<{
     localStorage.setItem(HERMES_PREF_KEY, v);
   }
 
+  const [updateStatus, setUpdateStatus] = useState<HermesUpdateStatus | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updating, setUpdating] = useState(false);
+
+  const refreshUpdate = useCallback(async () => {
+    setCheckingUpdate(true);
+    try {
+      const s = await hermesCheckUpdate();
+      setUpdateStatus(s);
+    } catch {
+      setUpdateStatus(null);
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (installed) void refreshUpdate();
+    else setUpdateStatus(null);
+  }, [installed, refreshUpdate]);
+
+  async function runUpdate() {
+    setUpdating(true);
+    const versionBefore = updateStatus?.current_version ?? null;
+    try {
+      await hermesUpdate();
+      // hermes update --yes 는 백그라운드(git pull + pip install + 노드 의존성)로
+      // 보통 30초~3분. 5초마다 폴링해서 (a) 버전이 바뀌거나 (b) update_available 가
+      // false 가 되면 완료로 간주. 5분이 지나도 변화 없으면 타임아웃.
+      const start = Date.now();
+      const timer = window.setInterval(async () => {
+        try {
+          const s = await hermesCheckUpdate();
+          setUpdateStatus(s);
+          const versionChanged = versionBefore && s.current_version && s.current_version !== versionBefore;
+          if (!s.update_available || versionChanged) {
+            window.clearInterval(timer);
+            setUpdating(false);
+          }
+        } catch {
+          // 일시적 실패는 무시 — 다음 tick 에서 재시도
+        }
+        if (Date.now() - start > 5 * 60 * 1000) {
+          window.clearInterval(timer);
+          setUpdating(false);
+        }
+      }, 5000);
+    } catch {
+      setUpdating(false);
+    }
+  }
+
   const selected = HERMES_BACKENDS.find((b) => b.value === backend) || HERMES_BACKENDS[0];
   const credStatus = statuses[selected.credentialProvider];
   const credConnected = !!credStatus && (credStatus.oauth_logged_in || credStatus.api_key_present);
@@ -591,6 +674,74 @@ const HermesCard: React.FC<{
       {!installed && (
         <div className={cls("text-[11.5px] mb-2", dark ? "text-dsub" : "text-sub")}>
           {copy.hermesNotInstalled}
+        </div>
+      )}
+
+      {installed && (
+        <div
+          className={cls(
+            "mt-3 rounded-md border px-3 py-2.5 flex items-center gap-2 flex-wrap",
+            updateStatus?.update_available
+              ? "border-[var(--accent)]/40 bg-[var(--accent)]/5"
+              : dark
+              ? "border-dline bg-dbg"
+              : "border-line bg-cream",
+          )}
+        >
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className={cls("text-[11.5px] uppercase tracking-wider font-semibold", dark ? "text-dsub" : "text-sub")}>
+                {copy.hermesUpdateLabel}
+              </span>
+              {checkingUpdate ? (
+                <span className={cls("text-[12px]", dark ? "text-dsub" : "text-sub")}>
+                  {copy.hermesUpdateChecking}
+                </span>
+              ) : updateStatus?.update_available ? (
+                <span className="text-[12px] font-medium" style={{ color: "#c2742b" }}>
+                  {typeof updateStatus.commits_behind === "number"
+                    ? copy.hermesUpdateAvailable(updateStatus.commits_behind)
+                    : copy.hermesUpdateAvailableNoCount}
+                </span>
+              ) : updateStatus ? (
+                <span className="text-[12px] font-medium" style={{ color: "#2f7d5b" }}>
+                  ✓ {copy.hermesUpdateLatest}
+                </span>
+              ) : null}
+            </div>
+            {updateStatus?.current_version && (
+              <div className={cls("text-[11px] gb-mono mt-0.5", dark ? "text-dsub" : "text-sub")}>
+                {copy.hermesVersionPrefix}: {updateStatus.current_version}
+              </div>
+            )}
+          </div>
+          <div className="shrink-0 flex items-center gap-1.5">
+            {updateStatus?.update_available && (
+              <button
+                onClick={() => void runUpdate()}
+                disabled={updating || checkingUpdate}
+                className={cls(
+                  "text-[12.5px] h-8 px-3 rounded-md border font-medium transition-colors",
+                  "bg-[var(--accent)]/10 text-[var(--accent)] border-[var(--accent)]/40 hover:bg-[var(--accent)]/20",
+                  "disabled:opacity-50 disabled:cursor-not-allowed",
+                )}
+              >
+                {updating ? copy.hermesUpdating : copy.hermesUpdateButton}
+              </button>
+            )}
+            <button
+              onClick={() => void refreshUpdate()}
+              disabled={checkingUpdate || updating}
+              className={cls(
+                "text-[12px] h-8 px-2.5 rounded-md border transition-colors disabled:opacity-50",
+                dark ? "border-dline text-dsub hover:text-dink" : "border-line text-sub hover:text-ink",
+              )}
+              title={copy.hermesRecheck}
+              aria-label={copy.hermesRecheck}
+            >
+              ↻
+            </button>
+          </div>
         </div>
       )}
 
@@ -692,12 +843,19 @@ const LoginModal: React.FC<{
   );
 };
 
-const StatusDot: React.FC<{ tone: "ok" | "warn" | "neutral"; label: string; dark: boolean }> = ({
+const StatusDot: React.FC<{ tone: "ok" | "info" | "warn" | "neutral"; label: string; dark: boolean }> = ({
   tone,
   label,
   dark,
 }) => {
-  const color = tone === "ok" ? "#2f7d5b" : tone === "warn" ? "#c2742b" : "#94a3b8";
+  const color =
+    tone === "ok"
+      ? "#2f7d5b"
+      : tone === "info"
+      ? "#3f6ea8"
+      : tone === "warn"
+      ? "#c2742b"
+      : "#94a3b8";
   return (
     <span
       className={cls(

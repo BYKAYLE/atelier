@@ -371,7 +371,7 @@ const AppearanceSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => v
   );
 };
 
-const DEFAULT_DOTS = ["#c96442", "#9aae63", "#4b7bd1", "#8b4a73", "#6b9a4a", "#b08a4a", "#3d8d87"];
+const DEFAULT_DOTS = ["#c96442", "#9aae63", "#4b7bd1", "#8a8218", "#6b9a4a", "#b08a4a", "#3d8d87"];
 
 const ProfilesSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => void }> = ({
   tw,
@@ -630,10 +630,64 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
   );
 };
 
+const ATELIER_GITHUB_REPO = "BYKAYLE/atelier";
+const ATELIER_GITHUB_API = `https://api.github.com/repos/${ATELIER_GITHUB_REPO}/releases/latest`;
+const ATELIER_GITHUB_RELEASES = `https://github.com/${ATELIER_GITHUB_REPO}/releases/latest`;
+
+type GithubReleaseInfo = {
+  version: string;
+  notes?: string;
+  date?: string;
+  url: string;
+};
+
+function normalizeVersion(value: string | undefined | null): string {
+  return (value ?? "").trim().replace(/^v/i, "").split("+")[0].split("-")[0];
+}
+
+function compareVersions(a: string, b: string): number {
+  const left = normalizeVersion(a).split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const right = normalizeVersion(b).split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const length = Math.max(left.length, right.length);
+  for (let i = 0; i < length; i += 1) {
+    const diff = (left[i] ?? 0) - (right[i] ?? 0);
+    if (diff !== 0) return diff > 0 ? 1 : -1;
+  }
+  return 0;
+}
+
+async function fetchLatestGithubRelease(): Promise<GithubReleaseInfo> {
+  const res = await fetch(ATELIER_GITHUB_API, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+  if (!res.ok) {
+    throw new Error(`GitHub release check failed (${res.status})`);
+  }
+  const json = await res.json() as {
+    tag_name?: string;
+    body?: string;
+    published_at?: string;
+    html_url?: string;
+  };
+  const version = normalizeVersion(json.tag_name);
+  if (!version) {
+    throw new Error("GitHub latest release has no version tag");
+  }
+  return {
+    version,
+    notes: json.body,
+    date: json.published_at,
+    url: json.html_url || ATELIER_GITHUB_RELEASES,
+  };
+}
+
 /**
- * UpdatesSection — Tauri auto-update plugin 기반.
- * GitHub Release latest.json을 폴링해 새 버전이 있으면 changelog와 함께 표시.
- * 사용자 동의 시 다운로드 → ED25519 서명 검증 → 자동 재시작.
+ * UpdatesSection — GitHub Releases 기준.
+ * 업데이트 유무는 GitHub 최신 릴리스 태그로 판단하고,
+ * 설치는 Tauri updater의 ED25519 서명 검증을 통과한 패키지만 진행한다.
  */
 const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
   dark,
@@ -642,19 +696,21 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
   const copy = language === "en"
     ? {
         title: "Updates",
-        sub: "Check for and install new Atelier versions. Updates are verified with an ED25519 signature.",
+        sub: "Checks GitHub Releases for new Atelier versions. Install packages are verified with an ED25519 signature.",
         currentVersion: "Current version",
         currentVersionHint: "Version embedded in the app bundle metadata (tauri.conf.json).",
         check: "Check for updates",
-        checkHint: "Polls latest.json from the public Atelier release channel. Internet access is required.",
+        checkHint: "Uses the latest GitHub Release tag as the update source, independent of Microsoft Store review timing.",
         checking: "Checking...",
         checkNow: "Check now",
-        checkingStatus: "Checking for the latest version...",
-        availableStatus: (version: string) => `v${version} available`,
+        checkingStatus: "Checking GitHub Releases...",
+        availableStatus: (version: string) => `v${version} available from GitHub`,
         upToDate: "You are up to date.",
         checkFailed: (message: string) => `Check failed: ${message}`,
         installingStatus: "Downloading and installing...",
         noUpdateOnRetry: "A fresh check found no new version.",
+        signedPackageMissing: (version: string) =>
+          `GitHub has v${version}, but its signed updater package is not ready yet. Open the release page to download it manually.`,
         downloadProgress: (pct: number, downloaded: number, total: number) =>
           `Download ${pct}% (${downloaded.toFixed(1)}MB / ${total.toFixed(1)}MB)`,
         installed: "Install complete. Restarting...",
@@ -662,22 +718,26 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
         availableTitle: (version: string) => `v${version} available`,
         installing: "Installing...",
         install: "Install + restart",
+        openRelease: "Open GitHub release",
+        source: "Source: GitHub Releases",
       }
     : {
         title: "업데이트",
-        sub: "Atelier 새 버전을 확인하고 설치합니다. 모든 업데이트는 ED25519 서명으로 검증됩니다.",
+        sub: "GitHub Releases 기준으로 Atelier 새 버전을 확인합니다. 설치 패키지는 ED25519 서명으로 검증됩니다.",
         currentVersion: "현재 버전",
         currentVersionHint: "앱 번들 메타데이터에 박힌 버전 (tauri.conf.json).",
         check: "업데이트 확인",
-        checkHint: "공개 Atelier 릴리스 채널의 latest.json을 폴링합니다. 인터넷 연결이 필요합니다.",
+        checkHint: "Microsoft Store 심사 대기와 무관하게 GitHub 최신 릴리스 태그를 기준으로 확인합니다.",
         checking: "확인 중…",
         checkNow: "지금 확인",
-        checkingStatus: "최신 버전 확인 중…",
-        availableStatus: (version: string) => `v${version} 사용 가능`,
+        checkingStatus: "GitHub 릴리스 확인 중…",
+        availableStatus: (version: string) => `GitHub에 v${version} 사용 가능`,
         upToDate: "최신 버전입니다.",
         checkFailed: (message: string) => `확인 실패: ${message}`,
         installingStatus: "다운로드·설치 중…",
         noUpdateOnRetry: "다시 확인하니 새 버전이 없습니다.",
+        signedPackageMissing: (version: string) =>
+          `GitHub에는 v${version} 릴리스가 있지만 서명된 updater 패키지가 아직 준비되지 않았습니다. 릴리스 페이지에서 직접 받을 수 있습니다.`,
         downloadProgress: (pct: number, downloaded: number, total: number) =>
           `다운로드 ${pct}% (${downloaded.toFixed(1)}MB / ${total.toFixed(1)}MB)`,
         installed: "설치 완료. 재시작 중…",
@@ -685,6 +745,8 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
         availableTitle: (version: string) => `v${version} 사용 가능`,
         installing: "설치 중…",
         install: "지금 설치 + 재시작",
+        openRelease: "GitHub 릴리스 열기",
+        source: "기준: GitHub Releases",
       };
   const [busy, setBusy] = React.useState(false);
   const [status, setStatus] = React.useState<string>("");
@@ -692,10 +754,12 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
     version: string;
     notes?: string;
     date?: string;
+    releaseUrl?: string;
   } | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [installing, setInstalling] = React.useState(false);
   const [currentVersion, setCurrentVersion] = React.useState<string>("...");
+  const [currentVersionRaw, setCurrentVersionRaw] = React.useState<string>("");
 
   React.useEffect(() => {
     let alive = true;
@@ -703,7 +767,10 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
       try {
         const { getVersion } = await import("@tauri-apps/api/app");
         const version = await getVersion();
-        if (alive) setCurrentVersion(`v${version}`);
+        if (alive) {
+          setCurrentVersion(`v${version}`);
+          setCurrentVersionRaw(version);
+        }
       } catch {
         if (alive) setCurrentVersion("dev");
       }
@@ -719,17 +786,37 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
     setStatus(copy.checkingStatus);
     setAvailable(null);
     try {
-      const { check } = await import("@tauri-apps/plugin-updater");
-      const update = await check();
-      if (update) {
-        setAvailable({ version: update.version, notes: update.body, date: update.date });
-        setStatus(copy.availableStatus(update.version));
+      const latest = await fetchLatestGithubRelease();
+      if (currentVersionRaw && compareVersions(latest.version, currentVersionRaw) > 0) {
+        setAvailable({
+          version: latest.version,
+          notes: latest.notes,
+          date: latest.date,
+          releaseUrl: latest.url,
+        });
+        setStatus(copy.availableStatus(latest.version));
       } else {
         setStatus(copy.upToDate);
       }
     } catch (e) {
-      setError(copy.checkFailed(String(e)));
-      setStatus("");
+      try {
+        const { check } = await import("@tauri-apps/plugin-updater");
+        const update = await check();
+        if (update) {
+          setAvailable({
+            version: update.version,
+            notes: update.body,
+            date: update.date,
+            releaseUrl: ATELIER_GITHUB_RELEASES,
+          });
+          setStatus(copy.availableStatus(update.version));
+        } else {
+          setStatus(copy.upToDate);
+        }
+      } catch {
+        setError(copy.checkFailed(String(e)));
+        setStatus("");
+      }
     } finally {
       setBusy(false);
     }
@@ -743,7 +830,7 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
       const { check } = await import("@tauri-apps/plugin-updater");
       const update = await check();
       if (!update) {
-        setError(copy.noUpdateOnRetry);
+        setError(available ? copy.signedPackageMissing(available.version) : copy.noUpdateOnRetry);
         return;
       }
       let downloaded = 0;
@@ -768,6 +855,16 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
       setStatus("");
     } finally {
       setInstalling(false);
+    }
+  }
+
+  async function openReleasePage() {
+    const url = available?.releaseUrl || ATELIER_GITHUB_RELEASES;
+    try {
+      const { open } = await import("@tauri-apps/plugin-shell");
+      await open(url);
+    } catch {
+      window.open(url, "_blank", "noopener,noreferrer");
     }
   }
 
@@ -834,7 +931,7 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
           </div>
           {available.date && (
             <div className={cls("text-[10px] mb-3", dark ? "text-dsub" : "text-sub")}>
-              {available.date}
+              {copy.source} · {available.date}
             </div>
           )}
           {available.notes && (
@@ -856,6 +953,16 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
             data-testid="settings-install-update"
           >
             {installing ? copy.installing : copy.install}
+          </button>
+          <button
+            type="button"
+            onClick={openReleasePage}
+            className={cls(
+              "ml-2 h-9 px-4 rounded-[6px] border text-[12px] font-medium whitespace-nowrap",
+              dark ? "border-dline text-dink hover:bg-[#2a2a28]" : "border-line text-ink hover:bg-muted",
+            )}
+          >
+            {copy.openRelease}
           </button>
         </div>
       )}

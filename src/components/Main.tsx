@@ -59,7 +59,7 @@ interface Tab {
   // 영속 로그 id — 재시작/복원 시 같은 값 유지해 PTY 출력을 같은 파일에 누적.
   logId: string;
   pending?: Uint8Array[];
-  state?: { ready: boolean };
+  state?: { ready: boolean; pendingBytes?: number };
   // 탭 닫을 때 호출할 리스너/타이머 해제 함수. initializeTabDom에서 할당.
   cleanup?: () => void;
   // 채팅방 느낌의 "마지막 활동 시각" — PTY data 수신 또는 사용자 입력마다 갱신.
@@ -169,6 +169,8 @@ function writeTerminalChunksCooperatively(
   return () => { cancelled = true; };
 }
 
+const MAX_HIDDEN_PENDING_BYTES = 512 * 1024;
+
 // Ring buffer — IME 진단 로그. pty-recv/pty-write-err는 노이즈라 차단.
 const IME_LOG_MAX = 200;
 function imeLogPush(entry: unknown) {
@@ -190,6 +192,7 @@ function diagOn() {
 
 const Main: React.FC<Props> = ({ tw, isActive = true }) => {
   const dark = tw.dark;
+  const isActiveRef = useRef(isActive);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [showPicker, setShowPicker] = useState(false);
@@ -224,6 +227,9 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
   useEffect(() => {
     try { localStorage.setItem(PREVIEW_VP_KEY, previewVP); } catch {}
   }, [previewVP]);
+  useEffect(() => {
+    isActiveRef.current = isActive;
+  }, [isActive]);
   // viewport 표준:
   //   mobile  390 × 844  — Chrome DevTools 표준 (iPhone 12 Pro / 13 / 14)
   //   tablet  834 × 1194 — iPad Pro 11"
@@ -541,7 +547,15 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
     const tauri = isTauri();
     const pending: Uint8Array[] = [];
     // listener closure가 참조할 가변 state.
-    const state = { ready: false };
+    const state = { ready: false, pendingBytes: 0 };
+    const pushPendingBytes = (bytes: Uint8Array) => {
+      pending.push(bytes);
+      state.pendingBytes += bytes.length;
+      while (state.pendingBytes > MAX_HIDDEN_PENDING_BYTES && pending.length > 1) {
+        const removed = pending.shift();
+        state.pendingBytes -= removed?.length || 0;
+      }
+    };
     // Vite dev에서도 xterm을 mount해서 IME 동작을 probe로 검증할 수 있게 허용.
     // PTY는 mock, 이벤트 흐름은 window.__imeLog에 기록 (dev 빌드에서만 활성, 프로덕션은 분기 제거됨).
     const devBridge = !tauri && import.meta.env.DEV;
@@ -669,7 +683,7 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
             const decoded = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
             snippetAccum.text = (snippetAccum.text + decoded).slice(-SNIP_LIMIT);
           } catch {}
-          if (now - lastActiveBump > 1000) {
+          if (isActiveRef.current && now - lastActiveBump > 1000) {
             lastActiveBump = now;
             const plain = stripAnsi(snippetAccum.text);
             const lines = plain.split("\n").filter((l) => l.trim()).slice(-3);
@@ -678,14 +692,14 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
               prev.map((t) => (t.id === uiId ? { ...t, lastActiveAt: now, lastSnippet: snippet } : t)),
             );
           }
-          if (state.ready) {
+          if (state.ready && isActiveRef.current) {
             try {
               term.write(bytes);
             } catch (err) {
               imeLogPush({ kind: "pty-write-err", msg: String(err), at: Date.now() });
             }
           } else {
-            pending.push(bytes);
+            pushPendingBytes(bytes);
           }
           try {
             const chunk = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
@@ -1125,6 +1139,21 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
     }
   }, [activeId, tabs, codeLayout, dark, isActive, fitVisibleTab]);
 
+  useEffect(() => {
+    if (!isActive) return;
+    for (const tab of tabs) {
+      if (!tab.state?.ready || !tab.pending?.length) continue;
+      const pendingChunks = tab.pending.splice(0);
+      tab.state.pendingBytes = 0;
+      writeTerminalChunksCooperatively(
+        tab.term,
+        pendingChunks,
+        imeLogPush,
+        () => {},
+      );
+    }
+  }, [isActive, tabs]);
+
   // 그리드 모드 — 멈춰 있는 터미널(idle: 마지막 PTY 출력 후 N초 무활동) 노란 outline.
   // PTY 활동마다 lastActiveAt가 1초 스로틀로 갱신되니, interval 1초로 비교만 하면 됨.
   // 선택된 탭(파란)이 우선 — idle보다 active 색이 위.
@@ -1200,10 +1229,11 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
             imeLogPush,
             flushPending,
           );
-        } else if (tab.state) {
-          tab.state.ready = true;
-          imeLogPush({ kind: "pending-flush-done", at: Date.now() });
-        }
+	        } else if (tab.state) {
+	          tab.state.ready = true;
+	          tab.state.pendingBytes = 0;
+	          imeLogPush({ kind: "pending-flush-done", at: Date.now() });
+	        }
       };
       flushPending();
       // 폰트 늦게 로딩돼 cols 오산 가능 → 추가 fit + claude에 SIGWINCH 효과를 위한 resize 통보.

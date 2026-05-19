@@ -3,7 +3,7 @@ export const ACCENTS: Record<string, { light: string; hover: string; dark: strin
   ink: { light: "#2d2d2d", hover: "#000000", dark: "#faf9f5" },
   olive: { light: "#6b7a3f", hover: "#57652f", dark: "#9aae63" },
   indigo: { light: "#4b5fbd", hover: "#3d4fa0", dark: "#7d8fe0" },
-  plum: { light: "#8b4a73", hover: "#723c5e", dark: "#b473a0" },
+  plum: { light: "#8a8218", hover: "#736b12", dark: "#aaa134" },
 };
 
 export type PlatformOS = "macos" | "windows" | "linux";
@@ -53,7 +53,7 @@ interface ProfileDef extends Profile {
 
 const ALL_PROFILES: ProfileDef[] = [
   { id: "claude", name: "Claude Code", cmd: "claude", dot: "#c96442", autoInstall: "claude", platforms: ["macos", "windows", "linux"] },
-  { id: "hermes", name: "Hermes", cmd: "hermes chat -m gpt-5.5 --max-turns 25", dot: "#8b4a73", autoInstall: "hermes", platforms: ["macos", "windows", "linux"] },
+  { id: "hermes", name: "Hermes", cmd: "hermes chat -m gpt-5.5 --max-turns 25", dot: "#8a8218", autoInstall: "hermes", platforms: ["macos", "windows", "linux"] },
   { id: "codex", name: "Codex CLI", cmd: "codex", dot: "#4b7bd1", autoInstall: "codex", platforms: ["macos", "windows", "linux"] },
   { id: "zsh", name: "Zsh", cmd: "zsh", dot: "#9aae63", platforms: ["macos", "linux"] },
   { id: "bash", name: "Bash", cmd: "bash", dot: "#6b9a4a", platforms: ["macos", "linux", "windows"] },

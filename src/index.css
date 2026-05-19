@@ -152,16 +152,16 @@ body.dark {
   padding: 0.6em;
   background: rgba(0, 0, 0, 0.04);
   border-radius: 4px;
-  overflow-x: hidden;
+  overflow-x: auto;
   margin: 0.6em 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-wrap: anywhere;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
 }
 .atelier-markdown pre code {
-  white-space: pre-wrap;
-  word-break: break-word;
-  overflow-wrap: anywhere;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
   background: transparent;
   padding: 0;
 }
@@ -229,7 +229,7 @@ body.dark {
   overflow-x: auto;
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.05);
-  white-space: pre-wrap;
+  white-space: pre;
 }
 .dark .atelier-chat-markdown pre {
   background: rgba(255, 255, 255, 0.055);
@@ -238,6 +238,9 @@ body.dark {
   display: block;
   padding: 0;
   background: transparent;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
 }
 .atelier-chat-table-wrap {
   max-width: 100%;
@@ -277,6 +280,32 @@ body.dark {
   opacity: 0.86;
 }
 
+.atelier-chat-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.atelier-chat-attachment {
+  min-width: 0;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  border: 1px solid rgba(128, 128, 128, 0.26);
+  background: rgba(128, 128, 128, 0.08);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.3;
+}
+.atelier-chat-attachment span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .atelier-streaming-text {
   white-space: pre-wrap;
   word-break: normal;
@@ -302,6 +331,60 @@ body.dark {
   45% {
     opacity: 0.56;
   }
+}
+
+.atelier-attachment-tray {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  padding: 0 4px 8px;
+}
+.atelier-attachment-chip {
+  min-width: 0;
+  max-width: 100%;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px 0 8px;
+  border-radius: 7px;
+  border: 1px solid rgba(128, 128, 128, 0.28);
+  background: rgba(128, 128, 128, 0.08);
+  font-size: 11px;
+  line-height: 1;
+}
+.atelier-attachment-name {
+  min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.7;
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.atelier-attachment-chip button {
+  height: 20px;
+  width: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  opacity: 0.72;
+}
+.atelier-attachment-chip button:hover {
+  background: rgba(128, 128, 128, 0.16);
+  opacity: 1;
+}
+.atelier-attachment-status,
+.atelier-attachment-error {
+  font-size: 11px;
+  line-height: 1.35;
+}
+.atelier-attachment-status {
+  opacity: 0.7;
+}
+.atelier-attachment-error {
+  color: #ff6b5f;
 }
 
 .atelier-activity-stack {
@@ -340,6 +423,25 @@ body.dark {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* codex/claude 스타일: 상단 elapsed 라인 + 하단 현재 활동 1줄 */
+.atelier-activity-codex {
+  margin-top: 12px;
+  color: rgba(128, 128, 128, 0.85);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.atelier-activity-elapsed {
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 4px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.22);
+}
+.atelier-activity-codex .atelier-activity-line {
+  margin-top: 6px;
+  opacity: 0.88;
 }
 
 .atelier-preview-badge {
@@ -464,6 +566,116 @@ body.dark {
   color: #d94b4b;
 }
 
+.atelier-devscreen-toolbar,
+.atelier-devscreen-controls {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(45, 45, 45, 0.1);
+  background: rgba(255, 255, 255, 0.52);
+}
+.atelier-devscreen-toolbar {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+.atelier-devscreen-toolbar-dark,
+.atelier-devscreen-controls-dark {
+  border-bottom-color: rgba(250, 249, 245, 0.09);
+  background: rgba(255, 255, 255, 0.035);
+}
+.atelier-devscreen-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.atelier-devscreen-input,
+.atelier-devscreen-size {
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid rgba(128, 128, 128, 0.22);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.6);
+  color: inherit;
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  outline: none;
+}
+.dark .atelier-devscreen-input,
+.dark .atelier-devscreen-size {
+  border-color: rgba(250, 249, 245, 0.12);
+  background: rgba(255, 255, 255, 0.055);
+}
+.atelier-devscreen-input {
+  flex: 1 1 auto;
+}
+.atelier-devscreen-input-short,
+.atelier-devscreen-size {
+  flex: 0 0 auto;
+  width: 64px;
+}
+.atelier-devscreen-button {
+  flex: 0 0 auto;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid rgba(128, 128, 128, 0.22);
+  border-radius: 5px;
+  background: rgba(128, 128, 128, 0.1);
+  color: inherit;
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+.atelier-devscreen-button:disabled {
+  opacity: 0.55;
+}
+.dark .atelier-devscreen-button {
+  border-color: rgba(250, 249, 245, 0.12);
+  background: rgba(255, 255, 255, 0.07);
+}
+.atelier-devscreen-shot-wrap {
+  padding: 12px;
+}
+.atelier-devscreen-shot {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+  border: 1px solid rgba(128, 128, 128, 0.18);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.14);
+}
+.atelier-devscreen-panel {
+  margin: 0 12px 12px;
+  overflow: hidden;
+  border: 1px solid rgba(45, 45, 45, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.7);
+}
+.atelier-devscreen-panel-dark {
+  border-color: rgba(250, 249, 245, 0.1);
+  background: rgba(255, 255, 255, 0.045);
+}
+.atelier-devscreen-panel-title {
+  padding: 7px 9px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.14);
+  color: rgba(128, 128, 128, 0.92);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+.atelier-devscreen-panel pre {
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  padding: 9px;
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
 .atelier-change-panel {
   overflow: hidden;
   border: 1px solid rgba(45, 45, 45, 0.14);
@@ -473,6 +685,9 @@ body.dark {
 .atelier-change-panel-dark {
   border-color: rgba(250, 249, 245, 0.1);
   background: rgba(255, 255, 255, 0.035);
+}
+.atelier-change-panel-compact {
+  background: transparent;
 }
 .atelier-change-header {
   min-height: 42px;
@@ -576,4 +791,73 @@ body.dark {
 }
 .atelier-change-error {
   color: #ff6969;
+}
+
+.atelier-log-shell {
+  margin-top: 8px;
+}
+.atelier-log-toggle {
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(128, 128, 128, 0.16);
+  color: inherit;
+  opacity: 0.62;
+  font-size: 11px;
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.atelier-log-toggle:hover {
+  opacity: 0.95;
+  background: rgba(128, 128, 128, 0.1);
+}
+.atelier-log-toggle-dark {
+  border-color: rgba(250, 249, 245, 0.12);
+}
+.atelier-log-panel {
+  max-height: 260px;
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid rgba(45, 45, 45, 0.12);
+  border-radius: 8px;
+  background: rgba(45, 45, 45, 0.035);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+.atelier-log-panel-dark {
+  border-color: rgba(250, 249, 245, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.atelier-slash-menu {
+  isolation: isolate;
+  background-clip: padding-box;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.36);
+  backdrop-filter: none;
+}
+.atelier-slash-menu-light {
+  background: #f6f3ed;
+  border-color: #d5d0c5;
+}
+.atelier-slash-menu-dark {
+  background: #242423;
+  border-color: #45443f;
+}
+.atelier-slash-item {
+  color: inherit;
+  background: transparent;
+}
+.atelier-slash-item-light:hover {
+  background: #ebe6dc;
+}
+.atelier-slash-item-dark:hover {
+  background: #31302d;
+}
+.atelier-slash-item-selected-light {
+  background: #e4dfd5;
+}
+.atelier-slash-item-selected-dark {
+  background: #3a3935;
 }
