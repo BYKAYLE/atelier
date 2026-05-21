@@ -706,6 +706,8 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
         checkingStatus: "Checking GitHub Releases...",
         availableStatus: (version: string) => `v${version} available from GitHub`,
         upToDate: "You are up to date.",
+        releaseBehind: (latest: string, current: string) =>
+          `GitHub Releases are behind this app (GitHub v${latest}, app v${current}). Publish a newer release to make in-app updates available.`,
         checkFailed: (message: string) => `Check failed: ${message}`,
         installingStatus: "Downloading and installing...",
         noUpdateOnRetry: "A fresh check found no new version.",
@@ -733,6 +735,8 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
         checkingStatus: "GitHub 릴리스 확인 중…",
         availableStatus: (version: string) => `GitHub에 v${version} 사용 가능`,
         upToDate: "최신 버전입니다.",
+        releaseBehind: (latest: string, current: string) =>
+          `GitHub 릴리스가 현재 앱보다 오래되었습니다. (GitHub v${latest}, 앱 v${current}) 더 높은 버전의 릴리스를 올려야 앱 안에서 업데이트가 검색됩니다.`,
         checkFailed: (message: string) => `확인 실패: ${message}`,
         installingStatus: "다운로드·설치 중…",
         noUpdateOnRetry: "다시 확인하니 새 버전이 없습니다.",
@@ -795,6 +799,8 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
           releaseUrl: latest.url,
         });
         setStatus(copy.availableStatus(latest.version));
+      } else if (currentVersionRaw && compareVersions(latest.version, currentVersionRaw) < 0) {
+        setStatus(copy.releaseBehind(latest.version, currentVersionRaw));
       } else {
         setStatus(copy.upToDate);
       }
