@@ -219,32 +219,52 @@ fn validate_agent_cli_command(provider: &str, args: &[String]) -> Result<(), Str
         "logout",
     ];
     if lowered.iter().any(|arg| blocked.contains(&arg.as_str())) {
-        return Err("Atelier에서는 삭제/설치/초기화/서버 실행류 CLI 명령을 바로 실행하지 않습니다.".into());
+        return Err(
+            "Atelier에서는 삭제/설치/초기화/서버 실행류 CLI 명령을 바로 실행하지 않습니다.".into(),
+        );
     }
     if lowered
         .iter()
         .any(|arg| matches!(arg.as_str(), "-f" | "--follow" | "--fix" | "--ack"))
     {
-        return Err("오래 실행되거나 상태를 직접 변경하는 옵션은 작업 탭에서 실행하지 않습니다.".into());
+        return Err(
+            "오래 실행되거나 상태를 직접 변경하는 옵션은 작업 탭에서 실행하지 않습니다.".into(),
+        );
     }
 
     match provider {
         "hermes" => match first {
             "status" | "version" | "doctor" => Ok(()),
-            "plugins" => {
-                allow_cli_subcommand(provider, &lowered, "plugins", &["list", "ls", "enable", "disable"])
+            "plugins" => allow_cli_subcommand(
+                provider,
+                &lowered,
+                "plugins",
+                &["list", "ls", "enable", "disable"],
+            ),
+            "tools" => {
+                allow_cli_subcommand(provider, &lowered, "tools", &["list", "enable", "disable"])
             }
-            "tools" => allow_cli_subcommand(provider, &lowered, "tools", &["list", "enable", "disable"]),
             "skills" => allow_cli_subcommand(
                 provider,
                 &lowered,
                 "skills",
-                &["list", "browse", "search", "inspect", "check", "audit", "config"],
+                &[
+                    "list", "browse", "search", "inspect", "check", "audit", "config",
+                ],
             ),
-            "mcp" => allow_cli_subcommand(provider, &lowered, "mcp", &["list", "ls", "test", "config", "configure"]),
-            "sessions" => allow_cli_subcommand(provider, &lowered, "sessions", &["list", "stats", "browse"]),
+            "mcp" => allow_cli_subcommand(
+                provider,
+                &lowered,
+                "mcp",
+                &["list", "ls", "test", "config", "configure"],
+            ),
+            "sessions" => {
+                allow_cli_subcommand(provider, &lowered, "sessions", &["list", "stats", "browse"])
+            }
             "logs" => Ok(()),
-            _ => Err(format!("Hermes 작업 탭에서 지원하지 않는 명령입니다: {first}")),
+            _ => Err(format!(
+                "Hermes 작업 탭에서 지원하지 않는 명령입니다: {first}"
+            )),
         },
         "claude" => match first {
             "doctor" => Ok(()),
@@ -253,19 +273,35 @@ fn validate_agent_cli_command(provider: &str, args: &[String]) -> Result<(), Str
                 provider,
                 &lowered,
                 first,
-                &["list", "details", "enable", "disable", "marketplace", "validate"],
+                &[
+                    "list",
+                    "details",
+                    "enable",
+                    "disable",
+                    "marketplace",
+                    "validate",
+                ],
             ),
             "mcp" => allow_cli_subcommand(provider, &lowered, "mcp", &["list", "get"]),
             "auto-mode" => Ok(()),
-            _ => Err(format!("Claude 작업 탭에서 지원하지 않는 명령입니다: {first}")),
+            _ => Err(format!(
+                "Claude 작업 탭에서 지원하지 않는 명령입니다: {first}"
+            )),
         },
         "codex" => match first {
             "mcp" => allow_cli_subcommand(provider, &lowered, "mcp", &["list", "get"]),
-            "features" => allow_cli_subcommand(provider, &lowered, "features", &["list", "enable", "disable"]),
+            "features" => allow_cli_subcommand(
+                provider,
+                &lowered,
+                "features",
+                &["list", "enable", "disable"],
+            ),
             "login" => allow_cli_subcommand(provider, &lowered, "login", &["status"]),
             "plugin" => allow_cli_subcommand(provider, &lowered, "plugin", &["marketplace"]),
             "review" => Ok(()),
-            _ => Err(format!("Codex 작업 탭에서 지원하지 않는 명령입니다: {first}")),
+            _ => Err(format!(
+                "Codex 작업 탭에서 지원하지 않는 명령입니다: {first}"
+            )),
         },
         other => Err(format!("지원하지 않는 provider입니다: {other}")),
     }
@@ -353,6 +389,143 @@ fn run_agent_cli_command(
         code: output.status.code(),
         success,
         timed_out,
+    })
+}
+
+fn run_claude_plugin_command(args: &[&str], timeout: Duration) -> Result<(bool, String), String> {
+    let mut cmd = command_for_cli("claude");
+    for arg in args {
+        cmd.arg(arg);
+    }
+    cmd.env("PATH", crate::augmented_cli_path())
+        .env("LANG", "ko_KR.UTF-8")
+        .env("LC_CTYPE", "ko_KR.UTF-8")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let child = cmd.spawn().map_err(|e| {
+        format!(
+            "claude plugin command spawn failed: {e} ({})",
+            describe_cli_command("claude")
+        )
+    })?;
+    let (output, timed_out) = wait_with_timeout(child, timeout)?;
+    let mut text = String::new();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !stdout.is_empty() {
+        text.push_str(&stdout);
+    }
+    if !stderr.is_empty() {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&stderr);
+    }
+    if timed_out {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str("timed out");
+    }
+    Ok((output.status.success() && !timed_out, clip_cli_output(text)))
+}
+
+fn academic_research_plugin_state(list_output: &str) -> (bool, bool) {
+    let installed = list_output.contains("academic-research-skills");
+    let enabled = installed
+        && list_output
+            .lines()
+            .skip_while(|line| !line.contains("academic-research-skills"))
+            .take(5)
+            .any(|line| line.contains("Status:") && !line.contains("disabled"));
+    (installed, enabled)
+}
+
+fn install_academic_research_claude_plugin_blocking(
+) -> Result<AcademicResearchPluginInstallResult, String> {
+    let mut log_lines = Vec::new();
+    let initial_list = match run_claude_plugin_command(&["plugin", "list"], Duration::from_secs(20))
+    {
+        Ok((_, output)) => output,
+        Err(err) => {
+            return Ok(AcademicResearchPluginInstallResult {
+                installed: false,
+                enabled: false,
+                message: format!(
+                    "Claude Code CLI is not ready, so Academic Research Skills will be installed after Claude is installed. {err}"
+                ),
+                log: err,
+            });
+        }
+    };
+
+    let (initial_installed, initial_enabled) = academic_research_plugin_state(&initial_list);
+    if initial_installed && initial_enabled {
+        return Ok(AcademicResearchPluginInstallResult {
+            installed: true,
+            enabled: true,
+            message: "Claude Academic Research Skills plugin is already installed and enabled."
+                .to_string(),
+            log: initial_list,
+        });
+    }
+
+    let mut steps: Vec<(&str, Vec<&'static str>)> = Vec::new();
+    if !initial_installed {
+        steps.push((
+            "marketplace add",
+            vec![
+                "plugin",
+                "marketplace",
+                "add",
+                "Imbad0202/academic-research-skills",
+            ],
+        ));
+        steps.push((
+            "plugin install",
+            vec!["plugin", "install", "academic-research-skills"],
+        ));
+    }
+    if !initial_enabled {
+        steps.push((
+            "plugin enable",
+            vec!["plugin", "enable", "academic-research-skills"],
+        ));
+    }
+
+    for (label, args) in steps {
+        match run_claude_plugin_command(&args, Duration::from_secs(90)) {
+            Ok((ok, output)) => {
+                let status = if ok { "ok" } else { "warn" };
+                log_lines.push(format!("[{status}] {label}: {}", output.trim()));
+            }
+            Err(err) => log_lines.push(format!("[warn] {label}: {err}")),
+        }
+    }
+
+    let (_, list_output) = run_claude_plugin_command(&["plugin", "list"], Duration::from_secs(20))?;
+    let (installed, enabled) = academic_research_plugin_state(&list_output);
+    log_lines.push(format!("[info] plugin list:\n{}", list_output.trim()));
+
+    if !installed {
+        return Err(format!(
+            "Claude Academic Research Skills plugin was not installed.\n{}",
+            log_lines.join("\n\n")
+        ));
+    }
+
+    let message = if enabled {
+        "Claude Academic Research Skills plugin installed and enabled.".to_string()
+    } else {
+        "Claude Academic Research Skills plugin installed. Enable it with `/plugin on academic-research-skills` if Claude reports it disabled.".to_string()
+    };
+
+    Ok(AcademicResearchPluginInstallResult {
+        installed,
+        enabled,
+        message,
+        log: log_lines.join("\n\n"),
     })
 }
 
@@ -588,6 +761,14 @@ pub struct AgentCliCommandResult {
     code: Option<i32>,
     success: bool,
     timed_out: bool,
+}
+
+#[derive(Serialize)]
+pub struct AcademicResearchPluginInstallResult {
+    installed: bool,
+    enabled: bool,
+    message: String,
+    log: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -3707,6 +3888,14 @@ pub async fn agent_cli_command(
     tauri::async_runtime::spawn_blocking(move || run_agent_cli_command(provider, args, cwd))
         .await
         .map_err(|e| format!("agent cli thread join: {e}"))?
+}
+
+#[tauri::command]
+pub async fn academic_research_install_claude_plugin(
+) -> std::result::Result<AcademicResearchPluginInstallResult, String> {
+    tauri::async_runtime::spawn_blocking(install_academic_research_claude_plugin_blocking)
+        .await
+        .map_err(|e| format!("academic research plugin install thread join: {e}"))?
 }
 
 #[tauri::command]

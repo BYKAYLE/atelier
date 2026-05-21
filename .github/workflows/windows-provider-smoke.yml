@@ -1,0 +1,36 @@
+name: Windows Provider Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_install:
+        description: "Install missing Claude/Codex/Hermes CLIs on the Windows runner"
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  provider-smoke:
+    name: CLI install/status smoke
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Windows provider smoke
+        shell: pwsh
+        run: |
+          $scriptArgs = @("-File", "tools/windows-provider-smoke.ps1")
+          if ("${{ inputs.run_install }}" -eq "true") {
+            $scriptArgs += "-Install"
+          }
+          powershell -ExecutionPolicy Bypass @scriptArgs
+
+      - name: Upload smoke diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: atelier-windows-provider-smoke
+          path: ${{ env.LOCALAPPDATA }}\Atelier\diagnostics\atelier-provider-smoke-*
+          if-no-files-found: warn

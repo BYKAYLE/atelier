@@ -107,6 +107,13 @@ export interface AgentCliCommandResult {
   timed_out: boolean;
 }
 
+export interface AcademicResearchPluginInstallResult {
+  installed: boolean;
+  enabled: boolean;
+  message: string;
+  log: string;
+}
+
 export interface PreviewCheckResult {
   url: string;
   ok: boolean;
@@ -194,6 +201,10 @@ export async function agentCliCommand(args: {
     args: args.args,
     cwd: args.cwd || null,
   });
+}
+
+export async function academicResearchInstallClaudePlugin(): Promise<AcademicResearchPluginInstallResult> {
+  return invoke("academic_research_install_claude_plugin");
 }
 
 export async function previewHealthCheck(url: string): Promise<PreviewCheckResult> {
@@ -333,7 +344,7 @@ export async function providerLoginOauth(provider: string): Promise<void> {
   return invoke("provider_login_oauth", { provider });
 }
 
-/** npm 글로벌로 claude-code / codex CLI 자동 설치. 백그라운드 실행, 즉시 반환. */
+/** Claude/Codex/Hermes CLI 자동 설치. 백그라운드 실행, 즉시 반환. */
 export async function providerInstallCli(provider: string): Promise<void> {
   return invoke("provider_install_cli", { provider });
 }

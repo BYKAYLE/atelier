@@ -13,6 +13,57 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const SERVICE: &str = "com.atelier.app";
+const HERMES_INSTALL_SH: &str =
+    "curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- --skip-setup";
+#[cfg(target_os = "windows")]
+const HERMES_INSTALL_PS1: &str =
+    "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1))) -SkipSetup -NonInteractive";
+#[cfg(target_os = "windows")]
+const CLAUDE_INSTALL_PS1: &str =
+    "& ([scriptblock]::Create((irm https://claude.ai/install.ps1))) stable";
+
+#[cfg(target_os = "windows")]
+fn configure_background_command(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn configure_background_command(_: &mut Command) {}
+
+fn cli_command(cli: &str) -> Command {
+    #[cfg(target_os = "windows")]
+    {
+        let mut command = Command::new("cmd.exe");
+        command.arg("/C").arg(cli);
+        configure_background_command(&mut command);
+        configure_claude_windows_env(&mut command);
+        command
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let mut command = Command::new(cli);
+        configure_background_command(&mut command);
+        command
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn configure_claude_windows_env(command: &mut Command) {
+    if std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH").is_some() {
+        return;
+    }
+    for candidate in [
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\bin\bash.exe",
+    ] {
+        if PathBuf::from(candidate).is_file() {
+            command.env("CLAUDE_CODE_GIT_BASH_PATH", candidate);
+            break;
+        }
+    }
+}
 
 #[derive(Clone, Default, Deserialize, Serialize)]
 struct CredentialState {
@@ -225,21 +276,28 @@ fn set_api_key_state(provider: &str, key: Option<&str>) {
 fn which(cli: &str) -> bool {
     // 빠른 PATH 검사. Windows 는 where, Unix 는 command -v.
     #[cfg(target_os = "windows")]
-    let res = Command::new("where")
-        .arg(cli)
-        .env("PATH", crate::augmented_cli_path())
-        .output();
+    let mut command = {
+        let mut command = Command::new("where");
+        command.arg(cli);
+        command
+    };
     #[cfg(not(target_os = "windows"))]
-    let res = Command::new("sh")
-        .arg("-c")
-        .arg(format!("command -v {cli}"))
-        .env("PATH", crate::augmented_cli_path())
-        .output();
+    let mut command = {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(format!("command -v {cli}"));
+        command
+    };
+    configure_background_command(&mut command);
+    let res = command.env("PATH", crate::augmented_cli_path()).output();
     matches!(res, Ok(o) if o.status.success())
 }
 
 fn command_output_timeout(mut command: Command, timeout: Duration) -> io::Result<Option<Output>> {
-    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    configure_background_command(&mut command);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     let mut child = command.spawn()?;
     let start = Instant::now();
     loop {
@@ -257,7 +315,7 @@ fn command_output_timeout(mut command: Command, timeout: Duration) -> io::Result
 
 fn detect_oauth(provider: &str) -> bool {
     if provider == "codex" && which("codex") {
-        let mut command = Command::new("codex");
+        let mut command = cli_command("codex");
         command
             .args(["login", "status"])
             .env("PATH", crate::augmented_cli_path());
@@ -281,7 +339,7 @@ fn detect_oauth(provider: &str) -> bool {
     }
 
     if provider == "claude" && which("claude") {
-        let mut command = Command::new("claude");
+        let mut command = cli_command("claude");
         command
             .args(["auth", "status"])
             .env("PATH", crate::augmented_cli_path());
@@ -533,35 +591,48 @@ pub async fn provider_login_oauth(provider: String) -> Result<(), String> {
         return Err(format!("CLI '{cli}' is not installed"));
     }
 
-    // 비동기 background spawn — child를 detach 하고 종료 감지 thread 로만 keychain 마커 기록.
-    // UI 는 즉시 모달을 띄우고 polling 으로 status 재확인.
     let provider_clone = provider.clone();
     let cli_owned = cli.to_string();
     let cmd_owned = cmd.to_string();
-    std::thread::spawn(move || {
-        let mut child = match Command::new(&cli_owned)
-            .arg(&cmd_owned)
-            .env("PATH", crate::augmented_cli_path())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .stdin(Stdio::null())
-            .spawn()
+    let mut command = cli_command(&cli_owned);
+    command
+        .arg(&cmd_owned)
+        .env("PATH", crate::augmented_cli_path())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .stdin(Stdio::null());
+    configure_background_command(&mut command);
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("oauth spawn {cli_owned} {cmd_owned}: {e}"))?;
+
+    // Claude/Codex CLI가 Windows에서 즉시 실패하는 경우에는 "브라우저가 열렸습니다"
+    // 모달을 띄우면 사용자가 무한 대기 상태로 보인다. 짧게만 관찰해서 즉시 실패는
+    // 호출자에게 돌려주고, 실제 로그인 대기는 백그라운드에서 계속 처리한다.
+    let started = Instant::now();
+    loop {
+        match child
+            .try_wait()
+            .map_err(|e| format!("{cli_owned} {cmd_owned} poll: {e}"))?
         {
-            Ok(c) => c,
-            Err(e) => {
-                log::warn!("oauth spawn {cli_owned} {cmd_owned}: {e}");
-                return;
-            }
-        };
-        match child.wait() {
-            Ok(status) if status.success() => {
+            Some(status) if status.success() => {
                 set_oauth_state(&provider_clone, true);
+                return Ok(());
             }
-            Ok(status) => {
-                log::warn!("{cli_owned} {cmd_owned} exited with {status}");
-            }
-            Err(e) => log::warn!("{cli_owned} wait: {e}"),
+            Some(status) => return Err(format!("{cli_owned} {cmd_owned} exited with {status}")),
+            None if started.elapsed() >= Duration::from_millis(1200) => break,
+            None => thread::sleep(Duration::from_millis(80)),
         }
+    }
+
+    std::thread::spawn(move || match child.wait() {
+        Ok(status) if status.success() => {
+            set_oauth_state(&provider_clone, true);
+        }
+        Ok(status) => {
+            log::warn!("{cli_owned} {cmd_owned} exited with {status}");
+        }
+        Err(e) => log::warn!("{cli_owned} wait: {e}"),
     });
     Ok(())
 }
@@ -570,21 +641,22 @@ pub async fn provider_login_oauth(provider: String) -> Result<(), String> {
 /// 새 사용자가 터미널 없이 한 클릭으로 셋업할 수 있도록.
 #[tauri::command]
 pub async fn provider_install_cli(provider: String) -> Result<(), String> {
-    let pkg = match provider.as_str() {
-        "claude" => "@anthropic-ai/claude-code",
-        "codex" => "@openai/codex",
-        _ => return Err(format!("automatic install not available for {provider}")),
-    };
-    if !which("npm") {
-        return Err("npm not found. install Node.js first.".into());
+    match provider.as_str() {
+        "claude" => install_claude_cli(),
+        "codex" => install_npm_cli("codex", "@openai/codex", false),
+        "hermes" => install_hermes_cli(),
+        _ => Err(format!("automatic install not available for {provider}")),
     }
-    let provider_clone = provider.clone();
-    let pkg_owned = pkg.to_string();
+}
+
+fn spawn_cli_installer(
+    mut command: Command,
+    label: &'static str,
+    after_success: Option<fn()>,
+) -> Result<(), String> {
+    configure_background_command(&mut command);
     std::thread::spawn(move || {
-        match Command::new("npm")
-            .arg("install")
-            .arg("-g")
-            .arg(&pkg_owned)
+        match command
             .env("PATH", crate::augmented_cli_path())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -593,15 +665,208 @@ pub async fn provider_install_cli(provider: String) -> Result<(), String> {
         {
             Ok(mut child) => match child.wait() {
                 Ok(status) if status.success() => {
-                    log::info!("installed {pkg_owned} for {provider_clone}");
+                    log::info!("{label} install completed");
+                    if let Some(callback) = after_success {
+                        callback();
+                    }
                 }
-                Ok(status) => log::warn!("npm install {pkg_owned} exited with {status}"),
-                Err(e) => log::warn!("npm install wait: {e}"),
+                Ok(status) => log::warn!("{label} install exited with {status}"),
+                Err(e) => log::warn!("{label} install wait: {e}"),
             },
-            Err(e) => log::warn!("npm install spawn: {e}"),
+            Err(e) => log::warn!("{label} install spawn: {e}"),
         }
     });
     Ok(())
+}
+
+fn install_npm_cli(
+    label: &'static str,
+    pkg: &'static str,
+    bootstrap_claude_plugin: bool,
+) -> Result<(), String> {
+    if !which("npm") {
+        return Err("npm not found. install Node.js first.".into());
+    }
+    #[cfg(target_os = "windows")]
+    let command = {
+        let mut command = Command::new("cmd.exe");
+        command
+            .arg("/C")
+            .arg("npm")
+            .arg("install")
+            .arg("-g")
+            .arg(pkg);
+        command
+    };
+    #[cfg(not(target_os = "windows"))]
+    let command = {
+        let mut command = Command::new("npm");
+        command.arg("install").arg("-g").arg(pkg);
+        command
+    };
+    let after_success = if bootstrap_claude_plugin {
+        Some(bootstrap_academic_research_plugin_for_claude as fn())
+    } else {
+        None
+    };
+    spawn_cli_installer(command, label, after_success)
+}
+
+fn install_claude_cli() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let mut command = Command::new("powershell.exe");
+        command
+            .arg("-NoProfile")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-Command")
+            .arg(CLAUDE_INSTALL_PS1);
+        return spawn_cli_installer(
+            command,
+            "claude",
+            Some(bootstrap_academic_research_plugin_for_claude as fn()),
+        );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    install_npm_cli("claude", "@anthropic-ai/claude-code", true)
+}
+
+fn install_hermes_cli() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let mut command = Command::new("powershell.exe");
+        command
+            .arg("-NoProfile")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-Command")
+            .arg(HERMES_INSTALL_PS1);
+        return spawn_cli_installer(command, "hermes", None);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        if !which("curl") {
+            return Err("curl not found. install curl first.".into());
+        }
+        if !which("bash") {
+            return Err("bash not found. install bash first.".into());
+        }
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(HERMES_INSTALL_SH);
+        spawn_cli_installer(command, "hermes", None)
+    }
+}
+
+fn run_claude_plugin_command_for_bootstrap(
+    args: &[&str],
+    timeout: Duration,
+) -> Result<Output, String> {
+    let mut command = cli_command("claude");
+    command
+        .args(args)
+        .env("PATH", crate::augmented_cli_path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null());
+    configure_background_command(&mut command);
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("claude plugin bootstrap spawn: {e}"))?;
+    let started = Instant::now();
+    loop {
+        if child
+            .try_wait()
+            .map_err(|e| format!("claude plugin bootstrap poll: {e}"))?
+            .is_some()
+        {
+            return child
+                .wait_with_output()
+                .map_err(|e| format!("claude plugin bootstrap output: {e}"));
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            return child
+                .wait_with_output()
+                .map_err(|e| format!("claude plugin bootstrap timeout output: {e}"));
+        }
+        thread::sleep(Duration::from_millis(120));
+    }
+}
+
+fn academic_research_plugin_state_from_list(list_output: &str) -> (bool, bool) {
+    let installed = list_output.contains("academic-research-skills");
+    let enabled = installed
+        && list_output
+            .lines()
+            .skip_while(|line| !line.contains("academic-research-skills"))
+            .take(5)
+            .any(|line| line.contains("Status:") && !line.contains("disabled"));
+    (installed, enabled)
+}
+
+fn bootstrap_academic_research_plugin_for_claude() {
+    if !which("claude") {
+        return;
+    }
+    let list_output =
+        match run_claude_plugin_command_for_bootstrap(&["plugin", "list"], Duration::from_secs(20))
+        {
+            Ok(output) => {
+                let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
+                combined.push('\n');
+                combined.push_str(&String::from_utf8_lossy(&output.stderr));
+                combined
+            }
+            Err(e) => {
+                log::warn!("academic research plugin bootstrap list failed: {e}");
+                return;
+            }
+        };
+    let (installed, enabled) = academic_research_plugin_state_from_list(&list_output);
+    if installed && enabled {
+        return;
+    }
+
+    let mut steps: Vec<Vec<&'static str>> = Vec::new();
+    if !installed {
+        steps.push(vec![
+            "plugin",
+            "marketplace",
+            "add",
+            "Imbad0202/academic-research-skills",
+        ]);
+        steps.push(vec!["plugin", "install", "academic-research-skills"]);
+    }
+    if !enabled {
+        steps.push(vec!["plugin", "enable", "academic-research-skills"]);
+    }
+    for args in steps {
+        match run_claude_plugin_command_for_bootstrap(&args, Duration::from_secs(90)) {
+            Ok(output) if output.status.success() => {
+                log::info!(
+                    "academic research plugin bootstrap step completed: {:?}",
+                    args
+                );
+            }
+            Ok(output) => {
+                let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
+                combined.push('\n');
+                combined.push_str(&String::from_utf8_lossy(&output.stderr));
+                log::warn!(
+                    "academic research plugin bootstrap step failed {:?}: {}",
+                    args,
+                    combined.trim()
+                );
+            }
+            Err(e) => log::warn!(
+                "academic research plugin bootstrap step error {:?}: {e}",
+                args
+            ),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -627,11 +892,12 @@ pub async fn hermes_check_update() -> Result<HermesUpdateStatus, String> {
     if !which("hermes") {
         return Ok(empty);
     }
-    let output = match Command::new("hermes")
+    let mut command = cli_command("hermes");
+    command
         .arg("--version")
-        .env("PATH", crate::augmented_cli_path())
-        .output()
-    {
+        .env("PATH", crate::augmented_cli_path());
+    configure_background_command(&mut command);
+    let output = match command.output() {
         Ok(o) => o,
         Err(_) => return Ok(empty),
     };
@@ -679,15 +945,16 @@ pub async fn hermes_update() -> Result<(), String> {
         return Err("hermes not found".into());
     }
     std::thread::spawn(|| {
-        match Command::new("hermes")
+        let mut command = cli_command("hermes");
+        command
             .arg("update")
             .arg("--yes")
             .env("PATH", crate::augmented_cli_path())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .stdin(Stdio::null())
-            .spawn()
-        {
+            .stdin(Stdio::null());
+        configure_background_command(&mut command);
+        match command.spawn() {
             Ok(mut child) => match child.wait() {
                 Ok(status) if status.success() => log::info!("hermes update completed"),
                 Ok(status) => log::warn!("hermes update exited with {status}"),

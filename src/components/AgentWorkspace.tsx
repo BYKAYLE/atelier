@@ -12,6 +12,18 @@ import {
   devScreenStatus,
   devScreenType,
 } from "../lib/devScreen";
+import {
+  formatStellaOntologyInstruction,
+  isStellaOntologyMode,
+  labelForStellaOntologyMode,
+  normalizeStellaOntologyMode,
+  STELLA_ONTOLOGY_MODES,
+} from "../lib/stellaOntology";
+import type { StellaOntologyMode } from "../lib/stellaOntology";
+import {
+  ACADEMIC_RESEARCH_SLASH_COMMANDS,
+  parseAcademicResearchCommand,
+} from "../lib/academicResearch";
 import type {
   DevScreenActionResult,
   DevScreenCheckResult,
@@ -27,6 +39,7 @@ import {
   agentCliCommand,
   agentSend,
   agentUndoChanges,
+  academicResearchInstallClaudePlugin,
   clipboardSaveImage,
   homeDir,
   isTauri,
@@ -168,6 +181,7 @@ interface AgentSession {
   profileDot?: string;
   model: string;
   hermesProvider?: HermesInferenceProvider;
+  stellaOntologyMode?: StellaOntologyMode;
   codexEffort?: CodexEffort;
   codexSpeed?: CodexSpeed;
   permissionMode?: AgentPermissionMode;
@@ -987,6 +1001,24 @@ function slashCommandsFor(
       detailKo: "목표 달성까지 계획-실행-검증을 반복하는 Goal 모드로 실행",
       detailEn: "Run in Goal mode and keep iterating until the objective is satisfied",
     },
+    ...ACADEMIC_RESEARCH_SLASH_COMMANDS.map((item) => ({
+      ...item,
+      scope: "atelier" as const,
+    })),
+    {
+      command: "/stella",
+      insert: "/stella",
+      scope: "atelier",
+      detailKo: "Stella/Atelier 온톨로지 모드로 전환",
+      detailEn: "Switch to Stella/Atelier ontology mode",
+    },
+    {
+      command: "/mode direct|stella|evidence",
+      insert: "/mode ",
+      scope: "atelier",
+      detailKo: "Atelier 온톨로지 실행 모드 변경",
+      detailEn: "Change Atelier ontology execution mode",
+    },
     {
       command: "/que",
       insert: "/que",
@@ -1400,6 +1432,7 @@ function loadSessions(): AgentSession[] {
             ? normalizeHermesModel(hermesProvider || DEFAULT_HERMES_PROVIDER, session.model || meta.defaultModel)
             : normalizeModel(provider, session.model || meta.defaultModel),
           hermesProvider,
+          stellaOntologyMode: normalizeStellaOntologyMode(session.stellaOntologyMode, provider),
           codexEffort: provider === "codex" ? normalizeCodexEffort(session.codexEffort) : undefined,
           codexSpeed: provider === "codex" ? normalizeCodexSpeed(session.codexSpeed) : undefined,
           permissionMode: normalizePermissionMode(session.permissionMode),
@@ -1863,6 +1896,27 @@ function formatAgentPrompt(
   return `${text}${attachmentContext}${context}${fastPatchContext}${instruction}`;
 }
 
+function formatOntologyAgentPrompt(
+  text: string,
+  language: "ko" | "en",
+  previewContext: string | null,
+  attachments: ChatAttachment[],
+  mode: StellaOntologyMode,
+  provider: AgentProvider,
+  cwd?: string | null,
+) {
+  const base = formatAgentPrompt(text, language, previewContext, attachments);
+  const ontology = formatStellaOntologyInstruction({
+    mode,
+    language,
+    providerLabel: providerMeta(provider).label,
+    cwd,
+  });
+  if (!ontology) return base;
+  const requestLabel = language === "en" ? "User request:" : "대표님 요청:";
+  return `${ontology}\n\n---\n${requestLabel}\n${base}`;
+}
+
 function revealCharsPerSecond(remaining: number) {
   if (remaining > 9000) return 150;
   if (remaining > 4200) return 132;
@@ -2038,6 +2092,24 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const previewResizeRef = useRef<{ startX: number; startW: number } | null>(null);
   const previewAutoStartRef = useRef<Record<string, number>>({});
   const lastPreviewCommandRef = useRef<string | null>(null);
+  const arsClaudeBootstrapRef = useRef(false);
+
+  useEffect(() => {
+    if (!isTauri() || arsClaudeBootstrapRef.current) return;
+    arsClaudeBootstrapRef.current = true;
+    const timer = window.setTimeout(() => {
+      academicResearchInstallClaudePlugin()
+        .then((result) => {
+          if (result.installed) {
+            console.info("Academic Research Skills for Claude is ready.");
+          } else {
+            console.info(result.message);
+          }
+        })
+        .catch((err) => console.warn("Academic Research Skills bootstrap skipped:", err));
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const persistSessionsNow = (next: AgentSession[] = sessionsRef.current) => {
     if (persistSessionsTimerRef.current !== null) {
@@ -2126,6 +2198,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         providerLabel: "Provider",
         modelLabel: "Model",
         permissionLabel: "Permission",
+        ontologyLabel: "Mode",
         intelligence: "Intelligence",
         speed: "Speed",
         model: "Agent workspace",
@@ -2144,10 +2217,15 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         queueEmpty: "Queue is empty.",
         queueCleared: "Queue cleared.",
         queueRunStarted: "Queued turn started.",
+        stellaModeOn: "Stella/Atelier ontology mode is on.",
+        modeChanged: (mode: string) => `Atelier ontology mode: ${mode}`,
+        modeUsage: "Usage: /mode direct|stella|evidence",
         slashUnknown: (command: string) => `Unknown slash command: ${command}`,
         slashHelp: [
           "Slash commands:",
           "/goal <objective> - run until the objective is satisfied or clearly blocked",
+          "/stella - turn on Stella/Atelier ontology mode",
+          "/mode direct|stella|evidence - change Atelier ontology mode",
           "/que - toggle queue mode",
           "/queue - show queued turns",
           "/queue clear - clear queued turns",
@@ -2257,6 +2335,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         providerLabel: "제공자",
         modelLabel: "모델",
         permissionLabel: "권한",
+        ontologyLabel: "모드",
         intelligence: "인텔리전스",
         speed: "속도",
         model: "에이전트 작업",
@@ -2275,10 +2354,15 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         queueEmpty: "대기열이 비어 있습니다.",
         queueCleared: "대기열을 비웠습니다.",
         queueRunStarted: "대기 중인 명령을 실행했습니다.",
+        stellaModeOn: "Stella/Atelier 온톨로지 모드가 켜졌습니다.",
+        modeChanged: (mode: string) => `Atelier 온톨로지 모드: ${mode}`,
+        modeUsage: "사용법: /mode direct|stella|evidence",
         slashUnknown: (command: string) => `알 수 없는 슬래시 명령어입니다: ${command}`,
         slashHelp: [
           "슬래시 명령어:",
           "/goal <objective> - 목표 달성 또는 명확한 차단까지 반복 진행",
+          "/stella - Stella/Atelier 온톨로지 모드 켜기",
+          "/mode direct|stella|evidence - Atelier 온톨로지 실행 모드 변경",
           "/que - 대기열 모드 켜기/끄기",
           "/queue - 대기열 보기",
           "/queue clear - 대기열 비우기",
@@ -2449,6 +2533,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const showSlashMenu = input.trimStart().startsWith("/") && !input.includes("\n") && visibleSlashCommands.length > 0;
   const activeSlashSelection = Math.min(slashSelection, Math.max(visibleSlashCommands.length - 1, 0));
   const selectedSlashCommand = visibleSlashCommands[activeSlashSelection];
+  const activeStellaOntologyMode = normalizeStellaOntologyMode(active?.stellaOntologyMode, activeProvider);
+  const activeStellaOntologyLabel = labelForStellaOntologyMode(activeStellaOntologyMode, tw.language);
   const activeCodexEffort = normalizeCodexEffort(active?.codexEffort);
   const activeCodexSpeed = normalizeCodexSpeed(active?.codexSpeed);
   const activePermissionMode = normalizePermissionMode(active?.permissionMode);
@@ -3122,6 +3208,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         ? normalizeHermesModel(hermesProvider || DEFAULT_HERMES_PROVIDER, profile ? modelFromProfile(profile, provider) : meta.defaultModel)
         : normalizeModel(provider, profile ? modelFromProfile(profile, provider) : meta.defaultModel),
       hermesProvider,
+      stellaOntologyMode: normalizeStellaOntologyMode(undefined, provider),
       codexEffort: provider === "codex" ? DEFAULT_CODEX_EFFORT : undefined,
       codexSpeed: provider === "codex" ? DEFAULT_CODEX_SPEED : undefined,
       permissionMode: DEFAULT_PERMISSION_MODE,
@@ -3378,6 +3465,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     if (!active) return;
     patchSession(active.id, (session) => ({ ...session, permissionMode, updatedAt: Date.now() }));
     setShowPermissionMenu(false);
+  };
+
+  const updateActiveStellaOntologyMode = (stellaOntologyMode: StellaOntologyMode) => {
+    if (!active) return;
+    patchSession(active.id, (session) => ({ ...session, stellaOntologyMode, updatedAt: Date.now() }));
   };
 
   const maybeAutoPreview = (event: AgentStreamEvent) => {
@@ -4100,6 +4192,60 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       return true;
     }
 
+    if (command === "/ars-install-claude") {
+      localAssistantMessage(
+        session.id,
+        rawText,
+        tw.language === "en"
+          ? "Installing the native Claude Code Academic Research Skills plugin..."
+          : "Claude Code용 Academic Research Skills 원본 플러그인을 설치하는 중입니다...",
+      );
+      try {
+        const result = await academicResearchInstallClaudePlugin();
+        localAssistantMessage(
+          session.id,
+          rawText,
+          [
+            result.message,
+            "",
+            result.enabled
+              ? (tw.language === "en" ? "Claude plugin is enabled. Open a new Claude session if it does not appear immediately." : "Claude 플러그인이 활성화되었습니다. 바로 보이지 않으면 새 Claude 작업을 열면 됩니다.")
+              : (tw.language === "en" ? "Installed, but Claude reported it may still be disabled. Use /plugin on academic-research-skills in a Claude session." : "설치는 됐지만 Claude가 비활성 상태로 보고할 수 있습니다. Claude 작업에서 /plugin on academic-research-skills를 실행하세요."),
+          ].join("\n"),
+        );
+      } catch (err) {
+        localAssistantMessage(
+          session.id,
+          rawText,
+          tw.language === "en"
+            ? `Claude plugin install failed: ${String(err)}`
+            : `Claude 플러그인 설치 실패: ${String(err)}`,
+        );
+      }
+      return true;
+    }
+
+    if (command === "/stella") {
+      patchSession(session.id, (current) => ({ ...current, stellaOntologyMode: "stella", updatedAt: Date.now() }));
+      localAssistantMessage(session.id, rawText, copy.stellaModeOn);
+      return true;
+    }
+
+    if (command === "/mode") {
+      const requested = arg.toLowerCase();
+      if (!isStellaOntologyMode(requested)) {
+        localAssistantMessage(session.id, rawText, copy.modeUsage);
+        return true;
+      }
+      patchSession(session.id, (current) => ({ ...current, stellaOntologyMode: requested, updatedAt: Date.now() }));
+      localAssistantMessage(
+        session.id,
+        rawText,
+        copy.modeChanged(labelForStellaOntologyMode(requested, tw.language)),
+      );
+      return true;
+    }
+
     if (command === "/que" && !arg) {
       const nextMode = !session.queueMode;
       patchSession(session.id, (current) => ({ ...current, queueMode: nextMode, updatedAt: Date.now() }));
@@ -4514,11 +4660,14 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         const result = await agentSend({
           provider: session.provider,
           turnId,
-          prompt: formatAgentPrompt(
+          prompt: formatOntologyAgentPrompt(
             payload.text,
             tw.language,
             visualContext,
             payload.attachments,
+            normalizeStellaOntologyMode(session.stellaOntologyMode, session.provider),
+            session.provider,
+            runCwd,
           ),
           resumeSessionId: session.providerSessionId || null,
           cwd: runCwd || null,
@@ -4623,17 +4772,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     if ((!userText && attachments.length === 0) || isPastingImage) return;
     const quePrefixedText = attachments.length === 0 ? parseQuePrefixedMessage(userText) : null;
     const goalPrefixedText = parseGoalPrefixedMessage(userText);
-    const turnText = quePrefixedText
-      ? quePrefixedText
-      : goalPrefixedText
-        ? buildGoalPrompt(goalPrefixedText, tw.language)
-        : userText;
-    const visibleUserText = userText;
     const session = active || (() => {
+      const initialTitle = goalPrefixedText || quePrefixedText || userText;
       const fresh = makeSession(
         fallbackProfile,
         fallbackProvider,
-        (goalPrefixedText || turnText).slice(0, 42),
+        initialTitle.slice(0, 42),
       );
       const nextSessions = [fresh, ...sessionsRef.current];
       sessionsRef.current = nextSessions;
@@ -4643,12 +4787,23 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       setActiveId(fresh.id);
       return fresh;
     })();
+    const academicResearchRequest = !quePrefixedText && !goalPrefixedText && attachments.length === 0
+      ? parseAcademicResearchCommand(userText, tw.language, session.provider)
+      : null;
+    const turnText = quePrefixedText
+      ? quePrefixedText
+      : goalPrefixedText
+        ? buildGoalPrompt(goalPrefixedText, tw.language)
+        : academicResearchRequest
+          ? academicResearchRequest.prompt
+          : userText;
+    const visibleUserText = userText;
 
     setInput("");
     setPendingAttachments([]);
     setPasteError(null);
 
-    if (!quePrefixedText && !goalPrefixedText && attachments.length === 0 && await handleSlashCommand(session, userText)) return;
+    if (!quePrefixedText && !goalPrefixedText && !academicResearchRequest && attachments.length === 0 && await handleSlashCommand(session, userText)) return;
 
     const createdAt = Date.now();
     const payload: QueuedAgentTurn = {
@@ -4665,7 +4820,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     const shouldQueue = isBusy && (queueMode || Boolean(quePrefixedText));
     patchSession(session.id, (s) => ({
       ...s,
-      title: s.messages.length === 0 && !s.titleEdited ? (goalPrefixedText || turnText).slice(0, 48) : s.title,
+      title: s.messages.length === 0 && !s.titleEdited
+        ? (academicResearchRequest?.title || goalPrefixedText || turnText).slice(0, 48)
+        : s.title,
       cwd,
       queuedTurns: isBusy
         ? shouldQueue
@@ -5169,6 +5326,28 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                     {busyTurnId ? copy.draftHint : "⌘/Ctrl + Enter"}
                   </div>
                   <div className="shrink-0 flex items-center gap-1.5">
+                    <span className={cls("text-[10px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
+                      {copy.ontologyLabel}
+                    </span>
+                    <select
+                      value={activeStellaOntologyMode}
+                      onChange={(e) => updateActiveStellaOntologyMode(e.target.value as StellaOntologyMode)}
+                      disabled={!active || !!busyTurnId}
+                      className={cls(
+                        "h-8 max-w-[118px] rounded-[7px] border px-2 text-[11px] font-mono outline-none",
+                        dark
+                          ? "bg-dsurf border-dline text-dink disabled:text-dsub"
+                          : "bg-surface border-line text-ink disabled:text-sub",
+                      )}
+                      aria-label={copy.ontologyLabel}
+                      title={`${copy.ontologyLabel}: ${activeStellaOntologyLabel}`}
+                    >
+                      {STELLA_ONTOLOGY_MODES.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {tw.language === "en" ? option.en : option.ko}
+                        </option>
+                      ))}
+                    </select>
                     {activeProvider === "hermes" && (
                       <>
                         <span className={cls("text-[10px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>

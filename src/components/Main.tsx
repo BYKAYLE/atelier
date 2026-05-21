@@ -9,7 +9,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { CanvasAddon } from "@xterm/addon-canvas";
 import "@xterm/xterm/css/xterm.css";
-import { autoInstallCommand, autoInstallExecutable } from "../lib/cliInstallers";
+import { autoInstallExecutable } from "../lib/cliInstallers";
 import { cls, MOD_KEY, Tweaks } from "../lib/tokens";
 import { I } from "./Icons";
 import {
@@ -960,28 +960,16 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
   async function launchProfile(profileId: string, opts?: SpawnTabOptions) {
     const p = tw.profiles.find((x) => x.id === profileId) || tw.profiles[0];
     const executable = p ? autoInstallExecutable(p) : null;
-    const runCommand = opts?.cmdOverride?.trim() || p?.cmd?.trim() || "";
     if (p && executable && isTauri()) {
       try {
         const exists = await commandExists(executable);
         if (!exists) {
-          const installCmd = autoInstallCommand(p, tw.language, runCommand);
-          if (installCmd) {
-            const installLabel =
-              tw.language === "en" ? `${p.name} setup` : `${p.name} 설치`;
-            showToast(
-              tw.language === "en"
-                ? `${p.name} is not installed. Starting automatic setup.`
-                : `${p.name}이 설치되어 있지 않아 자동 설치를 시작합니다.`,
-            );
-            await spawnTab(p.id, {
-              ...opts,
-              customName: opts?.customName || installLabel,
-              cmdOverride: installCmd,
-              autoConnect: true,
-            });
-            return;
-          }
+          showToast(
+            tw.language === "en"
+              ? `${p.name} CLI is not installed. Open Settings > Connections and click automatic install.`
+              : `${p.name} CLI가 미설치 상태입니다. 설정 > 연결에서 자동 설치를 눌러주세요.`,
+          );
+          return;
         }
       } catch (err) {
         console.warn("command exists check failed", err);

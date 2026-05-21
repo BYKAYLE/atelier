@@ -137,7 +137,12 @@ const COPY = {
     installLink: "설치 가이드",
     installAuto: "자동 설치",
     installing: "설치 중…",
+    installPrompt: "미설치 상태입니다. 자동 설치를 눌러 CLI를 설치하세요.",
+    installTimeout:
+      "설치 완료를 아직 감지하지 못했습니다. Node.js/npm, Git Bash 또는 네트워크 상태를 확인한 뒤 다시 눌러주세요.",
     refresh: "상태 새로고침",
+    loginStartFailed: (name: string, message: string) =>
+      `${name} 로그인을 시작하지 못했습니다. ${message}`,
     loginModalTitle: "브라우저에서 로그인 진행",
     loginModalDesc:
       "기본 브라우저가 열려 있습니다. SNS(Google/Apple 등) 로그인을 완료하면 자동으로 감지됩니다.",
@@ -178,7 +183,12 @@ const COPY = {
     installLink: "Install guide",
     installAuto: "Install automatically",
     installing: "Installing…",
+    installPrompt: "CLI is not installed. Click automatic install to set it up.",
+    installTimeout:
+      "Atelier still cannot detect the CLI. Check Node.js/npm, Git Bash, or your network, then try again.",
     refresh: "Refresh status",
+    loginStartFailed: (name: string, message: string) =>
+      `Could not start ${name} sign-in. ${message}`,
     loginModalTitle: "Complete sign-in in your browser",
     loginModalDesc:
       "Your default browser is open. Finish SNS (Google/Apple/etc.) sign-in and Atelier will detect it automatically.",
@@ -222,6 +232,7 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
     name: string;
     detected: boolean;
   } | null>(null);
+  const [panelError, setPanelError] = useState<string | null>(null);
 
   const refresh = useCallback(async (only?: ProviderId) => {
     const targets = only ? [only] : (["claude", "codex", "openrouter", "hermes"] as ProviderId[]);
@@ -265,11 +276,18 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
     };
   }, [loginModal]);
 
-  function startLogin(p: ProviderDef) {
+  async function startLogin(p: ProviderDef) {
     setBusyId(p.id);
-    providerLoginOauth(p.id).catch(() => {});
-    setLoginModal({ provider: p.id, name: p.name, detected: false });
-    setTimeout(() => setBusyId(null), 800);
+    setPanelError(null);
+    try {
+      await providerLoginOauth(p.id);
+      setLoginModal({ provider: p.id, name: p.name, detected: false });
+    } catch (e) {
+      setPanelError(copy.loginStartFailed(p.name, String(e)));
+      void refresh(p.id);
+    } finally {
+      setTimeout(() => setBusyId(null), 800);
+    }
   }
 
   return (
@@ -289,7 +307,7 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
             tw={tw}
             status={statuses[p.id]}
             busy={busyId === p.id}
-            onStartLogin={() => startLogin(p)}
+            onStartLogin={() => void startLogin(p)}
             onSaved={() => void refresh(p.id)}
             onCleared={() => void refresh(p.id)}
             onInstalled={() => {
@@ -302,8 +320,25 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
           />
         ))}
 
-        <HermesCard tw={tw} statuses={statuses} />
+        <HermesCard
+          tw={tw}
+          statuses={statuses}
+          onInstalled={() => {
+            setTimeout(() => void refresh("hermes"), 1000);
+          }}
+        />
       </div>
+
+      {panelError && (
+        <div
+          className={cls(
+            "text-[12px] px-3 py-2 rounded-md border",
+            dark ? "border-red-700/40 bg-red-900/20 text-red-300" : "border-red-200 bg-red-50 text-red-700",
+          )}
+        >
+          {panelError}
+        </div>
+      )}
 
       <div className="pt-2">
         <button
@@ -416,8 +451,19 @@ const ProviderCard: React.FC<CardProps> = ({
     setErrorMsg(null);
     try {
       await providerInstallCli(def.id);
+      const started = Date.now();
+      while (Date.now() - started < 5 * 60 * 1000) {
+        await new Promise((resolve) => window.setTimeout(resolve, 3000));
+        const next = await providerStatus(def.id).catch(() => null);
+        if (next?.cli_installed) {
+          onInstalled();
+          setInstalling(false);
+          return;
+        }
+      }
       onInstalled();
-      setTimeout(() => setInstalling(false), 4000);
+      setErrorMsg(copy.installTimeout);
+      setInstalling(false);
     } catch (e) {
       setErrorMsg(String(e));
       setInstalling(false);
@@ -483,7 +529,7 @@ const ProviderCard: React.FC<CardProps> = ({
           </div>
           {!cliInstalled && def.installHelp ? (
             <div className={cls("text-[11.5px]", dark ? "text-dsub" : "text-sub")}>
-              {def.installHelp[lang]}{" "}
+              {copy.installPrompt} {def.installHelp[lang]}{" "}
               {def.installUrl ? (
                 <a href={def.installUrl} target="_blank" rel="noreferrer" className="underline text-[var(--accent)]">
                   {copy.installLink} ↗
@@ -574,7 +620,8 @@ const ProviderCard: React.FC<CardProps> = ({
 const HermesCard: React.FC<{
   tw: Tweaks;
   statuses: Record<ProviderId, ProviderStatus | null>;
-}> = ({ tw, statuses }) => {
+  onInstalled: () => void;
+}> = ({ tw, statuses, onInstalled }) => {
   const dark = tw.dark;
   const lang = tw.language;
   const copy = COPY[lang];
@@ -595,6 +642,8 @@ const HermesCard: React.FC<{
   const [updateStatus, setUpdateStatus] = useState<HermesUpdateStatus | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [installError, setInstallError] = useState<string | null>(null);
 
   const refreshUpdate = useCallback(async () => {
     setCheckingUpdate(true);
@@ -644,6 +693,30 @@ const HermesCard: React.FC<{
     }
   }
 
+  async function runInstall() {
+    setInstalling(true);
+    setInstallError(null);
+    try {
+      await providerInstallCli("hermes");
+      const started = Date.now();
+      while (Date.now() - started < 5 * 60 * 1000) {
+        await new Promise((resolve) => window.setTimeout(resolve, 3000));
+        const next = await providerStatus("hermes").catch(() => null);
+        if (next?.cli_installed) {
+          onInstalled();
+          setInstalling(false);
+          return;
+        }
+      }
+      onInstalled();
+      setInstallError(copy.installTimeout);
+      setInstalling(false);
+    } catch (e) {
+      setInstallError(String(e));
+      setInstalling(false);
+    }
+  }
+
   const selected = HERMES_BACKENDS.find((b) => b.value === backend) || HERMES_BACKENDS[0];
   const credStatus = statuses[selected.credentialProvider];
   const credConnected = !!credStatus && (credStatus.oauth_logged_in || credStatus.api_key_present);
@@ -672,8 +745,37 @@ const HermesCard: React.FC<{
       </div>
 
       {!installed && (
-        <div className={cls("text-[11.5px] mb-2", dark ? "text-dsub" : "text-sub")}>
-          {copy.hermesNotInstalled}
+        <div
+          className={cls(
+            "mt-3 rounded-md border px-3 py-2.5 flex items-center gap-2 flex-wrap",
+            dark ? "border-dline bg-dbg" : "border-line bg-cream",
+          )}
+        >
+          <div className={cls("flex-1 min-w-[220px] text-[11.5px]", dark ? "text-dsub" : "text-sub")}>
+            {copy.hermesNotInstalled} {copy.installPrompt}
+          </div>
+          <button
+            onClick={() => void runInstall()}
+            disabled={installing}
+            className={cls(
+              "text-[12.5px] h-8 px-3 rounded-md border font-medium transition-colors",
+              "bg-[var(--accent)]/10 text-[var(--accent)] border-[var(--accent)]/40 hover:bg-[var(--accent)]/20",
+              "disabled:opacity-50 disabled:cursor-not-allowed",
+            )}
+          >
+            {installing ? copy.installing : `+ ${copy.installAuto}`}
+          </button>
+        </div>
+      )}
+
+      {installError && (
+        <div
+          className={cls(
+            "mt-3 text-[12px] px-3 py-2 rounded-md border",
+            dark ? "border-red-700/40 bg-red-900/20 text-red-300" : "border-red-200 bg-red-50 text-red-700",
+          )}
+        >
+          {installError}
         </div>
       )}
 

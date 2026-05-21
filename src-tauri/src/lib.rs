@@ -168,11 +168,35 @@ pub(crate) fn augmented_cli_path() -> String {
         let userprofile = std::env::var("USERPROFILE")
             .or_else(|_| std::env::var("HOME"))
             .unwrap_or_default();
+        let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
+        let programfiles = std::env::var("ProgramFiles").unwrap_or_default();
+        let programfiles_x86 = std::env::var("ProgramFiles(x86)").unwrap_or_default();
         let existing = std::env::var("PATH").unwrap_or_default();
-        let extra = format!(
-            "{up}\\AppData\\Roaming\\npm;{up}\\.claude\\local;{up}\\.local\\bin",
-            up = userprofile
-        );
+        let mut extras = vec![
+            format!("{up}\\AppData\\Roaming\\npm", up = userprofile),
+            format!("{up}\\.claude\\local", up = userprofile),
+            format!("{up}\\.claude\\local\\bin", up = userprofile),
+            format!("{up}\\.local\\bin", up = userprofile),
+        ];
+        if !localappdata.is_empty() {
+            extras.push(format!("{localappdata}\\Programs\\nodejs"));
+            extras.push(format!("{localappdata}\\hermes\\hermes-agent"));
+            extras.push(format!(
+                "{localappdata}\\hermes\\hermes-agent\\venv\\Scripts"
+            ));
+            extras.push(format!("{localappdata}\\hermes\\node"));
+        }
+        if !programfiles.is_empty() {
+            extras.push(format!("{programfiles}\\nodejs"));
+            extras.push(format!("{programfiles}\\Git\\bin"));
+            extras.push(format!("{programfiles}\\Git\\cmd"));
+        }
+        if !programfiles_x86.is_empty() {
+            extras.push(format!("{programfiles_x86}\\nodejs"));
+            extras.push(format!("{programfiles_x86}\\Git\\bin"));
+            extras.push(format!("{programfiles_x86}\\Git\\cmd"));
+        }
+        let extra = extras.join(";");
         if existing.is_empty() {
             extra
         } else {
@@ -690,6 +714,7 @@ pub fn run() {
             agent::agent_claude_send,
             agent::agent_send,
             agent::agent_cli_command,
+            agent::academic_research_install_claude_plugin,
             agent::agent_cancel,
             agent::agent_change_baseline,
             agent::agent_change_summary,
