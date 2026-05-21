@@ -137,6 +137,7 @@ jobs:
         run: npm install --legacy-peer-deps
 
       - name: Check SignPath configuration
+        id: signpath-config
         shell: pwsh
         env:
           SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
@@ -155,11 +156,15 @@ jobs:
             }
           }
           if ($missing.Count -gt 0) {
-            throw "Missing SignPath repository value(s): $($missing -join ', ')"
+            "ready=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            "missing=$($missing -join ', ')" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Warning "Missing SignPath repository value(s): $($missing -join ', '). Windows assets will be published with Tauri updater signatures only."
+          } else {
+            "ready=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           }
 
       - name: Submit SignPath signing request
-        if: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG == '' }}
+        if: ${{ steps.signpath-config.outputs.ready == 'true' && vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG == '' }}
         uses: signpath/github-action-submit-signing-request@v2
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
@@ -175,7 +180,7 @@ jobs:
             version: ${{ github.ref_name }}
 
       - name: Submit SignPath signing request with artifact configuration
-        if: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG != '' }}
+        if: ${{ steps.signpath-config.outputs.ready == 'true' && vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG != '' }}
         uses: signpath/github-action-submit-signing-request@v2
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
@@ -191,7 +196,14 @@ jobs:
           parameters: |
             version: ${{ github.ref_name }}
 
-      - name: Create updater signatures for signed Windows installers
+      - name: Use unsigned Windows artifact when SignPath is unavailable
+        if: ${{ steps.signpath-config.outputs.ready != 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: atelier-windows-unsigned-${{ github.ref_name }}
+          path: signed-windows
+
+      - name: Create updater signatures for Windows installers
         shell: pwsh
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -219,7 +231,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: node .github/scripts/update-tauri-latest-json.mjs
 
-      - name: Upload signed Windows assets
+      - name: Upload Windows assets
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN || github.token }}
