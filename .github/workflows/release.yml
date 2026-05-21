@@ -65,7 +65,7 @@ jobs:
             Full policy: https://github.com/BYKAYLE/atelier/blob/main/docs/code-signing-policy.md
           releaseDraft: false
           prerelease: false
-          uploadUpdaterJson: true
+          includeUpdaterJson: true
           updaterJsonPreferNsis: true
           args: "--target aarch64-apple-darwin"
 
