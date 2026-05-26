@@ -17,6 +17,36 @@ New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 $signedRootPath = (Resolve-Path -LiteralPath $SignedInputDir).Path
 $outputRootPath = (Resolve-Path -LiteralPath $OutputDir).Path
 
+function Get-TauriUpdaterSignature {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$RawOutput,
+    [Parameter(Mandatory = $true)]
+    [string]$File
+  )
+
+  $text = $RawOutput.Trim()
+  $match = [regex]::Match(
+    $text,
+    "Public signature:\s*(?<signature>[A-Za-z0-9+/=]+)",
+    [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+  )
+  if ($match.Success) {
+    $text = $match.Groups["signature"].Value.Trim()
+  }
+
+  if ([string]::IsNullOrWhiteSpace($text)) {
+    throw "Tauri updater signature was empty for $File"
+  }
+  if ($text -notmatch "^[A-Za-z0-9+/=]+$") {
+    throw "Tauri updater signature contains non-base64 text for $File"
+  }
+  if ($text.Length -lt 80) {
+    throw "Tauri updater signature is unexpectedly short for $File"
+  }
+  return $text
+}
+
 $zipFiles = Get-ChildItem -LiteralPath $signedRootPath -Recurse -File -Filter "*.zip"
 if ($zipFiles -and $zipFiles.Count -gt 0) {
   $expandedRoot = Join-Path $signedRootPath "__expanded"
@@ -39,12 +69,10 @@ foreach ($installer in $installers) {
   $destination = Join-Path $outputRootPath $installer.Name
   Copy-Item -LiteralPath $installer.FullName -Destination $destination -Force
 
-  $signature = (& npm run --silent tauri -- signer sign "$destination" | Out-String).Trim()
-  if ([string]::IsNullOrWhiteSpace($signature)) {
-    throw "Tauri updater signature was empty for $destination"
-  }
+  $signatureOutput = (& npm run --silent tauri -- signer sign "$destination" | Out-String)
+  $signature = Get-TauriUpdaterSignature -RawOutput $signatureOutput -File $destination
 
-  Set-Content -Path "$destination.sig" -Value $signature -Encoding UTF8
+  Set-Content -Path "$destination.sig" -Value $signature -Encoding UTF8 -NoNewline
 }
 
 Write-Host "Prepared signed Windows release assets:"

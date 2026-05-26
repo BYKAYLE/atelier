@@ -44,6 +44,22 @@ if (files.length === 0) {
   throw new Error(`No signed Windows installer files found in ${signedAssetsDir}`);
 }
 
+function extractUpdaterSignature(raw, file) {
+  const text = raw.trim();
+  const publicSignature = text.match(/Public signature:\s*([A-Za-z0-9+/=]+)/i)?.[1]?.trim();
+  const signature = publicSignature || text;
+  if (!signature) {
+    throw new Error(`Updater signature was empty for ${file}`);
+  }
+  if (!/^[A-Za-z0-9+/=]+$/.test(signature)) {
+    throw new Error(`Updater signature for ${file} contains non-base64 text`);
+  }
+  if (signature.length < 80) {
+    throw new Error(`Updater signature for ${file} is unexpectedly short`);
+  }
+  return signature;
+}
+
 const entries = [];
 for (const file of files) {
   const signaturePath = join(signedAssetsDir, `${file}.sig`);
@@ -56,7 +72,7 @@ for (const file of files) {
   const encodedFile = encodeURIComponent(basename(file));
   entries.push({
     bundle,
-    signature: readFileSync(signaturePath, 'utf8').trim(),
+    signature: extractUpdaterSignature(readFileSync(signaturePath, 'utf8'), file),
     url: `https://github.com/${releaseOwner}/${releaseRepo}/releases/download/${encodedTag}/${encodedFile}`,
   });
 }
