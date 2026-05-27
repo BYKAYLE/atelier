@@ -54,6 +54,15 @@ fn inject_backend_credential_env(cmd: &mut Command, provider: &str) {
     }
 }
 
+fn isolate_claude_structured_run(cmd: &mut Command) {
+    // Atelier renders Claude as a structured chat surface, not as the full Claude Code TUI.
+    // User-level hooks can inject synthetic follow-up turns after the answer has already
+    // completed (for example Stella Stop hook reminders), which looks like a repeated
+    // failed response in the hidden-terminal UI. Keep project/local settings, but skip
+    // global user hooks for this adapter.
+    cmd.arg("--setting-sources").arg("local,project");
+}
+
 fn format_cli_exit(cli: &str, status: ExitStatus) -> String {
     let code = status.code().unwrap_or(-1);
     #[cfg(target_os = "windows")]
@@ -2856,6 +2865,7 @@ fn run_claude<R: Runtime>(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    isolate_claude_structured_run(&mut cmd);
 
     if let Some(session_id) = resume_session_id.filter(|s| !s.trim().is_empty()) {
         cmd.arg("--resume").arg(session_id);

@@ -919,6 +919,11 @@ pub fn read_api_key(provider: &str) -> Option<String> {
 /// 일부러 주입하지 않는다. Hermes 같은 API backend 경로는 read_api_key를 직접 쓴다.
 pub fn read_agent_api_key(provider: &str) -> Option<String> {
     let state = credential_state(provider);
+    if matches!(provider, "claude" | "codex") && !state.oauth_logged_in && state.api_key_present {
+        if detect_oauth(provider) {
+            return None;
+        }
+    }
     if !should_inject_agent_api_key(provider, &state) {
         return None;
     }
