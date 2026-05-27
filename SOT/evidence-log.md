@@ -49,3 +49,14 @@ Validation evidence:
 - `npm run tauri:build` passed and produced:
   - `src-tauri/target/release/bundle/macos/Atelier.app`
   - `src-tauri/target/release/bundle/dmg/Atelier_0.1.36_aarch64.dmg`
+
+## 2026-05-28 Installed Build and Release Version
+
+- Version bumped to `0.1.37` for this Stella Factory patch upload.
+- `npm run tauri:build` passed for `0.1.37`.
+- `/Applications/Atelier.app` was replaced with the `0.1.37` app bundle and
+  passed `codesign --verify --deep --strict`.
+- `cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture` passed
+  23 tests on `0.1.37`.
+- Local release asset:
+  `src-tauri/target/release/bundle/dmg/Atelier_0.1.37_aarch64.dmg`.
