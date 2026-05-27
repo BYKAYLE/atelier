@@ -154,3 +154,36 @@ Validation evidence:
 - `codesign --verify --deep --strict --verbose=2 /Applications/Atelier.app`
   passed.
 - `/Applications/Atelier.app/Contents/Info.plist` reports version `0.1.40`.
+
+## 2026-05-28 Factory Main Toggle Button
+
+User-visible follow-up:
+
+- Changed the `필요 시 Stella Factory` label into a real toggle button.
+- The Factory main button now uses the same pressed/unpressed visual behavior as
+  the Goal/Analyze/Probe/Audit quick buttons.
+- Pressing the Factory main button turns on the default `/goal` Factory mode;
+  pressing it again clears the active Factory command.
+- Version bumped to `0.1.41` for this interaction fix.
+
+Validation evidence:
+
+- `npm run build` passed.
+- `cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture` passed
+  23 tests on `0.1.41`.
+- `npm run harness:fixture` passed and wrote:
+  `src-tauri/target/atelier-harness/atelier-agent-harness-2026-05-27T23-16-03-514Z.json`.
+- Headless Chrome main-toggle interaction check:
+  before press `aria-pressed` was `[]`, after pressing `필요 시 Stella Factory`
+  it was `["필요 시 Stella Factory", "목표"]` with prompt value `/goal `, and
+  after pressing it again `aria-pressed` returned to `[]` with an empty prompt.
+- Visual checks:
+  `/tmp/atelier-factory-main-default-041.png`,
+  `/tmp/atelier-factory-main-active-041.png`,
+  `/tmp/atelier-factory-main-cleared-041.png`.
+- `npm run tauri:build` passed and produced:
+  `src-tauri/target/release/bundle/dmg/Atelier_0.1.41_aarch64.dmg`.
+- `/Applications/Atelier.app` was replaced with the `0.1.41` app bundle.
+- `codesign --verify --deep --strict --verbose=2 /Applications/Atelier.app`
+  passed.
+- `/Applications/Atelier.app/Contents/Info.plist` reports version `0.1.41`.

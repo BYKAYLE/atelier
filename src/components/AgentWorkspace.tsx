@@ -5622,15 +5622,26 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                   </div>
                 )}
                 <div className={cls("mb-2 flex flex-wrap items-center gap-1.5 border-b pb-2", dark ? "border-dline" : "border-line")}>
-                  <span
+                  <button
+                    type="button"
+                    onClick={() => applyFactoryCommand(activeFactoryCommand || "goal")}
                     className={cls(
-                      "h-7 shrink-0 px-1 inline-flex items-center gap-1.5 text-[11px] font-medium",
-                      dark ? "text-dsub" : "text-sub",
+                      "h-7 shrink-0 rounded-[7px] px-2.5 inline-flex items-center gap-1.5 text-[11px] font-medium border transition-colors",
+                      activeFactoryCommand
+                        ? dark
+                          ? "bg-[#3a2a23] border-[#e26f4f] text-dink"
+                          : "bg-[#fff1eb] border-[#e26f4f] text-ink"
+                        : dark
+                          ? "border-transparent text-dsub hover:text-dink hover:bg-[#343431]"
+                          : "border-transparent text-sub hover:text-ink hover:bg-line",
                     )}
+                    title={copy.factoryGoalTitle}
+                    aria-label={copy.factoryLabel}
+                    aria-pressed={Boolean(activeFactoryCommand)}
                   >
                     <span className="text-[#e26f4f]">{I.zap}</span>
                     <span>{copy.factoryLabel}</span>
-                  </span>
+                  </button>
                   {[
                     { command: "goal" as const, label: copy.factoryGoal, title: copy.factoryGoalTitle, icon: I.zap },
                     { command: "analyze" as const, label: copy.factoryAnalyze, title: copy.factoryAnalyzeTitle, icon: I.eye },
