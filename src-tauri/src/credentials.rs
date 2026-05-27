@@ -753,6 +753,7 @@ fn install_npm_cli(label: &'static str, pkg: &'static str) -> Result<(), String>
             .arg("install")
             .arg("-g")
             .arg(pkg);
+        configure_background_command(&mut command);
         command
     };
     #[cfg(not(target_os = "windows"))]

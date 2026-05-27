@@ -6,6 +6,13 @@ mod pty;
 use serde::Serialize;
 use tauri::Manager;
 
+#[cfg(target_os = "windows")]
+fn configure_background_command(command: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
 fn reveal_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -242,13 +249,16 @@ async fn command_exists(command: String) -> std::result::Result<bool, String> {
         return Err("invalid command name".into());
     }
     #[cfg(target_os = "windows")]
-    let status = std::process::Command::new("cmd.exe")
-        .arg("/C")
-        .arg("where")
-        .arg(&command)
-        .env("PATH", augmented_cli_path())
-        .status()
-        .map_err(|e| format!("where {command}: {e}"))?;
+    let status = {
+        let mut cmd = std::process::Command::new("cmd.exe");
+        configure_background_command(&mut cmd);
+        cmd.arg("/C")
+            .arg("where")
+            .arg(&command)
+            .env("PATH", augmented_cli_path())
+            .status()
+            .map_err(|e| format!("where {command}: {e}"))?
+    };
     #[cfg(not(target_os = "windows"))]
     let status = std::process::Command::new("sh")
         .arg("-lc")
@@ -589,6 +599,7 @@ async fn design_claude_call(
     let mut command = {
         let mut command = Command::new("cmd.exe");
         command.arg("/C").arg("claude");
+        configure_background_command(&mut command);
         if std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH").is_none() {
             for candidate in [
                 r"C:\Program Files\Git\bin\bash.exe",

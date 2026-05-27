@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -42,6 +42,15 @@ fn inject_credential_env(cmd: &mut Command, provider: &str) {
     if let (Some(var), Some(key)) = (env_var_for(provider), read_api_key(provider)) {
         cmd.env(var, key);
     }
+}
+
+fn format_cli_exit(cli: &str, status: ExitStatus) -> String {
+    let code = status.code().unwrap_or(-1);
+    #[cfg(target_os = "windows")]
+    if code == -1073741510 {
+        return format!("{cli}가 Windows 종료 신호로 중단됐습니다. 외부 콘솔이 닫혔거나 프로세스가 강제로 종료된 상태입니다.");
+    }
+    format!("{cli} exited with {code}")
 }
 
 fn resolve_cli_executable(cli: &str) -> PathBuf {
@@ -129,6 +138,7 @@ fn command_for_cli(cli: &str) -> Command {
     {
         let mut command = Command::new("cmd.exe");
         command.arg("/C").arg(cli);
+        configure_windows_background_command(&mut command);
         configure_windows_agent_cli_env(&mut command);
         return command;
     }
@@ -143,6 +153,13 @@ fn command_for_cli(cli: &str) -> Command {
         return command;
     }
     Command::new(executable)
+}
+
+#[cfg(target_os = "windows")]
+fn configure_windows_background_command(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    command.creation_flags(CREATE_NO_WINDOW);
 }
 
 #[cfg(target_os = "windows")]
@@ -1152,6 +1169,7 @@ fn infer_preview_command(cwd: &str, url: &str) -> Result<String, String> {
 fn preview_shell_command(command: &str) -> Command {
     let mut cmd = Command::new("cmd.exe");
     cmd.arg("/C").arg(command);
+    configure_windows_background_command(&mut cmd);
     cmd
 }
 
@@ -2559,7 +2577,7 @@ fn run_claude<R: Runtime>(
         is_error = true;
         if error.is_none() {
             error = Some(if stderr_text.trim().is_empty() {
-                format!("claude exited with {}", status.code().unwrap_or(-1))
+                format_cli_exit("claude", status)
             } else {
                 stderr_text.trim().to_string()
             });
@@ -2839,7 +2857,7 @@ fn run_codex<R: Runtime>(
         is_error = true;
         if error.is_none() {
             error = Some(if stderr_text.trim().is_empty() {
-                format!("codex exited with {}", status.code().unwrap_or(-1))
+                format_cli_exit("codex", status)
             } else {
                 stderr_text.trim().to_string()
             });
@@ -3860,7 +3878,7 @@ fn run_hermes<R: Runtime>(
         } else if provider_timeout_without_answer {
             "Hermes 모델 호출이 시간 안에 응답하지 않아 중단됐습니다. Atelier가 다음 요청부터 긴 Hermes/Codex 세션 resume 대신 짧은 최근 대화 컨텍스트로 실행합니다.".to_string()
         } else if stderr_text.trim().is_empty() {
-            format!("hermes exited with {}", status.code().unwrap_or(-1))
+            format_cli_exit("hermes", status)
         } else {
             stderr_text.trim().to_string()
         })
