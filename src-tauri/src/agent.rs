@@ -1047,6 +1047,24 @@ fn extract_claude_error_from_raw_events(raw_events: &[String]) -> Option<String>
     None
 }
 
+fn claude_stream_completed_successfully(raw_events: &[String]) -> bool {
+    for line in raw_events.iter().rev() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if value.get("type").and_then(Value::as_str) != Some("result") {
+            continue;
+        }
+        if value.get("is_error").and_then(Value::as_bool) == Some(true) {
+            return false;
+        }
+        let subtype = value.get("subtype").and_then(Value::as_str);
+        let terminal_reason = value.get("terminal_reason").and_then(Value::as_str);
+        return subtype == Some("success") || terminal_reason == Some("completed");
+    }
+    false
+}
+
 fn is_hermes_provider_diagnostic_line(line: &str) -> bool {
     let t = line.trim();
     if t.is_empty() {
@@ -2946,7 +2964,8 @@ fn run_claude<R: Runtime>(
     let stderr_text = stderr_handle
         .and_then(|h| h.join().ok())
         .unwrap_or_default();
-    if !status.success() {
+    let stream_completed_successfully = claude_stream_completed_successfully(&raw_events);
+    if !status.success() && !stream_completed_successfully {
         is_error = true;
         if error.is_none() {
             error = Some(if stderr_text.trim().is_empty() {
@@ -4526,6 +4545,23 @@ mod tests {
         assert!(message.contains("Claude 인증 실패"));
         assert!(message.contains("401"));
         assert!(message.contains("authentication_failed"));
+    }
+
+    #[test]
+    fn claude_success_result_survives_late_nonzero_exit() {
+        let raw = vec![
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}"#.to_string(),
+            r#"{"type":"result","subtype":"success","is_error":false,"terminal_reason":"completed","result":"ok"}"#.to_string(),
+        ];
+        assert!(claude_stream_completed_successfully(&raw));
+    }
+
+    #[test]
+    fn claude_error_result_is_not_successful_completion() {
+        let raw = vec![
+            r#"{"type":"result","subtype":"error","is_error":true,"api_error_status":"401","terminal_reason":"failed"}"#.to_string(),
+        ];
+        assert!(!claude_stream_completed_successfully(&raw));
     }
 
     #[test]
