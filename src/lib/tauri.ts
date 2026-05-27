@@ -340,8 +340,8 @@ export async function providerClearCredentials(provider: string): Promise<void> 
  * CLI 가 사용자 기본 브라우저로 OAuth(Google/Apple/GitHub 등 SNS) 진입.
  * 즉시 반환 — 사용자가 브라우저에서 로그인 완료할 때까지 폴링으로 status 재확인.
  */
-export async function providerLoginOauth(provider: string): Promise<void> {
-  return invoke("provider_login_oauth", { provider });
+export async function providerLoginOauth(provider: string, force = false): Promise<void> {
+  return invoke("provider_login_oauth", { provider, force });
 }
 
 /** Claude/Codex/Hermes CLI 자동 설치. 백그라운드 실행, 즉시 반환. */

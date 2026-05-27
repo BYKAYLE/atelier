@@ -113,6 +113,48 @@ fn provider_meta(provider: &str) -> Option<ProviderMeta> {
     }
 }
 
+fn oauth_login_args(provider: &str, fallback_cmd: &'static str) -> Vec<&'static str> {
+    match provider {
+        "claude" => vec!["auth", "login", "--claudeai"],
+        _ => vec![fallback_cmd],
+    }
+}
+
+fn oauth_logout_args(provider: &str) -> Option<Vec<&'static str>> {
+    match provider {
+        "claude" => Some(vec!["auth", "logout"]),
+        "codex" => Some(vec!["logout"]),
+        _ => None,
+    }
+}
+
+fn run_oauth_logout(provider: &str, cli: &str) -> Result<(), String> {
+    let Some(args) = oauth_logout_args(provider) else {
+        return Ok(());
+    };
+    let label = args.join(" ");
+    let mut command = cli_command(cli);
+    command.args(&args).env("PATH", crate::augmented_cli_path());
+    match command_output_timeout(command, Duration::from_secs(8)) {
+        Ok(Some(output)) if output.status.success() => Ok(()),
+        Ok(Some(output)) => {
+            let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
+            if !combined.is_empty() {
+                combined.push('\n');
+            }
+            combined.push_str(&String::from_utf8_lossy(&output.stderr));
+            let detail = combined.trim();
+            if detail.is_empty() {
+                Err(format!("{cli} {label} exited with {}", output.status))
+            } else {
+                Err(format!("{cli} {label} exited with {}: {detail}", output.status))
+            }
+        }
+        Ok(None) => Err(format!("{cli} {label} timed out")),
+        Err(e) => Err(format!("{cli} {label}: {e}")),
+    }
+}
+
 struct ProviderMeta {
     cli: Option<&'static str>,
     login_cmd: Option<&'static str>,
@@ -562,10 +604,19 @@ pub async fn provider_save_api_key(provider: String, api_key: String) -> Result<
 
 #[tauri::command]
 pub async fn provider_clear_credentials(provider: String) -> Result<(), String> {
-    let _ = provider_meta(&provider).ok_or_else(|| format!("unknown provider: {provider}"))?;
+    let meta = provider_meta(&provider).ok_or_else(|| format!("unknown provider: {provider}"))?;
     for slot in ["api_key", "oauth_marker"] {
         if let Ok(entry) = keychain_entry(&provider, slot) {
             let _ = entry.delete_credential();
+        }
+    }
+    if meta.supports_oauth {
+        if let Some(cli) = meta.cli {
+            if which(cli) {
+                if let Err(e) = run_oauth_logout(&provider, cli) {
+                    log::warn!("oauth logout during credential clear failed for {provider}: {e}");
+                }
+            }
         }
     }
     let _ = update_credential_state(&provider, |state| {
@@ -580,7 +631,7 @@ pub async fn provider_clear_credentials(provider: String) -> Result<(), String> 
 /// CLI 가 사용자 기본 브라우저를 열어 SNS(Google/Apple/GitHub 등) 로그인 페이지로 보낸다.
 /// blocking 으로 기다리지 않고 즉시 반환 — 프론트가 status polling 으로 완료 감지.
 #[tauri::command]
-pub async fn provider_login_oauth(provider: String) -> Result<(), String> {
+pub async fn provider_login_oauth(provider: String, force: Option<bool>) -> Result<(), String> {
     let meta = provider_meta(&provider).ok_or_else(|| format!("unknown provider: {provider}"))?;
     if !meta.supports_oauth {
         return Err(format!("{provider} does not support OAuth"));
@@ -590,13 +641,20 @@ pub async fn provider_login_oauth(provider: String) -> Result<(), String> {
     if !which(cli) {
         return Err(format!("CLI '{cli}' is not installed"));
     }
+    if force.unwrap_or(false) {
+        if let Err(e) = run_oauth_logout(&provider, cli) {
+            log::warn!("forced oauth logout before login failed for {provider}: {e}");
+        }
+        set_oauth_state(&provider, false);
+    }
 
     let provider_clone = provider.clone();
     let cli_owned = cli.to_string();
-    let cmd_owned = cmd.to_string();
+    let login_args = oauth_login_args(&provider, cmd);
+    let cmd_owned = login_args.join(" ");
     let mut command = cli_command(&cli_owned);
     command
-        .arg(&cmd_owned)
+        .args(&login_args)
         .env("PATH", crate::augmented_cli_path())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -643,7 +701,7 @@ pub async fn provider_login_oauth(provider: String) -> Result<(), String> {
 pub async fn provider_install_cli(provider: String) -> Result<(), String> {
     match provider.as_str() {
         "claude" => install_claude_cli(),
-        "codex" => install_npm_cli("codex", "@openai/codex", false),
+        "codex" => install_npm_cli("codex", "@openai/codex"),
         "hermes" => install_hermes_cli(),
         _ => Err(format!("automatic install not available for {provider}")),
     }
@@ -679,11 +737,7 @@ fn spawn_cli_installer(
     Ok(())
 }
 
-fn install_npm_cli(
-    label: &'static str,
-    pkg: &'static str,
-    bootstrap_claude_plugin: bool,
-) -> Result<(), String> {
+fn install_npm_cli(label: &'static str, pkg: &'static str) -> Result<(), String> {
     if !which("npm") {
         return Err("npm not found. install Node.js first.".into());
     }
@@ -704,12 +758,7 @@ fn install_npm_cli(
         command.arg("install").arg("-g").arg(pkg);
         command
     };
-    let after_success = if bootstrap_claude_plugin {
-        Some(bootstrap_academic_research_plugin_for_claude as fn())
-    } else {
-        None
-    };
-    spawn_cli_installer(command, label, after_success)
+    spawn_cli_installer(command, label, None)
 }
 
 fn install_claude_cli() -> Result<(), String> {
@@ -722,15 +771,11 @@ fn install_claude_cli() -> Result<(), String> {
             .arg("Bypass")
             .arg("-Command")
             .arg(CLAUDE_INSTALL_PS1);
-        return spawn_cli_installer(
-            command,
-            "claude",
-            Some(bootstrap_academic_research_plugin_for_claude as fn()),
-        );
+        return spawn_cli_installer(command, "claude", None);
     }
 
     #[cfg(not(target_os = "windows"))]
-    install_npm_cli("claude", "@anthropic-ai/claude-code", true)
+    install_npm_cli("claude", "@anthropic-ai/claude-code")
 }
 
 fn install_hermes_cli() -> Result<(), String> {
@@ -757,115 +802,6 @@ fn install_hermes_cli() -> Result<(), String> {
         let mut command = Command::new("sh");
         command.arg("-c").arg(HERMES_INSTALL_SH);
         spawn_cli_installer(command, "hermes", None)
-    }
-}
-
-fn run_claude_plugin_command_for_bootstrap(
-    args: &[&str],
-    timeout: Duration,
-) -> Result<Output, String> {
-    let mut command = cli_command("claude");
-    command
-        .args(args)
-        .env("PATH", crate::augmented_cli_path())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .stdin(Stdio::null());
-    configure_background_command(&mut command);
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("claude plugin bootstrap spawn: {e}"))?;
-    let started = Instant::now();
-    loop {
-        if child
-            .try_wait()
-            .map_err(|e| format!("claude plugin bootstrap poll: {e}"))?
-            .is_some()
-        {
-            return child
-                .wait_with_output()
-                .map_err(|e| format!("claude plugin bootstrap output: {e}"));
-        }
-        if started.elapsed() >= timeout {
-            let _ = child.kill();
-            return child
-                .wait_with_output()
-                .map_err(|e| format!("claude plugin bootstrap timeout output: {e}"));
-        }
-        thread::sleep(Duration::from_millis(120));
-    }
-}
-
-fn academic_research_plugin_state_from_list(list_output: &str) -> (bool, bool) {
-    let installed = list_output.contains("academic-research-skills");
-    let enabled = installed
-        && list_output
-            .lines()
-            .skip_while(|line| !line.contains("academic-research-skills"))
-            .take(5)
-            .any(|line| line.contains("Status:") && !line.contains("disabled"));
-    (installed, enabled)
-}
-
-fn bootstrap_academic_research_plugin_for_claude() {
-    if !which("claude") {
-        return;
-    }
-    let list_output =
-        match run_claude_plugin_command_for_bootstrap(&["plugin", "list"], Duration::from_secs(20))
-        {
-            Ok(output) => {
-                let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
-                combined.push('\n');
-                combined.push_str(&String::from_utf8_lossy(&output.stderr));
-                combined
-            }
-            Err(e) => {
-                log::warn!("academic research plugin bootstrap list failed: {e}");
-                return;
-            }
-        };
-    let (installed, enabled) = academic_research_plugin_state_from_list(&list_output);
-    if installed && enabled {
-        return;
-    }
-
-    let mut steps: Vec<Vec<&'static str>> = Vec::new();
-    if !installed {
-        steps.push(vec![
-            "plugin",
-            "marketplace",
-            "add",
-            "Imbad0202/academic-research-skills",
-        ]);
-        steps.push(vec!["plugin", "install", "academic-research-skills"]);
-    }
-    if !enabled {
-        steps.push(vec!["plugin", "enable", "academic-research-skills"]);
-    }
-    for args in steps {
-        match run_claude_plugin_command_for_bootstrap(&args, Duration::from_secs(90)) {
-            Ok(output) if output.status.success() => {
-                log::info!(
-                    "academic research plugin bootstrap step completed: {:?}",
-                    args
-                );
-            }
-            Ok(output) => {
-                let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
-                combined.push('\n');
-                combined.push_str(&String::from_utf8_lossy(&output.stderr));
-                log::warn!(
-                    "academic research plugin bootstrap step failed {:?}: {}",
-                    args,
-                    combined.trim()
-                );
-            }
-            Err(e) => log::warn!(
-                "academic research plugin bootstrap step error {:?}: {e}",
-                args
-            ),
-        }
     }
 }
 

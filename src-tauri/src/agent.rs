@@ -640,6 +640,45 @@ fn hermes_auth_error_message(text: &str) -> Option<String> {
     })
 }
 
+fn is_hermes_provider_diagnostic_line(line: &str) -> bool {
+    let t = line.trim();
+    if t.is_empty() {
+        return false;
+    }
+
+    let lower = t.to_ascii_lowercase();
+    lower.contains("no response from provider")
+        || lower.contains("api call failed")
+        || lower.contains("timeout")
+            && (lower.contains("non-streaming")
+                || lower.contains("provider")
+                || lower.contains("endpoint")
+                || lower.contains("threshold"))
+        || lower.contains("aborting call")
+        || lower.contains("retrying in")
+        || lower.starts_with("provider:")
+        || lower.starts_with("endpoint:")
+        || lower.starts_with("error: non-streaming api call timed out")
+        || lower.starts_with("elapsed:")
+        || lower.starts_with("model:")
+        || lower.starts_with("context:")
+        || (t.starts_with('⚠')
+            && (lower.contains("provider")
+                || lower.contains("api call")
+                || lower.contains("timeout")
+                || lower.contains("aborting")))
+        || ((t.starts_with('🔌')
+            || t.starts_with('🌐')
+            || t.starts_with('📝')
+            || t.starts_with('⏱')
+            || t.starts_with('⏳'))
+            && (lower.contains("provider:")
+                || lower.contains("endpoint:")
+                || lower.contains("error:")
+                || lower.contains("elapsed:")
+                || lower.contains("retrying")))
+}
+
 struct AgentPowerAssertion {
     caffeinate: Option<Child>,
 }
@@ -3459,6 +3498,22 @@ fn run_hermes<R: Runtime>(
             continue;
         }
 
+        if is_hermes_provider_diagnostic_line(&line) {
+            emit_agent_event(
+                &app,
+                &turn_id,
+                AgentStreamEvent {
+                    kind: "status".into(),
+                    text: Some(trimmed.to_string()),
+                    status: Some("hermes.provider_diagnostic".into()),
+                    raw: Some(line.clone()),
+                    provider_session_id: provider_session_id.clone(),
+                    is_error: Some(true),
+                },
+            );
+            continue;
+        }
+
         if let Some(end_marker) = tool_block_end.clone() {
             if hermes_heredoc_marker_closed(&end_marker, trimmed) {
                 tool_block_end = None;
@@ -3668,9 +3723,6 @@ fn run_hermes<R: Runtime>(
         .unwrap_or_default();
     let auth_error =
         hermes_auth_error_message(&format!("{}\n{}", raw_events.join("\n"), stderr_text));
-    let idle_timed_out = idle_timeout_status.is_some();
-    let is_error =
-        auth_error.is_some() || (!status.success() && !finalized_after_idle) || idle_timed_out;
     let mut text = final_text.trim().to_string();
     let mut best: Vec<String> = Vec::new();
     let mut current: Vec<String> = Vec::new();
@@ -3728,6 +3780,9 @@ fn run_hermes<R: Runtime>(
         if is_activity_summary(line) || is_command_dump(line) || is_replacement_dump_line(line) {
             continue;
         }
+        if is_hermes_provider_diagnostic_line(line) {
+            continue;
+        }
         current.push(trimmed.to_string());
     }
     if current.iter().any(|l| !l.trim().is_empty()) {
@@ -3751,6 +3806,15 @@ fn run_hermes<R: Runtime>(
             .trim()
             .to_string();
     }
+    let idle_timed_out = idle_timeout_status.is_some();
+    let provider_timeout_without_answer = text.trim().is_empty()
+        && raw_events
+            .iter()
+            .any(|line| is_hermes_provider_diagnostic_line(line));
+    let is_error = auth_error.is_some()
+        || (!status.success() && !finalized_after_idle)
+        || idle_timed_out
+        || provider_timeout_without_answer;
     let error = if is_error {
         Some(if let Some(auth_error) = auth_error {
             auth_error
@@ -3764,6 +3828,8 @@ fn run_hermes<R: Runtime>(
                 }
                 _ => "Hermes가 오래 응답하지 않아 중단했습니다.".to_string(),
             }
+        } else if provider_timeout_without_answer {
+            "Hermes 모델 호출이 시간 안에 응답하지 않아 중단됐습니다. Atelier가 다음 요청부터 긴 Hermes/Codex 세션 resume 대신 짧은 최근 대화 컨텍스트로 실행합니다.".to_string()
         } else if stderr_text.trim().is_empty() {
             format!("hermes exited with {}", status.code().unwrap_or(-1))
         } else {
@@ -4028,5 +4094,24 @@ mod tests {
         .unwrap();
         assert!(message.contains("Hermes/Codex 인증"));
         assert!(message.contains("hermes auth"));
+    }
+
+    #[test]
+    fn hermes_provider_timeout_lines_are_diagnostics() {
+        assert!(is_hermes_provider_diagnostic_line(
+            "⚠️ No response from provider for 300s (non-streaming, model: gpt-5.5). Aborting call."
+        ));
+        assert!(is_hermes_provider_diagnostic_line(
+            "⚠️ API call failed (attempt 1/3): TimeoutError"
+        ));
+        assert!(is_hermes_provider_diagnostic_line(
+            "🌐 Endpoint: https://chatgpt.com/backend-api/codex"
+        ));
+        assert!(is_hermes_provider_diagnostic_line(
+            "⏳ Retrying in 2.5s (attempt 1/3)..."
+        ));
+        assert!(!is_hermes_provider_diagnostic_line(
+            "PositionCard.tsx: Trash2 import 제거 + getApiToken 통합"
+        ));
     }
 }

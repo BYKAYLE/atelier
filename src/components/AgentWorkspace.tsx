@@ -17,7 +17,6 @@ import {
   isStellaOntologyMode,
   labelForStellaOntologyMode,
   normalizeStellaOntologyMode,
-  STELLA_ONTOLOGY_MODES,
 } from "../lib/stellaOntology";
 import type { StellaOntologyMode } from "../lib/stellaOntology";
 import {
@@ -83,6 +82,8 @@ type CodexSpeed = "default" | "fast";
 type CodexMenuPanel = "root" | "model" | "speed";
 type HermesInferenceProvider = "anthropic" | "openai-codex" | "openrouter";
 type SlashCommandScope = "atelier" | AgentProvider;
+type WorkspacePluginId = "academic-research-claude";
+type WorkspacePluginInstallStatus = "idle" | "installing" | "installed" | "error";
 
 type SlashCommandSpec = {
   command: string;
@@ -90,6 +91,20 @@ type SlashCommandSpec = {
   scope: SlashCommandScope;
   detailKo: string;
   detailEn: string;
+};
+
+type WorkspacePluginSpec = {
+  id: WorkspacePluginId;
+  provider: AgentProvider;
+  titleKo: string;
+  titleEn: string;
+  detailKo: string;
+  detailEn: string;
+};
+
+type WorkspacePluginInstallState = {
+  status: WorkspacePluginInstallStatus;
+  message?: string;
 };
 
 type ChatAttachment = {
@@ -232,6 +247,8 @@ const DEFAULT_CODEX_SPEED: CodexSpeed = "default";
 const DEFAULT_PERMISSION_MODE: AgentPermissionMode = "full";
 const MAX_RAW_EVENTS = 120;
 const MAX_RAW_EVENT_CHARS = 12000;
+const MAX_COMPACT_AGENT_CONTEXT_CHARS = 9000;
+const MAX_COMPACT_AGENT_CONTEXT_MESSAGES = 8;
 const STREAM_FLUSH_MS = 120;
 const FINAL_ONLY_WORKSPACE_STREAMING = true;
 const CHANGE_BASELINE_TIMEOUT_MS = 650;
@@ -432,6 +449,7 @@ function stripThinkingLines(input: string): string {
 function isAgentActivityLine(line: string): boolean {
   const t = line.trim().replace(/^(?:Hm|Cl|Ci|Cd)\s+/, "");
   if (!t) return false;
+  if (isProviderDiagnosticLine(t)) return true;
   if (/^⚠️?\s*Compression summary failed\b/i.test(t)) return true;
   if (/Inserted a fallback context marker/i.test(t)) return true;
   if (/^⟳\s*compacting context/i.test(t)) return true;
@@ -440,7 +458,7 @@ function isAgentActivityLine(line: string): boolean {
   if (/Use\s+\/verbose\s+to cycle tool-progress display modes/i.test(t)) return true;
   if (/^📝\s*코드 변경\b/u.test(t)) return true;
   if (/omitted\s+\d+\s+diff line/i.test(t)) return true;
-  const hasActivityIcon = /[📚🐍💻📖🔎📋🧠🔧⚙▶✍🌐📸⚡]/u.test(t);
+  const hasActivityIcon = /[📚🐍💻📖🔎📋🧠🔧⚙▶✍🌐📸⚡⚠🔌⏱⏳📝]/u.test(t);
   if (t.startsWith("┊") && hasActivityIcon) return true;
   if (/^┊\s*review diff\b/i.test(t)) return true;
   if (
@@ -449,6 +467,23 @@ function isAgentActivityLine(line: string): boolean {
   ) {
     return true;
   }
+  return false;
+}
+
+function isProviderDiagnosticLine(line: string): boolean {
+  const t = line.trim().replace(/^(?:Hm|Cl|Ci|Cd)\s+/, "");
+  if (!t) return false;
+  if (/\bNo response from provider for \d+s\b/i.test(t)) return true;
+  if (/\bAPI call failed\s*\(attempt\s+\d+\/\d+\):\s*TimeoutError\b/i.test(t)) return true;
+  if (/\bNon-streaming API call timed out\b/i.test(t)) return true;
+  if (/\bAborting call\b/i.test(t) && /\bprovider\b/i.test(t)) return true;
+  if (/^⚠️?\s*(?:No response from provider|API call failed)\b/i.test(t)) return true;
+  if (/^(?:🔌\s*)?Provider:\s+/i.test(t)) return true;
+  if (/^(?:🌐\s*)?Endpoint:\s+/i.test(t)) return true;
+  if (/^(?:📝\s*)?Error:\s+Non-streaming API call timed out\b/i.test(t)) return true;
+  if (/^(?:⏱️?\s*)?Elapsed:\s+\d+(?:\.\d+)?s\b/i.test(t)) return true;
+  if (/^(?:⏳\s*)?Retrying in\s+\d+(?:\.\d+)?s\b/i.test(t)) return true;
+  if (/\bTimeoutError\b/i.test(t) && /\b(?:API|provider|non-streaming|attempt)\b/i.test(t)) return true;
   return false;
 }
 
@@ -766,6 +801,17 @@ const PROVIDERS: ProviderMeta[] = [
     dot: "#4b7bd1",
     newTitleKo: "새 Codex 작업",
     newTitleEn: "New Codex workspace",
+  },
+];
+
+const WORKSPACE_PLUGINS: WorkspacePluginSpec[] = [
+  {
+    id: "academic-research-claude",
+    provider: "claude",
+    titleKo: "Academic Research Skills",
+    titleEn: "Academic Research Skills",
+    detailKo: "Claude Code용 연구, 문헌조사, 논문 작성 워크플로 플러그인",
+    detailEn: "Claude Code research, literature review, and paper-writing workflow plugin",
   },
 ];
 
@@ -1830,6 +1876,49 @@ function formatAttachmentPrompt(attachments: ChatAttachment[], language: "ko" | 
     : ["", "", "---", "Atelier가 저장한 첨부 이미지:", ...lines, "붙여넣은 이미지를 언급한 요청이면 위 로컬 이미지 파일을 직접 열어서 확인하세요."].join("\n");
 }
 
+function formatCompactAgentContext(
+  messages: ChatMessage[],
+  language: "ko" | "en",
+  currentUserMessageId?: string | null,
+) {
+  const candidates = messages
+    .filter((message) =>
+      message.id !== currentUserMessageId
+      && message.status !== "queued"
+      && message.status !== "streaming"
+      && cleanAgentText(message.text).trim().length > 0,
+    )
+    .slice(-MAX_COMPACT_AGENT_CONTEXT_MESSAGES)
+    .map((message) => {
+      const label = message.role === "user"
+        ? language === "en" ? "User" : "사용자"
+        : language === "en" ? "Assistant" : "에이전트";
+      return `${label}: ${clipActivityText(cleanAgentText(message.text), 1600)}`;
+    });
+
+  const out: string[] = [];
+  let used = 0;
+  for (let i = candidates.length - 1; i >= 0; i -= 1) {
+    const line = candidates[i];
+    const nextUsed = used + line.length + 1;
+    if (out.length > 0 && nextUsed > MAX_COMPACT_AGENT_CONTEXT_CHARS) break;
+    out.unshift(line);
+    used = nextUsed;
+  }
+  if (out.length === 0) return "";
+  return language === "en"
+    ? [
+        "Atelier bounded continuity context:",
+        "The provider session was not resumed because the Hermes/Codex backend becomes very slow with large non-streaming histories. Use only this compact context plus the current request.",
+        ...out,
+      ].join("\n")
+    : [
+        "Atelier 제한 컨텍스트:",
+        "Hermes/Codex 백엔드는 긴 비스트리밍 세션 이력에서 급격히 느려지므로 provider 세션 resume 대신 아래 짧은 최근 맥락만 사용합니다.",
+        ...out,
+      ].join("\n");
+}
+
 function formatFastPatchPrompt(text: string, language: "ko" | "en") {
   if (!isFastPatchTask(text)) return "";
   return language === "en"
@@ -1992,7 +2081,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const [isPastingImage, setIsPastingImage] = useState(false);
   const [cwd, setCwd] = useState(() => localStorage.getItem(CWD_KEY) || "");
   const [showTaskList, setShowTaskList] = useState(() => localStorage.getItem(TASK_LIST_VISIBLE_KEY) !== "0");
-  const [showPreview, setShowPreview] = useState(() => localStorage.getItem(PREVIEW_VISIBLE_KEY) === "1");
+  const [showPreview, setShowPreview] = useState(
+    () => localStorage.getItem(PREVIEW_VISIBLE_KEY) === "1" || localStorage.getItem(DEV_SCREEN_VISIBLE_KEY) === "1",
+  );
   const [previewUrl, setPreviewUrl] = useState(() => cleanStoredPreviewUrl(localStorage.getItem(PREVIEW_KEY) || ""));
   const [previewInput, setPreviewInput] = useState(() => cleanStoredPreviewUrl(localStorage.getItem(PREVIEW_KEY) || ""));
   const [previewReloadKey, setPreviewReloadKey] = useState(0);
@@ -2067,6 +2158,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const [expandedDiffByKey, setExpandedDiffByKey] = useState<Record<string, boolean>>({});
   const [logsOpenById, setLogsOpenById] = useState<Record<string, boolean>>({});
   const [showProfilePicker, setShowProfilePicker] = useState(false);
+  const [showPluginList, setShowPluginList] = useState(true);
+  const [pluginInstallState, setPluginInstallState] = useState<Partial<Record<WorkspacePluginId, WorkspacePluginInstallState>>>({});
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [slashSelection, setSlashSelection] = useState(0);
@@ -2092,24 +2185,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const previewResizeRef = useRef<{ startX: number; startW: number } | null>(null);
   const previewAutoStartRef = useRef<Record<string, number>>({});
   const lastPreviewCommandRef = useRef<string | null>(null);
-  const arsClaudeBootstrapRef = useRef(false);
-
-  useEffect(() => {
-    if (!isTauri() || arsClaudeBootstrapRef.current) return;
-    arsClaudeBootstrapRef.current = true;
-    const timer = window.setTimeout(() => {
-      academicResearchInstallClaudePlugin()
-        .then((result) => {
-          if (result.installed) {
-            console.info("Academic Research Skills for Claude is ready.");
-          } else {
-            console.info(result.message);
-          }
-        })
-        .catch((err) => console.warn("Academic Research Skills bootstrap skipped:", err));
-    }, 1200);
-    return () => window.clearTimeout(timer);
-  }, []);
 
   const persistSessionsNow = (next: AgentSession[] = sessionsRef.current) => {
     if (persistSessionsTimerRef.current !== null) {
@@ -2158,7 +2233,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         previewStatusOk: (status?: number | null, title?: string | null) =>
           `Preview responded${status ? ` HTTP ${status}` : ""}${title ? ` · ${title}` : ""}`,
         previewStatusError: (message: string) => `Preview check failed: ${message}`,
-        devScreen: "Screen",
+        devScreen: "Inspect",
         devScreenBridge: "Bridge",
         devScreenHost: "Host",
         devScreenPort: "Port",
@@ -2187,6 +2262,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         devScreenActionFailed: (message: string) => `Screen action failed: ${message}`,
         cwd: "Working folder",
         noAgentProfiles: "No Claude/Hermes/Codex profiles in Settings.",
+        plugins: "Plugins",
+        pluginsHint: "Plugins are not installed automatically. Choose only what this workspace needs.",
+        pluginInstall: "Install",
+        pluginInstalling: "Installing",
+        pluginInstalled: "Installed",
+        pluginFailed: "Failed",
         placeholder: "Ask the selected agent to change, inspect, or explain this workspace...",
         send: "Send",
         stopHint: "A running turn finishes through the selected CLI; terminal fallback remains available.",
@@ -2295,7 +2376,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         previewStatusOk: (status?: number | null, title?: string | null) =>
           `프리뷰 응답 확인${status ? ` HTTP ${status}` : ""}${title ? ` · ${title}` : ""}`,
         previewStatusError: (message: string) => `프리뷰 검토 실패: ${message}`,
-        devScreen: "화면",
+        devScreen: "검사",
         devScreenBridge: "Bridge",
         devScreenHost: "호스트",
         devScreenPort: "포트",
@@ -2324,6 +2405,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         devScreenActionFailed: (message: string) => `화면 작업 실패: ${message}`,
         cwd: "작업 폴더",
         noAgentProfiles: "설정 프로필에 Claude/Hermes/Codex가 없습니다.",
+        plugins: "플러그인",
+        pluginsHint: "플러그인은 자동 설치하지 않습니다. 필요한 항목만 직접 설치하세요.",
+        pluginInstall: "설치",
+        pluginInstalling: "설치 중",
+        pluginInstalled: "설치됨",
+        pluginFailed: "실패",
         placeholder: "선택한 에이전트에게 이 작업공간의 수정, 분석, 설명을 요청하세요...",
         send: "보내기",
         stopHint: "실행 중인 턴은 선택한 CLI가 끝낼 때 완료됩니다. 터미널은 보조 화면으로 남겨둡니다.",
@@ -2420,7 +2507,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     previewHydratedSessionIdRef.current = active.id;
     // URL/서비스 명령은 세션별 고유 데이터 — 글로벌 폴백 없이 비어 있으면 빈 상태로 둔다.
     // 뷰포트/폭은 UI 환경설정이지만 표시 여부는 수동 opt-in으로만 복원한다.
-    const fallbackVisible = localStorage.getItem(PREVIEW_VISIBLE_KEY) === "1";
+    const fallbackVisible = localStorage.getItem(PREVIEW_VISIBLE_KEY) === "1" || localStorage.getItem(DEV_SCREEN_VISIBLE_KEY) === "1";
     const fallbackVPRaw = localStorage.getItem(PREVIEW_VP_KEY);
     const fallbackVP: PreviewViewport =
       fallbackVPRaw === "mobile" || fallbackVPRaw === "tablet" || fallbackVPRaw === "desktop"
@@ -2533,8 +2620,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const showSlashMenu = input.trimStart().startsWith("/") && !input.includes("\n") && visibleSlashCommands.length > 0;
   const activeSlashSelection = Math.min(slashSelection, Math.max(visibleSlashCommands.length - 1, 0));
   const selectedSlashCommand = visibleSlashCommands[activeSlashSelection];
-  const activeStellaOntologyMode = normalizeStellaOntologyMode(active?.stellaOntologyMode, activeProvider);
-  const activeStellaOntologyLabel = labelForStellaOntologyMode(activeStellaOntologyMode, tw.language);
   const activeCodexEffort = normalizeCodexEffort(active?.codexEffort);
   const activeCodexSpeed = normalizeCodexSpeed(active?.codexSpeed);
   const activePermissionMode = normalizePermissionMode(active?.permissionMode);
@@ -3467,11 +3552,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     setShowPermissionMenu(false);
   };
 
-  const updateActiveStellaOntologyMode = (stellaOntologyMode: StellaOntologyMode) => {
-    if (!active) return;
-    patchSession(active.id, (session) => ({ ...session, stellaOntologyMode, updatedAt: Date.now() }));
-  };
-
   const maybeAutoPreview = (event: AgentStreamEvent) => {
     const url = findPreviewUrl(event.text) || findPreviewUrl(event.raw);
     if (url) {
@@ -3519,6 +3599,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     }
     if (event.kind === "status") {
       const status = event.status || "";
+      if (status === "hermes.provider_diagnostic") {
+        return {
+          kind: "status",
+          label: tw.language === "en" ? "Provider is delayed; retrying" : "모델 응답 지연, 재시도 중",
+        };
+      }
       if (/starting|started|init|system|turn\.started|thread\.started/i.test(status)) {
         return { kind: "thinking", label: copy.thinking };
       }
@@ -4046,6 +4132,32 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       ],
       updatedAt: createdAt,
     }));
+  };
+
+  const installWorkspacePlugin = async (plugin: WorkspacePluginSpec) => {
+    if (pluginInstallState[plugin.id]?.status === "installing") return;
+    setPluginInstallState((prev) => ({
+      ...prev,
+      [plugin.id]: { status: "installing" },
+    }));
+    try {
+      const result = await academicResearchInstallClaudePlugin();
+      setPluginInstallState((prev) => ({
+        ...prev,
+        [plugin.id]: {
+          status: result.installed ? "installed" : "error",
+          message: result.message,
+        },
+      }));
+    } catch (err) {
+      setPluginInstallState((prev) => ({
+        ...prev,
+        [plugin.id]: {
+          status: "error",
+          message: String(err),
+        },
+      }));
+    }
   };
 
   const queueSummaryText = (session: AgentSession) => {
@@ -4621,6 +4733,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     const turnId = nowId("turn");
     const runCwd = payload.cwd || session.cwd || cwd;
     const fastPatchTask = isFastPatchTask(payload.text);
+    const hermesProvider = session.provider === "hermes"
+      ? normalizeHermesProvider(session.hermesProvider || inferHermesProviderFromModel(session.model))
+      : null;
+    const useHermesCodexFastPath = session.provider === "hermes" && hermesProvider === "openai-codex";
+    const resumeSessionId = useHermesCodexFastPath ? null : session.providerSessionId || null;
     const previewContext = sessionId === activeIdRef.current
       ? formatPreviewPromptContext(tw.language, previewUrl, previewCheck, previewDiagnostics, previewService)
       : null;
@@ -4634,7 +4751,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           devScreenError,
         )
       : null;
-    const visualContext = [previewContext, devScreenContext].filter(Boolean).join("\n\n") || null;
+    const compactContext = useHermesCodexFastPath
+      ? formatCompactAgentContext(session.messages, tw.language, payload.userMessageId)
+      : null;
+    const visualContext = [previewContext, devScreenContext, compactContext].filter(Boolean).join("\n\n") || null;
 
     backgroundedAssistantIdsRef.current.delete(assistantId);
     autoScrollRef.current = true;
@@ -4669,12 +4789,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
             session.provider,
             runCwd,
           ),
-          resumeSessionId: session.providerSessionId || null,
+          resumeSessionId,
           cwd: runCwd || null,
           model: session.model || meta.defaultModel,
-          hermesProvider: session.provider === "hermes"
-            ? normalizeHermesProvider(session.hermesProvider || inferHermesProviderFromModel(session.model))
-            : null,
+          hermesProvider,
           effort: session.provider === "codex" ? (fastPatchTask ? "low" : normalizeCodexEffort(session.codexEffort)) : null,
           speed: session.provider === "codex" ? (fastPatchTask ? "fast" : normalizeCodexSpeed(session.codexSpeed)) : null,
           permissionMode: normalizePermissionMode(session.permissionMode),
@@ -4923,6 +5041,108 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           )}
         </div>
         <div className="flex-1 min-h-0 overflow-auto p-2">
+          <div
+            className={cls(
+              "mb-2 rounded-[8px] border overflow-hidden",
+              dark ? "border-dline bg-[#20201e]" : "border-line bg-surface",
+            )}
+          >
+            <button
+              type="button"
+              onClick={() => setShowPluginList((v) => !v)}
+              className={cls(
+                "w-full h-9 px-2.5 flex items-center gap-2 text-left",
+                dark ? "text-dink hover:bg-dmuted" : "text-ink hover:bg-muted",
+              )}
+            >
+              <span className="h-5 w-5 shrink-0 grid place-items-center">{I.zap}</span>
+              <span className="min-w-0 flex-1 text-[12px] font-medium truncate">{copy.plugins}</span>
+              <span
+                className={cls(
+                  "h-5 w-5 shrink-0 grid place-items-center transition-transform",
+                  showPluginList ? "rotate-180" : "",
+                  dark ? "text-dsub" : "text-sub",
+                )}
+              >
+                {I.chevron}
+              </span>
+            </button>
+            {showPluginList && (
+              <div className={cls("border-t px-2.5 py-2", dark ? "border-dline" : "border-line")}>
+                <div className={cls("mb-2 text-[10.5px] leading-[1.45]", dark ? "text-dsub" : "text-sub")}>
+                  {copy.pluginsHint}
+                </div>
+                <div className="space-y-1.5">
+                  {WORKSPACE_PLUGINS.map((plugin) => {
+                    const state = pluginInstallState[plugin.id]?.status || "idle";
+                    const message = pluginInstallState[plugin.id]?.message || "";
+                    const isInstalling = state === "installing";
+                    const provider = providerMeta(plugin.provider);
+                    const title = tw.language === "en" ? plugin.titleEn : plugin.titleKo;
+                    const detail = tw.language === "en" ? plugin.detailEn : plugin.detailKo;
+                    const actionLabel = state === "installed"
+                      ? copy.pluginInstalled
+                      : state === "error"
+                        ? copy.pluginFailed
+                        : isInstalling
+                          ? copy.pluginInstalling
+                          : copy.pluginInstall;
+                    return (
+                      <div
+                        key={plugin.id}
+                        className={cls(
+                          "rounded-[7px] border p-2",
+                          dark ? "border-dline bg-[#242421]" : "border-line bg-bg",
+                        )}
+                      >
+                        <div className="flex items-start gap-2">
+                          <span
+                            className={cls(
+                              "mt-0.5 h-5 w-5 rounded-[6px] shrink-0 grid place-items-center text-[8.5px] font-semibold tracking-normal",
+                              dark ? "text-dink" : "text-ink",
+                            )}
+                            style={{
+                              background: `${provider.dot}22`,
+                              boxShadow: `inset 0 0 0 1px ${provider.dot}66`,
+                            }}
+                            title={provider.label}
+                          >
+                            {provider.short}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <div className={cls("truncate text-[12px] font-medium", dark ? "text-dink" : "text-ink")}>
+                              {title}
+                            </div>
+                            <div className={cls("mt-0.5 text-[10.5px] leading-[1.4]", dark ? "text-dsub" : "text-sub")}>
+                              {detail}
+                            </div>
+                            {message && (
+                              <div className={cls("mt-1 text-[9.5px] leading-[1.35] break-words", state === "error" ? "text-red-400" : dark ? "text-dsub" : "text-sub")}>
+                                {message}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => installWorkspacePlugin(plugin)}
+                          disabled={isInstalling}
+                          className={cls(
+                            "mt-2 h-7 w-full rounded-[6px] text-[11px] font-medium transition-colors disabled:opacity-60",
+                            state === "installed"
+                              ? dark ? "bg-[#173427] text-[#86efac]" : "bg-[#e8f7ee] text-[#166534]"
+                              : dark ? "bg-dmuted text-dink hover:bg-[#393936]" : "bg-muted text-ink hover:bg-line",
+                          )}
+                        >
+                          {actionLabel}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
           {sessions.length === 0 && (
             <div className={cls("p-3 text-[12px] leading-[1.55]", dark ? "text-dsub" : "text-sub")}>
               {copy.noMessages}
@@ -5050,7 +5270,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           >
             ›
           </button>
-          <div className={cls("mt-3 text-[10px] font-mono [writing-mode:vertical-rl]", dark ? "text-dsub" : "text-sub")}>
+          <div className={cls("mt-3 text-[11px] font-mono [writing-mode:vertical-rl]", dark ? "text-dsub" : "text-sub")}>
             {copy.title}
           </div>
         </aside>
@@ -5060,11 +5280,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         <div className={cls("h-12 px-4 border-b flex items-center gap-3", dark ? "border-dline" : "border-line")}>
           <div className="min-w-0 flex-1">
             <div className="text-[13px] font-medium truncate">{active?.title || active?.profileName || activeProviderMeta.label}</div>
-            <div className={cls("text-[10px] font-mono truncate", dark ? "text-dsub" : "text-sub")}>
+            <div className={cls("text-[11.5px] font-mono truncate", dark ? "text-dsub" : "text-sub")}>
               {copy.subtitle}
             </div>
           </div>
-          <label className={cls("text-[10px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
+          <label className={cls("text-[11px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
             {copy.cwd}
           </label>
           <input
@@ -5077,13 +5297,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           />
           <button
             type="button"
-            onClick={() => {
-              setShowPreview((v) => {
-                const next = !v;
-                if (next) setShowDevScreen(false);
-                return next;
-              });
-            }}
+            onClick={() => setShowPreview((v) => !v)}
             className={cls(
               "h-8 px-2.5 rounded-[6px] text-[12px]",
               showPreview
@@ -5092,24 +5306,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
             )}
           >
             {copy.preview}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setShowDevScreen((v) => {
-                const next = !v;
-                if (next) setShowPreview(false);
-                return next;
-              });
-            }}
-            className={cls(
-              "h-8 px-2.5 rounded-[6px] text-[12px]",
-              showDevScreen
-                ? dark ? "bg-dline text-dink" : "bg-line text-ink"
-                : dark ? "text-dsub hover:bg-dmuted hover:text-dink" : "text-sub hover:bg-muted hover:text-ink",
-            )}
-          >
-            {copy.devScreen}
           </button>
         </div>
 
@@ -5322,35 +5518,13 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                   )}
                 />
                 <div className="mt-2 flex items-center gap-2">
-                  <div className={cls("flex-1 text-[10.5px]", dark ? "text-dsub" : "text-sub")}>
+                  <div className={cls("flex-1 text-[12px] leading-[1.45]", dark ? "text-dsub" : "text-sub")}>
                     {busyTurnId ? copy.draftHint : "⌘/Ctrl + Enter"}
                   </div>
                   <div className="shrink-0 flex items-center gap-1.5">
-                    <span className={cls("text-[10px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
-                      {copy.ontologyLabel}
-                    </span>
-                    <select
-                      value={activeStellaOntologyMode}
-                      onChange={(e) => updateActiveStellaOntologyMode(e.target.value as StellaOntologyMode)}
-                      disabled={!active || !!busyTurnId}
-                      className={cls(
-                        "h-8 max-w-[118px] rounded-[7px] border px-2 text-[11px] font-mono outline-none",
-                        dark
-                          ? "bg-dsurf border-dline text-dink disabled:text-dsub"
-                          : "bg-surface border-line text-ink disabled:text-sub",
-                      )}
-                      aria-label={copy.ontologyLabel}
-                      title={`${copy.ontologyLabel}: ${activeStellaOntologyLabel}`}
-                    >
-                      {STELLA_ONTOLOGY_MODES.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {tw.language === "en" ? option.en : option.ko}
-                        </option>
-                      ))}
-                    </select>
                     {activeProvider === "hermes" && (
                       <>
-                        <span className={cls("text-[10px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
+                        <span className={cls("text-[11px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
                           {copy.providerLabel}
                         </span>
                         <select
@@ -5435,7 +5609,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                         </div>
                       )}
                     </div>
-                    <span className={cls("text-[10px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
+                    <span className={cls("text-[11px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
                       {copy.modelLabel}
                     </span>
                     {activeProvider === "codex" ? (
@@ -5665,7 +5839,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                 title="resize preview"
               />
               <div className={cls("h-10 px-3 border-b flex items-center gap-2", dark ? "border-dline" : "border-line")}>
-                <span className={cls("text-[11px] font-mono uppercase tracking-wider shrink-0", dark ? "text-dsub" : "text-sub")}>
+                <span className={cls("text-[12px] font-mono uppercase tracking-wider shrink-0", dark ? "text-dsub" : "text-sub")}>
                   {copy.preview}
                 </span>
                 <span className={cls("atelier-preview-badge", `atelier-preview-badge-${previewBadgeTone}`)}>
@@ -5683,7 +5857,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                     onChange={(e) => setPreviewInput(e.target.value)}
                     placeholder="http://localhost:5173"
                     className={cls(
-                      "flex-1 min-w-0 h-6 px-2 rounded-[4px] border text-[11px] font-mono outline-none",
+                      "flex-1 min-w-0 h-6 px-2 rounded-[4px] border text-[12px] font-mono outline-none",
                       dark
                         ? "bg-dmuted border-dline text-dink placeholder:text-dsub"
                         : "bg-muted border-line text-ink placeholder:text-sub",
@@ -5693,7 +5867,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                   <button
                     type="submit"
                     className={cls(
-                      "shrink-0 h-6 px-2 rounded-[4px] text-[10px]",
+                      "shrink-0 h-6 px-2 rounded-[4px] text-[11.5px]",
                       dark ? "bg-dline hover:bg-[#3d3d3b] text-dink" : "bg-line hover:bg-muted text-ink",
                     )}
                   >
@@ -5711,7 +5885,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                       type="button"
                       onClick={() => setPreviewVP(vp)}
                       className={cls(
-                        "h-6 w-6 text-[10px] font-mono",
+                        "h-6 w-6 text-[11.5px] font-mono",
                         previewVP === vp
                           ? dark ? "bg-dline text-dink" : "bg-line text-ink"
                           : dark ? "text-dsub hover:text-dink hover:bg-[#2a2a28]" : "text-sub hover:text-ink hover:bg-muted",
@@ -5732,6 +5906,18 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                   title="reload"
                 >
                   ↻
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowDevScreen((value) => !value)}
+                  className={cls(
+                    "shrink-0 h-6 px-2 rounded-[4px] text-[10px]",
+                    showDevScreen
+                      ? dark ? "bg-dline text-dink" : "bg-line text-ink"
+                      : dark ? "text-dsub hover:bg-[#3d3d3b] hover:text-dink" : "text-sub hover:bg-line hover:text-ink",
+                  )}
+                >
+                  {copy.devScreen}
                 </button>
               </div>
               {previewUrl && (
@@ -5816,6 +6002,170 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                   ))}
                 </div>
               )}
+              {showDevScreen && (
+                <div className={cls("atelier-preview-inspector", dark ? "atelier-preview-inspector-dark" : "")}>
+                  <div className={cls("h-10 px-3 border-b flex items-center gap-2", dark ? "border-dline" : "border-line")}>
+                    <span className={cls("text-[12px] font-mono uppercase tracking-wider shrink-0", dark ? "text-dsub" : "text-sub")}>
+                      {copy.devScreen}
+                    </span>
+                    <span className={cls("atelier-preview-badge", `atelier-preview-badge-${devScreenBadgeTone}`)}>
+                      {devScreenBadgeText}
+                    </span>
+                    <div className="flex-1 min-w-0 flex items-center gap-1">
+                      <input
+                        value={devScreenHost}
+                        onChange={(e) => setDevScreenHost(e.target.value)}
+                        className={cls(
+                          "h-6 min-w-0 flex-1 px-2 rounded-[4px] border text-[12px] font-mono outline-none",
+                          dark ? "bg-dmuted border-dline text-dink" : "bg-muted border-line text-ink",
+                        )}
+                        aria-label={copy.devScreenHost}
+                      />
+                      <input
+                        value={devScreenPort}
+                        onChange={(e) => setDevScreenPort(e.target.value.replace(/[^\d]/g, "").slice(0, 5))}
+                        placeholder="auto"
+                        className={cls(
+                          "h-6 w-14 px-2 rounded-[4px] border text-[12px] font-mono outline-none",
+                          dark ? "bg-dmuted border-dline text-dink" : "bg-muted border-line text-ink",
+                        )}
+                        aria-label={copy.devScreenPort}
+                      />
+                      <input
+                        value={devScreenWindow}
+                        onChange={(e) => setDevScreenWindow(e.target.value)}
+                        className={cls(
+                          "h-6 w-16 px-2 rounded-[4px] border text-[12px] font-mono outline-none",
+                          dark ? "bg-dmuted border-dline text-dink" : "bg-muted border-line text-ink",
+                        )}
+                        aria-label={copy.devScreenWindow}
+                      />
+                    </div>
+                  </div>
+
+                  <div className={cls("atelier-devscreen-toolbar", dark ? "atelier-devscreen-toolbar-dark" : "")}>
+                    <button type="button" onClick={runDevScreenStatus} disabled={devScreenBusy} className="atelier-devscreen-button">
+                      {copy.devScreenStatus}
+                    </button>
+                    <button type="button" onClick={runDevScreenCheck} disabled={devScreenBusy} className="atelier-devscreen-button">
+                      {copy.devScreenCheck}
+                    </button>
+                    <button type="button" onClick={runDevScreenScreenshot} disabled={devScreenBusy} className="atelier-devscreen-button">
+                      {copy.devScreenShot}
+                    </button>
+                    <button type="button" onClick={runDevScreenSnapshot} disabled={devScreenBusy} className="atelier-devscreen-button">
+                      {copy.devScreenDom}
+                    </button>
+                  </div>
+
+                  <div className={cls("atelier-devscreen-controls", dark ? "atelier-devscreen-controls-dark" : "")}>
+                    <div className="atelier-devscreen-row">
+                      <input
+                        value={devScreenJsCode}
+                        onChange={(e) => setDevScreenJsCode(e.target.value)}
+                        className="atelier-devscreen-input"
+                        aria-label={copy.devScreenCode}
+                      />
+                      <button type="button" onClick={runDevScreenJs} disabled={devScreenBusy} className="atelier-devscreen-button">
+                        {copy.devScreenJs}
+                      </button>
+                    </div>
+                    <div className="atelier-devscreen-row">
+                      <input
+                        value={devScreenSelector}
+                        onChange={(e) => setDevScreenSelector(e.target.value)}
+                        className="atelier-devscreen-input"
+                        aria-label={copy.devScreenSelector}
+                      />
+                      <button type="button" onClick={runDevScreenClick} disabled={devScreenBusy} className="atelier-devscreen-button">
+                        {copy.devScreenClick}
+                      </button>
+                    </div>
+                    <div className="atelier-devscreen-row">
+                      <input
+                        value={devScreenText}
+                        onChange={(e) => setDevScreenText(e.target.value)}
+                        className="atelier-devscreen-input"
+                        aria-label={copy.devScreenText}
+                      />
+                      <button type="button" onClick={runDevScreenType} disabled={devScreenBusy} className="atelier-devscreen-button">
+                        {copy.devScreenType}
+                      </button>
+                    </div>
+                    <div className="atelier-devscreen-row">
+                      <input
+                        value={devScreenKeyName}
+                        onChange={(e) => setDevScreenKeyName(e.target.value)}
+                        className="atelier-devscreen-input atelier-devscreen-input-short"
+                        aria-label={copy.devScreenKey}
+                      />
+                      <button type="button" onClick={runDevScreenKey} disabled={devScreenBusy} className="atelier-devscreen-button">
+                        {copy.devScreenKey}
+                      </button>
+                      <input
+                        value={devScreenResizeWidth}
+                        onChange={(e) => setDevScreenResizeWidth(e.target.value.replace(/[^\d]/g, "").slice(0, 4))}
+                        className="atelier-devscreen-size"
+                        aria-label={`${copy.devScreenSize} width`}
+                      />
+                      <input
+                        value={devScreenResizeHeight}
+                        onChange={(e) => setDevScreenResizeHeight(e.target.value.replace(/[^\d]/g, "").slice(0, 4))}
+                        className="atelier-devscreen-size"
+                        aria-label={`${copy.devScreenSize} height`}
+                      />
+                      <button type="button" onClick={runDevScreenResize} disabled={devScreenBusy} className="atelier-devscreen-button">
+                        {copy.devScreenResize}
+                      </button>
+                    </div>
+                  </div>
+
+                  {(latestDevScreenStatus || devScreenError) && (
+                    <div className={cls("atelier-preview-diagnostics", dark ? "atelier-preview-diagnostics-dark" : "")}>
+                      {latestDevScreenStatus && (
+                        <div className="atelier-preview-diagnostic atelier-preview-diagnostic-ok">
+                          <span className="atelier-preview-diagnostic-source">{copy.devScreenBridge}</span>
+                          <span className="atelier-preview-diagnostic-text">
+                            {latestDevScreenStatus.host}:{latestDevScreenStatus.port} · {latestDevScreenStatus.windowLabel}
+                          </span>
+                        </div>
+                      )}
+                      {devScreenError && (
+                        <div className="atelier-preview-diagnostic atelier-preview-diagnostic-error">
+                          <span className="atelier-preview-diagnostic-source">error</span>
+                          <span className="atelier-preview-diagnostic-text">{copy.devScreenActionFailed(devScreenError)}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {(latestDevScreenScreenshot?.dataUrl || latestDevScreenSnapshot?.text || latestDevScreenData) && (
+                    <div className={cls("atelier-preview-inspector-results", dark ? "atelier-preview-inspector-results-dark" : "")}>
+                      {latestDevScreenScreenshot?.dataUrl && (
+                        <div className="atelier-devscreen-shot-wrap">
+                          <img
+                            src={latestDevScreenScreenshot.dataUrl}
+                            alt={copy.devScreenShot}
+                            className="atelier-devscreen-shot"
+                          />
+                        </div>
+                      )}
+                      {latestDevScreenSnapshot?.text && (
+                        <div className={cls("atelier-devscreen-panel", dark ? "atelier-devscreen-panel-dark" : "")}>
+                          <div className="atelier-devscreen-panel-title">{copy.devScreenSnapshot}</div>
+                          <pre>{latestDevScreenSnapshot.text}</pre>
+                        </div>
+                      )}
+                      {latestDevScreenData && (
+                        <div className={cls("atelier-devscreen-panel", dark ? "atelier-devscreen-panel-dark" : "")}>
+                          <div className="atelier-devscreen-panel-title">{copy.devScreenResult}</div>
+                          <pre>{latestDevScreenData}</pre>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
               <div className={cls("flex-1 min-h-0 relative overflow-auto", previewUrl ? (dark ? "bg-[#11110f]" : "bg-[#e8e6df]") : "bg-black")}>
                 {previewUrl ? (
                   previewVP === "desktop" ? (
@@ -5856,185 +6206,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
             </aside>
           )}
 
-          {showDevScreen && (
-            <aside
-              className={cls("relative shrink-0 border-l flex flex-col", dark ? "border-dline bg-dsurf" : "border-line bg-surface")}
-              style={{ width: previewWidth }}
-            >
-              <div
-                role="separator"
-                aria-orientation="vertical"
-                onPointerDown={startPreviewResize}
-                className={cls(
-                  "absolute left-[-4px] top-0 z-20 h-full w-2 cursor-col-resize",
-                  resizingPreview ? "bg-terra/30" : "hover:bg-terra/20",
-                )}
-                title="resize screen inspector"
-              />
-              <div className={cls("h-10 px-3 border-b flex items-center gap-2", dark ? "border-dline" : "border-line")}>
-                <span className={cls("text-[11px] font-mono uppercase tracking-wider shrink-0", dark ? "text-dsub" : "text-sub")}>
-                  {copy.devScreen}
-                </span>
-                <span className={cls("atelier-preview-badge", `atelier-preview-badge-${devScreenBadgeTone}`)}>
-                  {devScreenBadgeText}
-                </span>
-                <div className="flex-1 min-w-0 flex items-center gap-1">
-                  <input
-                    value={devScreenHost}
-                    onChange={(e) => setDevScreenHost(e.target.value)}
-                    className={cls(
-                      "h-6 min-w-0 flex-1 px-2 rounded-[4px] border text-[10.5px] font-mono outline-none",
-                      dark ? "bg-dmuted border-dline text-dink" : "bg-muted border-line text-ink",
-                    )}
-                    aria-label={copy.devScreenHost}
-                  />
-                  <input
-                    value={devScreenPort}
-                    onChange={(e) => setDevScreenPort(e.target.value.replace(/[^\d]/g, "").slice(0, 5))}
-                    placeholder="auto"
-                    className={cls(
-                      "h-6 w-14 px-2 rounded-[4px] border text-[10.5px] font-mono outline-none",
-                      dark ? "bg-dmuted border-dline text-dink" : "bg-muted border-line text-ink",
-                    )}
-                    aria-label={copy.devScreenPort}
-                  />
-                  <input
-                    value={devScreenWindow}
-                    onChange={(e) => setDevScreenWindow(e.target.value)}
-                    className={cls(
-                      "h-6 w-16 px-2 rounded-[4px] border text-[10.5px] font-mono outline-none",
-                      dark ? "bg-dmuted border-dline text-dink" : "bg-muted border-line text-ink",
-                    )}
-                    aria-label={copy.devScreenWindow}
-                  />
-                </div>
-              </div>
-
-              <div className={cls("atelier-devscreen-toolbar", dark ? "atelier-devscreen-toolbar-dark" : "")}>
-                <button type="button" onClick={runDevScreenStatus} disabled={devScreenBusy} className="atelier-devscreen-button">
-                  {copy.devScreenStatus}
-                </button>
-                <button type="button" onClick={runDevScreenCheck} disabled={devScreenBusy} className="atelier-devscreen-button">
-                  {copy.devScreenCheck}
-                </button>
-                <button type="button" onClick={runDevScreenScreenshot} disabled={devScreenBusy} className="atelier-devscreen-button">
-                  {copy.devScreenShot}
-                </button>
-                <button type="button" onClick={runDevScreenSnapshot} disabled={devScreenBusy} className="atelier-devscreen-button">
-                  {copy.devScreenDom}
-                </button>
-              </div>
-
-              <div className={cls("atelier-devscreen-controls", dark ? "atelier-devscreen-controls-dark" : "")}>
-                <div className="atelier-devscreen-row">
-                  <input
-                    value={devScreenJsCode}
-                    onChange={(e) => setDevScreenJsCode(e.target.value)}
-                    className="atelier-devscreen-input"
-                    aria-label={copy.devScreenCode}
-                  />
-                  <button type="button" onClick={runDevScreenJs} disabled={devScreenBusy} className="atelier-devscreen-button">
-                    {copy.devScreenJs}
-                  </button>
-                </div>
-                <div className="atelier-devscreen-row">
-                  <input
-                    value={devScreenSelector}
-                    onChange={(e) => setDevScreenSelector(e.target.value)}
-                    className="atelier-devscreen-input"
-                    aria-label={copy.devScreenSelector}
-                  />
-                  <button type="button" onClick={runDevScreenClick} disabled={devScreenBusy} className="atelier-devscreen-button">
-                    {copy.devScreenClick}
-                  </button>
-                </div>
-                <div className="atelier-devscreen-row">
-                  <input
-                    value={devScreenText}
-                    onChange={(e) => setDevScreenText(e.target.value)}
-                    className="atelier-devscreen-input"
-                    aria-label={copy.devScreenText}
-                  />
-                  <button type="button" onClick={runDevScreenType} disabled={devScreenBusy} className="atelier-devscreen-button">
-                    {copy.devScreenType}
-                  </button>
-                </div>
-                <div className="atelier-devscreen-row">
-                  <input
-                    value={devScreenKeyName}
-                    onChange={(e) => setDevScreenKeyName(e.target.value)}
-                    className="atelier-devscreen-input atelier-devscreen-input-short"
-                    aria-label={copy.devScreenKey}
-                  />
-                  <button type="button" onClick={runDevScreenKey} disabled={devScreenBusy} className="atelier-devscreen-button">
-                    {copy.devScreenKey}
-                  </button>
-                  <input
-                    value={devScreenResizeWidth}
-                    onChange={(e) => setDevScreenResizeWidth(e.target.value.replace(/[^\d]/g, "").slice(0, 4))}
-                    className="atelier-devscreen-size"
-                    aria-label={`${copy.devScreenSize} width`}
-                  />
-                  <input
-                    value={devScreenResizeHeight}
-                    onChange={(e) => setDevScreenResizeHeight(e.target.value.replace(/[^\d]/g, "").slice(0, 4))}
-                    className="atelier-devscreen-size"
-                    aria-label={`${copy.devScreenSize} height`}
-                  />
-                  <button type="button" onClick={runDevScreenResize} disabled={devScreenBusy} className="atelier-devscreen-button">
-                    {copy.devScreenResize}
-                  </button>
-                </div>
-              </div>
-
-              {(latestDevScreenStatus || devScreenError) && (
-                <div className={cls("atelier-preview-diagnostics", dark ? "atelier-preview-diagnostics-dark" : "")}>
-                  {latestDevScreenStatus && (
-                    <div className="atelier-preview-diagnostic atelier-preview-diagnostic-ok">
-                      <span className="atelier-preview-diagnostic-source">{copy.devScreenBridge}</span>
-                      <span className="atelier-preview-diagnostic-text">
-                        {latestDevScreenStatus.host}:{latestDevScreenStatus.port} · {latestDevScreenStatus.windowLabel}
-                      </span>
-                    </div>
-                  )}
-                  {devScreenError && (
-                    <div className="atelier-preview-diagnostic atelier-preview-diagnostic-error">
-                      <span className="atelier-preview-diagnostic-source">error</span>
-                      <span className="atelier-preview-diagnostic-text">{copy.devScreenActionFailed(devScreenError)}</span>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className={cls("flex-1 min-h-0 overflow-auto", dark ? "bg-[#11110f]" : "bg-[#e8e6df]")}>
-                {latestDevScreenScreenshot?.dataUrl ? (
-                  <div className="atelier-devscreen-shot-wrap">
-                    <img
-                      src={latestDevScreenScreenshot.dataUrl}
-                      alt={copy.devScreenShot}
-                      className="atelier-devscreen-shot"
-                    />
-                  </div>
-                ) : (
-                  <div className={cls("h-[180px] grid place-items-center text-[12px]", dark ? "text-dsub" : "text-sub")}>
-                    {copy.devScreenNoShot}
-                  </div>
-                )}
-                {latestDevScreenSnapshot?.text && (
-                  <div className={cls("atelier-devscreen-panel", dark ? "atelier-devscreen-panel-dark" : "")}>
-                    <div className="atelier-devscreen-panel-title">{copy.devScreenSnapshot}</div>
-                    <pre>{latestDevScreenSnapshot.text}</pre>
-                  </div>
-                )}
-                {latestDevScreenData && (
-                  <div className={cls("atelier-devscreen-panel", dark ? "atelier-devscreen-panel-dark" : "")}>
-                    <div className="atelier-devscreen-panel-title">{copy.devScreenResult}</div>
-                    <pre>{latestDevScreenData}</pre>
-                  </div>
-                )}
-              </div>
-            </aside>
-          )}
         </div>
       </main>
     </div>

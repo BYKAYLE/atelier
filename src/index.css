@@ -377,7 +377,7 @@ body.dark {
 }
 .atelier-attachment-status,
 .atelier-attachment-error {
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.35;
 }
 .atelier-attachment-status {
@@ -392,8 +392,8 @@ body.dark {
   display: grid;
   gap: 8px;
   color: rgba(128, 128, 128, 0.92);
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 13px;
+  line-height: 1.5;
 }
 .atelier-activity-line {
   min-width: 0;
@@ -428,12 +428,12 @@ body.dark {
 /* codex/claude 스타일: 상단 elapsed 라인 + 하단 현재 활동 1줄 */
 .atelier-activity-codex {
   margin-top: 12px;
-  color: rgba(128, 128, 128, 0.85);
-  font-size: 12px;
-  line-height: 1.45;
+  color: rgba(128, 128, 128, 0.92);
+  font-size: 13.5px;
+  line-height: 1.5;
 }
 .atelier-activity-elapsed {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   margin-bottom: 4px;
   padding-bottom: 6px;
@@ -448,11 +448,11 @@ body.dark {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  height: 22px;
+  height: 24px;
   padding: 0 8px;
   border: 1px solid rgba(128, 128, 128, 0.22);
   border-radius: 999px;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1;
   color: rgba(128, 128, 128, 0.92);
   background: rgba(128, 128, 128, 0.08);
@@ -489,15 +489,15 @@ body.dark {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 11px;
-  line-height: 1.35;
+  font-size: 12px;
+  line-height: 1.45;
 }
 .atelier-preview-diagnostic-source {
   flex: 0 0 auto;
   min-width: 54px;
   color: rgba(128, 128, 128, 0.84);
   font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px;
+  font-size: 11px;
   text-transform: uppercase;
 }
 .atelier-preview-diagnostic-text {
@@ -538,7 +538,7 @@ body.dark {
   background: rgba(255, 255, 255, 0.6);
   color: inherit;
   font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
+  font-size: 12px;
   outline: none;
 }
 .atelier-preview-service-input-dark {
@@ -553,7 +553,7 @@ body.dark {
   border-radius: 5px;
   background: rgba(128, 128, 128, 0.1);
   color: inherit;
-  font-size: 11px;
+  font-size: 12px;
 }
 .atelier-preview-service-button:disabled {
   opacity: 0.55;
@@ -564,6 +564,25 @@ body.dark {
 }
 .atelier-preview-service-stop {
   color: #d94b4b;
+}
+
+.atelier-preview-inspector {
+  border-bottom: 1px solid rgba(45, 45, 45, 0.1);
+  background: rgba(255, 255, 255, 0.5);
+}
+.atelier-preview-inspector-dark {
+  border-bottom-color: rgba(250, 249, 245, 0.09);
+  background: rgba(255, 255, 255, 0.035);
+}
+.atelier-preview-inspector-results {
+  max-height: 320px;
+  overflow: auto;
+  border-top: 1px solid rgba(45, 45, 45, 0.1);
+  background: rgba(0, 0, 0, 0.025);
+}
+.atelier-preview-inspector-results-dark {
+  border-top-color: rgba(250, 249, 245, 0.09);
+  background: rgba(0, 0, 0, 0.12);
 }
 
 .atelier-devscreen-toolbar,
@@ -598,7 +617,7 @@ body.dark {
   background: rgba(255, 255, 255, 0.6);
   color: inherit;
   font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
+  font-size: 12px;
   outline: none;
 }
 .dark .atelier-devscreen-input,
@@ -623,7 +642,7 @@ body.dark {
   border-radius: 5px;
   background: rgba(128, 128, 128, 0.1);
   color: inherit;
-  font-size: 10.5px;
+  font-size: 12px;
   white-space: nowrap;
 }
 .atelier-devscreen-button:disabled {
@@ -662,7 +681,7 @@ body.dark {
   border-bottom: 1px solid rgba(128, 128, 128, 0.14);
   color: rgba(128, 128, 128, 0.92);
   font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px;
+  font-size: 11.5px;
   text-transform: uppercase;
 }
 .atelier-devscreen-panel pre {
@@ -671,7 +690,7 @@ body.dark {
   overflow: auto;
   padding: 9px;
   font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.45;
   white-space: pre-wrap;
 }
@@ -703,7 +722,7 @@ body.dark {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 650;
 }
 .atelier-change-add {
@@ -758,7 +777,7 @@ body.dark {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
+  font-size: 12.5px;
 }
 .atelier-change-chevron {
   margin-left: 4px;
@@ -776,7 +795,7 @@ body.dark {
   border-top: 1px solid rgba(128, 128, 128, 0.12);
   background: rgba(0, 0, 0, 0.08);
   font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.5;
   white-space: pre;
 }
@@ -784,7 +803,7 @@ body.dark {
 .atelier-change-error {
   padding: 9px 12px;
   border-top: 1px solid rgba(128, 128, 128, 0.12);
-  font-size: 11px;
+  font-size: 12px;
 }
 .atelier-change-note {
   color: #31d17a;
@@ -803,7 +822,7 @@ body.dark {
   border: 1px solid rgba(128, 128, 128, 0.16);
   color: inherit;
   opacity: 0.62;
-  font-size: 11px;
+  font-size: 12px;
   font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 .atelier-log-toggle:hover {
@@ -822,7 +841,7 @@ body.dark {
   border-radius: 8px;
   background: rgba(45, 45, 45, 0.035);
   font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.45;
   white-space: pre-wrap;
 }

@@ -138,6 +138,7 @@ const COPY = {
     installAuto: "자동 설치",
     installing: "설치 중…",
     installPrompt: "미설치 상태입니다. 자동 설치를 눌러 CLI를 설치하세요.",
+    oauthReconnect: "구독 다시 로그인",
     installTimeout:
       "설치 완료를 아직 감지하지 못했습니다. Node.js/npm, Git Bash 또는 네트워크 상태를 확인한 뒤 다시 눌러주세요.",
     refresh: "상태 새로고침",
@@ -153,6 +154,10 @@ const COPY = {
     hermesDesc:
       "Hermes는 로컬 binary로 동작하고, AI 호출 시 아래 백엔드 중 선택한 자격증명을 그대로 사용합니다.",
     hermesBackendLabel: "기본 백엔드",
+    hermesCliLabel: "Hermes Agent CLI",
+    hermesCliReady: "Hermes Agent CLI가 설치되어 있습니다.",
+    hermesCliInstall: "Hermes Agent CLI 설치",
+    hermesCliReinstall: "다시 설치",
     hermesNotInstalled: "Hermes binary가 설치되어 있지 않습니다.",
     hermesNeedCred: (label: string) =>
       `선택된 백엔드(${label})의 자격증명이 없습니다. 위 카드에서 먼저 연결하세요.`,
@@ -184,6 +189,7 @@ const COPY = {
     installAuto: "Install automatically",
     installing: "Installing…",
     installPrompt: "CLI is not installed. Click automatic install to set it up.",
+    oauthReconnect: "Sign in again",
     installTimeout:
       "Atelier still cannot detect the CLI. Check Node.js/npm, Git Bash, or your network, then try again.",
     refresh: "Refresh status",
@@ -199,6 +205,10 @@ const COPY = {
     hermesDesc:
       "Hermes runs locally and uses one of the credentials below as the inference backend.",
     hermesBackendLabel: "Default backend",
+    hermesCliLabel: "Hermes Agent CLI",
+    hermesCliReady: "Hermes Agent CLI is installed.",
+    hermesCliInstall: "Install Hermes Agent CLI",
+    hermesCliReinstall: "Reinstall",
     hermesNotInstalled: "Hermes binary is not installed.",
     hermesNeedCred: (label: string) =>
       `No credential for the selected backend (${label}). Connect it in the card above first.`,
@@ -276,11 +286,11 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
     };
   }, [loginModal]);
 
-  async function startLogin(p: ProviderDef) {
+  async function startLogin(p: ProviderDef, force = false) {
     setBusyId(p.id);
     setPanelError(null);
     try {
-      await providerLoginOauth(p.id);
+      await providerLoginOauth(p.id, force);
       setLoginModal({ provider: p.id, name: p.name, detected: false });
     } catch (e) {
       setPanelError(copy.loginStartFailed(p.name, String(e)));
@@ -307,7 +317,7 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
             tw={tw}
             status={statuses[p.id]}
             busy={busyId === p.id}
-            onStartLogin={() => void startLogin(p)}
+            onStartLogin={(force) => void startLogin(p, force)}
             onSaved={() => void refresh(p.id)}
             onCleared={() => void refresh(p.id)}
             onInstalled={() => {
@@ -372,7 +382,7 @@ interface CardProps {
   tw: Tweaks;
   status: ProviderStatus | null;
   busy: boolean;
-  onStartLogin: () => void;
+  onStartLogin: (force?: boolean) => void;
   onSaved: () => void;
   onCleared: () => void;
   onInstalled: () => void;
@@ -402,6 +412,8 @@ const ProviderCard: React.FC<CardProps> = ({
   const oauthLoggedIn = status?.oauth_logged_in ?? false;
   const apiKeyPresent = status?.api_key_present ?? false;
   const connected = oauthLoggedIn || apiKeyPresent;
+  const shouldForceOauthLogin = def.id === "claude" && oauthLoggedIn;
+  const oauthButtonLabel = shouldForceOauthLogin ? copy.oauthReconnect : def.oauthCta[lang];
 
   const statusLabel = connected
     ? copy.statusOk
@@ -447,6 +459,7 @@ const ProviderCard: React.FC<CardProps> = ({
   }
 
   async function handleAutoInstall() {
+    if (cliInstalled) return;
     setInstalling(true);
     setErrorMsg(null);
     try {
@@ -493,28 +506,30 @@ const ProviderCard: React.FC<CardProps> = ({
         <div className="mt-3 space-y-1.5">
           <div className="flex items-center gap-2 flex-wrap">
             <button
-              onClick={onStartLogin}
+              onClick={() => onStartLogin(shouldForceOauthLogin)}
               disabled={busy || !cliInstalled}
               className={cls(
                 "text-[12.5px] h-8 px-3 rounded-md border transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
                 "bg-[var(--accent)] text-white border-[var(--accent-hover)] hover:opacity-90",
               )}
             >
-              {def.oauthCta[lang]}
+              {oauthButtonLabel}
             </button>
-            {!cliInstalled && (
-              <button
-                onClick={() => void handleAutoInstall()}
-                disabled={installing}
-                className={cls(
-                  "text-[12.5px] h-8 px-3 rounded-md border font-medium transition-colors",
-                  "bg-[var(--accent)]/10 text-[var(--accent)] border-[var(--accent)]/40 hover:bg-[var(--accent)]/20",
-                  "disabled:opacity-50 disabled:cursor-not-allowed",
-                )}
-              >
-                {installing ? copy.installing : `+ ${copy.installAuto}`}
-              </button>
-            )}
+            <button
+              onClick={() => void handleAutoInstall()}
+              disabled={installing || cliInstalled}
+              className={cls(
+                "text-[12.5px] h-8 px-3 rounded-md border font-medium transition-colors",
+                cliInstalled
+                  ? dark
+                    ? "border-dline bg-dbg text-dsub"
+                    : "border-line bg-cream text-sub"
+                  : "bg-[var(--accent)]/10 text-[var(--accent)] border-[var(--accent)]/40 hover:bg-[var(--accent)]/20",
+                "disabled:opacity-60 disabled:cursor-not-allowed",
+              )}
+            >
+              {cliInstalled ? copy.statusCliReady : installing ? copy.installing : `+ ${copy.installAuto}`}
+            </button>
             {connected && (
               <button
                 onClick={() => void handleClear()}
@@ -694,6 +709,7 @@ const HermesCard: React.FC<{
   }
 
   async function runInstall() {
+    if (installed) return;
     setInstalling(true);
     setInstallError(null);
     try {
@@ -734,7 +750,7 @@ const HermesCard: React.FC<{
             <span className="font-medium text-[14px]">{copy.hermesTitle}</span>
             <StatusDot
               tone={installed ? "ok" : "warn"}
-              label={installed ? copy.statusOk : copy.statusNoCli}
+              label={installed ? copy.statusCliReady : copy.statusNoCli}
               dark={dark}
             />
           </div>
@@ -744,29 +760,36 @@ const HermesCard: React.FC<{
         </div>
       </div>
 
-      {!installed && (
-        <div
+      <div
+        className={cls(
+          "mt-3 rounded-md border px-3 py-2.5 flex items-center gap-2 flex-wrap",
+          dark ? "border-dline bg-dbg" : "border-line bg-cream",
+        )}
+      >
+        <div className="flex-1 min-w-[220px]">
+          <div className={cls("text-[11.5px] uppercase tracking-wider font-semibold", dark ? "text-dsub" : "text-sub")}>
+            {copy.hermesCliLabel}
+          </div>
+          <div className={cls("text-[11.5px] mt-0.5", dark ? "text-dsub" : "text-sub")}>
+            {installed ? copy.hermesCliReady : `${copy.hermesNotInstalled} ${copy.installPrompt}`}
+          </div>
+        </div>
+        <button
+          onClick={() => void runInstall()}
+          disabled={installing || installed}
           className={cls(
-            "mt-3 rounded-md border px-3 py-2.5 flex items-center gap-2 flex-wrap",
-            dark ? "border-dline bg-dbg" : "border-line bg-cream",
+            "text-[12.5px] h-8 px-3 rounded-md border font-medium transition-colors",
+            installed
+              ? dark
+                ? "border-dline bg-dpanel text-dsub"
+                : "border-line bg-panel text-sub"
+              : "bg-[var(--accent)]/10 text-[var(--accent)] border-[var(--accent)]/40 hover:bg-[var(--accent)]/20",
+            "disabled:opacity-60 disabled:cursor-not-allowed",
           )}
         >
-          <div className={cls("flex-1 min-w-[220px] text-[11.5px]", dark ? "text-dsub" : "text-sub")}>
-            {copy.hermesNotInstalled} {copy.installPrompt}
-          </div>
-          <button
-            onClick={() => void runInstall()}
-            disabled={installing}
-            className={cls(
-              "text-[12.5px] h-8 px-3 rounded-md border font-medium transition-colors",
-              "bg-[var(--accent)]/10 text-[var(--accent)] border-[var(--accent)]/40 hover:bg-[var(--accent)]/20",
-              "disabled:opacity-50 disabled:cursor-not-allowed",
-            )}
-          >
-            {installing ? copy.installing : `+ ${copy.installAuto}`}
-          </button>
-        </div>
-      )}
+          {installed ? copy.statusCliReady : installing ? copy.installing : `+ ${copy.hermesCliInstall}`}
+        </button>
+      </div>
 
       {installError && (
         <div
