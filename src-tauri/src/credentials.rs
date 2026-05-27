@@ -147,7 +147,10 @@ fn run_oauth_logout(provider: &str, cli: &str) -> Result<(), String> {
             if detail.is_empty() {
                 Err(format!("{cli} {label} exited with {}", output.status))
             } else {
-                Err(format!("{cli} {label} exited with {}: {detail}", output.status))
+                Err(format!(
+                    "{cli} {label} exited with {}: {detail}",
+                    output.status
+                ))
             }
         }
         Ok(None) => Err(format!("{cli} {label} timed out")),

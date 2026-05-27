@@ -585,7 +585,27 @@ async fn design_claude_call(
         format!("{};{}", extra, std::env::var("PATH").unwrap_or_default())
     };
 
-    let mut child = Command::new("claude")
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("cmd.exe");
+        command.arg("/C").arg("claude");
+        if std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH").is_none() {
+            for candidate in [
+                r"C:\Program Files\Git\bin\bash.exe",
+                r"C:\Program Files (x86)\Git\bin\bash.exe",
+            ] {
+                if std::path::PathBuf::from(candidate).is_file() {
+                    command.env("CLAUDE_CODE_GIT_BASH_PATH", candidate);
+                    break;
+                }
+            }
+        }
+        command
+    };
+    #[cfg(not(target_os = "windows"))]
+    let mut command = Command::new("claude");
+
+    let mut child = command
         .arg("--print")
         .arg("--output-format")
         .arg("text")

@@ -125,6 +125,14 @@ fn normalize_agent_cwd(cwd: Option<String>) -> Result<Option<PathBuf>, String> {
 }
 
 fn command_for_cli(cli: &str) -> Command {
+    #[cfg(target_os = "windows")]
+    {
+        let mut command = Command::new("cmd.exe");
+        command.arg("/C").arg(cli);
+        configure_windows_agent_cli_env(&mut command);
+        return command;
+    }
+
     let executable = resolve_cli_executable(cli);
     if let Some((interpreter, mut args)) = script_interpreter(&executable) {
         let mut command = Command::new(interpreter);
@@ -135,6 +143,22 @@ fn command_for_cli(cli: &str) -> Command {
         return command;
     }
     Command::new(executable)
+}
+
+#[cfg(target_os = "windows")]
+fn configure_windows_agent_cli_env(command: &mut Command) {
+    if std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH").is_some() {
+        return;
+    }
+    for candidate in [
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\bin\bash.exe",
+    ] {
+        if PathBuf::from(candidate).is_file() {
+            command.env("CLAUDE_CODE_GIT_BASH_PATH", candidate);
+            break;
+        }
+    }
 }
 
 fn command_for_hermes() -> Command {
@@ -530,6 +554,11 @@ fn install_academic_research_claude_plugin_blocking(
 }
 
 fn describe_cli_command(cli: &str) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        return format!("program=cmd.exe args=/C {cli}");
+    }
+
     let executable = resolve_cli_executable(cli);
     if let Some((interpreter, args)) = script_interpreter(&executable) {
         let mut all_args = args;
