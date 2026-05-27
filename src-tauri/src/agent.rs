@@ -140,19 +140,22 @@ fn command_for_cli(cli: &str) -> Command {
         command.args(["/D", "/Q", "/S", "/C", cli]);
         configure_windows_background_command(&mut command);
         configure_windows_agent_cli_env(&mut command);
-        return command;
+        command
     }
 
-    let executable = resolve_cli_executable(cli);
-    if let Some((interpreter, mut args)) = script_interpreter(&executable) {
-        let mut command = Command::new(interpreter);
-        for arg in args.drain(..) {
-            command.arg(arg);
+    #[cfg(not(target_os = "windows"))]
+    {
+        let executable = resolve_cli_executable(cli);
+        if let Some((interpreter, mut args)) = script_interpreter(&executable) {
+            let mut command = Command::new(interpreter);
+            for arg in args.drain(..) {
+                command.arg(arg);
+            }
+            command.arg(executable);
+            return command;
         }
-        command.arg(executable);
-        return command;
+        Command::new(executable)
     }
-    Command::new(executable)
 }
 
 #[cfg(target_os = "windows")]
@@ -575,20 +578,23 @@ fn install_academic_research_claude_plugin_blocking(
 fn describe_cli_command(cli: &str) -> String {
     #[cfg(target_os = "windows")]
     {
-        return format!("program=cmd.exe args=/C {cli}");
+        format!("program=cmd.exe args=/D /Q /S /C {cli}")
     }
 
-    let executable = resolve_cli_executable(cli);
-    if let Some((interpreter, args)) = script_interpreter(&executable) {
-        let mut all_args = args;
-        all_args.push(executable.display().to_string());
-        return format!(
-            "program={} args={}",
-            interpreter.display(),
-            all_args.join(" ")
-        );
+    #[cfg(not(target_os = "windows"))]
+    {
+        let executable = resolve_cli_executable(cli);
+        if let Some((interpreter, args)) = script_interpreter(&executable) {
+            let mut all_args = args;
+            all_args.push(executable.display().to_string());
+            return format!(
+                "program={} args={}",
+                interpreter.display(),
+                all_args.join(" ")
+            );
+        }
+        format!("program={}", executable.display())
     }
-    format!("program={}", executable.display())
 }
 
 fn describe_hermes_command() -> String {

@@ -281,18 +281,24 @@ async fn command_exists(command: String) -> std::result::Result<bool, String> {
     if !valid_command_name(&command) {
         return Err("invalid command name".into());
     }
+
     #[cfg(target_os = "windows")]
-    return Ok(command_exists_in_augmented_path(&command));
+    {
+        Ok(command_exists_in_augmented_path(&command))
+    }
+
     #[cfg(not(target_os = "windows"))]
-    let status = std::process::Command::new("sh")
-        .arg("-lc")
-        .arg("command -v \"$1\" >/dev/null 2>&1")
-        .arg("sh")
-        .arg(&command)
-        .env("PATH", augmented_cli_path())
-        .status()
-        .map_err(|e| format!("command -v {command}: {e}"))?;
-    Ok(status.success())
+    {
+        let status = std::process::Command::new("sh")
+            .arg("-lc")
+            .arg("command -v \"$1\" >/dev/null 2>&1")
+            .arg("sh")
+            .arg(&command)
+            .env("PATH", augmented_cli_path())
+            .status()
+            .map_err(|e| format!("command -v {command}: {e}"))?;
+        Ok(status.success())
+    }
 }
 
 /// design-engine 리소스 읽기 — atelier 빌트인 디자인 두뇌. 번들된

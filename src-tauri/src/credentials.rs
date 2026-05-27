@@ -323,19 +323,18 @@ fn set_api_key_state(provider: &str, key: Option<&str>) {
 fn which(cli: &str) -> bool {
     #[cfg(target_os = "windows")]
     {
-        return crate::command_exists_in_augmented_path(cli);
+        crate::command_exists_in_augmented_path(cli)
     }
 
-    // 빠른 PATH 검사. Unix 는 command -v.
     #[cfg(not(target_os = "windows"))]
-    let mut command = {
+    {
+        // 빠른 PATH 검사. Unix 는 command -v.
         let mut command = Command::new("sh");
         command.arg("-c").arg(format!("command -v {cli}"));
-        command
-    };
-    configure_background_command(&mut command);
-    let res = command.env("PATH", crate::augmented_cli_path()).output();
-    matches!(res, Ok(o) if o.status.success())
+        configure_background_command(&mut command);
+        let res = command.env("PATH", crate::augmented_cli_path()).output();
+        matches!(res, Ok(o) if o.status.success())
+    }
 }
 
 fn command_output_timeout(mut command: Command, timeout: Duration) -> io::Result<Option<Output>> {
