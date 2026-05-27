@@ -96,11 +96,11 @@ jobs:
       - name: Install npm deps
         run: npm install --legacy-peer-deps
 
-      - name: Probe Windows CLI resolver
+      - name: Probe Windows CLI and auth paths
         shell: pwsh
         run: |
           npm run build
-          cargo test --manifest-path src-tauri/Cargo.toml windows_cli_resolver -- --nocapture
+          cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture
 
       - name: Build unsigned Windows installers
         shell: pwsh
