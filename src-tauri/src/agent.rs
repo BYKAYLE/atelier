@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+#[cfg(target_os = "windows")]
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
@@ -66,9 +68,11 @@ fn resolve_cli_executable(cli: &str) -> PathBuf {
         }
         #[cfg(target_os = "windows")]
         {
-            let candidate = dir.join(format!("{cli}.exe"));
-            if candidate.is_file() {
-                return std::fs::canonicalize(&candidate).unwrap_or(candidate);
+            for extension in windows_cli_extensions() {
+                let candidate = dir.join(format!("{cli}.{extension}"));
+                if candidate.is_file() {
+                    return std::fs::canonicalize(&candidate).unwrap_or(candidate);
+                }
             }
         }
     }
@@ -109,6 +113,292 @@ fn cli_search_paths() -> Vec<PathBuf> {
     unique
 }
 
+#[cfg(target_os = "windows")]
+fn windows_cli_extensions() -> Vec<String> {
+    let raw = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+    let mut out = raw
+        .split(';')
+        .filter_map(|part| {
+            let ext = part.trim().trim_start_matches('.').to_ascii_lowercase();
+            if ext.is_empty() {
+                None
+            } else {
+                Some(ext)
+            }
+        })
+        .collect::<Vec<_>>();
+    for ext in ["exe", "cmd", "bat", "com"] {
+        if !out.iter().any(|seen| seen == ext) {
+            out.push(ext.into());
+        }
+    }
+    out
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Clone)]
+struct WindowsCommandSpec {
+    program: PathBuf,
+    args: Vec<String>,
+}
+
+#[cfg(target_os = "windows")]
+impl WindowsCommandSpec {
+    fn command(&self) -> Command {
+        let mut command = Command::new(&self.program);
+        for arg in &self.args {
+            command.arg(arg);
+        }
+        configure_windows_background_command(&mut command);
+        configure_windows_agent_cli_env(&mut command);
+        command
+    }
+
+    fn describe(&self) -> String {
+        if self.args.is_empty() {
+            format!("program={}", self.program.display())
+        } else {
+            format!(
+                "program={} args={}",
+                self.program.display(),
+                self.args.join(" ")
+            )
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_find_command(name: &str, preferred_extensions: &[&str]) -> Option<PathBuf> {
+    let direct = PathBuf::from(name);
+    if direct.is_absolute() || name.contains('/') || name.contains('\\') {
+        return direct
+            .is_file()
+            .then(|| std::fs::canonicalize(&direct).unwrap_or(direct));
+    }
+
+    let mut names = Vec::new();
+    let has_extension = Path::new(name).extension().is_some();
+    if has_extension {
+        names.push(name.to_string());
+    } else {
+        for ext in preferred_extensions {
+            let ext = ext.trim().trim_start_matches('.');
+            if ext.is_empty() {
+                names.push(name.to_string());
+            } else {
+                names.push(format!("{name}.{ext}"));
+            }
+        }
+        if preferred_extensions.is_empty() {
+            for ext in windows_cli_extensions() {
+                let candidate = format!("{name}.{ext}");
+                if !names
+                    .iter()
+                    .any(|seen| seen.eq_ignore_ascii_case(&candidate))
+                {
+                    names.push(candidate);
+                }
+            }
+        }
+    }
+
+    for dir in cli_search_paths() {
+        for candidate_name in &names {
+            let candidate = dir.join(candidate_name);
+            if candidate.is_file() {
+                return Some(std::fs::canonicalize(&candidate).unwrap_or(candidate));
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn windows_npm_module_roots(shim: Option<&Path>) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(parent) = shim.and_then(Path::parent) {
+        roots.push(parent.join("node_modules"));
+    }
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        if !appdata.trim().is_empty() {
+            roots.push(PathBuf::from(&appdata).join("npm").join("node_modules"));
+        }
+    }
+    if let Ok(userprofile) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
+        if !userprofile.trim().is_empty() {
+            roots.push(
+                PathBuf::from(&userprofile)
+                    .join("AppData")
+                    .join("Roaming")
+                    .join("npm")
+                    .join("node_modules"),
+            );
+        }
+    }
+    for env_key in ["LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"] {
+        if let Ok(base) = std::env::var(env_key) {
+            if !base.trim().is_empty() {
+                roots.push(PathBuf::from(base).join("node_modules"));
+            }
+        }
+    }
+
+    let mut unique = Vec::new();
+    for root in roots {
+        if !unique.iter().any(|seen| seen == &root) {
+            unique.push(root);
+        }
+    }
+    unique
+}
+
+#[cfg(target_os = "windows")]
+fn windows_npm_cli_entry(cli: &str, shim: Option<&Path>) -> Option<PathBuf> {
+    let relative_candidates: &[&[&str]] = match cli {
+        "codex" => &[&["@openai", "codex", "bin", "codex.js"]],
+        "claude" => &[
+            &["@anthropic-ai", "claude-code", "cli.js"],
+            &["@anthropic-ai", "claude-code", "cli.mjs"],
+            &["@anthropic-ai", "claude-code", "bin", "claude.js"],
+            &["@anthropic-ai", "claude-code", "bin", "claude.mjs"],
+            &["@anthropic-ai", "claude-code", "index.js"],
+        ],
+        _ => &[],
+    };
+
+    for root in windows_npm_module_roots(shim) {
+        for relative in relative_candidates {
+            let mut candidate = root.clone();
+            for part in *relative {
+                candidate.push(part);
+            }
+            if candidate.is_file() {
+                return Some(std::fs::canonicalize(&candidate).unwrap_or(candidate));
+            }
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn windows_claude_native_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(userprofile) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
+        if !userprofile.trim().is_empty() {
+            let home = PathBuf::from(userprofile);
+            candidates.push(home.join(".claude").join("local").join("claude.exe"));
+            candidates.push(
+                home.join(".claude")
+                    .join("local")
+                    .join("bin")
+                    .join("claude.exe"),
+            );
+        }
+    }
+    candidates
+}
+
+#[cfg(target_os = "windows")]
+fn windows_direct_cli_candidate(cli: &str) -> Option<PathBuf> {
+    if cli.eq_ignore_ascii_case("claude") {
+        for candidate in windows_claude_native_candidates() {
+            if candidate.is_file() {
+                return Some(std::fs::canonicalize(&candidate).unwrap_or(candidate));
+            }
+        }
+    }
+    windows_find_command(cli, &["exe", "com", ""])
+}
+
+#[cfg(target_os = "windows")]
+fn windows_cli_command_spec(cli: &str) -> WindowsCommandSpec {
+    let direct = PathBuf::from(cli);
+    if direct.is_absolute() || cli.contains('/') || cli.contains('\\') {
+        let resolved = std::fs::canonicalize(&direct).unwrap_or(direct);
+        if windows_is_shell_script(&resolved) {
+            let cli_name = resolved
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .unwrap_or(cli);
+            if let Some(script) = windows_npm_cli_entry(cli_name, Some(&resolved)) {
+                let node = windows_find_command("node", &["exe", "com", ""])
+                    .unwrap_or_else(|| PathBuf::from("node"));
+                return WindowsCommandSpec {
+                    program: node,
+                    args: vec![script.display().to_string()],
+                };
+            }
+            return WindowsCommandSpec {
+                program: PathBuf::from("cmd.exe"),
+                args: vec![
+                    "/D".into(),
+                    "/Q".into(),
+                    "/S".into(),
+                    "/C".into(),
+                    resolved.display().to_string(),
+                ],
+            };
+        }
+        return WindowsCommandSpec {
+            program: resolved,
+            args: Vec::new(),
+        };
+    }
+
+    if let Some(native) = windows_direct_cli_candidate(cli) {
+        return WindowsCommandSpec {
+            program: native,
+            args: Vec::new(),
+        };
+    }
+
+    if let Some(script) = windows_npm_cli_entry(cli, None) {
+        let node = windows_find_command("node", &["exe", "com", ""])
+            .unwrap_or_else(|| PathBuf::from("node"));
+        return WindowsCommandSpec {
+            program: node,
+            args: vec![script.display().to_string()],
+        };
+    }
+
+    if let Some(shim) = windows_find_command(cli, &["cmd", "bat"]) {
+        if let Some(script) = windows_npm_cli_entry(cli, Some(&shim)) {
+            let node = windows_find_command("node", &["exe", "com", ""])
+                .unwrap_or_else(|| PathBuf::from("node"));
+            return WindowsCommandSpec {
+                program: node,
+                args: vec![script.display().to_string()],
+            };
+        }
+        return WindowsCommandSpec {
+            program: PathBuf::from("cmd.exe"),
+            args: vec![
+                "/D".into(),
+                "/Q".into(),
+                "/S".into(),
+                "/C".into(),
+                shim.display().to_string(),
+            ],
+        };
+    }
+
+    WindowsCommandSpec {
+        program: PathBuf::from(cli),
+        args: Vec::new(),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_is_shell_script(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            let ext = ext.to_ascii_lowercase();
+            ext == "cmd" || ext == "bat"
+        })
+        .unwrap_or(false)
+}
+
 fn normalize_agent_cwd(cwd: Option<String>) -> Result<Option<PathBuf>, String> {
     let Some(raw) = cwd.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) else {
         return Ok(None);
@@ -133,14 +423,10 @@ fn normalize_agent_cwd(cwd: Option<String>) -> Result<Option<PathBuf>, String> {
     Ok(Some(resolved))
 }
 
-fn command_for_cli(cli: &str) -> Command {
+pub(crate) fn command_for_cli(cli: &str) -> Command {
     #[cfg(target_os = "windows")]
     {
-        let mut command = Command::new("cmd.exe");
-        command.args(["/D", "/Q", "/S", "/C", cli]);
-        configure_windows_background_command(&mut command);
-        configure_windows_agent_cli_env(&mut command);
-        command
+        windows_cli_command_spec(cli).command()
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -161,10 +447,9 @@ fn command_for_cli(cli: &str) -> Command {
 #[cfg(target_os = "windows")]
 fn configure_windows_background_command(command: &mut Command) {
     use std::os::windows::process::CommandExt;
-    const DETACHED_PROCESS: u32 = 0x00000008;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
-    command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+    command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
 }
 
 #[cfg(target_os = "windows")]
@@ -578,7 +863,7 @@ fn install_academic_research_claude_plugin_blocking(
 fn describe_cli_command(cli: &str) -> String {
     #[cfg(target_os = "windows")]
     {
-        format!("program=cmd.exe args=/D /Q /S /C {cli}")
+        windows_cli_command_spec(cli).describe()
     }
 
     #[cfg(not(target_os = "windows"))]

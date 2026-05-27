@@ -9,10 +9,9 @@ use tauri::Manager;
 #[cfg(target_os = "windows")]
 fn configure_background_command(command: &mut std::process::Command) {
     use std::os::windows::process::CommandExt;
-    const DETACHED_PROCESS: u32 = 0x00000008;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
-    command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+    command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
 }
 
 fn reveal_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
@@ -632,23 +631,7 @@ async fn design_claude_call(
     };
 
     #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = Command::new("cmd.exe");
-        command.args(["/D", "/Q", "/S", "/C", "claude"]);
-        configure_background_command(&mut command);
-        if std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH").is_none() {
-            for candidate in [
-                r"C:\Program Files\Git\bin\bash.exe",
-                r"C:\Program Files (x86)\Git\bin\bash.exe",
-            ] {
-                if std::path::PathBuf::from(candidate).is_file() {
-                    command.env("CLAUDE_CODE_GIT_BASH_PATH", candidate);
-                    break;
-                }
-            }
-        }
-        command
-    };
+    let mut command = crate::agent::command_for_cli("claude");
     #[cfg(not(target_os = "windows"))]
     let mut command = Command::new("claude");
 

@@ -25,10 +25,9 @@ const CLAUDE_INSTALL_PS1: &str =
 #[cfg(target_os = "windows")]
 fn configure_background_command(command: &mut Command) {
     use std::os::windows::process::CommandExt;
-    const DETACHED_PROCESS: u32 = 0x00000008;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
-    command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+    command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -37,33 +36,13 @@ fn configure_background_command(_: &mut Command) {}
 fn cli_command(cli: &str) -> Command {
     #[cfg(target_os = "windows")]
     {
-        let mut command = Command::new("cmd.exe");
-        command.args(["/D", "/Q", "/S", "/C", cli]);
-        configure_background_command(&mut command);
-        configure_claude_windows_env(&mut command);
-        command
+        crate::agent::command_for_cli(cli)
     }
     #[cfg(not(target_os = "windows"))]
     {
         let mut command = Command::new(cli);
         configure_background_command(&mut command);
         command
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn configure_claude_windows_env(command: &mut Command) {
-    if std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH").is_some() {
-        return;
-    }
-    for candidate in [
-        r"C:\Program Files\Git\bin\bash.exe",
-        r"C:\Program Files (x86)\Git\bin\bash.exe",
-    ] {
-        if PathBuf::from(candidate).is_file() {
-            command.env("CLAUDE_CODE_GIT_BASH_PATH", candidate);
-            break;
-        }
     }
 }
 

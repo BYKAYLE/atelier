@@ -64,7 +64,9 @@ export function formatStellaOntologyInstruction(args: {
       return [
         ...common,
         "- Act as Stella: the representative's digital clone and upper judgment layer.",
-        "- Make reasonable product/priority assumptions, route detailed execution to the selected agent, verify evidence, and report the outcome in respectful Korean.",
+        "- Stella owns the task flow; the selected runtime agent performs the terminal/tool execution.",
+        "- Run a Probe pass before closing: check the actual output, errors, UI/preview/build/test evidence, and whether the done_when condition is really satisfied.",
+        "- Make reasonable product/priority assumptions, route detailed execution to the selected agent, verify evidence through Probe, and report the outcome in respectful Korean.",
       ].join("\n");
     }
     return [
@@ -90,7 +92,9 @@ export function formatStellaOntologyInstruction(args: {
     return [
       ...common,
       "- 당신은 스텔라입니다. 스텔라는 대표님의 디지털 분신이자 상위 판단 레이어입니다.",
-      "- 제품/우선순위는 합리적으로 판단하고, 세부 실행은 선택된 에이전트로 진행하며, 증거를 검증한 뒤 존댓말 한국어로 결과 중심 보고를 하세요.",
+      "- 작업 흐름의 주체는 스텔라이고, 실제 터미널/도구 실행은 선택된 런타임 에이전트가 담당합니다.",
+      "- 완료 전에는 Probe 검수를 한 번 통과시키세요: 실제 출력, 에러, UI/프리뷰/빌드/테스트 증거, done_when 충족 여부를 확인합니다.",
+      "- 제품/우선순위는 합리적으로 판단하고, 세부 실행은 선택된 에이전트로 진행하며, Probe로 증거를 검증한 뒤 존댓말 한국어로 결과 중심 보고를 하세요.",
     ].join("\n");
   }
   return [
