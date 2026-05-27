@@ -307,7 +307,7 @@ fn windows_direct_cli_candidate(cli: &str) -> Option<PathBuf> {
             }
         }
     }
-    windows_find_command(cli, &["exe", "com", ""])
+    windows_find_command(cli, &["exe", "com"])
 }
 
 #[cfg(target_os = "windows")]
@@ -321,7 +321,7 @@ fn windows_cli_command_spec(cli: &str) -> WindowsCommandSpec {
                 .and_then(|name| name.to_str())
                 .unwrap_or(cli);
             if let Some(script) = windows_npm_cli_entry(cli_name, Some(&resolved)) {
-                let node = windows_find_command("node", &["exe", "com", ""])
+                let node = windows_find_command("node", &["exe", "com"])
                     .unwrap_or_else(|| PathBuf::from("node"));
                 return WindowsCommandSpec {
                     program: node,
@@ -353,8 +353,8 @@ fn windows_cli_command_spec(cli: &str) -> WindowsCommandSpec {
     }
 
     if let Some(script) = windows_npm_cli_entry(cli, None) {
-        let node = windows_find_command("node", &["exe", "com", ""])
-            .unwrap_or_else(|| PathBuf::from("node"));
+        let node =
+            windows_find_command("node", &["exe", "com"]).unwrap_or_else(|| PathBuf::from("node"));
         return WindowsCommandSpec {
             program: node,
             args: vec![script.display().to_string()],
@@ -363,7 +363,7 @@ fn windows_cli_command_spec(cli: &str) -> WindowsCommandSpec {
 
     if let Some(shim) = windows_find_command(cli, &["cmd", "bat"]) {
         if let Some(script) = windows_npm_cli_entry(cli, Some(&shim)) {
-            let node = windows_find_command("node", &["exe", "com", ""])
+            let node = windows_find_command("node", &["exe", "com"])
                 .unwrap_or_else(|| PathBuf::from("node"));
             return WindowsCommandSpec {
                 program: node,
@@ -4464,5 +4464,102 @@ mod tests {
         assert!(!is_hermes_provider_diagnostic_line(
             "PositionCard.tsx: Trash2 import 제거 + getApiToken 통합"
         ));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_cli_resolver_skips_extensionless_npm_shims() {
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ENV_LOCK.lock().unwrap();
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "atelier-windows-cli-resolver-{}-{stamp}",
+            std::process::id()
+        ));
+        let npm_dir = root.join("AppData").join("Roaming").join("npm");
+        let claude_pkg = npm_dir
+            .join("node_modules")
+            .join("@anthropic-ai")
+            .join("claude-code");
+        let codex_pkg = npm_dir
+            .join("node_modules")
+            .join("@openai")
+            .join("codex")
+            .join("bin");
+        std::fs::create_dir_all(&claude_pkg).unwrap();
+        std::fs::create_dir_all(&codex_pkg).unwrap();
+        std::fs::write(npm_dir.join("node.exe"), b"").unwrap();
+        std::fs::write(npm_dir.join("claude"), b"#!/bin/sh\n").unwrap();
+        std::fs::write(npm_dir.join("claude.cmd"), b"@echo off\r\n").unwrap();
+        std::fs::write(claude_pkg.join("cli.js"), b"console.log('claude')").unwrap();
+        std::fs::write(npm_dir.join("codex"), b"#!/bin/sh\n").unwrap();
+        std::fs::write(npm_dir.join("codex.cmd"), b"@echo off\r\n").unwrap();
+        std::fs::write(codex_pkg.join("codex.js"), b"console.log('codex')").unwrap();
+
+        let old_path = std::env::var_os("PATH");
+        let old_appdata = std::env::var_os("APPDATA");
+        let old_userprofile = std::env::var_os("USERPROFILE");
+        let old_localappdata = std::env::var_os("LOCALAPPDATA");
+        let old_pathext = std::env::var_os("PATHEXT");
+        std::env::set_var("PATH", npm_dir.display().to_string());
+        std::env::set_var("APPDATA", root.join("AppData").join("Roaming"));
+        std::env::set_var("USERPROFILE", &root);
+        std::env::set_var("LOCALAPPDATA", root.join("LocalAppData"));
+        std::env::set_var("PATHEXT", ".COM;.EXE;.BAT;.CMD");
+
+        let claude = windows_cli_command_spec("claude");
+        assert!(
+            claude.program.ends_with("node.exe"),
+            "{}",
+            claude.describe()
+        );
+        assert!(
+            claude
+                .args
+                .first()
+                .is_some_and(|arg| arg.ends_with(r"@anthropic-ai\claude-code\cli.js")),
+            "{}",
+            claude.describe()
+        );
+        assert!(
+            !claude.program.ends_with("claude"),
+            "extensionless shim would trigger os error 193: {}",
+            claude.describe()
+        );
+
+        let codex = windows_cli_command_spec("codex");
+        assert!(codex.program.ends_with("node.exe"), "{}", codex.describe());
+        assert!(
+            codex
+                .args
+                .first()
+                .is_some_and(|arg| arg.ends_with(r"@openai\codex\bin\codex.js")),
+            "{}",
+            codex.describe()
+        );
+        assert!(
+            !codex.program.ends_with("codex"),
+            "extensionless shim would trigger os error 193: {}",
+            codex.describe()
+        );
+
+        restore_env("PATH", old_path);
+        restore_env("APPDATA", old_appdata);
+        restore_env("USERPROFILE", old_userprofile);
+        restore_env("LOCALAPPDATA", old_localappdata);
+        restore_env("PATHEXT", old_pathext);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(target_os = "windows")]
+    fn restore_env(key: &str, value: Option<std::ffi::OsString>) {
+        if let Some(value) = value {
+            std::env::set_var(key, value);
+        } else {
+            std::env::remove_var(key);
+        }
     }
 }
