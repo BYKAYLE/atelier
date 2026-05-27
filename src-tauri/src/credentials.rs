@@ -101,6 +101,52 @@ fn oauth_login_args(provider: &str, fallback_cmd: &'static str) -> Vec<&'static 
     }
 }
 
+fn redact_login_output(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let lower = line.to_ascii_lowercase();
+            if line.contains("://") {
+                "[login url redacted]".to_string()
+            } else if lower.contains("access_token")
+                || lower.contains("refresh_token")
+                || lower.contains("id_token")
+                || lower.contains("client_secret")
+            {
+                "[credential output redacted]".to_string()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn login_failure_detail(output: &Output) -> String {
+    let mut combined = String::new();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !stdout.trim().is_empty() {
+        combined.push_str(stdout.trim());
+    }
+    if !stderr.trim().is_empty() {
+        if !combined.is_empty() {
+            combined.push('\n');
+        }
+        combined.push_str(stderr.trim());
+    }
+    let detail = redact_login_output(&combined);
+    if detail.chars().count() <= 1200 {
+        detail
+    } else {
+        format!(
+            "{}\n... output truncated ...",
+            detail.chars().take(1200).collect::<String>()
+        )
+    }
+}
+
 fn oauth_logout_args(provider: &str) -> Option<Vec<&'static str>> {
     match provider {
         "claude" => Some(vec!["auth", "logout"]),
@@ -623,7 +669,12 @@ pub async fn provider_login_oauth(provider: String, force: Option<bool>) -> Resu
     if !which(cli) {
         return Err(format!("CLI '{cli}' is not installed"));
     }
-    if force.unwrap_or(false) {
+    let force_login = force.unwrap_or(false);
+    if !force_login && detect_oauth(&provider) {
+        set_oauth_state(&provider, true);
+        return Ok(());
+    }
+    if force_login {
         if let Err(e) = run_oauth_logout(&provider, cli) {
             log::warn!("forced oauth logout before login failed for {provider}: {e}");
         }
@@ -638,8 +689,8 @@ pub async fn provider_login_oauth(provider: String, force: Option<bool>) -> Resu
     command
         .args(&login_args)
         .env("PATH", crate::augmented_cli_path())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .stdin(Stdio::null());
     configure_background_command(&mut command);
     let mut child = command
@@ -656,21 +707,42 @@ pub async fn provider_login_oauth(provider: String, force: Option<bool>) -> Resu
             .map_err(|e| format!("{cli_owned} {cmd_owned} poll: {e}"))?
         {
             Some(status) if status.success() => {
+                let _ = child.wait_with_output();
                 set_oauth_state(&provider_clone, true);
                 return Ok(());
             }
-            Some(status) => return Err(format!("{cli_owned} {cmd_owned} exited with {status}")),
-            None if started.elapsed() >= Duration::from_millis(1200) => break,
+            Some(status) => {
+                let detail = child
+                    .wait_with_output()
+                    .ok()
+                    .map(|output| login_failure_detail(&output))
+                    .filter(|detail| !detail.trim().is_empty());
+                return Err(match detail {
+                    Some(detail) => {
+                        format!("{cli_owned} {cmd_owned} exited with {status}: {detail}")
+                    }
+                    None => format!("{cli_owned} {cmd_owned} exited with {status}"),
+                });
+            }
+            None if started.elapsed() >= Duration::from_millis(1500) => break,
             None => thread::sleep(Duration::from_millis(80)),
         }
     }
 
-    std::thread::spawn(move || match child.wait() {
-        Ok(status) if status.success() => {
+    std::thread::spawn(move || match child.wait_with_output() {
+        Ok(output) if output.status.success() => {
             set_oauth_state(&provider_clone, true);
         }
-        Ok(status) => {
-            log::warn!("{cli_owned} {cmd_owned} exited with {status}");
+        Ok(output) => {
+            let detail = login_failure_detail(&output);
+            if detail.trim().is_empty() {
+                log::warn!("{cli_owned} {cmd_owned} exited with {}", output.status);
+            } else {
+                log::warn!(
+                    "{cli_owned} {cmd_owned} exited with {}: {detail}",
+                    output.status
+                );
+            }
         }
         Err(e) => log::warn!("{cli_owned} wait: {e}"),
     });
@@ -899,6 +971,10 @@ fn should_inject_agent_api_key(provider: &str, state: &CredentialState) -> bool 
     !(matches!(provider, "claude" | "codex") && state.oauth_logged_in)
 }
 
+pub fn should_clear_inherited_agent_api_env(provider: &str) -> bool {
+    matches!(provider, "claude" | "codex")
+}
+
 /// agent.rs 가 spawn 직전에 호출. provider 별 keychain API 키를 반환.
 /// 실제 키 노출이 필요한 유일한 경로. 호출처는 env 주입 후 즉시 폐기.
 pub fn read_api_key(provider: &str) -> Option<String> {
@@ -959,5 +1035,34 @@ mod tests {
         assert!(should_inject_agent_api_key("claude", &api_state));
         assert!(should_inject_agent_api_key("codex", &api_state));
         assert!(should_inject_agent_api_key("openrouter", &oauth_state));
+    }
+
+    #[test]
+    fn claude_subscription_login_uses_current_auth_command() {
+        assert_eq!(
+            oauth_login_args("claude", "login"),
+            vec!["auth", "login", "--claudeai"]
+        );
+        assert_eq!(oauth_login_args("codex", "login"), vec!["login"]);
+    }
+
+    #[test]
+    fn direct_subscription_clis_clear_inherited_api_env() {
+        assert!(should_clear_inherited_agent_api_env("claude"));
+        assert!(should_clear_inherited_agent_api_env("codex"));
+        assert!(!should_clear_inherited_agent_api_env("openrouter"));
+        assert!(!should_clear_inherited_agent_api_env("hermes"));
+    }
+
+    #[test]
+    fn login_output_redacts_urls_and_tokens() {
+        let detail = redact_login_output(
+            "Opening browser\nhttps://claude.com/cai/oauth/authorize?code_challenge=secret\naccess_token=abc",
+        );
+        assert!(detail.contains("Opening browser"));
+        assert!(detail.contains("[login url redacted]"));
+        assert!(detail.contains("[credential output redacted]"));
+        assert!(!detail.contains("code_challenge=secret"));
+        assert!(!detail.contains("access_token=abc"));
     }
 }

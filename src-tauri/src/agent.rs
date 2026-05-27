@@ -15,7 +15,8 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::credentials::{
-    env_var_for, read_agent_api_key, read_api_key, sync_codex_auth_to_hermes,
+    env_var_for, read_agent_api_key, read_api_key, should_clear_inherited_agent_api_env,
+    sync_codex_auth_to_hermes,
 };
 
 const RETURN_RAW_EVENT_LIMIT: usize = 120;
@@ -41,10 +42,16 @@ fn tail_return_raw_events(raw_events: &[String]) -> Vec<String> {
 }
 
 /// CLI subprocess 호출 직전, 사용자가 Settings → Connections 에 저장한 API 키를
-/// 해당 provider 의 환경변수로 주입한다. 키가 없으면 기존 환경(시스템 env, OAuth 캐시) 그대로 사용.
+/// 해당 provider 의 환경변수로 주입한다. Claude/Codex 구독 경로는 부모 프로세스의
+/// stale API key env 를 제거해 CLI OAuth 캐시가 우선되게 한다.
 fn inject_agent_cli_credential_env(cmd: &mut Command, provider: &str) {
-    if let (Some(var), Some(key)) = (env_var_for(provider), read_agent_api_key(provider)) {
-        cmd.env(var, key);
+    if let Some(var) = env_var_for(provider) {
+        if should_clear_inherited_agent_api_env(provider) {
+            cmd.env_remove(var);
+        }
+        if let Some(key) = read_agent_api_key(provider) {
+            cmd.env(var, key);
+        }
     }
 }
 

@@ -247,7 +247,7 @@ try {
       Invoke-Captured "Start Codex login" "cmd.exe" @("/C", "codex", "login") 900 | Out-Null
     }
     if (Find-Exe "claude") {
-      Invoke-Captured "Start Claude login" "cmd.exe" @("/C", "claude", "login") 900 | Out-Null
+      Invoke-Captured "Start Claude login" "cmd.exe" @("/C", "claude", "auth", "login", "--claudeai") 900 | Out-Null
     }
     Write-Host "Re-checking auth status after interactive login..."
     Invoke-Captured "Codex login status after login" "cmd.exe" @("/C", "codex", "login", "status") 60 | Out-Null
