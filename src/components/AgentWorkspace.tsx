@@ -203,6 +203,8 @@ interface AgentSession {
   queueMode?: boolean;
   cwd: string;
   providerSessionId?: string;
+  providerSessionModel?: string;
+  providerSessionHermesProvider?: HermesInferenceProvider;
   messages: ChatMessage[];
   queuedTurns?: QueuedAgentTurn[];
   rawEvents: string[];
@@ -1485,6 +1487,10 @@ function loadSessions(): AgentSession[] {
           queueMode: Boolean(session.queueMode),
           cwd: session.cwd || "",
           providerSessionId: session.providerSessionId,
+          providerSessionModel: typeof session.providerSessionModel === "string" ? session.providerSessionModel : undefined,
+          providerSessionHermesProvider: isHermesProvider(session.providerSessionHermesProvider)
+            ? session.providerSessionHermesProvider
+            : undefined,
           messages: Array.isArray(session.messages)
             ? finalizeOrphanedStreamingMessages(session.messages)
             : [],
@@ -3521,7 +3527,23 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
 
   const updateActiveModel = (model: string) => {
     if (!active) return;
-    patchSession(active.id, (session) => ({ ...session, model, updatedAt: Date.now() }));
+    patchSession(active.id, (session) => {
+      const hermesProvider = session.provider === "hermes"
+        ? normalizeHermesProvider(session.hermesProvider || inferHermesProviderFromModel(session.model))
+        : DEFAULT_HERMES_PROVIDER;
+      const nextModel = session.provider === "hermes"
+        ? normalizeHermesModel(hermesProvider, model)
+        : normalizeModel(session.provider, model);
+      const changed = nextModel !== session.model;
+      return {
+        ...session,
+        model: nextModel,
+        providerSessionId: changed ? undefined : session.providerSessionId,
+        providerSessionModel: changed ? undefined : session.providerSessionModel,
+        providerSessionHermesProvider: changed ? undefined : session.providerSessionHermesProvider,
+        updatedAt: Date.now(),
+      };
+    });
   };
 
   const updateActiveHermesProvider = (hermesProvider: HermesInferenceProvider) => {
@@ -3532,6 +3554,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       model: HERMES_MODEL_OPTIONS[hermesProvider].some((option) => option.value === normalizeHermesModel(hermesProvider, session.model))
         ? normalizeHermesModel(hermesProvider, session.model)
         : defaultHermesModel(hermesProvider),
+      providerSessionId: undefined,
+      providerSessionModel: undefined,
+      providerSessionHermesProvider: undefined,
       updatedAt: Date.now(),
     }));
   };
@@ -4422,6 +4447,15 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         ...current,
         model: nextModel,
         hermesProvider: current.provider === "hermes" ? nextHermesProvider : current.hermesProvider,
+        providerSessionId: current.model !== nextModel || current.hermesProvider !== nextHermesProvider
+          ? undefined
+          : current.providerSessionId,
+        providerSessionModel: current.model !== nextModel || current.hermesProvider !== nextHermesProvider
+          ? undefined
+          : current.providerSessionModel,
+        providerSessionHermesProvider: current.model !== nextModel || current.hermesProvider !== nextHermesProvider
+          ? undefined
+          : current.providerSessionHermesProvider,
         updatedAt: Date.now(),
       }));
       localAssistantMessage(
@@ -4635,6 +4669,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         ...current,
         hermesProvider: arg,
         model: nextModel,
+        providerSessionId: undefined,
+        providerSessionModel: undefined,
+        providerSessionHermesProvider: undefined,
         updatedAt: Date.now(),
       }));
       localAssistantMessage(
@@ -4736,8 +4773,17 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     const hermesProvider = session.provider === "hermes"
       ? normalizeHermesProvider(session.hermesProvider || inferHermesProviderFromModel(session.model))
       : null;
+    const runModel = session.provider === "hermes"
+      ? normalizeHermesModel(hermesProvider || DEFAULT_HERMES_PROVIDER, session.model || meta.defaultModel)
+      : normalizeModel(session.provider, session.model || meta.defaultModel);
     const useHermesCodexFastPath = session.provider === "hermes" && hermesProvider === "openai-codex";
-    const resumeSessionId = useHermesCodexFastPath ? null : session.providerSessionId || null;
+    const hermesResumeMatches = session.provider === "hermes"
+      && Boolean(session.providerSessionId)
+      && session.providerSessionModel === runModel
+      && session.providerSessionHermesProvider === hermesProvider;
+    const resumeSessionId = session.provider === "hermes"
+      ? (useHermesCodexFastPath || !hermesResumeMatches ? null : session.providerSessionId || null)
+      : session.providerSessionId || null;
     const previewContext = sessionId === activeIdRef.current
       ? formatPreviewPromptContext(tw.language, previewUrl, previewCheck, previewDiagnostics, previewService)
       : null;
@@ -4791,7 +4837,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           ),
           resumeSessionId,
           cwd: runCwd || null,
-          model: session.model || meta.defaultModel,
+          model: runModel,
           hermesProvider,
           effort: session.provider === "codex" ? (fastPatchTask ? "low" : normalizeCodexEffort(session.codexEffort)) : null,
           speed: session.provider === "codex" ? (fastPatchTask ? "fast" : normalizeCodexSpeed(session.codexSpeed)) : null,
@@ -4804,7 +4850,15 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         const fallbackRawEvents = result.raw_events.slice(-MAX_RAW_EVENTS).map(clipRawEvent);
         patchSession(sessionId, (s) => ({
           ...s,
-          providerSessionId: result.provider_session_id || s.providerSessionId,
+          providerSessionId: result.provider_session_id || (resumeSessionId ? s.providerSessionId : undefined),
+          providerSessionModel: result.provider_session_id
+            ? runModel
+            : (resumeSessionId ? s.providerSessionModel : undefined),
+          providerSessionHermesProvider: session.provider === "hermes"
+            ? (result.provider_session_id
+                ? hermesProvider || undefined
+                : (resumeSessionId ? s.providerSessionHermesProvider : undefined))
+            : s.providerSessionHermesProvider,
           messages: s.messages.map((m) =>
             {
               if (m.id !== assistantId) return m;
