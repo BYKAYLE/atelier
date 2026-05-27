@@ -15,7 +15,7 @@ export function isStellaOntologyMode(value: unknown): value is StellaOntologyMod
 }
 
 export function defaultStellaOntologyMode(_provider?: string | null): StellaOntologyMode {
-  return "stella";
+  return "direct";
 }
 
 export function normalizeStellaOntologyMode(

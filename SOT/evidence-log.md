@@ -88,3 +88,34 @@ Validation evidence:
   23 tests on `0.1.38`.
 - `npm run harness:fixture` passed and wrote:
   `src-tauri/target/atelier-harness/atelier-agent-harness-2026-05-27T19-22-29-033Z.json`.
+
+## 2026-05-28 Factory On-Demand Default
+
+User-visible follow-up:
+
+- Changed the default Atelier ontology mode from `stella` to `direct`.
+- Stopped prepending the Stella Factory autonomous-development contract to every
+  normal agent prompt.
+- The Factory contract and preflight evidence now apply only when a Factory
+  command is used: `/goal`, `/analyze`, `/probe`, or `/audit`.
+- Existing sessions created under the old always-on Stella default are migrated
+  once to `direct`, so Factory is no longer silently active in old task tabs.
+- Updated the prompt action strip label to show Factory is on demand:
+  `필요 시 Stella Factory`.
+- Version bumped to `0.1.39` for this behavior change.
+
+Validation evidence:
+
+- `npm run build` passed.
+- `cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture` passed
+  23 tests on `0.1.39`.
+- `npm run harness:fixture` passed and wrote:
+  `src-tauri/target/atelier-harness/atelier-agent-harness-2026-05-27T20-51-34-733Z.json`.
+- `npm run tauri:build` passed and produced:
+  `src-tauri/target/release/bundle/dmg/Atelier_0.1.39_aarch64.dmg`.
+- `/Applications/Atelier.app` was replaced with the `0.1.39` app bundle.
+- `codesign --verify --deep --strict --verbose=2 /Applications/Atelier.app`
+  passed.
+- `/Applications/Atelier.app/Contents/Info.plist` reports version `0.1.39`.
+- Visual app check:
+  `/tmp/atelier-factory-on-demand-039.png` shows `필요 시 Stella Factory`.

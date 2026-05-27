@@ -254,6 +254,7 @@ const DEV_SCREEN_HOST_KEY = "atelier.agent.devscreen.host.v1";
 const DEV_SCREEN_PORT_KEY = "atelier.agent.devscreen.port.v1";
 const DEV_SCREEN_WINDOW_KEY = "atelier.agent.devscreen.window.v1";
 const TASK_LIST_VISIBLE_KEY = "atelier.agent.tasklist.visible.v1";
+const FACTORY_DEFAULT_OFF_MIGRATION_KEY = "atelier.agent.factory.defaultOff.v1";
 const DEFAULT_PROVIDER: AgentProvider = "claude";
 const DEFAULT_HERMES_PROVIDER: HermesInferenceProvider = "openai-codex";
 const DEFAULT_CODEX_EFFORT: CodexEffort = "xhigh";
@@ -1464,12 +1465,17 @@ function loadSessions(): AgentSession[] {
     const raw = localStorage.getItem(SESSIONS_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
     if (Array.isArray(parsed) && parsed.length > 0) {
+      const shouldResetLegacyStellaDefault = localStorage.getItem(FACTORY_DEFAULT_OFF_MIGRATION_KEY) !== "1";
+      if (shouldResetLegacyStellaDefault) localStorage.setItem(FACTORY_DEFAULT_OFF_MIGRATION_KEY, "1");
       return parsed.map((session: Partial<AgentSession>) => {
         const provider = isProvider(session.provider) ? session.provider : DEFAULT_PROVIDER;
         const meta = providerMeta(provider);
         const hermesProvider = provider === "hermes"
           ? normalizeHermesProvider(session.hermesProvider || inferHermesProviderFromModel(session.model))
           : undefined;
+        const stellaOntologyMode = shouldResetLegacyStellaDefault && session.stellaOntologyMode === "stella"
+          ? "direct"
+          : normalizeStellaOntologyMode(session.stellaOntologyMode, provider);
         return {
           id: session.id || nowId("agent"),
           title: session.title || meta.newTitleKo,
@@ -1482,7 +1488,7 @@ function loadSessions(): AgentSession[] {
             ? normalizeHermesModel(hermesProvider || DEFAULT_HERMES_PROVIDER, session.model || meta.defaultModel)
             : normalizeModel(provider, session.model || meta.defaultModel),
           hermesProvider,
-          stellaOntologyMode: normalizeStellaOntologyMode(session.stellaOntologyMode, provider),
+          stellaOntologyMode,
           codexEffort: provider === "codex" ? normalizeCodexEffort(session.codexEffort) : undefined,
           codexSpeed: provider === "codex" ? normalizeCodexSpeed(session.codexSpeed) : undefined,
           permissionMode: normalizePermissionMode(session.permissionMode),
@@ -2000,6 +2006,7 @@ function formatOntologyAgentPrompt(
   attachments: ChatAttachment[],
   mode: StellaOntologyMode,
   provider: AgentProvider,
+  factoryEnabled: boolean,
   cwd?: string | null,
 ) {
   const base = formatAgentPrompt(text, language, previewContext, attachments);
@@ -2009,12 +2016,14 @@ function formatOntologyAgentPrompt(
     providerLabel: providerMeta(provider).label,
     cwd,
   });
-  const factory = formatStellaFactoryInstruction({
-    language,
-    provider,
-    providerLabel: providerMeta(provider).label,
-    cwd,
-  });
+  const factory = factoryEnabled
+    ? formatStellaFactoryInstruction({
+        language,
+        provider,
+        providerLabel: providerMeta(provider).label,
+        cwd,
+      })
+    : "";
   const requestLabel = language === "en" ? "User request:" : "대표님 요청:";
   const layers = [factory, ontology].filter(Boolean).join("\n\n");
   if (!layers) return base;
@@ -2277,7 +2286,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         devScreenActionFailed: (message: string) => `Screen action failed: ${message}`,
         cwd: "Working folder",
         noAgentProfiles: "No Claude/Hermes/Codex profiles in Settings.",
-        factoryLabel: "Stella Factory",
+        factoryLabel: "Stella Factory (on demand)",
         factoryGoal: "Goal",
         factoryAnalyze: "Analyze",
         factoryProbe: "Probe",
@@ -2432,7 +2441,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         devScreenActionFailed: (message: string) => `화면 작업 실패: ${message}`,
         cwd: "작업 폴더",
         noAgentProfiles: "설정 프로필에 Claude/Hermes/Codex가 없습니다.",
-        factoryLabel: "Stella Factory",
+        factoryLabel: "필요 시 Stella Factory",
         factoryGoal: "목표",
         factoryAnalyze: "분석",
         factoryProbe: "검증",
@@ -4875,6 +4884,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
             payload.attachments,
             normalizeStellaOntologyMode(session.stellaOntologyMode, session.provider),
             session.provider,
+            Boolean(payload.factoryCommand),
             runCwd,
           ),
           resumeSessionId,
