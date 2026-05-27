@@ -139,6 +139,51 @@ export interface PreviewServiceStatus {
   recent_output: string[];
 }
 
+export interface StellaPathStatus {
+  path: string;
+  exists: boolean;
+}
+
+export interface StellaProjectAnalysis {
+  cwd: string;
+  root: string;
+  is_git: boolean;
+  project_name?: string | null;
+  package_manager?: string | null;
+  frameworks: string[];
+  scripts: string[];
+  verification_commands: string[];
+  sot_files: StellaPathStatus[];
+  docs: StellaPathStatus[];
+  dirty_files: string[];
+  risk_flags: string[];
+  generated_at: number;
+}
+
+export interface StellaProbeCommandResult {
+  command: string;
+  success: boolean;
+  code?: number | null;
+  timed_out: boolean;
+  duration_ms: number;
+  stdout: string;
+  stderr: string;
+}
+
+export interface StellaProbeResult {
+  cwd: string;
+  root: string;
+  profile: string;
+  success: boolean;
+  commands: StellaProbeCommandResult[];
+  generated_at: number;
+}
+
+export interface StellaEvidenceRecordResult {
+  path: string;
+  written: boolean;
+}
+
 export type AgentProvider = "claude" | "codex" | "hermes";
 export type AgentPermissionMode = "basic" | "auto" | "full";
 
@@ -226,6 +271,32 @@ export async function previewServiceStatus(url: string): Promise<PreviewServiceS
 
 export async function previewServiceStop(url: string): Promise<PreviewServiceStatus> {
   return invoke("preview_service_stop", { url });
+}
+
+export async function stellaProjectAnalysis(cwd?: string | null): Promise<StellaProjectAnalysis> {
+  return invoke("stella_project_analysis", { cwd: cwd || null });
+}
+
+export async function stellaWorkspaceProbe(args: {
+  cwd?: string | null;
+  profile?: "fast" | "focused" | "full" | string | null;
+}): Promise<StellaProbeResult> {
+  return invoke("stella_workspace_probe", {
+    cwd: args.cwd || null,
+    profile: args.profile || null,
+  });
+}
+
+export async function stellaRecordEvidence(args: {
+  cwd?: string | null;
+  title: string;
+  body: string;
+}): Promise<StellaEvidenceRecordResult> {
+  return invoke("stella_record_evidence", {
+    cwd: args.cwd || null,
+    title: args.title,
+    body: args.body,
+  });
 }
 
 /** 클립보드 PNG 바이트를 임시파일로 저장하고 경로 반환 */

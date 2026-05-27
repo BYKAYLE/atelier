@@ -14,6 +14,8 @@
   - macOS: Claude Code / Zsh / Bash / Node (+ PowerShell 설치 시)
   - Windows: Claude Code / PowerShell / Bash / cmd / Node
 - **Claude Code 퍼스트파티 호환** — `claude` CLI를 subprocess로 실행 → Pro/Max 구독 합법 경로
+- **Stella Factory 작업 모드** — `/goal`, `/analyze`, `/probe`, `/audit`로
+  자연어 목표를 개발 작업으로 변환하고 검증/SOT 기록까지 이어가는 자율 개발 레이어
 
 ## 전제조건
 
@@ -121,6 +123,29 @@ SignPath kept as an optional direct-installer signing path.
 - Privacy policy: [docs/privacy-policy.md](docs/privacy-policy.md)
 - Code signing policy: [docs/code-signing-policy.md](docs/code-signing-policy.md)
 - Windows signing workflow notes: [docs/windows-code-signing.md](docs/windows-code-signing.md)
+
+## Stella Factory
+
+Atelier is being upgraded in place into a Codex-like local autonomous
+development workspace while preserving the existing terminal and agent features.
+
+- Operating contract: [SOT/autonomous-workspace-contract.md](SOT/autonomous-workspace-contract.md)
+- Project summary: [SOT/L1-project-summary.md](SOT/L1-project-summary.md)
+- Feature notes: [docs/stella-factory.md](docs/stella-factory.md)
+
+Agent Workspace commands attach local evidence before provider execution:
+
+```text
+/goal <objective>
+/analyze <scope>
+/probe <scope>
+/audit <scope>
+```
+
+The Rust backend also exposes `stella_project_analysis`,
+`stella_workspace_probe`, and `stella_record_evidence` so Factory runs can
+inspect the real workspace, run allowlisted probes, and append SOT evidence
+without depending on a provider's terminal output.
 
 ## 로드맵
 

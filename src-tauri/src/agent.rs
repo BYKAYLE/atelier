@@ -4326,6 +4326,7 @@ pub async fn agent_claude_send<R: Runtime>(
     model: Option<String>,
     permission_mode: Option<String>,
 ) -> std::result::Result<AgentRunResult, String> {
+    crate::stella::guard_agent_prompt(&prompt)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_claude(
             app,
@@ -4355,6 +4356,7 @@ pub async fn agent_send<R: Runtime>(
     speed: Option<String>,
     permission_mode: Option<String>,
 ) -> std::result::Result<AgentRunResult, String> {
+    crate::stella::guard_agent_prompt(&prompt)?;
     tauri::async_runtime::spawn_blocking(move || match provider.as_str() {
         "claude" => run_claude(
             app,

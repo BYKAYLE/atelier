@@ -20,6 +20,13 @@ import {
 } from "../lib/stellaOntology";
 import type { StellaOntologyMode } from "../lib/stellaOntology";
 import {
+  detectStellaFactorySafetyBlock,
+  formatStellaFactoryPreflightBlock,
+  formatStellaFactoryInstruction,
+  parseStellaFactoryCommand,
+} from "../lib/stellaFactory";
+import type { StellaFactoryCommand } from "../lib/stellaFactory";
+import {
   ACADEMIC_RESEARCH_SLASH_COMMANDS,
   parseAcademicResearchCommand,
 } from "../lib/academicResearch";
@@ -47,6 +54,9 @@ import {
   previewServiceStart,
   previewServiceStatus,
   previewServiceStop,
+  stellaProjectAnalysis,
+  stellaRecordEvidence,
+  stellaWorkspaceProbe,
 } from "../lib/tauri";
 import type {
   AgentChangeBaseline,
@@ -176,6 +186,8 @@ type QueuedAgentTurn = {
   userMessageId: string;
   text: string;
   displayText?: string;
+  factoryCommand?: StellaFactoryCommand;
+  factoryEvidence?: string;
   attachments: ChatAttachment[];
   cwd: string;
   createdAt: number;
@@ -1049,6 +1061,27 @@ function slashCommandsFor(
       detailKo: "목표 달성까지 계획-실행-검증을 반복하는 Goal 모드로 실행",
       detailEn: "Run in Goal mode and keep iterating until the objective is satisfied",
     },
+    {
+      command: "/analyze <scope>",
+      insert: "/analyze ",
+      scope: "atelier",
+      detailKo: "현재 코드/실행/문서/테스트/SOT 상태를 먼저 분석",
+      detailEn: "Analyze code, runtime, docs, tests, and SOT first",
+    },
+    {
+      command: "/probe <scope>",
+      insert: "/probe ",
+      scope: "atelier",
+      detailKo: "구현 결과를 Probe 방식으로 증거 검증",
+      detailEn: "Run evidence-oriented Probe verification",
+    },
+    {
+      command: "/audit <scope>",
+      insert: "/audit ",
+      scope: "atelier",
+      detailKo: "보안/권한/배포준비/최종감사 실행",
+      detailEn: "Run security, permission, release-readiness, and final audit",
+    },
     ...ACADEMIC_RESEARCH_SLASH_COMMANDS.map((item) => ({
       ...item,
       scope: "atelier" as const,
@@ -1354,37 +1387,6 @@ function filterSlashCommands(commands: SlashCommandSpec[], input: string, langua
     const detail = language === "en" ? item.detailEn : item.detailKo;
     return `${item.command} ${item.scope} ${detail}`.toLowerCase().includes(query);
   });
-}
-
-function buildGoalPrompt(goal: string, language: Tweaks["language"]) {
-  const objective = goal.trim();
-  if (!objective) return "";
-  if (language === "en") {
-    return [
-      "Goal mode is enabled.",
-      "",
-      `Primary objective: ${objective}`,
-      "",
-      "Instructions:",
-      "- Work autonomously until the objective is actually satisfied or clearly blocked.",
-      "- Plan, execute, verify, and keep iterating instead of stopping after analysis.",
-      "- Prefer concrete changes, evidence, and checks over suggestions.",
-      "- If you hit a real blocker, explain exactly what is blocked and what remains.",
-      "- Keep updates concise and momentum-oriented.",
-    ].join("\n");
-  }
-  return [
-    "Goal 모드가 활성화되었습니다.",
-    "",
-    `최우선 목표: ${objective}`,
-    "",
-    "지침:",
-    "- 목표가 실제로 달성되거나 명확한 차단 사유가 생길 때까지 자율적으로 계속 진행합니다.",
-    "- 분석에서 멈추지 말고 계획 -> 실행 -> 검증 -> 재시도를 반복합니다.",
-    "- 제안보다 실제 변경, 근거, 검증 결과를 우선합니다.",
-    "- 실제 차단 요인이 있으면 무엇이 막혔는지와 남은 일을 정확히 설명합니다.",
-    "- 진행 상황 공유는 짧고 분명하게 유지합니다.",
-  ].join("\n");
 }
 
 function normalizeModel(provider: AgentProvider, model?: string | null) {
@@ -2007,9 +2009,16 @@ function formatOntologyAgentPrompt(
     providerLabel: providerMeta(provider).label,
     cwd,
   });
-  if (!ontology) return base;
+  const factory = formatStellaFactoryInstruction({
+    language,
+    provider,
+    providerLabel: providerMeta(provider).label,
+    cwd,
+  });
   const requestLabel = language === "en" ? "User request:" : "대표님 요청:";
-  return `${ontology}\n\n---\n${requestLabel}\n${base}`;
+  const layers = [factory, ontology].filter(Boolean).join("\n\n");
+  if (!layers) return base;
+  return `${layers}\n\n---\n${requestLabel}\n${base}`;
 }
 
 function revealCharsPerSecond(remaining: number) {
@@ -2311,6 +2320,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         slashHelp: [
           "Slash commands:",
           "/goal <objective> - run until the objective is satisfied or clearly blocked",
+          "/analyze <scope> - analyze code, runtime, docs, tests, and SOT before editing",
+          "/probe <scope> - verify implementation evidence and remaining blockers",
+          "/audit <scope> - check security, permissions, release readiness, and regression risk",
           "/stella - turn on Stella/Atelier ontology mode",
           "/mode direct|stella|evidence - change Atelier ontology mode",
           "/que - toggle queue mode",
@@ -2454,6 +2466,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         slashHelp: [
           "슬래시 명령어:",
           "/goal <objective> - 목표 달성 또는 명확한 차단까지 반복 진행",
+          "/analyze <scope> - 수정 전 코드, 실행, 문서, 테스트, SOT 상태 분석",
+          "/probe <scope> - 구현 증거와 남은 차단점 검증",
+          "/audit <scope> - 보안, 권한, 배포준비, 회귀 위험 최종감사",
           "/stella - Stella/Atelier 온톨로지 모드 켜기",
           "/mode direct|stella|evidence - Atelier 온톨로지 실행 모드 변경",
           "/que - 대기열 모드 켜기/끄기",
@@ -4260,15 +4275,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     return body;
   };
 
-  const parseGoalPrefixedMessage = (rawText: string) => {
-    const trimmed = rawText.trim();
-    const match = trimmed.match(/^\/goal\s+([\s\S]+)$/i);
-    if (!match) return null;
-    const body = match[1].trim();
-    if (!body) return null;
-    return body;
-  };
-
   const applySlashCommand = (command: SlashCommandSpec) => {
     setInput(command.insert);
     window.requestAnimationFrame(() => {
@@ -4318,13 +4324,17 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       return true;
     }
 
-    if (command === "/goal") {
+    if (command === "/goal" || command === "/analyze" || command === "/probe" || command === "/audit") {
+      const usage = {
+        "/goal": tw.language === "en" ? "Usage: /goal <objective>" : "사용법: /goal <목표>",
+        "/analyze": tw.language === "en" ? "Usage: /analyze <scope>" : "사용법: /analyze <범위>",
+        "/probe": tw.language === "en" ? "Usage: /probe <scope>" : "사용법: /probe <검증 범위>",
+        "/audit": tw.language === "en" ? "Usage: /audit <scope>" : "사용법: /audit <감사 범위>",
+      } as Record<string, string>;
       localAssistantMessage(
         session.id,
         rawText,
-        tw.language === "en"
-          ? "Usage: /goal <objective>"
-          : "사용법: /goal <목표>",
+        usage[command],
       );
       return true;
     }
@@ -4891,6 +4901,20 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           revealMessageImmediately(assistantId, finalTextForReveal);
         }
         backgroundedAssistantIdsRef.current.delete(assistantId);
+        if (payload.factoryCommand) {
+          stellaRecordEvidence({
+            cwd: runCwd || null,
+            title: `Stella Factory ${payload.factoryCommand}: ${payload.displayText || payload.text}`,
+            body: [
+              `Provider: ${session.provider}`,
+              `Model: ${runModel}`,
+              `Workspace: ${runCwd || "(not set)"}`,
+              `Status: ${wasInterrupted ? "interrupted" : result.is_error ? "error" : "done"}`,
+              payload.factoryEvidence ? `\nPreflight:\n${clipBlockText(payload.factoryEvidence, 4000)}` : "",
+              `\nResult:\n${clipBlockText(finalTextForReveal || result.error || copy.noResponse, 6000)}`,
+            ].filter(Boolean).join("\n"),
+          }).catch(console.warn);
+        }
       } else {
         await new Promise((resolve) => window.setTimeout(resolve, 500));
         patchSession(sessionId, (s) => ({
@@ -4927,6 +4951,20 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         revealMessageImmediately(assistantId, finalTextForReveal);
       }
       backgroundedAssistantIdsRef.current.delete(assistantId);
+      if (payload.factoryCommand && isTauri()) {
+        stellaRecordEvidence({
+          cwd: runCwd || null,
+          title: `Stella Factory ${payload.factoryCommand}: ${payload.displayText || payload.text}`,
+          body: [
+            `Provider: ${session.provider}`,
+            `Model: ${runModel}`,
+            `Workspace: ${runCwd || "(not set)"}`,
+            "Status: error",
+            payload.factoryEvidence ? `\nPreflight:\n${clipBlockText(payload.factoryEvidence, 4000)}` : "",
+            `\nError:\n${clipBlockText(finalTextForReveal, 6000)}`,
+          ].filter(Boolean).join("\n"),
+        }).catch(console.warn);
+      }
     } finally {
       unlisten?.();
       flushAgentStream(assistantId);
@@ -4943,9 +4981,14 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     const userText = text || (attachments.length > 0 ? copy.imageOnlyPrompt : "");
     if ((!userText && attachments.length === 0) || isPastingImage) return;
     const quePrefixedText = attachments.length === 0 ? parseQuePrefixedMessage(userText) : null;
-    const goalPrefixedText = parseGoalPrefixedMessage(userText);
+    const factoryRequest = attachments.length === 0
+      ? parseStellaFactoryCommand(userText, tw.language)
+      : null;
+    const factorySafetyBlock = attachments.length === 0
+      ? detectStellaFactorySafetyBlock(userText, tw.language)
+      : null;
     const session = active || (() => {
-      const initialTitle = goalPrefixedText || quePrefixedText || userText;
+      const initialTitle = factoryRequest?.title || quePrefixedText || userText;
       const fresh = makeSession(
         fallbackProfile,
         fallbackProvider,
@@ -4959,23 +5002,46 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       setActiveId(fresh.id);
       return fresh;
     })();
-    const academicResearchRequest = !quePrefixedText && !goalPrefixedText && attachments.length === 0
+    if (factorySafetyBlock) {
+      localAssistantMessage(session.id, userText, factorySafetyBlock.message);
+      setInput("");
+      setPendingAttachments([]);
+      setPasteError(null);
+      return;
+    }
+    const academicResearchRequest = !quePrefixedText && !factoryRequest && attachments.length === 0
       ? parseAcademicResearchCommand(userText, tw.language, session.provider)
       : null;
-    const turnText = quePrefixedText
+    let turnText = quePrefixedText
       ? quePrefixedText
-      : goalPrefixedText
-        ? buildGoalPrompt(goalPrefixedText, tw.language)
+      : factoryRequest
+        ? factoryRequest.prompt
         : academicResearchRequest
           ? academicResearchRequest.prompt
           : userText;
+    let factoryEvidence: string | undefined;
+    if (factoryRequest && isTauri()) {
+      try {
+        const analysis = await stellaProjectAnalysis(cwd || null);
+        const probe = factoryRequest.command === "probe" || factoryRequest.command === "audit"
+          ? await stellaWorkspaceProbe({
+              cwd: cwd || null,
+              profile: factoryRequest.command === "audit" ? "full" : "focused",
+            })
+          : null;
+        factoryEvidence = formatStellaFactoryPreflightBlock({ analysis, probe }, tw.language);
+      } catch (err) {
+        factoryEvidence = formatStellaFactoryPreflightBlock({ error: String(err) }, tw.language);
+      }
+      turnText = `${turnText}\n\n---\n${factoryEvidence}`;
+    }
     const visibleUserText = userText;
 
     setInput("");
     setPendingAttachments([]);
     setPasteError(null);
 
-    if (!quePrefixedText && !goalPrefixedText && !academicResearchRequest && attachments.length === 0 && await handleSlashCommand(session, userText)) return;
+    if (!quePrefixedText && !factoryRequest && !academicResearchRequest && attachments.length === 0 && await handleSlashCommand(session, userText)) return;
 
     const createdAt = Date.now();
     const payload: QueuedAgentTurn = {
@@ -4983,6 +5049,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       userMessageId: nowId("user"),
       text: turnText,
       displayText: visibleUserText,
+      factoryCommand: factoryRequest?.command,
+      factoryEvidence,
       attachments,
       cwd,
       createdAt,
@@ -4993,7 +5061,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     patchSession(session.id, (s) => ({
       ...s,
       title: s.messages.length === 0 && !s.titleEdited
-        ? (academicResearchRequest?.title || goalPrefixedText || turnText).slice(0, 48)
+        ? (academicResearchRequest?.title || factoryRequest?.title || turnText).slice(0, 48)
         : s.title,
       cwd,
       queuedTurns: isBusy

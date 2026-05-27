@@ -2,6 +2,7 @@ mod agent;
 mod clipboard;
 mod credentials;
 mod pty;
+mod stella;
 
 use serde::Serialize;
 use tauri::Manager;
@@ -775,6 +776,9 @@ pub fn run() {
             agent::preview_service_start,
             agent::preview_service_status,
             agent::preview_service_stop,
+            stella::stella_project_analysis,
+            stella::stella_workspace_probe,
+            stella::stella_record_evidence,
             credentials::provider_status,
             credentials::provider_save_api_key,
             credentials::provider_clear_credentials,
