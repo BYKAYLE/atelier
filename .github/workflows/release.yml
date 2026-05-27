@@ -98,7 +98,9 @@ jobs:
 
       - name: Probe Windows CLI resolver
         shell: pwsh
-        run: cargo test --manifest-path src-tauri/Cargo.toml windows_cli_resolver -- --nocapture
+        run: |
+          npm run build
+          cargo test --manifest-path src-tauri/Cargo.toml windows_cli_resolver -- --nocapture
 
       - name: Build unsigned Windows installers
         shell: pwsh

@@ -600,7 +600,9 @@ async fn design_claude_call(
     user_input: String,
 ) -> std::result::Result<String, String> {
     use std::io::Write;
-    use std::process::{Command, Stdio};
+    #[cfg(not(target_os = "windows"))]
+    use std::process::Command;
+    use std::process::Stdio;
     use std::time::Duration;
 
     let input = format!(
