@@ -9,8 +9,10 @@ use tauri::Manager;
 #[cfg(target_os = "windows")]
 fn configure_background_command(command: &mut std::process::Command) {
     use std::os::windows::process::CommandExt;
+    const DETACHED_PROCESS: u32 = 0x00000008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
-    command.creation_flags(CREATE_NO_WINDOW);
+    command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
 }
 
 fn reveal_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
@@ -234,6 +236,37 @@ pub(crate) fn augmented_cli_path() -> String {
     }
 }
 
+#[cfg(target_os = "windows")]
+pub(crate) fn command_exists_in_augmented_path(command: &str) -> bool {
+    let command = command.trim();
+    if command.is_empty() {
+        return false;
+    }
+
+    let command_path = std::path::Path::new(command);
+    let mut names = vec![command.to_string()];
+    if command_path.extension().is_none() {
+        let pathext =
+            std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
+        for ext in pathext
+            .split(';')
+            .map(str::trim)
+            .filter(|ext| !ext.is_empty())
+        {
+            names.push(format!("{command}{ext}"));
+        }
+    }
+
+    if command_path.is_absolute() || command.contains('/') || command.contains('\\') {
+        return names
+            .iter()
+            .any(|name| std::path::Path::new(name).is_file());
+    }
+
+    std::env::split_paths(&augmented_cli_path())
+        .any(|dir| names.iter().any(|name| dir.join(name).is_file()))
+}
+
 fn valid_command_name(command: &str) -> bool {
     !command.is_empty()
         && command.len() <= 80
@@ -249,16 +282,7 @@ async fn command_exists(command: String) -> std::result::Result<bool, String> {
         return Err("invalid command name".into());
     }
     #[cfg(target_os = "windows")]
-    let status = {
-        let mut cmd = std::process::Command::new("cmd.exe");
-        configure_background_command(&mut cmd);
-        cmd.arg("/C")
-            .arg("where")
-            .arg(&command)
-            .env("PATH", augmented_cli_path())
-            .status()
-            .map_err(|e| format!("where {command}: {e}"))?
-    };
+    return Ok(command_exists_in_augmented_path(&command));
     #[cfg(not(target_os = "windows"))]
     let status = std::process::Command::new("sh")
         .arg("-lc")
@@ -445,12 +469,18 @@ async fn export_design_project_zip(project_id: String) -> std::result::Result<St
             "Compress-Archive -Path '{}' -DestinationPath '{}' -Force",
             src, dst
         );
-        let status = std::process::Command::new("powershell")
-            .arg("-NoProfile")
-            .arg("-Command")
-            .arg(&ps_cmd)
-            .status()
-            .map_err(|e| format!("powershell spawn: {e}"))?;
+        let status = {
+            let mut command = std::process::Command::new("powershell");
+            configure_background_command(&mut command);
+            command
+                .arg("-NoProfile")
+                .arg("-WindowStyle")
+                .arg("Hidden")
+                .arg("-Command")
+                .arg(&ps_cmd)
+                .status()
+                .map_err(|e| format!("powershell spawn: {e}"))?
+        };
         if !status.success() {
             return Err(format!(
                 "Compress-Archive failed (exit {:?})",
@@ -598,7 +628,7 @@ async fn design_claude_call(
     #[cfg(target_os = "windows")]
     let mut command = {
         let mut command = Command::new("cmd.exe");
-        command.arg("/C").arg("claude");
+        command.args(["/D", "/Q", "/S", "/C", "claude"]);
         configure_background_command(&mut command);
         if std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH").is_none() {
             for candidate in [

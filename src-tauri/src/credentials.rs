@@ -25,8 +25,10 @@ const CLAUDE_INSTALL_PS1: &str =
 #[cfg(target_os = "windows")]
 fn configure_background_command(command: &mut Command) {
     use std::os::windows::process::CommandExt;
+    const DETACHED_PROCESS: u32 = 0x00000008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
-    command.creation_flags(CREATE_NO_WINDOW);
+    command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -36,7 +38,7 @@ fn cli_command(cli: &str) -> Command {
     #[cfg(target_os = "windows")]
     {
         let mut command = Command::new("cmd.exe");
-        command.arg("/C").arg(cli);
+        command.args(["/D", "/Q", "/S", "/C", cli]);
         configure_background_command(&mut command);
         configure_claude_windows_env(&mut command);
         command
@@ -319,13 +321,12 @@ fn set_api_key_state(provider: &str, key: Option<&str>) {
 }
 
 fn which(cli: &str) -> bool {
-    // 빠른 PATH 검사. Windows 는 where, Unix 는 command -v.
     #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = Command::new("where");
-        command.arg(cli);
-        command
-    };
+    {
+        return crate::command_exists_in_augmented_path(cli);
+    }
+
+    // 빠른 PATH 검사. Unix 는 command -v.
     #[cfg(not(target_os = "windows"))]
     let mut command = {
         let mut command = Command::new("sh");
@@ -748,6 +749,9 @@ fn install_npm_cli(label: &'static str, pkg: &'static str) -> Result<(), String>
     let command = {
         let mut command = Command::new("cmd.exe");
         command
+            .arg("/D")
+            .arg("/Q")
+            .arg("/S")
             .arg("/C")
             .arg("npm")
             .arg("install")
@@ -771,6 +775,8 @@ fn install_claude_cli() -> Result<(), String> {
         let mut command = Command::new("powershell.exe");
         command
             .arg("-NoProfile")
+            .arg("-WindowStyle")
+            .arg("Hidden")
             .arg("-ExecutionPolicy")
             .arg("Bypass")
             .arg("-Command")
@@ -788,6 +794,8 @@ fn install_hermes_cli() -> Result<(), String> {
         let mut command = Command::new("powershell.exe");
         command
             .arg("-NoProfile")
+            .arg("-WindowStyle")
+            .arg("Hidden")
             .arg("-ExecutionPolicy")
             .arg("Bypass")
             .arg("-Command")

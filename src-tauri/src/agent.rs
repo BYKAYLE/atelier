@@ -137,7 +137,7 @@ fn command_for_cli(cli: &str) -> Command {
     #[cfg(target_os = "windows")]
     {
         let mut command = Command::new("cmd.exe");
-        command.arg("/C").arg(cli);
+        command.args(["/D", "/Q", "/S", "/C", cli]);
         configure_windows_background_command(&mut command);
         configure_windows_agent_cli_env(&mut command);
         return command;
@@ -158,8 +158,10 @@ fn command_for_cli(cli: &str) -> Command {
 #[cfg(target_os = "windows")]
 fn configure_windows_background_command(command: &mut Command) {
     use std::os::windows::process::CommandExt;
+    const DETACHED_PROCESS: u32 = 0x00000008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
-    command.creation_flags(CREATE_NO_WINDOW);
+    command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
 }
 
 #[cfg(target_os = "windows")]
@@ -801,7 +803,9 @@ fn terminate_agent_pid(pid: u32) -> bool {
 
     #[cfg(windows)]
     {
-        Command::new("taskkill")
+        let mut command = Command::new("taskkill");
+        configure_windows_background_command(&mut command);
+        command
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -1168,7 +1172,7 @@ fn infer_preview_command(cwd: &str, url: &str) -> Result<String, String> {
 #[cfg(target_os = "windows")]
 fn preview_shell_command(command: &str) -> Command {
     let mut cmd = Command::new("cmd.exe");
-    cmd.arg("/C").arg(command);
+    cmd.args(["/D", "/Q", "/S", "/C", command]);
     configure_windows_background_command(&mut cmd);
     cmd
 }
@@ -1689,7 +1693,10 @@ pub async fn preview_service_stop(url: String) -> Result<PreviewServiceStatus, S
 }
 
 fn run_git(root: &str, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+    #[cfg(windows)]
+    configure_windows_background_command(&mut command);
+    let output = command
         .arg("-C")
         .arg(root)
         .args(args)
@@ -1703,7 +1710,10 @@ fn run_git(root: &str, args: &[&str]) -> Result<String, String> {
 }
 
 fn run_git_with_input(root: &str, args: &[&str], input: &str) -> Result<(), String> {
-    let mut child = Command::new("git")
+    let mut command = Command::new("git");
+    #[cfg(windows)]
+    configure_windows_background_command(&mut command);
+    let mut child = command
         .arg("-C")
         .arg(root)
         .args(args)
@@ -1929,7 +1939,10 @@ fn run_unified_diff(
     let new_path = temp_dir.join("new");
     let wrote = std::fs::write(&old_path, old).is_ok() && std::fs::write(&new_path, new).is_ok();
     let output = if wrote {
-        Command::new("diff")
+        let mut command = Command::new("diff");
+        #[cfg(windows)]
+        configure_windows_background_command(&mut command);
+        command
             .arg("-u")
             .arg("-L")
             .arg(label_old)
