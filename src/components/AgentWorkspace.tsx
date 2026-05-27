@@ -117,6 +117,15 @@ type WorkspacePluginInstallState = {
   message?: string;
 };
 
+function activeFactoryCommandFromText(rawText: string): StellaFactoryCommand | null {
+  const match = rawText.trimStart().match(/^\/(goal|analyze|probe|audit)(?:\s|$)/i);
+  return match ? (match[1].toLowerCase() as StellaFactoryCommand) : null;
+}
+
+function stripFactoryCommandPrefix(rawText: string): string {
+  return rawText.trimStart().replace(/^\/(?:goal|analyze|probe|audit)(?:\s+)?/i, "").trimStart();
+}
+
 type ChatAttachment = {
   id: string;
   kind: "image";
@@ -4315,8 +4324,15 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
 
   const applyFactoryCommand = (command: StellaFactoryCommand) => {
     const current = input.trim();
+    const activeCommand = activeFactoryCommandFromText(current);
     const prefix = `/${command} `;
-    const next = current && !current.startsWith("/") ? `${prefix}${current}` : prefix;
+    const next = activeCommand === command
+      ? stripFactoryCommandPrefix(current)
+      : activeCommand
+        ? `${prefix}${stripFactoryCommandPrefix(current)}`.trimEnd() + " "
+        : current && !current.startsWith("/")
+          ? `${prefix}${current}`
+          : prefix;
     setInput(next);
     window.requestAnimationFrame(() => {
       const el = inputRef.current;
@@ -5143,6 +5159,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     send().catch(console.error);
   };
 
+  const activeFactoryCommand = activeFactoryCommandFromText(input);
+
   return (
     <div className={cls("h-full w-full flex", dark ? "bg-dbg text-dink" : "bg-cream text-ink")}>
       {showTaskList ? (
@@ -5606,8 +5624,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                 <div className={cls("mb-2 flex flex-wrap items-center gap-1.5 border-b pb-2", dark ? "border-dline" : "border-line")}>
                   <span
                     className={cls(
-                      "h-7 shrink-0 rounded-[7px] px-2.5 inline-flex items-center gap-1.5 text-[11px] font-medium",
-                      dark ? "bg-[#242421] text-dink" : "bg-muted text-ink",
+                      "h-7 shrink-0 px-1 inline-flex items-center gap-1.5 text-[11px] font-medium",
+                      dark ? "text-dsub" : "text-sub",
                     )}
                   >
                     <span className="text-[#e26f4f]">{I.zap}</span>
@@ -5618,24 +5636,34 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                     { command: "analyze" as const, label: copy.factoryAnalyze, title: copy.factoryAnalyzeTitle, icon: I.eye },
                     { command: "probe" as const, label: copy.factoryProbe, title: copy.factoryProbeTitle, icon: I.shieldCheck },
                     { command: "audit" as const, label: copy.factoryAudit, title: copy.factoryAuditTitle, icon: I.shieldAlert },
-                  ].map((item) => (
-                    <button
-                      key={item.command}
-                      type="button"
-                      onClick={() => applyFactoryCommand(item.command)}
-                      className={cls(
-                        "h-7 rounded-[7px] px-2.5 inline-flex items-center gap-1.5 text-[11px] font-medium transition-colors",
-                        dark ? "text-dink hover:bg-[#343431]" : "text-ink hover:bg-line",
-                      )}
-                      title={item.title}
-                      aria-label={item.title}
-                    >
-                      <span className={cls("shrink-0", item.command === "goal" ? "text-[#e26f4f]" : dark ? "text-dsub" : "text-sub")}>
-                        {item.icon}
-                      </span>
-                      <span>{item.label}</span>
-                    </button>
-                  ))}
+                  ].map((item) => {
+                    const active = activeFactoryCommand === item.command;
+                    return (
+                      <button
+                        key={item.command}
+                        type="button"
+                        onClick={() => applyFactoryCommand(item.command)}
+                        className={cls(
+                          "h-7 rounded-[7px] px-2.5 inline-flex items-center gap-1.5 text-[11px] font-medium border transition-colors",
+                          active
+                            ? dark
+                              ? "bg-[#3a2a23] border-[#e26f4f] text-dink"
+                              : "bg-[#fff1eb] border-[#e26f4f] text-ink"
+                            : dark
+                              ? "border-transparent text-dsub hover:text-dink hover:bg-[#343431]"
+                              : "border-transparent text-sub hover:text-ink hover:bg-line",
+                        )}
+                        title={item.title}
+                        aria-label={item.title}
+                        aria-pressed={active}
+                      >
+                        <span className={cls("shrink-0", active || item.command === "goal" ? "text-[#e26f4f]" : dark ? "text-dsub" : "text-sub")}>
+                          {item.icon}
+                        </span>
+                        <span>{item.label}</span>
+                      </button>
+                    );
+                  })}
                 </div>
 	                {showSlashMenu && (
 	                  <div

@@ -119,3 +119,38 @@ Validation evidence:
 - `/Applications/Atelier.app/Contents/Info.plist` reports version `0.1.39`.
 - Visual app check:
   `/tmp/atelier-factory-on-demand-039.png` shows `필요 시 Stella Factory`.
+
+## 2026-05-28 Factory Button Press State
+
+User-visible follow-up:
+
+- Changed the Factory strip label from a filled chip to plain muted text so it
+  no longer looks permanently enabled.
+- Factory quick buttons now show a pressed state only while the prompt starts
+  with their matching command: `/goal`, `/analyze`, `/probe`, or `/audit`.
+- Pressing the active quick button again removes the Factory command prefix and
+  returns the strip to the unpressed state.
+- Version bumped to `0.1.40` for this visible interaction fix.
+
+Validation evidence:
+
+- `npm run build` passed.
+- Headless Chrome visual check:
+  `/tmp/atelier-factory-default-off.png` shows the default Factory strip with no
+  pressed quick action.
+- Headless Chrome interaction check:
+  before pressing Factory quick actions, `aria-pressed` was `[]`; after pressing
+  `목표`, `aria-pressed` was `["목표"]` and the prompt value was `/goal `.
+- Visual active-state check:
+  `/tmp/atelier-factory-goal-active.png` shows only the `목표` quick action in
+  the pressed state.
+- `cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture` passed
+  23 tests on `0.1.40`.
+- `npm run harness:fixture` passed and wrote:
+  `src-tauri/target/atelier-harness/atelier-agent-harness-2026-05-27T22-40-20-271Z.json`.
+- `npm run tauri:build` passed and produced:
+  `src-tauri/target/release/bundle/dmg/Atelier_0.1.40_aarch64.dmg`.
+- `/Applications/Atelier.app` was replaced with the `0.1.40` app bundle.
+- `codesign --verify --deep --strict --verbose=2 /Applications/Atelier.app`
+  passed.
+- `/Applications/Atelier.app/Contents/Info.plist` reports version `0.1.40`.
