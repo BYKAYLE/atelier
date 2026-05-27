@@ -14,7 +14,9 @@ use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Runtime};
 
-use crate::credentials::{env_var_for, read_api_key, sync_codex_auth_to_hermes};
+use crate::credentials::{
+    env_var_for, read_agent_api_key, read_api_key, sync_codex_auth_to_hermes,
+};
 
 const RETURN_RAW_EVENT_LIMIT: usize = 120;
 const RETURN_RAW_EVENT_CHAR_LIMIT: usize = 12_000;
@@ -40,7 +42,13 @@ fn tail_return_raw_events(raw_events: &[String]) -> Vec<String> {
 
 /// CLI subprocess 호출 직전, 사용자가 Settings → Connections 에 저장한 API 키를
 /// 해당 provider 의 환경변수로 주입한다. 키가 없으면 기존 환경(시스템 env, OAuth 캐시) 그대로 사용.
-fn inject_credential_env(cmd: &mut Command, provider: &str) {
+fn inject_agent_cli_credential_env(cmd: &mut Command, provider: &str) {
+    if let (Some(var), Some(key)) = (env_var_for(provider), read_agent_api_key(provider)) {
+        cmd.env(var, key);
+    }
+}
+
+fn inject_backend_credential_env(cmd: &mut Command, provider: &str) {
     if let (Some(var), Some(key)) = (env_var_for(provider), read_api_key(provider)) {
         cmd.env(var, key);
     }
@@ -686,7 +694,7 @@ fn run_agent_cli_command(
         _ => return Err(format!("지원하지 않는 provider입니다: {provider}")),
     };
     if provider != "hermes" {
-        inject_credential_env(&mut cmd, &provider);
+        inject_agent_cli_credential_env(&mut cmd, &provider);
     }
     if let Some(cwd) = normalize_agent_cwd(cwd)? {
         cmd.current_dir(cwd);
@@ -977,6 +985,57 @@ fn hermes_auth_error_message(text: &str) -> Option<String> {
             detail
         )
     })
+}
+
+fn extract_claude_error_from_raw_events(raw_events: &[String]) -> Option<String> {
+    for line in raw_events.iter().rev() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let event_type = value
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if event_type == "result" && value.get("is_error").and_then(Value::as_bool) == Some(true) {
+            if let Some(status) = value.get("api_error_status").and_then(Value::as_str) {
+                return Some(format!("Claude API error: {status}"));
+            }
+            if let Some(result) = value.get("result").and_then(Value::as_str) {
+                if !result.trim().is_empty() {
+                    return Some(result.trim().to_string());
+                }
+            }
+        }
+        if event_type == "error" {
+            if let Some(message) = value.get("message").and_then(Value::as_str) {
+                if !message.trim().is_empty() {
+                    return Some(message.trim().to_string());
+                }
+            }
+        }
+        if event_type == "system"
+            && value.get("subtype").and_then(Value::as_str) == Some("api_retry")
+        {
+            let status = value
+                .get("error_status")
+                .and_then(Value::as_i64)
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            let code = value
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("api_error");
+            if status == "401" || code == "authentication_failed" {
+                return Some(format!(
+                    "Claude 인증 실패: 구독 로그인 대신 API 키 인증 경로가 사용됐거나 저장된 자격증명이 만료되었습니다. status={status}, error={code}"
+                ));
+            }
+            return Some(format!(
+                "Claude API retry failed: status={status}, error={code}"
+            ));
+        }
+    }
+    None
 }
 
 fn is_hermes_provider_diagnostic_line(line: &str) -> bool {
@@ -2781,7 +2840,7 @@ fn run_claude<R: Runtime>(
     let model = normalize_claude_model(model);
     let permission_mode = normalize_agent_permission_mode(permission_mode);
     let mut cmd = command_for_cli("claude");
-    inject_credential_env(&mut cmd, "claude");
+    inject_agent_cli_credential_env(&mut cmd, "claude");
     cmd.arg("-p")
         .arg("--verbose")
         .arg("--output-format")
@@ -2881,7 +2940,8 @@ fn run_claude<R: Runtime>(
         is_error = true;
         if error.is_none() {
             error = Some(if stderr_text.trim().is_empty() {
-                format_cli_exit("claude", status)
+                extract_claude_error_from_raw_events(&raw_events)
+                    .unwrap_or_else(|| format_cli_exit("claude", status))
             } else {
                 stderr_text.trim().to_string()
             });
@@ -3053,7 +3113,7 @@ fn run_codex<R: Runtime>(
 ) -> Result<AgentRunResult, String> {
     let permission_mode = normalize_agent_permission_mode(permission_mode);
     let mut cmd = command_for_cli("codex");
-    inject_credential_env(&mut cmd, "codex");
+    inject_agent_cli_credential_env(&mut cmd, "codex");
     cmd.arg("exec");
     if let Some(cwd) = normalize_agent_cwd(cwd)? {
         cmd.arg("--cd").arg(cwd);
@@ -3212,7 +3272,7 @@ fn run_hermes<R: Runtime>(
     if hermes_provider == "openai-codex" {
         let _ = sync_codex_auth_to_hermes();
     }
-    inject_credential_env(&mut cmd, hermes_credential_provider);
+    inject_backend_credential_env(&mut cmd, hermes_credential_provider);
     // -Q (quiet) 는 banner·spinner·도구 프리뷰를 차단해 stdout 무음이 됨 → 진행 표시 불가.
     // 진행 흐름 노출을 위해 quiet 끄고, 대신 --source tool 로 세션 리스트 노출만 차단.
     cmd.arg("chat")
@@ -4445,6 +4505,17 @@ mod tests {
         .unwrap();
         assert!(message.contains("Hermes/Codex 인증"));
         assert!(message.contains("hermes auth"));
+    }
+
+    #[test]
+    fn claude_auth_retry_is_promoted_from_raw_events() {
+        let raw = vec![
+            r#"{"type":"system","subtype":"api_retry","attempt":1,"error_status":401,"error":"authentication_failed"}"#.to_string(),
+        ];
+        let message = extract_claude_error_from_raw_events(&raw).unwrap();
+        assert!(message.contains("Claude 인증 실패"));
+        assert!(message.contains("401"));
+        assert!(message.contains("authentication_failed"));
     }
 
     #[test]

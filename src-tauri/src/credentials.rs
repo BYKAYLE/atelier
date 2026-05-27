@@ -892,6 +892,13 @@ pub async fn hermes_update() -> Result<(), String> {
     Ok(())
 }
 
+fn should_inject_agent_api_key(provider: &str, state: &CredentialState) -> bool {
+    // Claude/Codex CLI can authenticate through their own subscription OAuth.
+    // If Atelier also injects a stale API key, the CLI prefers that env var and
+    // fails with confusing 401/exit 1 errors even though subscription login is valid.
+    !(matches!(provider, "claude" | "codex") && state.oauth_logged_in)
+}
+
 /// agent.rs 가 spawn 직전에 호출. provider 별 keychain API 키를 반환.
 /// 실제 키 노출이 필요한 유일한 경로. 호출처는 env 주입 후 즉시 폐기.
 pub fn read_api_key(provider: &str) -> Option<String> {
@@ -908,7 +915,44 @@ pub fn read_api_key(provider: &str) -> Option<String> {
     }
 }
 
+/// Claude/Codex 작업 CLI용 API 키. 구독 OAuth가 연결되어 있으면 API 키를
+/// 일부러 주입하지 않는다. Hermes 같은 API backend 경로는 read_api_key를 직접 쓴다.
+pub fn read_agent_api_key(provider: &str) -> Option<String> {
+    let state = credential_state(provider);
+    if !should_inject_agent_api_key(provider, &state) {
+        return None;
+    }
+    read_api_key(provider)
+}
+
 /// provider id → 환경변수명. agent.rs spawn 시 사용.
 pub fn env_var_for(provider: &str) -> Option<&'static str> {
     provider_meta(provider).and_then(|m| m.env_var)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subscription_oauth_wins_for_direct_agent_clis() {
+        let oauth_state = CredentialState {
+            oauth_logged_in: true,
+            api_key_present: true,
+            api_key_masked: "sk-…bad1".to_string(),
+            updated_at: None,
+        };
+        let api_state = CredentialState {
+            oauth_logged_in: false,
+            api_key_present: true,
+            api_key_masked: "sk-…good".to_string(),
+            updated_at: None,
+        };
+
+        assert!(!should_inject_agent_api_key("claude", &oauth_state));
+        assert!(!should_inject_agent_api_key("codex", &oauth_state));
+        assert!(should_inject_agent_api_key("claude", &api_state));
+        assert!(should_inject_agent_api_key("codex", &api_state));
+        assert!(should_inject_agent_api_key("openrouter", &oauth_state));
+    }
 }
