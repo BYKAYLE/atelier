@@ -60,3 +60,31 @@ Validation evidence:
   23 tests on `0.1.37`.
 - Local release asset:
   `src-tauri/target/release/bundle/dmg/Atelier_0.1.37_aarch64.dmg`.
+
+## 2026-05-28 Visible Factory Controls
+
+User-visible follow-up:
+
+- Added an always-visible `Stella Factory` action strip above the AgentWorkspace
+  prompt.
+- Added quick actions for `/goal`, `/analyze`, `/probe`, and `/audit` so the
+  Factory capability is visible without needing to remember slash commands.
+- Version bumped to `0.1.38` for the visible UI follow-up.
+
+Validation evidence:
+
+- `npm run build` passed before packaging.
+- `npm run tauri:build` passed for `0.1.38`.
+- `/Applications/Atelier.app` was replaced with the `0.1.38` app bundle.
+- `codesign --verify --deep --strict --verbose=2 /Applications/Atelier.app`
+  passed.
+- `/Applications/Atelier.app/Contents/Info.plist` reports version `0.1.38`.
+- Visual app check:
+  `/tmp/atelier-work-ax3-038.png` shows the `Stella Factory` action strip.
+- Interaction check:
+  `/tmp/atelier-work-goal-ax-038.png` shows the `목표` quick action filling
+  `/goal` in the prompt.
+- `cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture` passed
+  23 tests on `0.1.38`.
+- `npm run harness:fixture` passed and wrote:
+  `src-tauri/target/atelier-harness/atelier-agent-harness-2026-05-27T19-22-29-033Z.json`.

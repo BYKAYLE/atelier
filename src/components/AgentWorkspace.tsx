@@ -2277,6 +2277,15 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         devScreenActionFailed: (message: string) => `Screen action failed: ${message}`,
         cwd: "Working folder",
         noAgentProfiles: "No Claude/Hermes/Codex profiles in Settings.",
+        factoryLabel: "Stella Factory",
+        factoryGoal: "Goal",
+        factoryAnalyze: "Analyze",
+        factoryProbe: "Probe",
+        factoryAudit: "Audit",
+        factoryGoalTitle: "Create a goal-driven autonomous development task",
+        factoryAnalyzeTitle: "Inspect this workspace before implementation",
+        factoryProbeTitle: "Run evidence checks for this workspace",
+        factoryAuditTitle: "Audit security, permissions, release readiness, and regressions",
         plugins: "Plugins",
         pluginsHint: "Plugins are not installed automatically. Choose only what this workspace needs.",
         pluginInstall: "Install",
@@ -2423,6 +2432,15 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         devScreenActionFailed: (message: string) => `화면 작업 실패: ${message}`,
         cwd: "작업 폴더",
         noAgentProfiles: "설정 프로필에 Claude/Hermes/Codex가 없습니다.",
+        factoryLabel: "Stella Factory",
+        factoryGoal: "목표",
+        factoryAnalyze: "분석",
+        factoryProbe: "검증",
+        factoryAudit: "감사",
+        factoryGoalTitle: "목표 기반 자율 개발 작업 생성",
+        factoryAnalyzeTitle: "구현 전 현재 작업공간 분석",
+        factoryProbeTitle: "이 작업공간의 증거 검증 실행",
+        factoryAuditTitle: "보안, 권한, 배포준비, 회귀 위험 감사",
         plugins: "플러그인",
         pluginsHint: "플러그인은 자동 설치하지 않습니다. 필요한 항목만 직접 설치하세요.",
         pluginInstall: "설치",
@@ -4286,6 +4304,20 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     });
   };
 
+  const applyFactoryCommand = (command: StellaFactoryCommand) => {
+    const current = input.trim();
+    const prefix = `/${command} `;
+    const next = current && !current.startsWith("/") ? `${prefix}${current}` : prefix;
+    setInput(next);
+    window.requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      const cursor = el.value.length;
+      el.setSelectionRange(cursor, cursor);
+    });
+  };
+
   const startNextQueuedTurn = (sessionId: string) => {
     window.setTimeout(() => {
       if (busyTurnIdsRef.current[sessionId]) return;
@@ -5561,6 +5593,40 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                     {pasteError && <div className="atelier-attachment-error">{pasteError}</div>}
                   </div>
                 )}
+                <div className={cls("mb-2 flex flex-wrap items-center gap-1.5 border-b pb-2", dark ? "border-dline" : "border-line")}>
+                  <span
+                    className={cls(
+                      "h-7 shrink-0 rounded-[7px] px-2.5 inline-flex items-center gap-1.5 text-[11px] font-medium",
+                      dark ? "bg-[#242421] text-dink" : "bg-muted text-ink",
+                    )}
+                  >
+                    <span className="text-[#e26f4f]">{I.zap}</span>
+                    <span>{copy.factoryLabel}</span>
+                  </span>
+                  {[
+                    { command: "goal" as const, label: copy.factoryGoal, title: copy.factoryGoalTitle, icon: I.zap },
+                    { command: "analyze" as const, label: copy.factoryAnalyze, title: copy.factoryAnalyzeTitle, icon: I.eye },
+                    { command: "probe" as const, label: copy.factoryProbe, title: copy.factoryProbeTitle, icon: I.shieldCheck },
+                    { command: "audit" as const, label: copy.factoryAudit, title: copy.factoryAuditTitle, icon: I.shieldAlert },
+                  ].map((item) => (
+                    <button
+                      key={item.command}
+                      type="button"
+                      onClick={() => applyFactoryCommand(item.command)}
+                      className={cls(
+                        "h-7 rounded-[7px] px-2.5 inline-flex items-center gap-1.5 text-[11px] font-medium transition-colors",
+                        dark ? "text-dink hover:bg-[#343431]" : "text-ink hover:bg-line",
+                      )}
+                      title={item.title}
+                      aria-label={item.title}
+                    >
+                      <span className={cls("shrink-0", item.command === "goal" ? "text-[#e26f4f]" : dark ? "text-dsub" : "text-sub")}>
+                        {item.icon}
+                      </span>
+                      <span>{item.label}</span>
+                    </button>
+                  ))}
+                </div>
 	                {showSlashMenu && (
 	                  <div
 	                    className={cls(
