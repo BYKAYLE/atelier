@@ -187,3 +187,38 @@ Validation evidence:
 - `codesign --verify --deep --strict --verbose=2 /Applications/Atelier.app`
   passed.
 - `/Applications/Atelier.app/Contents/Info.plist` reports version `0.1.41`.
+
+## 2026-05-31 Hermes-Like Desktop Shell
+
+User-visible follow-up:
+
+- Replaced the top segmented chrome with a Hermes-style left desktop sidebar.
+- Preserved the existing mounted Atelier work surfaces: structured agent chat,
+  workbench/code-preview, design mode, and settings.
+- Added sidebar entries for Chat, Sessions, Workbench, Design, Models, Skills,
+  Providers, Profiles, Gateway, Updates, and Settings.
+- Connected Providers/Gateway/Profiles/Updates/Settings sidebar entries to the
+  matching Settings sections instead of creating empty placeholder screens.
+- Persisted the selected sidebar module and Settings section so refresh/reopen
+  does not show mismatched navigation state.
+- Version bumped to `0.1.42` for this shell update.
+
+Validation evidence:
+
+- `npm run build` passed.
+- `cargo test --manifest-path src-tauri/Cargo.toml` passed 23 tests on
+  `0.1.42`.
+- `npm run harness:fixture` passed and wrote:
+  `src-tauri/target/atelier-harness/atelier-agent-harness-2026-05-30T18-07-43-043Z.json`.
+- Browser visual check:
+  `/tmp/atelier-hermes-shell-v1-updated.png` shows the Hermes-style sidebar in
+  the dev build.
+- `npm run tauri:build` passed and produced:
+  `src-tauri/target/release/bundle/dmg/Atelier_0.1.42_aarch64.dmg`.
+- `/Applications/Atelier.app` was replaced with the `0.1.42` app bundle.
+- `codesign --verify --deep --strict --verbose=2 /Applications/Atelier.app`
+  passed.
+- `/Applications/Atelier.app/Contents/Info.plist` reports version `0.1.42`.
+- Installed app visual check:
+  `/tmp/atelier-installed-0.1.42-shell.png` shows the shell running from
+  `/Applications/Atelier.app`.

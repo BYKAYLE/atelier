@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   ACCENTS,
   AppLanguage,
@@ -15,6 +15,7 @@ import ConnectionsPanel from "./ConnectionsPanel";
 interface Props {
   tw: Tweaks;
   setTw: (p: Partial<Tweaks>) => void;
+  initialSection?: string;
 }
 
 const SETTINGS_COPY = {
@@ -44,10 +45,14 @@ const SETTINGS_COPY = {
   },
 } as const;
 
-const Settings: React.FC<Props> = ({ tw, setTw }) => {
+const Settings: React.FC<Props> = ({ tw, setTw, initialSection }) => {
   const dark = tw.dark;
-  const [section, setSection] = useState<string>("appearance");
+  const [section, setSection] = useState<string>(initialSection || "appearance");
   const copy = SETTINGS_COPY[tw.language];
+
+  useEffect(() => {
+    if (initialSection) setSection(initialSection);
+  }, [initialSection]);
 
   const nav: Array<[string, string, React.ReactNode]> = [
     ["terminal", copy.nav.terminal, I.terminal],
