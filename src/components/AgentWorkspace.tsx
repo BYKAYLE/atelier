@@ -2191,6 +2191,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const [expandedDiffByKey, setExpandedDiffByKey] = useState<Record<string, boolean>>({});
   const [logsOpenById, setLogsOpenById] = useState<Record<string, boolean>>({});
   const [showProfilePicker, setShowProfilePicker] = useState(false);
+  const [showFactoryBrief, setShowFactoryBrief] = useState(true);
   const [showPluginList, setShowPluginList] = useState(true);
   const [pluginInstallState, setPluginInstallState] = useState<Partial<Record<WorkspacePluginId, WorkspacePluginInstallState>>>({});
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
@@ -2304,6 +2305,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         factoryAnalyzeTitle: "Inspect this workspace before implementation",
         factoryProbeTitle: "Run evidence checks for this workspace",
         factoryAuditTitle: "Audit security, permissions, release readiness, and regressions",
+        factoryBriefTitle: "Stella Factory",
+        factoryBriefHint: "Shape Atelier into a Hermes Desktop-style local autonomous workspace only when you choose to run Factory.",
+        factoryBriefSeedGoal: "Set direction",
+        factoryBriefSeedAnalyze: "Analyze current app",
+        factoryRoadmapPrompt: "Upgrade Atelier into a Hermes Desktop-style local autonomous development workspace. Preserve existing terminal, agent, preview, model, provider, plugin, updater, and settings features. Evolve it step by step around goal normalization, project analysis, safe command execution, file editing, test/probe verification, role delegation, security review, release readiness, and SOT evidence recording.",
+        factoryAnalyzePrompt: "Analyze Atelier's current code, runtime, SOT, tests, installed app behavior, and release/update flow. Decide what must be preserved and what should be upgraded to make Atelier feel like Hermes Desktop while remaining a Codex-like local autonomous development workspace.",
         plugins: "Plugins",
         pluginsHint: "Plugins are not installed automatically. Choose only what this workspace needs.",
         pluginInstall: "Install",
@@ -2459,6 +2466,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         factoryAnalyzeTitle: "구현 전 현재 작업공간 분석",
         factoryProbeTitle: "이 작업공간의 증거 검증 실행",
         factoryAuditTitle: "보안, 권한, 배포준비, 회귀 위험 감사",
+        factoryBriefTitle: "Stella Factory",
+        factoryBriefHint: "필요할 때만 Factory를 켜서 Atelier를 Hermes Desktop 같은 로컬 자율 개발 워크스페이스로 고도화합니다.",
+        factoryBriefSeedGoal: "방향 잡기",
+        factoryBriefSeedAnalyze: "현재 앱 분석",
+        factoryRoadmapPrompt: "Atelier를 Hermes Desktop 같은 로컬 자율 개발 워크스페이스로 고도화해. 기존 터미널, 에이전트, 프리뷰, 모델, 제공자, 플러그인, 업데이트, 설정 기능은 보존하고 목표 변환, 프로젝트 분석, 안전한 명령 실행, 파일 수정, 테스트/Probe 검증, 역할별 위임, 보안검토, 배포준비, SOT 증거 기록을 중심으로 단계적으로 발전시켜.",
+        factoryAnalyzePrompt: "Atelier의 현재 코드, 실행 방식, SOT, 테스트, 설치본 동작, 릴리스/업데이트 흐름을 분석해. Hermes Desktop처럼 느껴지는 Codex형 로컬 자율 개발 워크스페이스로 만들기 위해 무엇을 유지하고 무엇을 고도화해야 하는지 판단해.",
         plugins: "플러그인",
         pluginsHint: "플러그인은 자동 설치하지 않습니다. 필요한 항목만 직접 설치하세요.",
         pluginInstall: "설치",
@@ -4343,6 +4356,18 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     });
   };
 
+  const applyFactoryPreset = (command: StellaFactoryCommand, body: string) => {
+    const next = `/${command} ${body}`;
+    setInput(next);
+    window.requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      const cursor = el.value.length;
+      el.setSelectionRange(cursor, cursor);
+    });
+  };
+
   const startNextQueuedTurn = (sessionId: string) => {
     window.setTimeout(() => {
       if (busyTurnIdsRef.current[sessionId]) return;
@@ -5223,6 +5248,77 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           )}
         </div>
         <div className="flex-1 min-h-0 overflow-auto p-2">
+          <div
+            className={cls(
+              "mb-2 rounded-[8px] border overflow-hidden",
+              dark ? "border-dline bg-[#20201e]" : "border-line bg-surface",
+            )}
+          >
+            <button
+              type="button"
+              onClick={() => setShowFactoryBrief((v) => !v)}
+              className={cls(
+                "w-full h-9 px-2.5 flex items-center gap-2 text-left",
+                dark ? "text-dink hover:bg-dmuted" : "text-ink hover:bg-muted",
+              )}
+            >
+              <span className="h-5 w-5 shrink-0 grid place-items-center text-[#e26f4f]">{I.shieldCheck}</span>
+              <span className="min-w-0 flex-1 text-[12px] font-medium truncate">{copy.factoryBriefTitle}</span>
+              <span
+                className={cls(
+                  "h-5 w-5 shrink-0 grid place-items-center transition-transform",
+                  showFactoryBrief ? "rotate-180" : "",
+                  dark ? "text-dsub" : "text-sub",
+                )}
+              >
+                {I.chevron}
+              </span>
+            </button>
+            {showFactoryBrief && (
+              <div className={cls("border-t px-2.5 py-2", dark ? "border-dline" : "border-line")}>
+                <div className={cls("text-[10.5px] leading-[1.45]", dark ? "text-dsub" : "text-sub")}>
+                  {copy.factoryBriefHint}
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => applyFactoryPreset("goal", copy.factoryRoadmapPrompt)}
+                    className={cls(
+                      "h-8 rounded-[7px] px-2 text-[11px] font-medium inline-flex items-center justify-center gap-1.5 border transition-colors",
+                      dark ? "border-[#e26f4f66] bg-[#3a2a23] text-dink hover:bg-[#463026]" : "border-[#e26f4f66] bg-[#fff1eb] text-ink hover:bg-[#ffe7dc]",
+                    )}
+                  >
+                    <span className="text-[#e26f4f]">{I.zap}</span>
+                    <span className="truncate">{copy.factoryBriefSeedGoal}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => applyFactoryPreset("analyze", copy.factoryAnalyzePrompt)}
+                    className={cls(
+                      "h-8 rounded-[7px] px-2 text-[11px] font-medium inline-flex items-center justify-center gap-1.5 border transition-colors",
+                      dark ? "border-dline bg-dmuted text-dink hover:bg-[#393936]" : "border-line bg-muted text-ink hover:bg-line",
+                    )}
+                  >
+                    <span className={dark ? "text-dsub" : "text-sub"}>{I.eye}</span>
+                    <span className="truncate">{copy.factoryBriefSeedAnalyze}</span>
+                  </button>
+                </div>
+                <div className={cls("mt-2 flex flex-wrap gap-1 text-[9.5px]", dark ? "text-dsub" : "text-sub")}>
+                  {[copy.factoryGoal, copy.factoryAnalyze, copy.factoryProbe, copy.factoryAudit].map((label) => (
+                    <span
+                      key={label}
+                      className={cls(
+                        "h-5 rounded-full border px-2 inline-flex items-center",
+                        dark ? "border-dline bg-[#242421]" : "border-line bg-bg",
+                      )}
+                    >
+                      {label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
           <div
             className={cls(
               "mb-2 rounded-[8px] border overflow-hidden",

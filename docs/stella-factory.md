@@ -13,6 +13,21 @@ existing terminal and structured agent workspace without replacing them.
 - Role delegation across Stella, Worker, Probe, Security, Release, and Auditor.
 - SOT recording for durable project state.
 
+## Hermes Desktop Direction
+
+Atelier's product direction is a Hermes Desktop-like local workspace, not a
+separate always-on agent. The global shell should expose the major work areas:
+
+- Chat and Sessions for agent work.
+- Workbench and Preview for code/runtime inspection.
+- Models, Factory, Skills, Providers, and Profiles for agent control.
+- Updates and Settings for packaging, release, and app-level configuration.
+
+Factory remains on demand. The user chooses it only when they want Stella to
+turn a natural-language goal into a development packet, analyze the repository,
+run probes, audit risk, and record evidence. Direct Claude, Hermes, and Codex
+sessions remain available without Factory wrapping.
+
 ## Workspace Commands
 
 Use these in the Agent Workspace input:

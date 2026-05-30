@@ -102,6 +102,15 @@ const NAV_GROUPS: NavGroup[] = [
         hintEn: "Model routing",
       },
       {
+        id: "factory",
+        screen: "agent",
+        icon: I.shieldCheck,
+        labelKo: "Factory",
+        labelEn: "Factory",
+        hintKo: "목표 · 검증",
+        hintEn: "Goals · Probe",
+      },
+      {
         id: "skills",
         screen: "agent",
         icon: I.zap,

@@ -1,6 +1,6 @@
 # Stella Factory Task Ledger
 
-Last updated: 2026-05-28
+Last updated: 2026-05-31
 
 ## Completed
 
@@ -25,6 +25,9 @@ Last updated: 2026-05-28
 - Added backend prompt safety guard before Claude/Codex/Hermes execution.
 - Connected Factory runs to preflight project analysis, optional Probe execution,
   and SOT evidence append.
+- Added a Hermes Desktop-style Factory entry point to the global shell and a
+  visible Stella Factory brief in the task pane. The brief seeds `/goal` and
+  `/analyze` prompts without making Factory always-on.
 
 ## Next Upgrades
 
@@ -36,6 +39,8 @@ Last updated: 2026-05-28
   selected, so destructive shell commands can be blocked below the prompt layer.
 - Add release readiness checklist integration for updater, GitHub release, MSIX,
   signing, and Store packaging.
+- Expand the Factory brief into a per-run task packet view with objective,
+  constraints, done_when, checks, evidence, and final audit state.
 
 ## Known Constraints
 

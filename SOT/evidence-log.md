@@ -257,3 +257,37 @@ Validation evidence:
 - Installed app visual check:
   `/tmp/atelier-installed-0.1.43-single-settings-nav.png` shows the cleaned
   single-sidebar settings view.
+
+## 2026-05-31 Stella Factory Direction Surface
+
+User-visible follow-up:
+
+- Added `Factory` to the global Intelligence navigation so Stella Factory is a
+  first-class Hermes Desktop-style workspace area, not a hidden slash-command
+  feature.
+- Added a visible Stella Factory brief to the task pane. It explains that
+  Factory is on demand and provides two prompt presets:
+  - `Set direction` / `방향 잡기` seeds a `/goal` request for evolving Atelier
+    toward a Hermes Desktop-like local autonomous development workspace.
+  - `Analyze current app` / `현재 앱 분석` seeds a `/analyze` request that
+    preserves the existing app before deciding what to upgrade.
+- Kept Factory off by default. Direct Claude, Hermes, and Codex sessions still
+  run without Factory wrapping unless the user chooses a Factory action.
+- Version bumped to `0.1.44` for this direction-surface patch.
+
+Validation evidence:
+
+- `npm run build` passed.
+- `cargo test --manifest-path src-tauri/Cargo.toml` passed 23 tests on
+  `0.1.44`.
+- `npm run harness:fixture` passed and wrote:
+  `src-tauri/target/atelier-harness/atelier-agent-harness-2026-05-30T19-14-39-815Z.json`.
+- Browser visual check:
+  `/tmp/atelier-0.1.44-factory-brief-browser.png` shows the global `Factory`
+  navigation item plus the task-pane Stella Factory brief and presets.
+- `npm run tauri:build` passed and produced:
+  `src-tauri/target/release/bundle/dmg/Atelier_0.1.44_aarch64.dmg`.
+- `/Applications/Atelier.app` was replaced with the `0.1.44` app bundle.
+- `codesign --verify --deep --strict --verbose=2 /Applications/Atelier.app`
+  passed.
+- `/Applications/Atelier.app/Contents/Info.plist` reports version `0.1.44`.
