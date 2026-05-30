@@ -9,7 +9,6 @@ import {
   Tweaks,
   WELCOME_COPY,
 } from "../lib/tokens";
-import { I } from "./Icons";
 import ConnectionsPanel from "./ConnectionsPanel";
 
 interface Props {
@@ -18,106 +17,29 @@ interface Props {
   initialSection?: string;
 }
 
-const SETTINGS_COPY = {
-  ko: {
-    title: "설정",
-    nav: {
-      terminal: "터미널",
-      appearance: "외관",
-      profiles: "프로필",
-      shortcuts: "단축키",
-      preview: "미리보기 패널",
-      connections: "연결",
-      updates: "업데이트",
-    },
-  },
-  en: {
-    title: "Settings",
-    nav: {
-      terminal: "Terminal",
-      appearance: "Appearance",
-      profiles: "Profiles",
-      shortcuts: "Shortcuts",
-      preview: "Preview panel",
-      connections: "Connections",
-      updates: "Updates",
-    },
-  },
-} as const;
-
 const Settings: React.FC<Props> = ({ tw, setTw, initialSection }) => {
   const dark = tw.dark;
   const [section, setSection] = useState<string>(initialSection || "appearance");
-  const copy = SETTINGS_COPY[tw.language];
 
   useEffect(() => {
     if (initialSection) setSection(initialSection);
   }, [initialSection]);
 
-  const nav: Array<[string, string, React.ReactNode]> = [
-    ["terminal", copy.nav.terminal, I.terminal],
-    ["appearance", copy.nav.appearance, I.palette],
-    ["profiles", copy.nav.profiles, I.zap],
-    ["shortcuts", copy.nav.shortcuts, I.keyboard],
-    ["preview", copy.nav.preview, I.eye],
-    ["connections", copy.nav.connections, I.zap],
-    ["updates", copy.nav.updates, I.gear],
-  ];
-
   return (
     <div
       className={cls(
-        "h-full w-full flex fade-in",
+        "h-full w-full overflow-auto fade-in",
         dark ? "bg-dbg" : "bg-cream",
       )}
     >
-      <aside
-        className={cls(
-          "w-[240px] shrink-0 h-full border-r px-3 pt-6",
-          dark ? "border-dline" : "border-line",
-        )}
-      >
-        <div
-          className={cls(
-            "px-2 mb-4 font-display text-[20px] font-[500]",
-            dark ? "text-dink" : "text-ink",
-          )}
-        >
-          {copy.title}
-        </div>
-        <nav className="space-y-0.5">
-          {nav.map(([k, label, icon]) => (
-            <button
-              key={k}
-              onClick={() => setSection(k)}
-              className={cls(
-                "w-full h-9 px-2.5 rounded-[7px] text-left text-[13px] flex items-center gap-2.5 transition-colors",
-                section === k
-                  ? dark
-                    ? "bg-dmuted text-dink"
-                    : "bg-surface text-ink shadow-[0_0_0_1px_#e5e3db]"
-                  : dark
-                    ? "text-dsub hover:text-dink"
-                    : "text-sub hover:text-ink",
-              )}
-            >
-              <span className="[&>svg]:w-[14px] [&>svg]:h-[14px]">{icon}</span>
-              {label}
-            </button>
-          ))}
-        </nav>
-      </aside>
-
-      <div className="flex-1 min-w-0 overflow-auto">
-        <div className="max-w-[720px] px-10 pt-10 pb-16">
-          {section === "terminal" && <TerminalSection tw={tw} setTw={setTw} />}
-          {section === "appearance" && <AppearanceSection tw={tw} setTw={setTw} />}
-          {section === "profiles" && <ProfilesSection tw={tw} setTw={setTw} />}
-          {section === "shortcuts" && <ShortcutsSection dark={dark} language={tw.language} />}
-          {section === "preview" && <PreviewSection dark={dark} language={tw.language} />}
-          {section === "connections" && <ConnectionsPanel tw={tw} />}
-          {section === "updates" && <UpdatesSection dark={dark} language={tw.language} />}
-        </div>
+      <div className="max-w-[780px] px-10 pt-10 pb-16">
+        {section === "terminal" && <TerminalSection tw={tw} setTw={setTw} />}
+        {section === "appearance" && <AppearanceSection tw={tw} setTw={setTw} />}
+        {section === "profiles" && <ProfilesSection tw={tw} setTw={setTw} />}
+        {section === "shortcuts" && <ShortcutsSection dark={dark} language={tw.language} />}
+        {section === "preview" && <PreviewSection dark={dark} language={tw.language} />}
+        {section === "connections" && <ConnectionsPanel tw={tw} />}
+        {section === "updates" && <UpdatesSection dark={dark} language={tw.language} />}
       </div>
     </div>
   );

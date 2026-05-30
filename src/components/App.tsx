@@ -110,16 +110,6 @@ const NAV_GROUPS: NavGroup[] = [
         hintKo: "플러그인 설치",
         hintEn: "Workspace plugins",
       },
-      {
-        id: "providers",
-        screen: "settings",
-        settingsSection: "connections",
-        icon: I.globe,
-        labelKo: "Providers",
-        labelEn: "Providers",
-        hintKo: "구독 · API 연결",
-        hintEn: "Auth · API links",
-      },
     ],
   },
   {
@@ -127,6 +117,26 @@ const NAV_GROUPS: NavGroup[] = [
     labelKo: "System",
     labelEn: "System",
     items: [
+      {
+        id: "appearance",
+        screen: "settings",
+        settingsSection: "appearance",
+        icon: I.palette,
+        labelKo: "Appearance",
+        labelEn: "Appearance",
+        hintKo: "테마 · 언어",
+        hintEn: "Theme · Language",
+      },
+      {
+        id: "terminal",
+        screen: "settings",
+        settingsSection: "terminal",
+        icon: I.terminal,
+        labelKo: "Terminal",
+        labelEn: "Terminal",
+        hintKo: "글꼴 · 커서",
+        hintEn: "Font · Cursor",
+      },
       {
         id: "profiles",
         screen: "settings",
@@ -138,14 +148,34 @@ const NAV_GROUPS: NavGroup[] = [
         hintEn: "CLI profiles",
       },
       {
-        id: "gateway",
+        id: "providers",
         screen: "settings",
         settingsSection: "connections",
-        icon: I.shieldCheck,
-        labelKo: "Gateway",
-        labelEn: "Gateway",
-        hintKo: "로컬 실행 연결",
-        hintEn: "Local runtime",
+        icon: I.globe,
+        labelKo: "Providers",
+        labelEn: "Providers",
+        hintKo: "구독 · API 연결",
+        hintEn: "Auth · API links",
+      },
+      {
+        id: "preview-settings",
+        screen: "settings",
+        settingsSection: "preview",
+        icon: I.eye,
+        labelKo: "Preview",
+        labelEn: "Preview",
+        hintKo: "미리보기 패널",
+        hintEn: "Preview panel",
+      },
+      {
+        id: "shortcuts",
+        screen: "settings",
+        settingsSection: "shortcuts",
+        icon: I.keyboard,
+        labelKo: "Shortcuts",
+        labelEn: "Shortcuts",
+        hintKo: "키보드 조작",
+        hintEn: "Keyboard",
       },
       {
         id: "updates",
@@ -156,16 +186,6 @@ const NAV_GROUPS: NavGroup[] = [
         labelEn: "Updates",
         hintKo: "GitHub 릴리스",
         hintEn: "GitHub releases",
-      },
-      {
-        id: "settings",
-        screen: "settings",
-        settingsSection: "appearance",
-        icon: I.gear,
-        labelKo: "Settings",
-        labelEn: "Settings",
-        hintKo: "외관 · 단축키",
-        hintEn: "Appearance · Keys",
       },
     ],
   },
@@ -185,8 +205,10 @@ const App: React.FC = () => {
   });
   const [activeNav, setActiveNav] = useState<string>(() => {
     const savedNav = localStorage.getItem("atelier.nav");
+    if (savedNav === "settings") return "appearance";
+    if (savedNav === "gateway") return "providers";
     if (savedNav) return savedNav;
-    return screen === "settings" ? "settings" : screen;
+    return screen === "settings" ? "appearance" : screen;
   });
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(() => {
     const saved = localStorage.getItem("atelier.settingsSection");
@@ -370,7 +392,7 @@ const App: React.FC = () => {
               type="button"
               onClick={() =>
                 openNav({
-                  id: "settings",
+                  id: "appearance",
                   screen: "settings",
                   settingsSection: "appearance",
                   icon: I.gear,
