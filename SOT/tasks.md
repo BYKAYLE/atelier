@@ -28,9 +28,21 @@ Last updated: 2026-05-31
 - Added a Hermes Desktop-style Factory entry point to the global shell and a
   visible Stella Factory brief in the task pane. The brief seeds `/goal` and
   `/analyze` prompts without making Factory always-on.
+- Removed duplicate left-nav entries that pointed at the same agent workspace:
+  `Chat`, `Models`, and `Factory`. The remaining `Sessions` item now owns the
+  agent workspace, while Factory/model controls stay inside the work surface.
+- Moved installable extensions out of the task list into a dedicated
+  `Plugins & Skills` screen, with plugins and built-in skills separated.
+- Corrected Stella Factory invocation and completion semantics so
+  `스텔라 팩토리` / `Stella Factory` natural-language requests route into the
+  Factory goal path and product-wide goals cannot close after a single feature
+  without Service Factory readiness evidence.
 
 ## Next Upgrades
 
+- Add actual `SOT/service-factory-state.json` bootstrap for active long-running
+  Atelier product runs, then wire the run state into a visible Factory status
+  panel.
 - Add a visible task packet/status panel so the user can see objective,
   done_when, checks, and evidence per run.
 - Add preview/dev-screen Probe integration so UI/runtime failures are captured
@@ -41,6 +53,8 @@ Last updated: 2026-05-31
   signing, and Store packaging.
 - Expand the Factory brief into a per-run task packet view with objective,
   constraints, done_when, checks, evidence, and final audit state.
+- Add installed-state probing to the `Plugins & Skills` screen so plugins can
+  show installed/disabled status before the user clicks install.
 
 ## Known Constraints
 

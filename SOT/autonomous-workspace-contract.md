@@ -23,7 +23,12 @@ Every non-trivial development request should follow this loop:
    - rollback path
 2. Inspect the real repository state before editing.
 3. Prefer existing architecture, adapters, styles, and IPC commands.
-4. Apply the smallest coherent patch that satisfies the objective.
+4. Classify the objective:
+   - Feature ticket: apply the smallest coherent patch that satisfies the
+     objective.
+   - Service Factory run: do not collapse the work into one feature. Create or
+     update durable factory state, milestones, agent topology, QC gates, and a
+     continuation path.
 5. Verify with focused checks first.
 6. Escalate to broader build, test, harness, preview, package, or release checks
    when the touched surface requires it.
@@ -38,6 +43,12 @@ Every non-trivial development request should follow this loop:
 - Security: permission, credential, destructive-action, and network-risk review.
 - Release: packaging, updater, signing, Store, and GitHub Release readiness.
 - Auditor: final pass that checks whether done_when is truly satisfied.
+
+For Service Factory runs, the role model is explicit rather than decorative.
+Before implementation, Stella records which roles are available, which are
+missing, which can run in parallel, and which gate must independently review the
+work. Missing roles are tracked as `missing_capabilities`; they are not silently
+merged into the implementer.
 
 ## Approval Gates
 
@@ -57,6 +68,8 @@ checks, or user-requested integration checks. Record the reason when they matter
 
 ## Current App Hooks
 
+- `스텔라 팩토리 <objective>` / `Stella Factory <objective>`: natural-language
+  alias for a product-scale `/goal` Factory run.
 - `/goal <objective>`: run a full autonomous development loop.
 - `/analyze <scope>`: analyze code, runtime, docs, tests, and SOT before edits;
   Atelier attaches Rust-collected project evidence to the provider prompt.
@@ -107,3 +120,19 @@ Evidence can come from:
 
 Raw terminal dumps are not SOT. SOT should capture the decision, command, result,
 and remaining risk.
+
+## Service Factory Completion Rule
+
+A Factory run cannot close because one visible feature was implemented. It can
+close only when one of these is true:
+
+- the readiness report reaches `pilot_ready` or `full_ready`
+- the user explicitly narrowed the goal to a single feature and that
+  feature-level done_when is verified
+- an approval gate is reached
+- the run is blocked by a concrete missing tool, permission, dependency, or
+  environment condition
+
+If any roadmap, QC, security, release, or final-audit queue remains, the run
+must leave `SOT/service-factory-state.json` and
+`SOT/service-factory/readiness-report.md` with the next executable action.

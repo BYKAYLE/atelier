@@ -92,8 +92,6 @@ type CodexSpeed = "default" | "fast";
 type CodexMenuPanel = "root" | "model" | "speed";
 type HermesInferenceProvider = "anthropic" | "openai-codex" | "openrouter";
 type SlashCommandScope = "atelier" | AgentProvider;
-type WorkspacePluginId = "academic-research-claude";
-type WorkspacePluginInstallStatus = "idle" | "installing" | "installed" | "error";
 
 type SlashCommandSpec = {
   command: string;
@@ -101,20 +99,6 @@ type SlashCommandSpec = {
   scope: SlashCommandScope;
   detailKo: string;
   detailEn: string;
-};
-
-type WorkspacePluginSpec = {
-  id: WorkspacePluginId;
-  provider: AgentProvider;
-  titleKo: string;
-  titleEn: string;
-  detailKo: string;
-  detailEn: string;
-};
-
-type WorkspacePluginInstallState = {
-  status: WorkspacePluginInstallStatus;
-  message?: string;
 };
 
 function activeFactoryCommandFromText(rawText: string): StellaFactoryCommand | null {
@@ -825,17 +809,6 @@ const PROVIDERS: ProviderMeta[] = [
     dot: "#4b7bd1",
     newTitleKo: "새 Codex 작업",
     newTitleEn: "New Codex workspace",
-  },
-];
-
-const WORKSPACE_PLUGINS: WorkspacePluginSpec[] = [
-  {
-    id: "academic-research-claude",
-    provider: "claude",
-    titleKo: "Academic Research Skills",
-    titleEn: "Academic Research Skills",
-    detailKo: "Claude Code용 연구, 문헌조사, 논문 작성 워크플로 플러그인",
-    detailEn: "Claude Code research, literature review, and paper-writing workflow plugin",
   },
 ];
 
@@ -2192,8 +2165,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const [logsOpenById, setLogsOpenById] = useState<Record<string, boolean>>({});
   const [showProfilePicker, setShowProfilePicker] = useState(false);
   const [showFactoryBrief, setShowFactoryBrief] = useState(true);
-  const [showPluginList, setShowPluginList] = useState(true);
-  const [pluginInstallState, setPluginInstallState] = useState<Partial<Record<WorkspacePluginId, WorkspacePluginInstallState>>>({});
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [slashSelection, setSlashSelection] = useState(0);
@@ -2311,12 +2282,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         factoryBriefSeedAnalyze: "Analyze current app",
         factoryRoadmapPrompt: "Upgrade Atelier into a Hermes Desktop-style local autonomous development workspace. Preserve existing terminal, agent, preview, model, provider, plugin, updater, and settings features. Evolve it step by step around goal normalization, project analysis, safe command execution, file editing, test/probe verification, role delegation, security review, release readiness, and SOT evidence recording.",
         factoryAnalyzePrompt: "Analyze Atelier's current code, runtime, SOT, tests, installed app behavior, and release/update flow. Decide what must be preserved and what should be upgraded to make Atelier feel like Hermes Desktop while remaining a Codex-like local autonomous development workspace.",
-        plugins: "Plugins",
-        pluginsHint: "Plugins are not installed automatically. Choose only what this workspace needs.",
-        pluginInstall: "Install",
-        pluginInstalling: "Installing",
-        pluginInstalled: "Installed",
-        pluginFailed: "Failed",
         placeholder: "Ask the selected agent to change, inspect, or explain this workspace...",
         send: "Send",
         stopHint: "A running turn finishes through the selected CLI; terminal fallback remains available.",
@@ -2472,12 +2437,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         factoryBriefSeedAnalyze: "현재 앱 분석",
         factoryRoadmapPrompt: "Atelier를 Hermes Desktop 같은 로컬 자율 개발 워크스페이스로 고도화해. 기존 터미널, 에이전트, 프리뷰, 모델, 제공자, 플러그인, 업데이트, 설정 기능은 보존하고 목표 변환, 프로젝트 분석, 안전한 명령 실행, 파일 수정, 테스트/Probe 검증, 역할별 위임, 보안검토, 배포준비, SOT 증거 기록을 중심으로 단계적으로 발전시켜.",
         factoryAnalyzePrompt: "Atelier의 현재 코드, 실행 방식, SOT, 테스트, 설치본 동작, 릴리스/업데이트 흐름을 분석해. Hermes Desktop처럼 느껴지는 Codex형 로컬 자율 개발 워크스페이스로 만들기 위해 무엇을 유지하고 무엇을 고도화해야 하는지 판단해.",
-        plugins: "플러그인",
-        pluginsHint: "플러그인은 자동 설치하지 않습니다. 필요한 항목만 직접 설치하세요.",
-        pluginInstall: "설치",
-        pluginInstalling: "설치 중",
-        pluginInstalled: "설치됨",
-        pluginFailed: "실패",
         placeholder: "선택한 에이전트에게 이 작업공간의 수정, 분석, 설명을 요청하세요...",
         send: "보내기",
         stopHint: "실행 중인 턴은 선택한 CLI가 끝낼 때 완료됩니다. 터미널은 보조 화면으로 남겨둡니다.",
@@ -4223,32 +4182,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     }));
   };
 
-  const installWorkspacePlugin = async (plugin: WorkspacePluginSpec) => {
-    if (pluginInstallState[plugin.id]?.status === "installing") return;
-    setPluginInstallState((prev) => ({
-      ...prev,
-      [plugin.id]: { status: "installing" },
-    }));
-    try {
-      const result = await academicResearchInstallClaudePlugin();
-      setPluginInstallState((prev) => ({
-        ...prev,
-        [plugin.id]: {
-          status: result.installed ? "installed" : "error",
-          message: result.message,
-        },
-      }));
-    } catch (err) {
-      setPluginInstallState((prev) => ({
-        ...prev,
-        [plugin.id]: {
-          status: "error",
-          message: String(err),
-        },
-      }));
-    }
-  };
-
   const queueSummaryText = (session: AgentSession) => {
     const queued = session.queuedTurns || [];
     if (queued.length === 0) return copy.queueEmpty;
@@ -5315,108 +5248,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                       {label}
                     </span>
                   ))}
-                </div>
-              </div>
-            )}
-          </div>
-          <div
-            className={cls(
-              "mb-2 rounded-[8px] border overflow-hidden",
-              dark ? "border-dline bg-[#20201e]" : "border-line bg-surface",
-            )}
-          >
-            <button
-              type="button"
-              onClick={() => setShowPluginList((v) => !v)}
-              className={cls(
-                "w-full h-9 px-2.5 flex items-center gap-2 text-left",
-                dark ? "text-dink hover:bg-dmuted" : "text-ink hover:bg-muted",
-              )}
-            >
-              <span className="h-5 w-5 shrink-0 grid place-items-center">{I.zap}</span>
-              <span className="min-w-0 flex-1 text-[12px] font-medium truncate">{copy.plugins}</span>
-              <span
-                className={cls(
-                  "h-5 w-5 shrink-0 grid place-items-center transition-transform",
-                  showPluginList ? "rotate-180" : "",
-                  dark ? "text-dsub" : "text-sub",
-                )}
-              >
-                {I.chevron}
-              </span>
-            </button>
-            {showPluginList && (
-              <div className={cls("border-t px-2.5 py-2", dark ? "border-dline" : "border-line")}>
-                <div className={cls("mb-2 text-[10.5px] leading-[1.45]", dark ? "text-dsub" : "text-sub")}>
-                  {copy.pluginsHint}
-                </div>
-                <div className="space-y-1.5">
-                  {WORKSPACE_PLUGINS.map((plugin) => {
-                    const state = pluginInstallState[plugin.id]?.status || "idle";
-                    const message = pluginInstallState[plugin.id]?.message || "";
-                    const isInstalling = state === "installing";
-                    const provider = providerMeta(plugin.provider);
-                    const title = tw.language === "en" ? plugin.titleEn : plugin.titleKo;
-                    const detail = tw.language === "en" ? plugin.detailEn : plugin.detailKo;
-                    const actionLabel = state === "installed"
-                      ? copy.pluginInstalled
-                      : state === "error"
-                        ? copy.pluginFailed
-                        : isInstalling
-                          ? copy.pluginInstalling
-                          : copy.pluginInstall;
-                    return (
-                      <div
-                        key={plugin.id}
-                        className={cls(
-                          "rounded-[7px] border p-2",
-                          dark ? "border-dline bg-[#242421]" : "border-line bg-bg",
-                        )}
-                      >
-                        <div className="flex items-start gap-2">
-                          <span
-                            className={cls(
-                              "mt-0.5 h-5 w-5 rounded-[6px] shrink-0 grid place-items-center text-[8.5px] font-semibold tracking-normal",
-                              dark ? "text-dink" : "text-ink",
-                            )}
-                            style={{
-                              background: `${provider.dot}22`,
-                              boxShadow: `inset 0 0 0 1px ${provider.dot}66`,
-                            }}
-                            title={provider.label}
-                          >
-                            {provider.short}
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <div className={cls("truncate text-[12px] font-medium", dark ? "text-dink" : "text-ink")}>
-                              {title}
-                            </div>
-                            <div className={cls("mt-0.5 text-[10.5px] leading-[1.4]", dark ? "text-dsub" : "text-sub")}>
-                              {detail}
-                            </div>
-                            {message && (
-                              <div className={cls("mt-1 text-[9.5px] leading-[1.35] break-words", state === "error" ? "text-red-400" : dark ? "text-dsub" : "text-sub")}>
-                                {message}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => installWorkspacePlugin(plugin)}
-                          disabled={isInstalling}
-                          className={cls(
-                            "mt-2 h-7 w-full rounded-[6px] text-[11px] font-medium transition-colors disabled:opacity-60",
-                            state === "installed"
-                              ? dark ? "bg-[#173427] text-[#86efac]" : "bg-[#e8f7ee] text-[#166534]"
-                              : dark ? "bg-dmuted text-dink hover:bg-[#393936]" : "bg-muted text-ink hover:bg-line",
-                          )}
-                        >
-                          {actionLabel}
-                        </button>
-                      </div>
-                    );
-                  })}
                 </div>
               </div>
             )}

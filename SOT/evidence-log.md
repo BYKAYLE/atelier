@@ -291,3 +291,69 @@ Validation evidence:
 - `codesign --verify --deep --strict --verbose=2 /Applications/Atelier.app`
   passed.
 - `/Applications/Atelier.app/Contents/Info.plist` reports version `0.1.44`.
+
+## 2026-05-31 Navigation and Plugin Catalog Cleanup
+
+User-visible follow-up:
+
+- Removed duplicate left navigation entries that pointed to the same agent
+  workspace:
+  - `Chat` was merged into `Sessions`.
+  - `Models` was removed from the left nav because model selection already
+    lives in the chat composer.
+  - `Factory` was removed from the left nav because the Stella Factory brief
+    already lives above the task list and remains on demand.
+- Renamed `Skills` into a dedicated `Plugins & Skills` workspace screen.
+- Moved the Academic Research plugin install card out of the task list and into
+  the new `Plugins & Skills` screen.
+- Split the new screen into:
+  - installable plugins
+  - built-in skills
+- Version bumped to `0.1.45` for this navigation/catalog cleanup.
+
+Validation evidence:
+
+- `npm run build` passed.
+- `cargo test --manifest-path src-tauri/Cargo.toml` passed: 23 tests.
+- `npm run harness:fixture` passed and wrote
+  `src-tauri/target/atelier-harness/atelier-agent-harness-2026-05-31T01-53-47-659Z.json`.
+- Browser visual checks:
+  - `/tmp/atelier-0.1.45-nav-sessions.png` confirms the left nav no longer
+    shows duplicate `Chat`, `Models`, or `Factory` entries.
+  - `/tmp/atelier-0.1.45-plugin-skills.png` confirms the dedicated
+    `Plugins & Skills` screen separates plugins from built-in skills.
+- `npm run tauri:build` passed and produced:
+  - `src-tauri/target/release/bundle/macos/Atelier.app`
+  - `src-tauri/target/release/bundle/dmg/Atelier_0.1.45_aarch64.dmg`
+- `/Applications/Atelier.app` was replaced with the 0.1.45 bundle.
+- `codesign --verify --deep --strict --verbose=2 /Applications/Atelier.app`
+  passed.
+- `/Applications/Atelier.app/Contents/Info.plist` reports version `0.1.45`.
+
+## 2026-05-31 Stella Factory Autonomy Contract Correction
+
+Root-cause follow-up:
+
+- Confirmed that Factory was documented and implemented as an on-demand
+  slash-command wrapper, so broad goals could be compressed into one feature
+  task and then marked complete.
+- Added natural-language Factory invocation for `스텔라 팩토리` / `Stella
+  Factory` so the phrase routes to the Factory goal path instead of a normal
+  direct provider message.
+- Expanded the Factory prompt contract to classify broad product/service
+  evolution goals as durable Service Factory runs.
+- Required product-scale Factory artifacts:
+  `SOT/service-factory-state.json`, mission charter, research dossier,
+  capability map, agent topology, roadmap, QC matrix, and readiness report.
+- Added the rule that a single feature implementation is only a milestone
+  result, not a Factory completion, unless readiness proves the declared product
+  goal is actually satisfied.
+
+Validation evidence:
+
+- `python3 ~/.claude/skills/stella/scripts/stella_ontology.py validate` passed.
+- `python3 ~/.claude/skills/stella/scripts/stella_ontology.py normalize
+  '스텔라 팩토리. Atelier를 Antigravity급 로컬 자율 개발 워크스페이스로 고도화해.'`
+  routes to `service-factory` with product-wide done_when and stop rules.
+- `npm run build` passed for the updated Atelier frontend.
+- `cargo test --manifest-path src-tauri/Cargo.toml` passed: 23 tests.

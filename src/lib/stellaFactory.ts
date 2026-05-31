@@ -25,6 +25,8 @@ type Language = "ko" | "en";
 const SOT_PATHS = [
   "SOT/L1-project-summary.md",
   "SOT/autonomous-workspace-contract.md",
+  "SOT/service-factory-state.json",
+  "SOT/service-factory/",
   "SOT/tasks.md",
   "SOT/evidence-log.md",
 ];
@@ -43,6 +45,9 @@ export function formatStellaFactoryInstruction(args: {
       `- Runtime provider: ${providerLabel} (${provider}). Workspace: ${workspace}.`,
       "- Preserve the existing terminal/service behavior. Upgrade in place; do not rebuild from scratch unless explicitly requested.",
       "- Convert natural-language goals into development tasks: objective, constraints, target files, execution plan, verification plan, done_when, and rollback path.",
+      "- If the goal is broad product delivery, service evolution, or an Antigravity-style autonomous build, treat it as a durable Service Factory run, not a single feature ticket.",
+      "- For Service Factory runs, maintain state under SOT/service-factory-state.json plus mission, research, capability map, agent topology, roadmap, QC matrix, and readiness artifacts under SOT/service-factory/.",
+      "- A single implemented feature is not done unless it closes the declared milestone and the readiness report proves no remaining factory queue is required.",
       "- Before broad edits, inspect the real code, run surfaces, docs, tests, and SOT status. Prefer existing patterns over new architecture.",
       "- Execute safely: small commands first, capture evidence, avoid destructive or irreversible operations.",
       "- Forbidden without explicit approval: database deletion, user-data deletion, production deploy/submission, credential exposure, paid purchases, and external publication. External network calls are allowed only when required by the user task or dependency verification; state why when used.",
@@ -57,6 +62,9 @@ export function formatStellaFactoryInstruction(args: {
     `- 실행 provider: ${providerLabel} (${provider}). 작업공간: ${workspace}.`,
     "- 기존 터미널/서비스 동작을 보존하세요. 명시 요청이 없는 한 처음부터 다시 만들지 말고 현재 구조 위에서 고도화하세요.",
     "- 자연어 목표를 개발 작업으로 변환하세요: objective, constraints, target files, execution plan, verification plan, done_when, rollback path.",
+    "- 목표가 제품 단위 개발, 기존 서비스 고도화, Antigravity급 자율 빌드라면 단일 기능 티켓이 아니라 지속되는 Service Factory run으로 취급하세요.",
+    "- Service Factory run에서는 SOT/service-factory-state.json과 SOT/service-factory/ 아래 mission, research, capability map, agent topology, roadmap, QC matrix, readiness 산출물을 유지하세요.",
+    "- 단일 기능 구현은 완료가 아닙니다. 선언한 milestone이 닫히고 readiness report가 남은 factory queue가 없음을 증명할 때만 완료입니다.",
     "- 넓은 수정 전에는 실제 코드, 실행 표면, 문서, 테스트, SOT 상태를 먼저 확인하세요. 새 구조보다 기존 패턴을 우선합니다.",
     "- 안전하게 실행하세요: 작은 명령부터 수행하고, 증거를 수집하며, 파괴적/되돌리기 어려운 작업은 피합니다.",
     "- 명시 승인 없이 금지: DB 삭제, 사용자 데이터 삭제, 프로덕션 배포/제출, 자격증명 노출, 유료 결제, 외부 게시. 외부 네트워크 호출은 사용자 작업 또는 의존성 검증에 필요할 때만 사용하고 이유를 남기세요.",
@@ -70,9 +78,10 @@ export function formatStellaFactoryInstruction(args: {
 export function parseStellaFactoryCommand(rawText: string, language: Language): StellaFactoryRequest | null {
   const trimmed = rawText.trim();
   const match = trimmed.match(/^\/(goal|analyze|probe|audit)(?:\s+([\s\S]*))?$/i);
-  if (!match) return null;
-  const command = match[1].toLowerCase() as StellaFactoryCommand;
-  const body = (match[2] || "").trim();
+  const alias = match ? null : parseStellaFactoryAlias(trimmed);
+  if (!match && !alias) return null;
+  const command = match ? (match[1].toLowerCase() as StellaFactoryCommand) : alias!.command;
+  const body = (match ? match[2] || "" : alias!.body).trim();
   if (!body) return null;
   return {
     command,
@@ -84,7 +93,7 @@ export function parseStellaFactoryCommand(rawText: string, language: Language): 
 
 export function detectStellaFactorySafetyBlock(rawText: string, language: Language): StellaFactorySafetyBlock | null {
   const trimmed = rawText.trim();
-  if (!/^\/(goal|analyze|probe|audit)\b/i.test(trimmed)) return null;
+  if (!isStellaFactoryInvocation(trimmed)) return null;
   const lower = trimmed.toLowerCase();
   const normalized = trimmed.replace(/\s+/g, " ");
   const negated = /하지\s*마|하지\s*말|삭제하지|지우지|금지|do\s+not|don't|without\s+delet/i.test(normalized);
@@ -155,6 +164,16 @@ export function detectStellaFactorySafetyBlock(rawText: string, language: Langua
   return null;
 }
 
+function parseStellaFactoryAlias(trimmed: string): { command: StellaFactoryCommand; body: string } | null {
+  const match = trimmed.match(/^(?:\/\s*)?(?:스텔라\s*팩토리|stella\s+factory)(?:\s*(?:로|으로|를|을|는|은|:|：|\.|-|—)\s*)?([\s\S]*)$/i);
+  if (!match) return null;
+  return { command: "goal", body: match[1] || "" };
+}
+
+function isStellaFactoryInvocation(trimmed: string) {
+  return /^\/(goal|analyze|probe|audit)\b/i.test(trimmed) || parseStellaFactoryAlias(trimmed) !== null;
+}
+
 export function buildStellaFactoryPrompt(
   command: StellaFactoryCommand,
   body: string,
@@ -170,13 +189,16 @@ export function buildStellaFactoryPrompt(
       "",
       "Required workflow:",
       "1. Convert the objective into a concrete development task packet.",
-      "2. Inspect the current project structure, run method, docs, tests, and SOT before changing behavior.",
-      "3. Preserve existing working features and patch only the surfaces needed for the objective.",
-      "4. Execute commands safely, summarize evidence, and avoid destructive operations.",
-      "5. Implement file changes when needed, then run focused verification.",
-      "6. If the work touches agent execution, preview, updater, packaging, or permissions, run an extra Probe/Security/Release check.",
-      "7. Record changed assumptions, decisions, commands, and evidence in SOT when project behavior or workflow changes.",
-      "8. Stop only when done_when is satisfied or a concrete blocker is proven.",
+      "2. Decide whether this is a feature ticket or a Service Factory run. Product-wide, long-horizon, autonomous, or existing-service evolution goals are Service Factory runs.",
+      "3. For Service Factory runs, create or update SOT/service-factory-state.json and SOT/service-factory artifacts: mission-charter.md, research-dossier.md, capability-map.md, agent-topology.md, roadmap.md, qc-matrix.md, readiness-report.md.",
+      "4. Map required roles before implementation: product/research, architect, worker, reviewer, critic, Probe, security, release, final-audit. Record missing capabilities instead of pretending they exist.",
+      "5. Inspect the current project structure, run method, docs, tests, and SOT before changing behavior.",
+      "6. Preserve existing working features and patch only the surfaces needed for the current milestone.",
+      "7. Execute commands safely, summarize evidence, and avoid destructive operations.",
+      "8. Implement file changes when needed, then run focused verification.",
+      "9. If the work touches agent execution, preview, updater, packaging, or permissions, run an extra Probe/Security/Release check.",
+      "10. Record changed assumptions, decisions, commands, and evidence in SOT when project behavior or workflow changes.",
+      "11. Stop only when done_when is satisfied, readiness is pilot_ready/full_ready, or a concrete blocker is proven. Do not stop only because one feature was implemented.",
       "",
       "Hard safety gates:",
       "- No DB deletion, user-data deletion, production deploy/submission, external publication, credential disclosure, or paid action without explicit approval.",
@@ -193,13 +215,16 @@ export function buildStellaFactoryPrompt(
     "",
     "필수 workflow:",
     "1. 목표를 구체적인 개발 작업 패킷으로 변환합니다.",
-    "2. 동작 변경 전 현재 프로젝트 구조, 실행 방법, 문서, 테스트, SOT를 확인합니다.",
-    "3. 기존에 동작하는 기능을 보존하고 목표에 필요한 표면만 좁게 패치합니다.",
-    "4. 명령은 안전하게 실행하고 증거를 요약하며 파괴적 작업은 피합니다.",
-    "5. 필요한 파일 수정을 진행한 뒤 집중 검증을 실행합니다.",
-    "6. 에이전트 실행, 프리뷰, 업데이트, 패키징, 권한을 건드리면 Probe/Security/Release 검수를 추가합니다.",
-    "7. 프로젝트 동작이나 작업 방식이 바뀌면 결정, 명령, 증거를 SOT에 기록합니다.",
-    "8. done_when이 충족되거나 구체적인 차단 사유가 증명될 때만 멈춥니다.",
+    "2. 이것이 단일 기능 티켓인지 Service Factory run인지 먼저 판정합니다. 제품 단위, 장기 목표, 자율 개발, 기존 서비스 고도화 목표는 Service Factory run입니다.",
+    "3. Service Factory run이면 SOT/service-factory-state.json과 SOT/service-factory 산출물을 생성/갱신합니다: mission-charter.md, research-dossier.md, capability-map.md, agent-topology.md, roadmap.md, qc-matrix.md, readiness-report.md.",
+    "4. 구현 전 필요한 역할을 매핑합니다: product/research, architect, worker, reviewer, critic, Probe, security, release, final-audit. 없는 역량은 있는 척하지 말고 missing_capabilities로 기록합니다.",
+    "5. 동작 변경 전 현재 프로젝트 구조, 실행 방법, 문서, 테스트, SOT를 확인합니다.",
+    "6. 기존에 동작하는 기능을 보존하고 현재 milestone에 필요한 표면만 좁게 패치합니다.",
+    "7. 명령은 안전하게 실행하고 증거를 요약하며 파괴적 작업은 피합니다.",
+    "8. 필요한 파일 수정을 진행한 뒤 집중 검증을 실행합니다.",
+    "9. 에이전트 실행, 프리뷰, 업데이트, 패키징, 권한을 건드리면 Probe/Security/Release 검수를 추가합니다.",
+    "10. 프로젝트 동작이나 작업 방식이 바뀌면 결정, 명령, 증거를 SOT에 기록합니다.",
+    "11. done_when이 충족되거나 readiness가 pilot_ready/full_ready에 도달하거나 구체적인 차단 사유가 증명될 때만 멈춥니다. 단일 기능을 하나 구현했다는 이유만으로 종료하지 않습니다.",
     "",
     "강제 안전 게이트:",
     "- 명시 승인 없이 DB 삭제, 사용자 데이터 삭제, 프로덕션 배포/제출, 외부 게시, 자격증명 노출, 유료 결제를 하지 않습니다.",

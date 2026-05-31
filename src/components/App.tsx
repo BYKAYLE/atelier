@@ -5,10 +5,11 @@ import Welcome from "./Welcome";
 import Main from "./Main";
 import Settings from "./Settings";
 import AgentWorkspace from "./AgentWorkspace";
+import PluginSkillsPage from "./PluginSkillsPage";
 import { I } from "./Icons";
 const DesignPage = lazy(() => import("./DesignPage"));
 
-type AppScreen = "agent" | "main" | "settings" | "design" | "welcome";
+type AppScreen = "agent" | "main" | "settings" | "design" | "plugins" | "welcome";
 type SettingsSection =
   | "terminal"
   | "appearance"
@@ -41,6 +42,7 @@ const isScreen = (value: string | null): value is AppScreen =>
   value === "main" ||
   value === "settings" ||
   value === "design" ||
+  value === "plugins" ||
   value === "welcome";
 
 const NAV_GROUPS: NavGroup[] = [
@@ -50,22 +52,13 @@ const NAV_GROUPS: NavGroup[] = [
     labelEn: "Workspace",
     items: [
       {
-        id: "agent",
-        screen: "agent",
-        icon: I.terminal,
-        labelKo: "Chat",
-        labelEn: "Chat",
-        hintKo: "Claude · Hermes · Codex",
-        hintEn: "Claude · Hermes · Codex",
-      },
-      {
         id: "sessions",
         screen: "agent",
         icon: I.preview,
         labelKo: "Sessions",
         labelEn: "Sessions",
-        hintKo: "작업 기록",
-        hintEn: "Work history",
+        hintKo: "Claude · Hermes · Codex",
+        hintEn: "Claude · Hermes · Codex",
       },
       {
         id: "main",
@@ -85,39 +78,14 @@ const NAV_GROUPS: NavGroup[] = [
         hintKo: "기획 · 시안",
         hintEn: "Brief · Drafts",
       },
-    ],
-  },
-  {
-    id: "intelligence",
-    labelKo: "Intelligence",
-    labelEn: "Intelligence",
-    items: [
       {
-        id: "models",
-        screen: "agent",
-        icon: I.fastPreview,
-        labelKo: "Models",
-        labelEn: "Models",
-        hintKo: "응답 모델 선택",
-        hintEn: "Model routing",
-      },
-      {
-        id: "factory",
-        screen: "agent",
-        icon: I.shieldCheck,
-        labelKo: "Factory",
-        labelEn: "Factory",
-        hintKo: "목표 · 검증",
-        hintEn: "Goals · Probe",
-      },
-      {
-        id: "skills",
-        screen: "agent",
+        id: "plugins",
+        screen: "plugins",
         icon: I.zap,
-        labelKo: "Skills",
-        labelEn: "Skills",
-        hintKo: "플러그인 설치",
-        hintEn: "Workspace plugins",
+        labelKo: "플러그인&스킬",
+        labelEn: "Plugins & Skills",
+        hintKo: "설치 · 내장",
+        hintEn: "Install · Built-in",
       },
     ],
   },
@@ -216,8 +184,12 @@ const App: React.FC = () => {
     const savedNav = localStorage.getItem("atelier.nav");
     if (savedNav === "settings") return "appearance";
     if (savedNav === "gateway") return "providers";
+    if (savedNav === "agent" || savedNav === "chat" || savedNav === "models" || savedNav === "factory") return "sessions";
+    if (savedNav === "skills") return "plugins";
     if (savedNav) return savedNav;
-    return screen === "settings" ? "appearance" : screen;
+    if (screen === "settings") return "appearance";
+    if (screen === "agent") return "sessions";
+    return screen;
   });
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(() => {
     const saved = localStorage.getItem("atelier.settingsSection");
@@ -276,11 +248,11 @@ const App: React.FC = () => {
           type="button"
           onClick={() =>
             openNav({
-              id: "agent",
+              id: "sessions",
               screen: "agent",
-              icon: I.terminal,
-              labelKo: "Chat",
-              labelEn: "Chat",
+              icon: I.preview,
+              labelKo: "Sessions",
+              labelEn: "Sessions",
               hintKo: "Claude · Hermes · Codex",
               hintEn: "Claude · Hermes · Codex",
             })
@@ -445,6 +417,12 @@ const App: React.FC = () => {
           style={{ display: screen === "settings" ? "block" : "none" }}
         >
           <Settings tw={tw} setTw={setTw} initialSection={settingsSection} />
+        </div>
+        <div
+          className="absolute inset-0"
+          style={{ display: screen === "plugins" ? "block" : "none" }}
+        >
+          <PluginSkillsPage tw={tw} />
         </div>
         {/* 디자인 모드 — lazy import. 클릭 전엔 chunk 미로드. */}
         {screen === "design" && (
