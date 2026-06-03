@@ -1,10 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-#[cfg(target_os = "windows")]
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
@@ -1160,6 +1159,164 @@ fn install_academic_research_claude_plugin_blocking(
     })
 }
 
+const ATELIER_SKILL_REPOSITORY: &str = "https://github.com/BYKAYLE/atelier-skill.git";
+
+fn run_skill_git_command(args: &[String], cwd: Option<&Path>) -> Result<String, String> {
+    let mut command = Command::new("git");
+    #[cfg(windows)]
+    configure_windows_background_command(&mut command);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    let output = command
+        .args(args)
+        .env("PATH", crate::augmented_cli_path())
+        .output()
+        .map_err(|e| format!("git {}: {e}", args.join(" ")))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !output.status.success() {
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        return Err(format!("git {} failed: {detail}", args.join(" ")));
+    }
+    Ok(if stdout.is_empty() { stderr } else { stdout })
+}
+
+fn copy_skill_dir_missing(src: &Path, dst: &Path) -> Result<(), String> {
+    if dst.exists() {
+        return Ok(());
+    }
+    fs::create_dir_all(dst).map_err(|e| format!("create skill dir {}: {e}", dst.display()))?;
+    copy_dir_recursive(src, dst)
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    for entry in fs::read_dir(src).map_err(|e| format!("read dir {}: {e}", src.display()))? {
+        let entry = entry.map_err(|e| format!("read dir entry {}: {e}", src.display()))?;
+        let name = entry.file_name();
+        let name_text = name.to_string_lossy();
+        if matches!(
+            name_text.as_ref(),
+            ".git" | ".venv" | "node_modules" | "__pycache__" | ".DS_Store"
+        ) {
+            continue;
+        }
+        let src_path = entry.path();
+        let dst_path = dst.join(&name);
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("file type {}: {e}", src_path.display()))?;
+        if file_type.is_dir() {
+            fs::create_dir_all(&dst_path)
+                .map_err(|e| format!("create dir {}: {e}", dst_path.display()))?;
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else if file_type.is_file() {
+            fs::copy(&src_path, &dst_path).map_err(|e| {
+                format!("copy {} -> {}: {e}", src_path.display(), dst_path.display())
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn install_atelier_public_skill_bundle_blocking() -> Result<SkillBundleInstallResult, String> {
+    let cache_dir = home_path(&[".atelier", "skills", "atelier-skill"])
+        .ok_or_else(|| "Could not resolve the user home directory.".to_string())?;
+    let cache_parent = cache_dir
+        .parent()
+        .ok_or_else(|| "Could not resolve the Atelier skill cache parent.".to_string())?
+        .to_path_buf();
+    fs::create_dir_all(&cache_parent)
+        .map_err(|e| format!("create skill cache {}: {e}", cache_parent.display()))?;
+
+    let mut log_lines = Vec::new();
+    if cache_dir.join(".git").is_dir() {
+        let output = run_skill_git_command(&["pull".into(), "--ff-only".into()], Some(&cache_dir))?;
+        log_lines.push(format!("[ok] update repository: {output}"));
+    } else if cache_dir.exists() {
+        return Err(format!(
+            "{} exists but is not a git checkout. Move it aside before installing Atelier Skill.",
+            cache_dir.display()
+        ));
+    } else {
+        let output = run_skill_git_command(
+            &[
+                "clone".into(),
+                "--depth".into(),
+                "1".into(),
+                ATELIER_SKILL_REPOSITORY.into(),
+                cache_dir.to_string_lossy().to_string(),
+            ],
+            None,
+        )?;
+        log_lines.push(format!("[ok] clone repository: {output}"));
+    }
+
+    let install_roots = [
+        home_path(&[".atelier", "skills"]),
+        home_path(&[".claude", "skills"]),
+        home_path(&[".codex", "skills"]),
+        home_path(&[".hermes", "skills"]),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+
+    let mut skill_names = Vec::new();
+    for entry in
+        fs::read_dir(&cache_dir).map_err(|e| format!("read bundle {}: {e}", cache_dir.display()))?
+    {
+        let entry = entry.map_err(|e| format!("read bundle entry: {e}"))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name == "deploy-pilot" || name.starts_with('.') {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() && path.join("SKILL.md").is_file() {
+            skill_names.push((name, path));
+        }
+    }
+
+    let mut copied = 0usize;
+    let mut skipped = 0usize;
+    let mut installed_roots = Vec::new();
+    for root in install_roots {
+        fs::create_dir_all(&root)
+            .map_err(|e| format!("create install root {}: {e}", root.display()))?;
+        installed_roots.push(root.to_string_lossy().to_string());
+        for (name, source) in &skill_names {
+            let target = root.join(name);
+            if target.exists() {
+                skipped += 1;
+                continue;
+            }
+            copy_skill_dir_missing(source, &target)?;
+            copied += 1;
+        }
+    }
+
+    let message = if copied == 0 {
+        format!(
+            "Atelier Skill bundle is available. {} existing local skill entries were left untouched.",
+            skipped
+        )
+    } else {
+        format!(
+            "Atelier Skill bundle installed. Copied {copied} skill entries and skipped {skipped} existing entries."
+        )
+    };
+
+    Ok(SkillBundleInstallResult {
+        installed: !skill_names.is_empty(),
+        skill_count: skill_names.len(),
+        skipped_count: skipped,
+        repository_path: cache_dir.to_string_lossy().to_string(),
+        installed_roots,
+        message,
+        log: log_lines.join("\n"),
+    })
+}
+
 fn describe_cli_command(cli: &str) -> String {
     #[cfg(target_os = "windows")]
     {
@@ -1516,6 +1673,17 @@ pub struct AgentCliCommandResult {
 pub struct AcademicResearchPluginInstallResult {
     installed: bool,
     enabled: bool,
+    message: String,
+    log: String,
+}
+
+#[derive(Serialize)]
+pub struct SkillBundleInstallResult {
+    installed: bool,
+    skill_count: usize,
+    skipped_count: usize,
+    repository_path: String,
+    installed_roots: Vec<String>,
     message: String,
     log: String,
 }
@@ -4701,6 +4869,14 @@ pub async fn academic_research_install_claude_plugin(
     tauri::async_runtime::spawn_blocking(install_academic_research_claude_plugin_blocking)
         .await
         .map_err(|e| format!("academic research plugin install thread join: {e}"))?
+}
+
+#[tauri::command]
+pub async fn atelier_skill_install_public_bundle(
+) -> std::result::Result<SkillBundleInstallResult, String> {
+    tauri::async_runtime::spawn_blocking(install_atelier_public_skill_bundle_blocking)
+        .await
+        .map_err(|e| format!("atelier skill install thread join: {e}"))?
 }
 
 #[tauri::command]

@@ -770,6 +770,7 @@ pub fn run() {
             agent::openrouter_model_options,
             agent::agent_cli_command,
             agent::academic_research_install_claude_plugin,
+            agent::atelier_skill_install_public_bundle,
             agent::agent_cancel,
             agent::agent_change_baseline,
             agent::agent_change_summary,

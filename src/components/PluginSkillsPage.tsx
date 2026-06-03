@@ -1,13 +1,13 @@
 import React, { useState } from "react";
 import { cls } from "../lib/tokens";
 import type { Tweaks } from "../lib/tokens";
-import { academicResearchInstallClaudePlugin } from "../lib/tauri";
+import { academicResearchInstallClaudePlugin, atelierSkillInstallPublicBundle } from "../lib/tauri";
 import { I } from "./Icons";
 
 type InstallStatus = "idle" | "installing" | "installed" | "error";
 
 type CatalogPlugin = {
-  id: "academic-research-claude";
+  id: "academic-research-claude" | "atelier-skill-public";
   provider: string;
   short: string;
   color: string;
@@ -27,6 +27,16 @@ type BuiltInSkill = {
 };
 
 const PLUGINS: CatalogPlugin[] = [
+  {
+    id: "atelier-skill-public",
+    provider: "GitHub",
+    short: "At",
+    color: "#e26f4f",
+    titleKo: "Atelier Skill",
+    titleEn: "Atelier Skill",
+    detailKo: "Stella, Stella Factory, Probe, 에이전트 오케스트레이터 공개 스킬 묶음",
+    detailEn: "Public Stella, Stella Factory, Probe, and agent orchestration skill bundle",
+  },
   {
     id: "academic-research-claude",
     provider: "Claude Code",
@@ -107,7 +117,10 @@ const PluginSkillsPage: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     if (installState[plugin.id]?.status === "installing") return;
     setInstallState((prev) => ({ ...prev, [plugin.id]: { status: "installing" } }));
     try {
-      const result = await academicResearchInstallClaudePlugin();
+      const result =
+        plugin.id === "atelier-skill-public"
+          ? await atelierSkillInstallPublicBundle()
+          : await academicResearchInstallClaudePlugin();
       setInstallState((prev) => ({
         ...prev,
         [plugin.id]: {

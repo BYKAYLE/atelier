@@ -114,6 +114,16 @@ export interface AcademicResearchPluginInstallResult {
   log: string;
 }
 
+export interface SkillBundleInstallResult {
+  installed: boolean;
+  skill_count: number;
+  skipped_count: number;
+  repository_path: string;
+  installed_roots: string[];
+  message: string;
+  log: string;
+}
+
 export interface PreviewCheckResult {
   url: string;
   ok: boolean;
@@ -333,6 +343,10 @@ export async function agentCliCommand(args: {
 
 export async function academicResearchInstallClaudePlugin(): Promise<AcademicResearchPluginInstallResult> {
   return invoke("academic_research_install_claude_plugin");
+}
+
+export async function atelierSkillInstallPublicBundle(): Promise<SkillBundleInstallResult> {
+  return invoke("atelier_skill_install_public_bundle");
 }
 
 export async function previewHealthCheck(url: string): Promise<PreviewCheckResult> {
