@@ -1,0 +1,89 @@
+{
+  "status": "validation_required",
+  "modified_files": [
+    "/Users/kansic/Service/atelier/.service-factory/worktrees/product_brief-product_manager/SOT/service-factory/product-brief.md",
+    "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-133552/product_brief-product_manager/product-brief.md",
+    "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-133552/product_brief-product_manager/result.json"
+  ],
+  "commands_run": [
+    {
+      "command": "rg -n \"atelier|service-factory|product_brief|product_manager\" /Users/kansic/.codex/memories/MEMORY.md",
+      "exit_code": 0
+    },
+    {
+      "command": "sed -n '1,220p' /Users/kansic/Service/atelier/SOT/service-factory/bridge/sf-run-20260531-133552/product_brief-product_manager/dispatch.md",
+      "exit_code": 0
+    },
+    {
+      "command": "sed -n '1,260p' /Users/kansic/Service/atelier/SOT/service-factory/agent-prompts/product_brief--product_manager.md",
+      "exit_code": 0
+    },
+    {
+      "command": "pwd && rg --files .",
+      "exit_code": 0
+    },
+    {
+      "command": "find .. -name AGENTS.md -print",
+      "exit_code": 0
+    },
+    {
+      "command": "sed -n '1,260p' SOT/service-factory/product-brief.md",
+      "exit_code": 1
+    },
+    {
+      "command": "rg -n \"Service Factory|Stella Factory|Antigravity|dispatch|Probe|heartbeat|continuation|capability map|agent topology|final audit\" -S SOT docs src .",
+      "exit_code": 0
+    },
+    {
+      "command": "sed -n '1,220p' docs/stella-factory.md",
+      "exit_code": 0
+    },
+    {
+      "command": "sed -n '1,220p' SOT/autonomous-workspace-contract.md",
+      "exit_code": 0
+    },
+    {
+      "command": "sed -n '1,220p' SOT/L1-project-summary.md",
+      "exit_code": 0
+    },
+    {
+      "command": "sed -n '1,220p' SOT/tasks.md",
+      "exit_code": 0
+    },
+    {
+      "command": "sed -n '1,260p' src/lib/stellaFactory.ts",
+      "exit_code": 0
+    },
+    {
+      "command": "sed -n '2410,2475p' src/components/AgentWorkspace.tsx",
+      "exit_code": 0
+    },
+    {
+      "command": "sed -n '1,220p' probe.yml",
+      "exit_code": 0
+    },
+    {
+      "command": "mkdir -p SOT/service-factory /Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-133552/product_brief-product_manager",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff -- SOT/service-factory/product-brief.md",
+      "exit_code": 0
+    },
+    {
+      "command": "cp SOT/service-factory/product-brief.md /Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-133552/product_brief-product_manager/product-brief.md",
+      "exit_code": 0
+    }
+  ],
+  "artifacts": [
+    "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-133552/product_brief-product_manager/product-brief.md"
+  ],
+  "findings_or_risks": [
+    "Current Atelier already has Factory invocation, project analysis, Probe, evidence logging, and safety gates; the main product gap is durable run-state visibility rather than raw execution capability.",
+    "The recommended ship-now scope is a Factory Run Control Loop, not a full autonomous multi-agent mesh. This intentionally defers deeper specialist automation until trust, continuation, and gate semantics are visible.",
+    "A below-provider command policy layer is still unresolved. Full-permission provider tool calls remain a known constraint and should not be treated as solved by this brief alone.",
+    "Independent product-owner validation has not happened in this subagent run, so the brief should be treated as ready for review rather than final-approved scope."
+  ],
+  "failure_category": null,
+  "next_step": "Review and approve the ship-now scope boundary, then dispatch the next Service Factory stages for capability map, agent topology, roadmap, and readiness-state bootstrap using this brief as the controlling product frame."
+}

@@ -1,0 +1,1 @@
+{"result": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135619/security_review-security_auditor/result.json", "status": "done", "artifact": "/Users/kansic/Service/atelier/SOT/service-factory/security-audit.md"}

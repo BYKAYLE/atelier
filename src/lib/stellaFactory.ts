@@ -1,4 +1,4 @@
-import type { AgentProvider, StellaProbeResult, StellaProjectAnalysis } from "./tauri";
+import type { AgentProvider, StellaFactoryAutopilotResult, StellaFactoryBootstrapResult, StellaProbeResult, StellaProjectAnalysis } from "./tauri";
 
 export type StellaFactoryCommand = "goal" | "analyze" | "probe" | "audit";
 
@@ -16,6 +16,8 @@ export type StellaFactorySafetyBlock = {
 
 export type StellaFactoryPreflight = {
   analysis?: StellaProjectAnalysis | null;
+  bootstrap?: StellaFactoryBootstrapResult | null;
+  autopilot?: StellaFactoryAutopilotResult | null;
   probe?: StellaProbeResult | null;
   error?: string | null;
 };
@@ -26,6 +28,8 @@ const SOT_PATHS = [
   "SOT/L1-project-summary.md",
   "SOT/autonomous-workspace-contract.md",
   "SOT/service-factory-state.json",
+  "SOT/service-factory/current-state.md",
+  "SOT/service-factory/development-plan.md",
   "SOT/service-factory/",
   "SOT/tasks.md",
   "SOT/evidence-log.md",
@@ -45,8 +49,10 @@ export function formatStellaFactoryInstruction(args: {
       `- Runtime provider: ${providerLabel} (${provider}). Workspace: ${workspace}.`,
       "- Preserve the existing terminal/service behavior. Upgrade in place; do not rebuild from scratch unless explicitly requested.",
       "- Convert natural-language goals into development tasks: objective, constraints, target files, execution plan, verification plan, done_when, and rollback path.",
+      "- Mandatory development order: first capture the current state, then write the goal-to-plan strategy, then execute and verify. Do not jump straight into implementation for broad goals.",
       "- If the goal is broad product delivery, service evolution, or an Antigravity-style autonomous build, treat it as a durable Service Factory run, not a single feature ticket.",
-      "- For Service Factory runs, maintain state under SOT/service-factory-state.json plus mission, research, capability map, agent topology, roadmap, QC matrix, and readiness artifacts under SOT/service-factory/.",
+      "- For Service Factory runs, maintain state under SOT/service-factory-state.json plus current-state, development-plan, mission, research, capability map, agent topology, roadmap, QC matrix, and readiness artifacts under SOT/service-factory/.",
+      "- For Factory goal runs, if the local Stella bridge exists, immediately run the managed cycle before any completion claim: python3 ~/.claude/skills/stella/scripts/stella_service_factory.py autopilot --project <workspace> --goal <objective> --max-cycles 12 --pretty.",
       "- A single implemented feature is not done unless it closes the declared milestone and the readiness report proves no remaining factory queue is required.",
       "- Before broad edits, inspect the real code, run surfaces, docs, tests, and SOT status. Prefer existing patterns over new architecture.",
       "- Execute safely: small commands first, capture evidence, avoid destructive or irreversible operations.",
@@ -62,8 +68,10 @@ export function formatStellaFactoryInstruction(args: {
     `- 실행 provider: ${providerLabel} (${provider}). 작업공간: ${workspace}.`,
     "- 기존 터미널/서비스 동작을 보존하세요. 명시 요청이 없는 한 처음부터 다시 만들지 말고 현재 구조 위에서 고도화하세요.",
     "- 자연어 목표를 개발 작업으로 변환하세요: objective, constraints, target files, execution plan, verification plan, done_when, rollback path.",
+    "- 필수 개발 순서: 먼저 현재 상태를 파악하고, 그다음 목표 달성 계획을 정리한 뒤, 실행/검증으로 들어갑니다. 넓은 목표에서 바로 구현부터 시작하지 마세요.",
     "- 목표가 제품 단위 개발, 기존 서비스 고도화, Antigravity급 자율 빌드라면 단일 기능 티켓이 아니라 지속되는 Service Factory run으로 취급하세요.",
-    "- Service Factory run에서는 SOT/service-factory-state.json과 SOT/service-factory/ 아래 mission, research, capability map, agent topology, roadmap, QC matrix, readiness 산출물을 유지하세요.",
+    "- Service Factory run에서는 SOT/service-factory-state.json과 SOT/service-factory/ 아래 current-state, development-plan, mission, research, capability map, agent topology, roadmap, QC matrix, readiness 산출물을 유지하세요.",
+    "- Factory goal run에서는 로컬 Stella bridge가 있으면 완료를 말하기 전에 반드시 managed cycle을 실행하세요: python3 ~/.claude/skills/stella/scripts/stella_service_factory.py autopilot --project <workspace> --goal <objective> --max-cycles 12 --pretty.",
     "- 단일 기능 구현은 완료가 아닙니다. 선언한 milestone이 닫히고 readiness report가 남은 factory queue가 없음을 증명할 때만 완료입니다.",
     "- 넓은 수정 전에는 실제 코드, 실행 표면, 문서, 테스트, SOT 상태를 먼저 확인하세요. 새 구조보다 기존 패턴을 우선합니다.",
     "- 안전하게 실행하세요: 작은 명령부터 수행하고, 증거를 수집하며, 파괴적/되돌리기 어려운 작업은 피합니다.",
@@ -188,17 +196,21 @@ export function buildStellaFactoryPrompt(
       `Objective: ${objective}`,
       "",
       "Required workflow:",
-      "1. Convert the objective into a concrete development task packet.",
-      "2. Decide whether this is a feature ticket or a Service Factory run. Product-wide, long-horizon, autonomous, or existing-service evolution goals are Service Factory runs.",
-      "3. For Service Factory runs, create or update SOT/service-factory-state.json and SOT/service-factory artifacts: mission-charter.md, research-dossier.md, capability-map.md, agent-topology.md, roadmap.md, qc-matrix.md, readiness-report.md.",
-      "4. Map required roles before implementation: product/research, architect, worker, reviewer, critic, Probe, security, release, final-audit. Record missing capabilities instead of pretending they exist.",
-      "5. Inspect the current project structure, run method, docs, tests, and SOT before changing behavior.",
-      "6. Preserve existing working features and patch only the surfaces needed for the current milestone.",
-      "7. Execute commands safely, summarize evidence, and avoid destructive operations.",
-      "8. Implement file changes when needed, then run focused verification.",
-      "9. If the work touches agent execution, preview, updater, packaging, or permissions, run an extra Probe/Security/Release check.",
-      "10. Record changed assumptions, decisions, commands, and evidence in SOT when project behavior or workflow changes.",
-      "11. Stop only when done_when is satisfied, readiness is pilot_ready/full_ready, or a concrete blocker is proven. Do not stop only because one feature was implemented.",
+      "1. Current state discovery: inspect the actual code, runtime, installed app/package state, SOT, dirty paths, existing capabilities, risks, and verification baseline.",
+      "2. Goal-to-plan strategy: explain the gap between current state and the target, then define task packets with role, owned paths, done_when, verification, and rollback/retry criteria.",
+      "3. Execution and verification: implement scoped task packets, integrate, run checks, and loop back to planning if evidence fails.",
+      "4. Decide whether this is a feature ticket or a Service Factory run. Product-wide, long-horizon, autonomous, or existing-service evolution goals are Service Factory runs.",
+      "5. For Service Factory runs, create or update SOT/service-factory-state.json and SOT/service-factory artifacts: current-state.md, development-plan.md, mission-charter.md, research-dossier.md, capability-map.md, agent-topology.md, roadmap.md, qc-matrix.md, readiness-report.md.",
+      command === "goal"
+        ? "6. If available, run the managed bridge cycle now: python3 ~/.claude/skills/stella/scripts/stella_service_factory.py autopilot --project <workspace> --goal <objective> --max-cycles 12 --pretty."
+        : "6. This is not goal mode. Do not run managed autopilot from analysis/probe/audit mode unless the user explicitly asks to start a Factory goal run.",
+      "7. Map required roles before implementation: product/research, architect, worker, reviewer, critic, Probe, security, release, final-audit. Record missing capabilities instead of pretending they exist.",
+      "8. Preserve existing working features and patch only the surfaces needed for the current milestone.",
+      "9. Execute commands safely, summarize evidence, and avoid destructive operations.",
+      "10. Implement file changes when needed, then run focused verification.",
+      "11. If the work touches agent execution, preview, updater, packaging, or permissions, run an extra Probe/Security/Release check.",
+      "12. Record changed assumptions, decisions, commands, and evidence in SOT when project behavior or workflow changes.",
+      "13. Stop only when done_when is satisfied, readiness is pilot_ready/full_ready, or a concrete blocker is proven. Do not stop only because one feature was implemented.",
       "",
       "Hard safety gates:",
       "- No DB deletion, user-data deletion, production deploy/submission, external publication, credential disclosure, or paid action without explicit approval.",
@@ -214,17 +226,21 @@ export function buildStellaFactoryPrompt(
     `목표: ${objective}`,
     "",
     "필수 workflow:",
-    "1. 목표를 구체적인 개발 작업 패킷으로 변환합니다.",
-    "2. 이것이 단일 기능 티켓인지 Service Factory run인지 먼저 판정합니다. 제품 단위, 장기 목표, 자율 개발, 기존 서비스 고도화 목표는 Service Factory run입니다.",
-    "3. Service Factory run이면 SOT/service-factory-state.json과 SOT/service-factory 산출물을 생성/갱신합니다: mission-charter.md, research-dossier.md, capability-map.md, agent-topology.md, roadmap.md, qc-matrix.md, readiness-report.md.",
-    "4. 구현 전 필요한 역할을 매핑합니다: product/research, architect, worker, reviewer, critic, Probe, security, release, final-audit. 없는 역량은 있는 척하지 말고 missing_capabilities로 기록합니다.",
-    "5. 동작 변경 전 현재 프로젝트 구조, 실행 방법, 문서, 테스트, SOT를 확인합니다.",
-    "6. 기존에 동작하는 기능을 보존하고 현재 milestone에 필요한 표면만 좁게 패치합니다.",
-    "7. 명령은 안전하게 실행하고 증거를 요약하며 파괴적 작업은 피합니다.",
-    "8. 필요한 파일 수정을 진행한 뒤 집중 검증을 실행합니다.",
-    "9. 에이전트 실행, 프리뷰, 업데이트, 패키징, 권한을 건드리면 Probe/Security/Release 검수를 추가합니다.",
-    "10. 프로젝트 동작이나 작업 방식이 바뀌면 결정, 명령, 증거를 SOT에 기록합니다.",
-    "11. done_when이 충족되거나 readiness가 pilot_ready/full_ready에 도달하거나 구체적인 차단 사유가 증명될 때만 멈춥니다. 단일 기능을 하나 구현했다는 이유만으로 종료하지 않습니다.",
+    "1. 현재 상태 파악: 실제 코드, 실행 방식, 설치본/패키지 상태, SOT, 변경 파일, 현재 기능, 위험, 검증 기준선을 확인합니다.",
+    "2. 목표 달성 계획: 현재 상태와 목표 사이의 gap을 설명하고 role, owned paths, done_when, verification, rollback/retry 기준이 있는 task packet으로 분해합니다.",
+    "3. 실행/검증: 좁게 나눈 task packet을 구현하고 통합, 검증을 실행하며 증거가 실패하면 다시 계획으로 돌아갑니다.",
+    "4. 이것이 단일 기능 티켓인지 Service Factory run인지 판정합니다. 제품 단위, 장기 목표, 자율 개발, 기존 서비스 고도화 목표는 Service Factory run입니다.",
+    "5. Service Factory run이면 SOT/service-factory-state.json과 SOT/service-factory 산출물을 생성/갱신합니다: current-state.md, development-plan.md, mission-charter.md, research-dossier.md, capability-map.md, agent-topology.md, roadmap.md, qc-matrix.md, readiness-report.md.",
+    command === "goal"
+      ? "6. 가능하면 지금 managed bridge cycle을 실행합니다: python3 ~/.claude/skills/stella/scripts/stella_service_factory.py autopilot --project <workspace> --goal <objective> --max-cycles 12 --pretty."
+      : "6. goal 모드가 아니므로 사용자가 Factory goal run 시작을 명시하지 않은 한 managed autopilot을 실행하지 않습니다.",
+    "7. 구현 전 필요한 역할을 매핑합니다: product/research, architect, worker, reviewer, critic, Probe, security, release, final-audit. 없는 역량은 있는 척하지 말고 missing_capabilities로 기록합니다.",
+    "8. 기존에 동작하는 기능을 보존하고 현재 milestone에 필요한 표면만 좁게 패치합니다.",
+    "9. 명령은 안전하게 실행하고 증거를 요약하며 파괴적 작업은 피합니다.",
+    "10. 필요한 파일 수정을 진행한 뒤 집중 검증을 실행합니다.",
+    "11. 에이전트 실행, 프리뷰, 업데이트, 패키징, 권한을 건드리면 Probe/Security/Release 검수를 추가합니다.",
+    "12. 프로젝트 동작이나 작업 방식이 바뀌면 결정, 명령, 증거를 SOT에 기록합니다.",
+    "13. done_when이 충족되거나 readiness가 pilot_ready/full_ready에 도달하거나 구체적인 차단 사유가 증명될 때만 멈춥니다. 단일 기능을 하나 구현했다는 이유만으로 종료하지 않습니다.",
     "",
     "강제 안전 게이트:",
     "- 명시 승인 없이 DB 삭제, 사용자 데이터 삭제, 프로덕션 배포/제출, 외부 게시, 자격증명 노출, 유료 결제를 하지 않습니다.",
@@ -251,6 +267,21 @@ export function formatStellaFactoryPreflightBlock(
       lines.push(`- SOT: ${missingSot.length ? `missing ${missingSot.join(", ")}` : "present"}`);
       if (analysis.risk_flags.length) lines.push(`- Risk flags: ${analysis.risk_flags.join(" | ")}`);
     }
+    if (preflight.bootstrap) {
+      const bootstrap = preflight.bootstrap;
+      const created = bootstrap.artifacts.filter((item) => item.created).length;
+      const existing = bootstrap.artifacts.length - created;
+      lines.push(`- Factory state: ${bootstrap.created_state ? "created" : "resumed"} ${bootstrap.state_path}`);
+      lines.push(`- Factory artifacts: ${created} created, ${existing} existing; readiness ${bootstrap.readiness}`);
+      if (bootstrap.next_actions.length) lines.push(`- Factory next: ${bootstrap.next_actions.slice(0, 2).join(" | ")}`);
+    }
+    if (preflight.autopilot) {
+      const autopilot = preflight.autopilot;
+      const verdict = factoryAutopilotVerdict(autopilot);
+      lines.push(`- Managed autopilot: ${autopilot.ran ? (autopilot.success ? "completed" : "needs review") : "unavailable"}${verdict ? `; verdict ${verdict}` : ""}`);
+      lines.push(`- Managed autopilot runtime: ${Math.round(autopilot.duration_ms / 1000)}s; bridge: ${autopilot.bridge_path || "(missing)"}`);
+      if (autopilot.next_actions.length) lines.push(`- Managed autopilot next: ${autopilot.next_actions.slice(0, 2).join(" | ")}`);
+    }
     if (probe) {
       lines.push(`- Probe profile: ${probe.profile}; result: ${probe.success ? "pass" : "fail"}`);
       probe.commands.forEach((cmd) => {
@@ -270,6 +301,21 @@ export function formatStellaFactoryPreflightBlock(
       lines.push(`- SOT: ${missingSot.length ? `${missingSot.join(", ")} 누락` : "존재"}`);
       if (analysis.risk_flags.length) lines.push(`- 위험 신호: ${analysis.risk_flags.join(" | ")}`);
     }
+    if (preflight.bootstrap) {
+      const bootstrap = preflight.bootstrap;
+      const created = bootstrap.artifacts.filter((item) => item.created).length;
+      const existing = bootstrap.artifacts.length - created;
+      lines.push(`- Factory 상태: ${bootstrap.created_state ? "생성" : "재개"} ${bootstrap.state_path}`);
+      lines.push(`- Factory 산출물: ${created}개 생성, ${existing}개 기존; readiness ${bootstrap.readiness}`);
+      if (bootstrap.next_actions.length) lines.push(`- Factory 다음 작업: ${bootstrap.next_actions.slice(0, 2).join(" | ")}`);
+    }
+    if (preflight.autopilot) {
+      const autopilot = preflight.autopilot;
+      const verdict = factoryAutopilotVerdict(autopilot);
+      lines.push(`- Managed autopilot: ${autopilot.ran ? (autopilot.success ? "완료" : "검토 필요") : "사용 불가"}${verdict ? `; verdict ${verdict}` : ""}`);
+      lines.push(`- Managed autopilot 실행: ${Math.round(autopilot.duration_ms / 1000)}초; bridge: ${autopilot.bridge_path || "(없음)"}`);
+      if (autopilot.next_actions.length) lines.push(`- Managed autopilot 다음 작업: ${autopilot.next_actions.slice(0, 2).join(" | ")}`);
+    }
     if (probe) {
       lines.push(`- Probe 프로필: ${probe.profile}; 결과: ${probe.success ? "통과" : "실패"}`);
       probe.commands.forEach((cmd) => {
@@ -279,6 +325,21 @@ export function formatStellaFactoryPreflightBlock(
     if (error) lines.push(`- 사전 증거 수집 오류: ${error}`);
   }
   return lines.join("\n");
+}
+
+function factoryAutopilotVerdict(result: StellaFactoryAutopilotResult) {
+  const summary = result.summary as {
+    assessment?: { verdict?: unknown };
+    steps?: Array<{ json?: { verdict?: unknown; assessment?: { verdict?: unknown } } }>;
+  } | null | undefined;
+  const direct = summary?.assessment?.verdict;
+  if (typeof direct === "string") return direct;
+  const steps = Array.isArray(summary?.steps) ? summary?.steps : [];
+  for (const step of [...steps].reverse()) {
+    const verdict = step?.json?.verdict || step?.json?.assessment?.verdict;
+    if (typeof verdict === "string") return verdict;
+  }
+  return null;
 }
 
 function factoryTitle(command: StellaFactoryCommand, body: string, language: Language) {

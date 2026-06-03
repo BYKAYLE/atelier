@@ -1,0 +1,1 @@
+executable is not allowlisted: npm

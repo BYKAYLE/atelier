@@ -1,0 +1,1 @@
+{"result": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135615/decomposition-decomposer/result.json", "status": "done", "artifact": "/Users/kansic/Service/atelier/SOT/service-factory/decomposition.md"}

@@ -22,6 +22,26 @@ use crate::credentials::{
 const RETURN_RAW_EVENT_LIMIT: usize = 120;
 const RETURN_RAW_EVENT_CHAR_LIMIT: usize = 12_000;
 
+#[derive(Clone, Serialize)]
+pub struct AgentModelOption {
+    value: String,
+    label: String,
+}
+
+#[derive(Clone, Serialize)]
+pub struct CodexModelOptionsResult {
+    source: String,
+    updated_at: Option<String>,
+    models: Vec<AgentModelOption>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct OpenRouterModelOptionsResult {
+    source: String,
+    updated_at: Option<String>,
+    models: Vec<AgentModelOption>,
+}
+
 fn clip_return_raw_event(raw: &str) -> String {
     if raw.chars().count() <= RETURN_RAW_EVENT_CHAR_LIMIT {
         return raw.to_string();
@@ -40,6 +60,262 @@ fn tail_return_raw_events(raw_events: &[String]) -> Vec<String> {
         .map(|event| clip_return_raw_event(event))
         .collect()
 }
+
+fn home_path(parts: &[&str]) -> Option<PathBuf> {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()?;
+    if home.trim().is_empty() {
+        return None;
+    }
+    let mut path = PathBuf::from(home);
+    for part in parts {
+        path.push(part);
+    }
+    Some(path)
+}
+
+fn json_string(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn label_from_model_slug(slug: &str) -> String {
+    let mut parts = Vec::new();
+    for part in slug.split('-') {
+        if part.eq_ignore_ascii_case("gpt") {
+            parts.push("GPT".to_string());
+        } else if part.chars().all(|ch| ch.is_ascii_digit() || ch == '.') {
+            parts.push(part.to_string());
+        } else {
+            let mut chars = part.chars();
+            if let Some(first) = chars.next() {
+                parts.push(format!(
+                    "{}{}",
+                    first.to_uppercase().collect::<String>(),
+                    chars.as_str()
+                ));
+            }
+        }
+    }
+    parts.join("-").replace("-Mini", " Mini")
+}
+
+fn read_codex_config_model() -> Option<String> {
+    let path = home_path(&[".codex", "config.toml"])?;
+    let raw = std::fs::read_to_string(path).ok()?;
+    for line in raw.lines() {
+        let line = line.trim();
+        if !line.starts_with("model") || line.starts_with("model_") {
+            continue;
+        }
+        let (_, value) = line.split_once('=')?;
+        let value = value.trim().trim_matches('"').trim_matches('\'').trim();
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn read_codex_model_options_sync() -> CodexModelOptionsResult {
+    if let Some(path) = home_path(&[".codex", "models_cache.json"]) {
+        if let Ok(raw) = std::fs::read_to_string(path) {
+            if let Ok(value) = serde_json::from_str::<Value>(&raw) {
+                let updated_at = json_string(&value, "fetched_at")
+                    .or_else(|| json_string(&value, "updated_at"))
+                    .or_else(|| json_string(&value, "last_updated_at"));
+                let mut models = Vec::new();
+                let mut seen = BTreeSet::new();
+                if let Some(items) = value.get("models").and_then(Value::as_array) {
+                    for item in items {
+                        let Some(slug) = json_string(item, "slug")
+                            .or_else(|| json_string(item, "id"))
+                            .or_else(|| json_string(item, "name"))
+                        else {
+                            continue;
+                        };
+                        if !slug.starts_with("gpt-") {
+                            continue;
+                        }
+                        if item.get("available").and_then(Value::as_bool) == Some(false)
+                            || item.get("enabled").and_then(Value::as_bool) == Some(false)
+                        {
+                            continue;
+                        }
+                        if !seen.insert(slug.clone()) {
+                            continue;
+                        }
+                        let label = json_string(item, "display_name")
+                            .or_else(|| json_string(item, "label"))
+                            .unwrap_or_else(|| label_from_model_slug(&slug));
+                        models.push(AgentModelOption { value: slug, label });
+                    }
+                }
+                if !models.is_empty() {
+                    return CodexModelOptionsResult {
+                        source: "codex_models_cache".to_string(),
+                        updated_at,
+                        models,
+                    };
+                }
+            }
+        }
+    }
+
+    let fallback = read_codex_config_model().unwrap_or_else(|| "gpt-5.5".to_string());
+    CodexModelOptionsResult {
+        source: "codex_config_fallback".to_string(),
+        updated_at: None,
+        models: vec![AgentModelOption {
+            label: label_from_model_slug(&fallback),
+            value: fallback,
+        }],
+    }
+}
+
+fn openrouter_models_cache_path() -> Option<PathBuf> {
+    home_path(&[".atelier", "openrouter_models_cache.json"])
+}
+
+fn write_openrouter_models_cache(raw: &str) {
+    let Some(path) = openrouter_models_cache_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        if std::fs::create_dir_all(parent).is_err() {
+            return;
+        }
+    }
+    let _ = std::fs::write(path, raw);
+}
+
+fn read_openrouter_models_cache() -> Option<String> {
+    let path = openrouter_models_cache_path()?;
+    std::fs::read_to_string(path).ok()
+}
+
+fn parse_openrouter_model_options(raw: &str, source: &str) -> Option<OpenRouterModelOptionsResult> {
+    let value = serde_json::from_str::<Value>(raw).ok()?;
+    let updated_at = json_string(&value, "fetched_at");
+    let items = value.get("data").and_then(Value::as_array)?;
+    let mut models = Vec::new();
+    let mut seen = BTreeSet::new();
+    for item in items {
+        let Some(id) = json_string(item, "id") else {
+            continue;
+        };
+        let output_is_text = item
+            .get("architecture")
+            .and_then(|architecture| architecture.get("output_modalities"))
+            .and_then(Value::as_array)
+            .map(|modalities| {
+                modalities
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|modality| modality.eq_ignore_ascii_case("text"))
+            })
+            .unwrap_or(true);
+        if !output_is_text || item.get("expiration_date").is_some_and(|v| !v.is_null()) {
+            continue;
+        }
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        let label = json_string(item, "name").unwrap_or_else(|| id.clone());
+        models.push(AgentModelOption { value: id, label });
+    }
+    if models.is_empty() {
+        return None;
+    }
+    Some(OpenRouterModelOptionsResult {
+        source: source.to_string(),
+        updated_at,
+        models,
+    })
+}
+
+fn fetch_openrouter_models_json() -> Result<String, String> {
+    let mut cmd = command_for_cli("curl");
+    cmd.arg("-fsSL")
+        .arg("--max-time")
+        .arg("20")
+        .arg("-H")
+        .arg("Accept: application/json")
+        .arg("https://openrouter.ai/api/v1/models?output_modalities=text")
+        .env("PATH", crate::augmented_cli_path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = cmd
+        .output()
+        .map_err(|e| format!("openrouter models fetch: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "openrouter models fetch exited with {}: {}",
+            output.status,
+            stderr.trim()
+        ));
+    }
+    String::from_utf8(output.stdout).map_err(|e| format!("openrouter models utf8: {e}"))
+}
+
+fn read_openrouter_model_options_sync() -> OpenRouterModelOptionsResult {
+    match fetch_openrouter_models_json() {
+        Ok(raw) => {
+            let fetched_at = chrono::Utc::now().to_rfc3339();
+            let with_timestamp = match serde_json::from_str::<Value>(&raw) {
+                Ok(mut value) => {
+                    if let Some(object) = value.as_object_mut() {
+                        object.insert("fetched_at".to_string(), Value::String(fetched_at));
+                    }
+                    serde_json::to_string(&value).unwrap_or(raw)
+                }
+                Err(_) => raw,
+            };
+            if let Some(result) = parse_openrouter_model_options(&with_timestamp, "openrouter_api")
+            {
+                write_openrouter_models_cache(&with_timestamp);
+                return result;
+            }
+        }
+        Err(err) => {
+            log::warn!("{err}");
+        }
+    }
+
+    if let Some(raw) = read_openrouter_models_cache() {
+        if let Some(result) = parse_openrouter_model_options(&raw, "openrouter_cache") {
+            return result;
+        }
+    }
+
+    OpenRouterModelOptionsResult {
+        source: "openrouter_fallback".to_string(),
+        updated_at: None,
+        models: OPENROUTER_FALLBACK_MODELS
+            .iter()
+            .map(|(value, label)| AgentModelOption {
+                value: (*value).to_string(),
+                label: (*label).to_string(),
+            })
+            .collect(),
+    }
+}
+
+const OPENROUTER_FALLBACK_MODELS: &[(&str, &str)] = &[
+    ("openai/gpt-5.5", "OpenAI: GPT-5.5"),
+    ("anthropic/claude-opus-4.8", "Anthropic: Claude Opus 4.8"),
+    (
+        "anthropic/claude-sonnet-4.6",
+        "Anthropic: Claude Sonnet 4.6",
+    ),
+];
 
 /// CLI subprocess 호출 직전, 사용자가 Settings → Connections 에 저장한 API 키를
 /// 해당 provider 의 환경변수로 주입한다. Claude/Codex 구독 경로는 부모 프로세스의
@@ -2629,9 +2905,9 @@ fn normalize_hermes_provider(provider: Option<String>) -> String {
         .filter(|s| !s.is_empty())
         .unwrap_or("openai-codex")
     {
-        "anthropic" => "anthropic".to_string(),
         "openrouter" => "openrouter".to_string(),
         "openai-codex" | "codex" => "openai-codex".to_string(),
+        "anthropic" | "claude" => "openai-codex".to_string(),
         _ => "openai-codex".to_string(),
     }
 }
@@ -3300,7 +3576,6 @@ fn run_hermes<R: Runtime>(
     let mut cmd = command_for_hermes();
     // Hermes 의 sub-provider 별로 그에 맞는 사용자 키를 주입.
     let hermes_credential_provider = match hermes_provider.as_str() {
-        "anthropic" => "claude",
         "openai-codex" => "codex",
         "openrouter" => "openrouter",
         _ => "openrouter",
@@ -4392,6 +4667,21 @@ pub async fn agent_send<R: Runtime>(
     })
     .await
     .map_err(|e| format!("agent thread join: {e}"))?
+}
+
+#[tauri::command]
+pub async fn codex_model_options() -> std::result::Result<CodexModelOptionsResult, String> {
+    tauri::async_runtime::spawn_blocking(read_codex_model_options_sync)
+        .await
+        .map_err(|e| format!("codex model cache read: {e}"))
+}
+
+#[tauri::command]
+pub async fn openrouter_model_options() -> std::result::Result<OpenRouterModelOptionsResult, String>
+{
+    tauri::async_runtime::spawn_blocking(read_openrouter_model_options_sync)
+        .await
+        .map_err(|e| format!("openrouter model catalog read: {e}"))
 }
 
 #[tauri::command]

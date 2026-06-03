@@ -71,7 +71,8 @@ const CORE_PROFILE_IDS = ["claude", "hermes", "codex"];
 
 function migrateLegacyProfileCommand(profile: Profile): Profile {
   const command = profile.cmd.trim().replace(/\s+/g, " ");
-  if (command === "hermes" || command === "hermes chat -m gpt-5.4 --max-turns 25") {
+  const legacyHermesCodexModel = /^hermes chat -m gpt-5\.(?:2|3-codex|4|4-mini) --max-turns 25$/;
+  if (command === "hermes" || legacyHermesCodexModel.test(command)) {
     const hermesDefault = PROFILES.find((p) => p.id === "hermes");
     if (hermesDefault) return { ...profile, cmd: hermesDefault.cmd };
   }

@@ -1,0 +1,1 @@
+{"result": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135616/integration-integrator/result.json", "status": "done", "artifact": "/Users/kansic/Service/atelier/SOT/service-factory/integration-report.md"}

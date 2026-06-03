@@ -638,10 +638,10 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
     const rows = 24;
 
     // 탭 식별자 분리 — UI 식별자(uiId)는 즉시 확정.
-    // 복원 탭도 기본값은 자동 PTY 접속이다. macOS App Data Isolation 팝업은 사용자가
-    // 한 번 승인해 TCC에 저장되게 두어야 세션이 실제로 이어진다. 팝업 회피를 위해
-    // 자동 접속을 막으면 Atelier가 살아난 것처럼 보여도 Claude/Hermes가 시작되지 않는다.
-    // 단, 긴급 회피용으로 명시적으로 autoConnect: false를 넘기면 lazy 모드는 유지한다.
+    // 자동 복원 탭은 명시적인 사용자 입력 전까지 PTY를 열지 않는다.
+    // macOS는 자식 CLI가 ~/Music, ~/Pictures 같은 보호 위치를 훑는 경우에도
+    // 접근 주체를 Atelier로 표시하므로, 버전업/재실행 직후 원치 않는 TCC 팝업이 뜰 수 있다.
+    // 사용자가 새 작업을 직접 만들거나 복원 탭에 입력하면 그때 live PTY를 연결한다.
     const restoreMode = tauri && !!opts?.replayLogId;
     const autoConnect = opts?.autoConnect ?? true;
     const lazyMode = tauri && !autoConnect;
@@ -898,14 +898,14 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
     // 비동기 IIFE로 두면 race: setTabs → render → mount effect setTimeout 50ms 안에 sessionLogLoad가
     // 못 끝나면 빈 pending 그대로 flush + state.ready=true → 이후 push해도 안 그려짐.
     // (실제 PTY는 새 세션이므로 claude의 대화 맥락은 claude --continue 옵션이 별도 처리.)
-    if (tauri && restoreMode && !autoConnect) {
+    if (tauri && !autoConnect) {
       const label = effectiveCmd.includes("claude")
         ? "Claude 세션"
         : effectiveCmd.includes("hermes")
           ? "Hermes 세션"
           : "터미널 세션";
       pending.push(new TextEncoder().encode(
-        `\x1b[0m\x1b[?25h\x1b[2J\x1b[H\x1b[90m${label} 복원 준비됨. 입력하면 접속합니다.\x1b[0m\r\n`,
+        `\x1b[0m\x1b[?25h\x1b[2J\x1b[H\x1b[90m${label} 준비됨. 첫 입력 때 연결합니다.\x1b[0m\r\n`,
       ));
     }
 
@@ -1017,7 +1017,9 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
             // `claude --continue`는 "마지막 Claude 대화" 하나로 붙기 때문에 Claude 탭 4개가
             // 모두 같은 채팅을 보여주는 원인이 된다. 각 탭은 독립 PTY/log를 갖고,
             // 명시적인 최근 세션 "이어가기" 액션에서만 --continue를 사용한다.
-            // macOS App Data Isolation 팝업 완화용 --no-chrome만 launch 시 보강한다.
+            // 재실행/버전업 직후에는 실제 CLI를 띄우지 않는다.
+            // 하위 프로세스가 보호 리소스를 스캔하며 Apple Music/Media Library TCC 팝업을
+            // 유발할 수 있으므로, 이전 기록만 보여주고 첫 입력 때 연결한다.
             const baseCmd = (meta.cmd || "").trim();
             const cmdOverride =
               meta.profile === "claude"
@@ -1027,14 +1029,14 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
               customName: meta.customName,
               cmdOverride,
               replayLogId: meta.logId,
-              autoConnect: true,
+              autoConnect: false,
             });
           } catch (err) {
             console.warn("restore tab failed", meta, err);
           }
         }
       } else if (!cancelled && tabs.length === 0) {
-        await launchProfile("claude").catch(console.error);
+        await launchProfile("claude", { autoConnect: false }).catch(console.error);
       }
       if (!cancelled) openTabsInitRef.current = true;
     })();

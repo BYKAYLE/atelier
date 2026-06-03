@@ -1,0 +1,19 @@
+{
+  "factory_id": "sf-20260531-133552",
+  "run_id": "sf-run-20260531-133552",
+  "request_id": "product_brief::product_manager",
+  "agent_type": "product-manager",
+  "stage": "product_brief",
+  "state_file": "/Users/kansic/Service/atelier/SOT/service-factory-state.json",
+  "workspace": {
+    "mode": "git_worktree",
+    "path": "/Users/kansic/Service/atelier/.service-factory/worktrees/product_brief-product_manager",
+    "created": true,
+    "stdout": "HEAD is now at 3393d03 Simplify workspace navigation",
+    "stderr": "Preparing worktree (detached HEAD 3393d03)"
+  },
+  "prompt_file": "/Users/kansic/Service/atelier/SOT/service-factory/agent-prompts/product_brief--product_manager.md",
+  "artifact_dir": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-133552/product_brief-product_manager",
+  "result_file": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-133552/product_brief-product_manager/result.json",
+  "dispatch_markdown": "/Users/kansic/Service/atelier/SOT/service-factory/bridge/sf-run-20260531-133552/product_brief-product_manager/dispatch.md"
+}

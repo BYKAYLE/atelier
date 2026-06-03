@@ -1,0 +1,1 @@
+{"result": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-194555/development_plan-strategy_planner/result.json", "status": "done", "artifact": "/Users/kansic/Service/atelier/SOT/service-factory/development-plan.md"}

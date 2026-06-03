@@ -1,0 +1,1 @@
+{"result": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135614/product_brief-product_manager/result.json", "status": "done", "artifact": "/Users/kansic/Service/atelier/SOT/service-factory/product-brief.md"}

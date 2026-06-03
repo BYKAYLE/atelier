@@ -1,0 +1,1 @@
+{"result": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135620/final_audit-final_audit/result.json", "status": "done", "artifact": "/Users/kansic/Service/atelier/SOT/service-factory/final-audit.md"}

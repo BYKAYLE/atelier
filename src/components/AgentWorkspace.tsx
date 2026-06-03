@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -47,13 +47,18 @@ import {
   agentUndoChanges,
   academicResearchInstallClaudePlugin,
   clipboardSaveImage,
+  codexModelOptions,
   homeDir,
   isTauri,
   onAgentEvent,
+  openRouterModelOptions,
   previewHealthCheck,
   previewServiceStart,
   previewServiceStatus,
   previewServiceStop,
+  stellaFactoryAutopilot,
+  stellaFactoryBootstrap,
+  stellaFactoryStatus,
   stellaProjectAnalysis,
   stellaRecordEvidence,
   stellaWorkspaceProbe,
@@ -66,6 +71,7 @@ import type {
   AgentStreamEvent,
   PreviewCheckResult,
   PreviewServiceStatus,
+  StellaFactoryStatusResult,
 } from "../lib/tauri";
 import { cls, Profile, Tweaks } from "../lib/tokens";
 import { I } from "./Icons";
@@ -90,7 +96,7 @@ type ModelOption = {
 type CodexEffort = "low" | "medium" | "high" | "xhigh";
 type CodexSpeed = "default" | "fast";
 type CodexMenuPanel = "root" | "model" | "speed";
-type HermesInferenceProvider = "anthropic" | "openai-codex" | "openrouter";
+type HermesInferenceProvider = "openai-codex" | "openrouter";
 type SlashCommandScope = "atelier" | AgentProvider;
 
 type SlashCommandSpec = {
@@ -264,6 +270,7 @@ const SMOOTH_OUTPUT_FPS = 30;
 const SMOOTH_FRAME_MS = 1000 / SMOOTH_OUTPUT_FPS;
 const SMOOTH_BACKGROUND_CATCH_UP_MS = 900;
 const INPUT_REVEAL_PAUSE_MS = 220;
+const INPUT_STATE_COMMIT_DEBOUNCE_MS = 90;
 const SESSION_PERSIST_DEBOUNCE_MS = 260;
 const HERMES_GOLD = "#8a8218";
 const PREVIEW_VP_SIZES: Record<Exclude<PreviewViewport, "desktop">, { w: number; h: number }> = {
@@ -820,10 +827,6 @@ const CLAUDE_MODELS: ModelOption[] = [
 
 const OPENAI_CODEX_MODELS: ModelOption[] = [
   { value: "gpt-5.5", label: "GPT-5.5" },
-  { value: "gpt-5.4", label: "GPT-5.4" },
-  { value: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
-  { value: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
-  { value: "gpt-5.2", label: "GPT-5.2" },
 ];
 
 const OPENROUTER_MODELS: ModelOption[] = [
@@ -836,10 +839,6 @@ const OPENROUTER_MODELS: ModelOption[] = [
 
 const CODEX_MODELS: ModelOption[] = [
   { value: "gpt-5.5", label: "GPT-5.5" },
-  { value: "gpt-5.4", label: "GPT-5.4" },
-  { value: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
-  { value: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
-  { value: "gpt-5.2", label: "GPT-5.2" },
 ];
 
 const MODEL_OPTIONS: Record<AgentProvider, ModelOption[]> = {
@@ -849,13 +848,11 @@ const MODEL_OPTIONS: Record<AgentProvider, ModelOption[]> = {
 };
 
 const HERMES_PROVIDERS: Array<{ value: HermesInferenceProvider; label: string }> = [
-  { value: "anthropic", label: "Claude" },
   { value: "openai-codex", label: "Codex" },
   { value: "openrouter", label: "OpenRouter" },
 ];
 
 const HERMES_MODEL_OPTIONS: Record<HermesInferenceProvider, ModelOption[]> = {
-  anthropic: CLAUDE_MODELS,
   "openai-codex": OPENAI_CODEX_MODELS,
   openrouter: OPENROUTER_MODELS,
 };
@@ -910,7 +907,7 @@ const isProvider = (value: unknown): value is AgentProvider =>
   value === "claude" || value === "hermes" || value === "codex";
 
 const isHermesProvider = (value: unknown): value is HermesInferenceProvider =>
-  value === "anthropic" || value === "openai-codex" || value === "openrouter";
+  value === "openai-codex" || value === "openrouter";
 
 const isCodexEffort = (value: unknown): value is CodexEffort =>
   value === "low" || value === "medium" || value === "high" || value === "xhigh";
@@ -959,7 +956,6 @@ function hermesProviderFromProfile(profile?: Profile) {
 }
 
 function defaultHermesModel(hermesProvider: HermesInferenceProvider) {
-  if (hermesProvider === "anthropic") return "claude-sonnet-4-6";
   if (hermesProvider === "openrouter") return "openai/gpt-5.5";
   return "gpt-5.5";
 }
@@ -967,8 +963,7 @@ function defaultHermesModel(hermesProvider: HermesInferenceProvider) {
 function inferHermesProviderFromModel(model?: string | null) {
   const trimmed = model?.trim();
   if (!trimmed) return DEFAULT_HERMES_PROVIDER;
-  if (trimmed.startsWith("anthropic/") || trimmed.startsWith("openai/")) return "openrouter";
-  if (trimmed.startsWith("claude-") || trimmed === "sonnet" || trimmed === "opus" || trimmed === "haiku") return "anthropic";
+  if (trimmed.includes("/")) return "openrouter";
   return DEFAULT_HERMES_PROVIDER;
 }
 
@@ -976,17 +971,46 @@ function modelOptionsFor(
   provider: AgentProvider,
   selected?: string | null,
   hermesProvider: HermesInferenceProvider = DEFAULT_HERMES_PROVIDER,
+  codexModels: ModelOption[] = CODEX_MODELS,
+  openRouterModels: ModelOption[] = OPENROUTER_MODELS,
 ) {
+  const liveCodexModels = codexModels.length > 0 ? codexModels : CODEX_MODELS;
+  const liveOpenRouterModels = openRouterModels.length > 0 ? openRouterModels : OPENROUTER_MODELS;
   const options = provider === "hermes"
-    ? HERMES_MODEL_OPTIONS[hermesProvider]
-    : MODEL_OPTIONS[provider] || [];
+    ? (hermesProvider === "openai-codex"
+        ? liveCodexModels
+        : hermesProvider === "openrouter"
+          ? liveOpenRouterModels
+          : HERMES_MODEL_OPTIONS[hermesProvider])
+    : provider === "codex"
+      ? liveCodexModels
+      : MODEL_OPTIONS[provider] || [];
   const trimmed = selected?.trim();
   if (!trimmed || options.some((option) => option.value === trimmed)) return options;
+  if (provider === "codex" || (provider === "hermes" && (hermesProvider === "openai-codex" || hermesProvider === "openrouter"))) return options;
   return [{ value: trimmed, label: `사용자 지정: ${trimmed}` }, ...options];
 }
 
 function labelForOption(options: ModelOption[], value: string) {
   return options.find((option) => option.value === value)?.label || value;
+}
+
+function sanitizeModelOptions(options: ModelOption[]) {
+  const seen = new Set<string>();
+  const clean: ModelOption[] = [];
+  for (const option of options) {
+    const value = option.value?.trim();
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    clean.push({ value, label: option.label?.trim() || value });
+  }
+  return clean;
+}
+
+function coerceModelToOptions(model: string, options: ModelOption[]) {
+  return options.some((option) => option.value === model)
+    ? model
+    : options[0]?.value || model;
 }
 
 function normalizeCodexEffort(value?: unknown): CodexEffort {
@@ -1005,9 +1029,27 @@ function normalizePermissionMode(value?: unknown): AgentPermissionMode {
   return isPermissionMode(value) ? value : DEFAULT_PERMISSION_MODE;
 }
 
+function labelForCodexEffort(value: CodexEffort, language: Tweaks["language"]) {
+  const option = CODEX_EFFORTS.find((item) => item.value === value) || CODEX_EFFORTS[0];
+  return language === "en" ? option.en : option.ko;
+}
+
 function labelForCodexSpeed(value: CodexSpeed, language: Tweaks["language"]) {
   const option = CODEX_SPEEDS.find((item) => item.value === value) || CODEX_SPEEDS[0];
   return language === "en" ? option.en : option.ko;
+}
+
+function compactCodexModelLabel(label: string, value: string) {
+  const raw = (label || value).trim();
+  return raw
+    .replace(/^OpenAI\s+/i, "")
+    .replace(/^GPT[-\s]*/i, "")
+    .replace(/^Codex[-\s]*/i, "")
+    .trim() || value;
+}
+
+function codexToolbarLabel(modelLabel: string, modelValue: string, effort: CodexEffort, language: Tweaks["language"]) {
+  return `${compactCodexModelLabel(modelLabel, modelValue)} ${labelForCodexEffort(effort, language)}`;
 }
 
 function labelForPermissionMode(value: AgentPermissionMode, language: Tweaks["language"]) {
@@ -1159,7 +1201,7 @@ function slashCommandsFor(
         detailEn: "Run a Hermes CLI command",
       },
       {
-        command: "/provider anthropic|openai-codex|openrouter",
+        command: "/provider openai-codex|openrouter",
         insert: "/provider ",
         scope: "hermes",
         detailKo: `Hermes 하위 provider 변경 (현재 ${hermesProvider})`,
@@ -1398,19 +1440,20 @@ function normalizeModel(provider: AgentProvider, model?: string | null) {
     return legacy[trimmed] || trimmed;
   }
 
-  if (trimmed === "gpt-5.4-nano") return "gpt-5.4-mini";
+  if (provider === "codex") {
+    return trimmed;
+  }
+
   return trimmed;
 }
 
 function normalizeHermesModel(hermesProvider: HermesInferenceProvider, model?: string | null) {
-  const trimmed = normalizeModel(hermesProvider === "anthropic" ? "claude" : "hermes", model);
+  const trimmed = normalizeModel("hermes", model);
   if (!trimmed || trimmed === providerMeta("hermes").defaultModel) return defaultHermesModel(hermesProvider);
   if (hermesProvider === "openrouter") {
+    if (/^gpt-5\.(?:2|3-codex|4|4-mini)$/.test(trimmed)) return "openai/gpt-5.5";
     const legacy: Record<string, string> = {
       "gpt-5.5": "openai/gpt-5.5",
-      "gpt-5.4": "openai/gpt-5.4",
-      "gpt-5.4-mini": "openai/gpt-5.4-mini",
-      "gpt-5.3-codex": "openai/gpt-5.3-codex",
       "claude-opus-4-7": "anthropic/claude-opus-4.7",
       "claude-sonnet-4-6": "anthropic/claude-sonnet-4.6",
       "claude-haiku-4-5-20251001": "anthropic/claude-haiku-4.5",
@@ -1419,6 +1462,9 @@ function normalizeHermesModel(hermesProvider: HermesInferenceProvider, model?: s
   }
   if (hermesProvider === "openai-codex" && trimmed.startsWith("openai/")) {
     return trimmed.slice("openai/".length);
+  }
+  if (hermesProvider === "openai-codex") {
+    return trimmed;
   }
   return trimmed;
 }
@@ -2118,6 +2164,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const [devScreenKeyName, setDevScreenKeyName] = useState("Enter");
   const [devScreenResizeWidth, setDevScreenResizeWidth] = useState("1440");
   const [devScreenResizeHeight, setDevScreenResizeHeight] = useState("980");
+  const [factoryStatus, setFactoryStatus] = useState<StellaFactoryStatusResult | null>(null);
+  const [factoryStatusLoading, setFactoryStatusLoading] = useState(false);
+  const [factoryStatusError, setFactoryStatusError] = useState<string | null>(null);
   const [previewWidth, setPreviewWidth] = useState(() =>
     clampNumber(Number(localStorage.getItem(PREVIEW_WIDTH_KEY)) || 430, 320, 760),
   );
@@ -2125,11 +2174,44 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [showPermissionMenu, setShowPermissionMenu] = useState(false);
   const [codexMenuPanel, setCodexMenuPanel] = useState<CodexMenuPanel>("root");
+  const [codexRuntimeModels, setCodexRuntimeModels] = useState<ModelOption[]>(CODEX_MODELS);
+  const [openRouterRuntimeModels, setOpenRouterRuntimeModels] = useState<ModelOption[]>(OPENROUTER_MODELS);
   const [previewVP, setPreviewVP] = useState<PreviewViewport>(() => {
     const saved = localStorage.getItem(PREVIEW_VP_KEY);
     return saved === "mobile" || saved === "tablet" || saved === "desktop" ? saved : "desktop";
   });
   const sessionsRef = useRef<AgentSession[]>(sessions);
+  const refreshCodexRuntimeModels = useCallback(async () => {
+    if (!isTauri()) return;
+    try {
+      const result = await codexModelOptions();
+      const next = sanitizeModelOptions(result.models || []);
+      if (next.length > 0) setCodexRuntimeModels(next);
+    } catch (err) {
+      console.warn("codex model options refresh failed", err);
+    }
+  }, []);
+  const refreshOpenRouterRuntimeModels = useCallback(async () => {
+    if (!isTauri()) return;
+    try {
+      const result = await openRouterModelOptions();
+      const next = sanitizeModelOptions(result.models || []);
+      if (next.length > 0) setOpenRouterRuntimeModels(next);
+    } catch (err) {
+      console.warn("openrouter model options refresh failed", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshCodexRuntimeModels().catch(console.error);
+    refreshOpenRouterRuntimeModels().catch(console.error);
+    const timer = window.setInterval(() => {
+      refreshCodexRuntimeModels().catch(console.error);
+      refreshOpenRouterRuntimeModels().catch(console.error);
+    }, 5 * 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, [refreshCodexRuntimeModels, refreshOpenRouterRuntimeModels]);
+
   useEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
@@ -2164,11 +2246,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const [expandedDiffByKey, setExpandedDiffByKey] = useState<Record<string, boolean>>({});
   const [logsOpenById, setLogsOpenById] = useState<Record<string, boolean>>({});
   const [showProfilePicker, setShowProfilePicker] = useState(false);
-  const [showFactoryBrief, setShowFactoryBrief] = useState(true);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [slashSelection, setSlashSelection] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const inputDraftRef = useRef(input);
+  const inputCommitTimerRef = useRef<number | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
   const permissionMenuRef = useRef<HTMLDivElement | null>(null);
@@ -2190,6 +2273,27 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const previewResizeRef = useRef<{ startX: number; startW: number } | null>(null);
   const previewAutoStartRef = useRef<Record<string, number>>({});
   const lastPreviewCommandRef = useRef<string | null>(null);
+
+  const commitInputSoon = () => {
+    if (inputCommitTimerRef.current !== null) {
+      window.clearTimeout(inputCommitTimerRef.current);
+    }
+    inputCommitTimerRef.current = window.setTimeout(() => {
+      inputCommitTimerRef.current = null;
+      setInput((current) => (current === inputDraftRef.current ? current : inputDraftRef.current));
+    }, INPUT_STATE_COMMIT_DEBOUNCE_MS);
+  };
+
+  const setComposerInput = (next: string) => {
+    inputDraftRef.current = next;
+    if (inputCommitTimerRef.current !== null) {
+      window.clearTimeout(inputCommitTimerRef.current);
+      inputCommitTimerRef.current = null;
+    }
+    const el = inputRef.current;
+    if (el && el.value !== next) el.value = next;
+    setInput(next);
+  };
 
   const persistSessionsNow = (next: AgentSession[] = sessionsRef.current) => {
     if (persistSessionsTimerRef.current !== null) {
@@ -2267,7 +2371,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         devScreenActionFailed: (message: string) => `Screen action failed: ${message}`,
         cwd: "Working folder",
         noAgentProfiles: "No Claude/Hermes/Codex profiles in Settings.",
-        factoryLabel: "Stella Factory (on demand)",
+        factoryLabel: "Stella Factory",
         factoryGoal: "Goal",
         factoryAnalyze: "Analyze",
         factoryProbe: "Probe",
@@ -2276,12 +2380,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         factoryAnalyzeTitle: "Inspect this workspace before implementation",
         factoryProbeTitle: "Run evidence checks for this workspace",
         factoryAuditTitle: "Audit security, permissions, release readiness, and regressions",
-        factoryBriefTitle: "Stella Factory",
-        factoryBriefHint: "Shape Atelier into a Hermes Desktop-style local autonomous workspace only when you choose to run Factory.",
-        factoryBriefSeedGoal: "Set direction",
-        factoryBriefSeedAnalyze: "Analyze current app",
-        factoryRoadmapPrompt: "Upgrade Atelier into a Hermes Desktop-style local autonomous development workspace. Preserve existing terminal, agent, preview, model, provider, plugin, updater, and settings features. Evolve it step by step around goal normalization, project analysis, safe command execution, file editing, test/probe verification, role delegation, security review, release readiness, and SOT evidence recording.",
-        factoryAnalyzePrompt: "Analyze Atelier's current code, runtime, SOT, tests, installed app behavior, and release/update flow. Decide what must be preserved and what should be upgraded to make Atelier feel like Hermes Desktop while remaining a Codex-like local autonomous development workspace.",
         placeholder: "Ask the selected agent to change, inspect, or explain this workspace...",
         send: "Send",
         stopHint: "A running turn finishes through the selected CLI; terminal fallback remains available.",
@@ -2295,6 +2393,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         permissionLabel: "Permission",
         ontologyLabel: "Mode",
         intelligence: "Intelligence",
+        reasoning: "Reasoning",
         speed: "Speed",
         model: "Agent workspace",
         running: "running",
@@ -2333,7 +2432,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           "/cwd <path> - change working folder",
           "/model <model> - change the current CLI model",
           "/permission basic|auto|full - change CLI permission mode",
-          "/provider anthropic|openai-codex|openrouter - change Hermes provider",
+          "/provider openai-codex|openrouter - change Hermes provider",
           "/effort low|medium|high|xhigh - change Codex reasoning effort",
           "/speed default|fast - change Codex speed tier",
         ].join("\n"),
@@ -2422,7 +2521,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         devScreenActionFailed: (message: string) => `화면 작업 실패: ${message}`,
         cwd: "작업 폴더",
         noAgentProfiles: "설정 프로필에 Claude/Hermes/Codex가 없습니다.",
-        factoryLabel: "필요 시 Stella Factory",
+        factoryLabel: "Stella Factory",
         factoryGoal: "목표",
         factoryAnalyze: "분석",
         factoryProbe: "검증",
@@ -2431,12 +2530,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         factoryAnalyzeTitle: "구현 전 현재 작업공간 분석",
         factoryProbeTitle: "이 작업공간의 증거 검증 실행",
         factoryAuditTitle: "보안, 권한, 배포준비, 회귀 위험 감사",
-        factoryBriefTitle: "Stella Factory",
-        factoryBriefHint: "필요할 때만 Factory를 켜서 Atelier를 Hermes Desktop 같은 로컬 자율 개발 워크스페이스로 고도화합니다.",
-        factoryBriefSeedGoal: "방향 잡기",
-        factoryBriefSeedAnalyze: "현재 앱 분석",
-        factoryRoadmapPrompt: "Atelier를 Hermes Desktop 같은 로컬 자율 개발 워크스페이스로 고도화해. 기존 터미널, 에이전트, 프리뷰, 모델, 제공자, 플러그인, 업데이트, 설정 기능은 보존하고 목표 변환, 프로젝트 분석, 안전한 명령 실행, 파일 수정, 테스트/Probe 검증, 역할별 위임, 보안검토, 배포준비, SOT 증거 기록을 중심으로 단계적으로 발전시켜.",
-        factoryAnalyzePrompt: "Atelier의 현재 코드, 실행 방식, SOT, 테스트, 설치본 동작, 릴리스/업데이트 흐름을 분석해. Hermes Desktop처럼 느껴지는 Codex형 로컬 자율 개발 워크스페이스로 만들기 위해 무엇을 유지하고 무엇을 고도화해야 하는지 판단해.",
         placeholder: "선택한 에이전트에게 이 작업공간의 수정, 분석, 설명을 요청하세요...",
         send: "보내기",
         stopHint: "실행 중인 턴은 선택한 CLI가 끝낼 때 완료됩니다. 터미널은 보조 화면으로 남겨둡니다.",
@@ -2450,6 +2543,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         permissionLabel: "권한",
         ontologyLabel: "모드",
         intelligence: "인텔리전스",
+        reasoning: "추론",
         speed: "속도",
         model: "에이전트 작업",
         running: "실행 중",
@@ -2488,7 +2582,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           "/cwd <path> - 작업 폴더 변경",
           "/model <model> - 현재 CLI 모델 변경",
           "/permission basic|auto|full - CLI 실행 권한 변경",
-          "/provider anthropic|openai-codex|openrouter - Hermes provider 변경",
+          "/provider openai-codex|openrouter - Hermes provider 변경",
           "/effort low|medium|high|xhigh - Codex 추론 강도 변경",
           "/speed default|fast - Codex 속도 tier 변경",
         ].join("\n"),
@@ -2525,6 +2619,50 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   );
   // active 세션 기준 busy 가드 — 다른 세션이 바빠도 active가 한가하면 입력 가능.
   const busyTurnId: string | null = active ? busyTurnIdsBySession[active.id] || null : null;
+
+  const refreshFactoryStatus = async () => {
+    if (!isTauri() || !cwd.trim()) {
+      setFactoryStatus(null);
+      setFactoryStatusError(null);
+      setFactoryStatusLoading(false);
+      return;
+    }
+    setFactoryStatusLoading(true);
+    setFactoryStatusError(null);
+    try {
+      const status = await stellaFactoryStatus(cwd);
+      setFactoryStatus(status);
+    } catch (err) {
+      setFactoryStatusError(String(err instanceof Error ? err.message : err));
+    } finally {
+      setFactoryStatusLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!isTauri() || !cwd.trim()) {
+      setFactoryStatus(null);
+      setFactoryStatusError(null);
+      setFactoryStatusLoading(false);
+      return;
+    }
+    setFactoryStatusLoading(true);
+    setFactoryStatusError(null);
+    stellaFactoryStatus(cwd)
+      .then((status) => {
+        if (!cancelled) setFactoryStatus(status);
+      })
+      .catch((err) => {
+        if (!cancelled) setFactoryStatusError(String(err instanceof Error ? err.message : err));
+      })
+      .finally(() => {
+        if (!cancelled) setFactoryStatusLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cwd, active?.id]);
 
   // 작업탭마다 프리뷰 상태가 독립적이도록 활성 세션의 값으로 로컬 상태를 hydrate.
   // 프리뷰 표시 여부는 사용자가 직접 켠 경우에만 복원한다.
@@ -2632,11 +2770,17 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const fallbackProvider = agentProfiles[0]?.provider || DEFAULT_PROVIDER;
   const activeProvider = active?.provider || fallbackProvider;
   const activeProviderMeta = providerMeta(activeProvider);
-  const activeModel = active?.model || activeProviderMeta.defaultModel;
+  const rawActiveModel = active?.model || activeProviderMeta.defaultModel;
   const activeHermesProvider = activeProvider === "hermes"
-    ? normalizeHermesProvider(active?.hermesProvider || inferHermesProviderFromModel(activeModel))
+    ? normalizeHermesProvider(active?.hermesProvider || inferHermesProviderFromModel(rawActiveModel))
     : DEFAULT_HERMES_PROVIDER;
-  const activeModelOptions = modelOptionsFor(activeProvider, activeModel, activeHermesProvider);
+  const normalizedActiveModel = activeProvider === "hermes"
+    ? normalizeHermesModel(activeHermesProvider, rawActiveModel)
+    : normalizeModel(activeProvider, rawActiveModel);
+  const activeModelOptions = modelOptionsFor(activeProvider, normalizedActiveModel, activeHermesProvider, codexRuntimeModels, openRouterRuntimeModels);
+  const activeModel = (activeProvider === "codex" || (activeProvider === "hermes" && (activeHermesProvider === "openai-codex" || activeHermesProvider === "openrouter")))
+    ? coerceModelToOptions(normalizedActiveModel, activeModelOptions)
+    : normalizedActiveModel;
   const activeModelLabel = labelForOption(activeModelOptions, activeModel);
   const slashCommands = useMemo(
     () => slashCommandsFor(activeProvider, activeHermesProvider, activeModelOptions),
@@ -2651,6 +2795,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const selectedSlashCommand = visibleSlashCommands[activeSlashSelection];
   const activeCodexEffort = normalizeCodexEffort(active?.codexEffort);
   const activeCodexSpeed = normalizeCodexSpeed(active?.codexSpeed);
+  const activeCodexModelSurface = activeProvider === "codex" || (activeProvider === "hermes" && activeHermesProvider === "openai-codex");
+  const activeCodexToolbarLabel = codexToolbarLabel(activeModelLabel, activeModel, activeCodexEffort, tw.language);
   const activePermissionMode = normalizePermissionMode(active?.permissionMode);
   const activePermissionOption = PERMISSION_MODES.find((option) => option.value === activePermissionMode) || PERMISSION_MODES[0];
   const activePermissionLabel = labelForPermissionMode(activePermissionMode, tw.language);
@@ -3060,6 +3206,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       if (scrollFrameRef.current !== null) {
         window.cancelAnimationFrame(scrollFrameRef.current);
       }
+      if (inputCommitTimerRef.current !== null) {
+        window.clearTimeout(inputCommitTimerRef.current);
+        inputCommitTimerRef.current = null;
+      }
       persistSessionsNow(sessionsRef.current);
       pendingStreamRef.current = {};
       smoothTargetsRef.current = {};
@@ -3285,7 +3435,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     );
 
   const resetComposer = () => {
-    setInput("");
+    setComposerInput("");
     setPendingAttachments([]);
     setPasteError(null);
   };
@@ -3307,6 +3457,14 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     const id = nowId("agent");
     const profileName = profile?.name || meta.label;
     const hermesProvider = provider === "hermes" ? hermesProviderFromProfile(profile) : undefined;
+    const rawModel = profile ? modelFromProfile(profile, provider) : meta.defaultModel;
+    const normalizedModel = provider === "hermes"
+      ? normalizeHermesModel(hermesProvider || DEFAULT_HERMES_PROVIDER, rawModel)
+      : normalizeModel(provider, rawModel);
+    const modelOptions = modelOptionsFor(provider, normalizedModel, hermesProvider || DEFAULT_HERMES_PROVIDER, codexRuntimeModels, openRouterRuntimeModels);
+    const initialModel = (provider === "codex" || (provider === "hermes" && (hermesProvider === "openai-codex" || hermesProvider === "openrouter")))
+      ? coerceModelToOptions(normalizedModel, modelOptions)
+      : normalizedModel;
     const defaultTitle = tw.language === "en"
       ? `New ${profileName} workspace`
       : `새 ${profileName} 작업`;
@@ -3318,9 +3476,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       profileId: profile?.id || provider,
       profileName,
       profileDot: normalizeAgentDotColor(profile?.dot || meta.dot),
-      model: provider === "hermes"
-        ? normalizeHermesModel(hermesProvider || DEFAULT_HERMES_PROVIDER, profile ? modelFromProfile(profile, provider) : meta.defaultModel)
-        : normalizeModel(provider, profile ? modelFromProfile(profile, provider) : meta.defaultModel),
+      model: initialModel,
       hermesProvider,
       stellaOntologyMode: normalizeStellaOntologyMode(undefined, provider),
       codexEffort: provider === "codex" ? DEFAULT_CODEX_EFFORT : undefined,
@@ -3554,9 +3710,13 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       const hermesProvider = session.provider === "hermes"
         ? normalizeHermesProvider(session.hermesProvider || inferHermesProviderFromModel(session.model))
         : DEFAULT_HERMES_PROVIDER;
-      const nextModel = session.provider === "hermes"
+      const normalizedModel = session.provider === "hermes"
         ? normalizeHermesModel(hermesProvider, model)
         : normalizeModel(session.provider, model);
+      const options = modelOptionsFor(session.provider, normalizedModel, hermesProvider, codexRuntimeModels, openRouterRuntimeModels);
+      const nextModel = (session.provider === "codex" || (session.provider === "hermes" && (hermesProvider === "openai-codex" || hermesProvider === "openrouter")))
+        ? coerceModelToOptions(normalizedModel, options)
+        : normalizedModel;
       const changed = nextModel !== session.model;
       return {
         ...session,
@@ -3571,17 +3731,20 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
 
   const updateActiveHermesProvider = (hermesProvider: HermesInferenceProvider) => {
     if (!active) return;
-    patchSession(active.id, (session) => ({
-      ...session,
-      hermesProvider,
-      model: HERMES_MODEL_OPTIONS[hermesProvider].some((option) => option.value === normalizeHermesModel(hermesProvider, session.model))
-        ? normalizeHermesModel(hermesProvider, session.model)
-        : defaultHermesModel(hermesProvider),
-      providerSessionId: undefined,
-      providerSessionModel: undefined,
-      providerSessionHermesProvider: undefined,
-      updatedAt: Date.now(),
-    }));
+    patchSession(active.id, (session) => {
+      const normalizedModel = normalizeHermesModel(hermesProvider, session.model);
+      const options = modelOptionsFor("hermes", normalizedModel, hermesProvider, codexRuntimeModels, openRouterRuntimeModels);
+      const nextModel = coerceModelToOptions(normalizedModel, options);
+      return {
+        ...session,
+        hermesProvider,
+        model: nextModel || defaultHermesModel(hermesProvider),
+        providerSessionId: undefined,
+        providerSessionModel: undefined,
+        providerSessionHermesProvider: undefined,
+        updatedAt: Date.now(),
+      };
+    });
   };
 
   const updateActiveCodexEffort = (effort: CodexEffort) => {
@@ -4127,6 +4290,104 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     );
   };
 
+  const renderedTranscriptMessages = useMemo(() => {
+    if (!active) return null;
+    return active.messages.map((m) => {
+      const isAnimatedAssistant = m.role === "assistant" && animatedAssistantIdsRef.current.has(m.id);
+      const displayText = animatedAssistantIdsRef.current.has(m.id)
+        ? (visibleTextById[m.id] || "")
+        : m.text;
+      const isRevealing = isAnimatedAssistant && displayText !== m.text;
+      const useStreamingRenderer = isAnimatedAssistant && (m.status === "streaming" || isRevealing);
+      const renderedText = useStreamingRenderer
+        ? cleanStreamingText(collapseDumpyText(displayText)).replace(/\s+$/g, "")
+        : collapseDumpyText(m.text).replace(/\s+$/g, "");
+      const hasRenderedText = renderedText.trim().length > 0;
+      return (
+        <article key={m.id} className={cls("flex min-w-0 gap-3", m.role === "user" ? "justify-end" : "justify-start")}>
+          {m.role !== "user" && (
+            <div
+              className="mt-1 h-7 w-7 shrink-0 rounded-[7px] text-white grid place-items-center text-[10px] font-semibold"
+              style={{ background: normalizeAgentDotColor(active.profileDot || activeProviderMeta.dot) }}
+            >
+              {activeProviderMeta.short}
+            </div>
+          )}
+          <div
+            className={cls(
+              "min-w-0 overflow-hidden text-[13px] break-words",
+              m.role === "user"
+                ? cls(
+                    "max-w-[min(78%,760px)] rounded-[8px] px-3.5 py-2.5 border leading-[1.65]",
+                    dark ? "bg-[#34312e] border-[#4a4039] text-dink" : "bg-[#fff8f2] border-[#eed7c8] text-ink",
+                  )
+                : cls(
+                    "flex-1 max-w-full font-mono leading-[1.55] py-1",
+                    dark ? "text-dink" : "text-ink",
+                  ),
+            )}
+          >
+            {hasRenderedText ? (
+              useStreamingRenderer ? (
+                <div className="atelier-streaming-text min-w-0 max-w-full" aria-live="polite">
+                  {renderedText}
+                  <span className="atelier-streaming-caret" aria-hidden="true" />
+                </div>
+              ) : (
+                <div className="atelier-chat-markdown min-w-0 max-w-full">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={CHAT_MARKDOWN_COMPONENTS}>
+                    {renderedText}
+                  </ReactMarkdown>
+                </div>
+              )
+            ) : m.role === "assistant" && m.status === "streaming" ? (
+              <span className={cls("font-mono", dark ? "text-dsub" : "text-sub")}>
+                {copy.running}...
+              </span>
+            ) : m.role === "assistant" ? (
+              <span className={cls("font-sans", dark ? "text-dsub" : "text-sub")}>
+                {copy.noResponse}
+              </span>
+            ) : null}
+            {m.attachments && m.attachments.length > 0 && (
+              <div className={cls("atelier-chat-attachments", hasRenderedText ? "mt-2" : "")}>
+                {m.attachments.map((attachment) => (
+                  <div key={attachment.id} className="atelier-chat-attachment" title={attachment.path}>
+                    {I.image}
+                    <span>{attachment.name || attachmentFileName(attachment.path)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {m.role === "user" && m.status === "queued" && (
+              <div className={cls("mt-1 text-[10.5px] font-mono", dark ? "text-dsub" : "text-sub")}>
+                {copy.queued}
+              </div>
+            )}
+            {m.status === "streaming" && renderAgentActivity(m)}
+            {m.role === "assistant" && renderChangeSummary(m)}
+            {m.role === "assistant" && renderAgentLogs(m)}
+          </div>
+        </article>
+      );
+    });
+  }, [
+    active?.id,
+    active?.messages,
+    active?.profileDot,
+    active?.cwd,
+    activeProviderMeta.dot,
+    activeProviderMeta.short,
+    visibleTextById,
+    dark,
+    copy,
+    nowTickMs,
+    expandedDiffByKey,
+    reviewOpenById,
+    logsOpenById,
+    cwd,
+  ]);
+
   const handleAttachmentPaste = async (event: React.ClipboardEvent<HTMLElement>) => {
     const items = Array.from(event.clipboardData?.items || []);
     const imageItems = items.filter((item) => item.type.startsWith("image/"));
@@ -4258,7 +4519,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   };
 
   const applySlashCommand = (command: SlashCommandSpec) => {
-    setInput(command.insert);
+    setComposerInput(command.insert);
     window.requestAnimationFrame(() => {
       const el = inputRef.current;
       if (!el) return;
@@ -4269,7 +4530,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   };
 
   const applyFactoryCommand = (command: StellaFactoryCommand) => {
-    const current = input.trim();
+    const current = inputDraftRef.current.trim();
     const activeCommand = activeFactoryCommandFromText(current);
     const prefix = `/${command} `;
     const next = activeCommand === command
@@ -4279,19 +4540,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         : current && !current.startsWith("/")
           ? `${prefix}${current}`
           : prefix;
-    setInput(next);
-    window.requestAnimationFrame(() => {
-      const el = inputRef.current;
-      if (!el) return;
-      el.focus();
-      const cursor = el.value.length;
-      el.setSelectionRange(cursor, cursor);
-    });
-  };
-
-  const applyFactoryPreset = (command: StellaFactoryCommand, body: string) => {
-    const next = `/${command} ${body}`;
-    setInput(next);
+    setComposerInput(next);
     window.requestAnimationFrame(() => {
       const el = inputRef.current;
       if (!el) return;
@@ -4328,7 +4577,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       const hermesProvider = session.provider === "hermes"
         ? normalizeHermesProvider(session.hermesProvider || inferHermesProviderFromModel(session.model))
         : DEFAULT_HERMES_PROVIDER;
-      const options = modelOptionsFor(session.provider, session.model || providerMeta(session.provider).defaultModel, hermesProvider);
+      const options = modelOptionsFor(session.provider, session.model || providerMeta(session.provider).defaultModel, hermesProvider, codexRuntimeModels, openRouterRuntimeModels);
       const help = slashCommandsFor(session.provider, hermesProvider, options)
         .map((item) => {
           const detail = tw.language === "en" ? item.detailEn : item.detailKo;
@@ -4451,7 +4700,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       const hermesProvider = session.provider === "hermes"
         ? normalizeHermesProvider(session.hermesProvider || inferHermesProviderFromModel(session.model))
         : DEFAULT_HERMES_PROVIDER;
-      const options = modelOptionsFor(session.provider, session.model || providerMeta(session.provider).defaultModel, hermesProvider);
+      const options = modelOptionsFor(session.provider, session.model || providerMeta(session.provider).defaultModel, hermesProvider, codexRuntimeModels, openRouterRuntimeModels);
       if (!arg) {
         const list = options.map((option) => `- ${option.value} (${option.label})`).join("\n");
         localAssistantMessage(
@@ -4465,9 +4714,13 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       const nextHermesProvider = session.provider === "hermes"
         ? inferHermesProviderFromModel(requested)
         : hermesProvider;
-      const nextModel = session.provider === "hermes"
+      const normalizedModel = session.provider === "hermes"
         ? normalizeHermesModel(nextHermesProvider, requested)
         : normalizeModel(session.provider, requested);
+      const nextOptions = modelOptionsFor(session.provider, normalizedModel, nextHermesProvider, codexRuntimeModels, openRouterRuntimeModels);
+      const nextModel = (session.provider === "codex" || (session.provider === "hermes" && (nextHermesProvider === "openai-codex" || nextHermesProvider === "openrouter")))
+        ? coerceModelToOptions(normalizedModel, nextOptions)
+        : normalizedModel;
       patchSession(session.id, (current) => ({
         ...current,
         model: nextModel,
@@ -4684,12 +4937,15 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           session.id,
           rawText,
           tw.language === "en"
-            ? "Usage: /provider anthropic|openai-codex|openrouter"
-            : "사용법: /provider anthropic|openai-codex|openrouter",
+            ? "Usage: /provider openai-codex|openrouter"
+            : "사용법: /provider openai-codex|openrouter",
         );
         return true;
       }
-      const nextModel = defaultHermesModel(arg);
+      const providerOptions = modelOptionsFor("hermes", defaultHermesModel(arg), arg, codexRuntimeModels, openRouterRuntimeModels);
+      const nextModel = arg === "openai-codex" || arg === "openrouter"
+        ? providerOptions[0]?.value || defaultHermesModel(arg)
+        : defaultHermesModel(arg);
       patchSession(session.id, (current) => ({
         ...current,
         hermesProvider: arg,
@@ -4798,9 +5054,19 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     const hermesProvider = session.provider === "hermes"
       ? normalizeHermesProvider(session.hermesProvider || inferHermesProviderFromModel(session.model))
       : null;
-    const runModel = session.provider === "hermes"
+    const normalizedRunModel = session.provider === "hermes"
       ? normalizeHermesModel(hermesProvider || DEFAULT_HERMES_PROVIDER, session.model || meta.defaultModel)
       : normalizeModel(session.provider, session.model || meta.defaultModel);
+    const runModelOptions = modelOptionsFor(
+      session.provider,
+      normalizedRunModel,
+      hermesProvider || DEFAULT_HERMES_PROVIDER,
+      codexRuntimeModels,
+      openRouterRuntimeModels,
+    );
+    const runModel = (session.provider === "codex" || (session.provider === "hermes" && (hermesProvider === "openai-codex" || hermesProvider === "openrouter")))
+      ? coerceModelToOptions(normalizedRunModel, runModelOptions)
+      : normalizedRunModel;
     const useHermesCodexFastPath = session.provider === "hermes" && hermesProvider === "openai-codex";
     const hermesResumeMatches = session.provider === "hermes"
       && Boolean(session.providerSessionId)
@@ -4992,7 +5258,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   };
 
   const send = async () => {
-    const text = input.trim();
+    const text = inputDraftRef.current.trim();
     const attachments = pendingAttachments;
     const userText = text || (attachments.length > 0 ? copy.imageOnlyPrompt : "");
     if ((!userText && attachments.length === 0) || isPastingImage) return;
@@ -5020,7 +5286,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     })();
     if (factorySafetyBlock) {
       localAssistantMessage(session.id, userText, factorySafetyBlock.message);
-      setInput("");
+      setComposerInput("");
       setPendingAttachments([]);
       setPasteError(null);
       return;
@@ -5039,13 +5305,27 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     if (factoryRequest && isTauri()) {
       try {
         const analysis = await stellaProjectAnalysis(cwd || null);
+        const runManagedFactory = factoryRequest.command === "goal";
+        const bootstrap = runManagedFactory
+          ? await stellaFactoryBootstrap({
+              cwd: cwd || null,
+              goal: factoryRequest.body,
+            })
+          : null;
+        const autopilot = runManagedFactory
+          ? await stellaFactoryAutopilot({
+              cwd: cwd || null,
+              goal: factoryRequest.body,
+              maxCycles: 12,
+            })
+          : null;
         const probe = factoryRequest.command === "probe" || factoryRequest.command === "audit"
           ? await stellaWorkspaceProbe({
               cwd: cwd || null,
               profile: factoryRequest.command === "audit" ? "full" : "focused",
             })
           : null;
-        factoryEvidence = formatStellaFactoryPreflightBlock({ analysis, probe }, tw.language);
+        factoryEvidence = formatStellaFactoryPreflightBlock({ analysis, bootstrap, autopilot, probe }, tw.language);
       } catch (err) {
         factoryEvidence = formatStellaFactoryPreflightBlock({ error: String(err) }, tw.language);
       }
@@ -5053,7 +5333,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     }
     const visibleUserText = userText;
 
-    setInput("");
+    setComposerInput("");
     setPendingAttachments([]);
     setPasteError(null);
 
@@ -5118,6 +5398,30 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   };
 
   const activeFactoryCommand = activeFactoryCommandFromText(input);
+  const factoryOpenStages = factoryStatus
+    ? (factoryStatus.stage_counts.queued || 0)
+      + (factoryStatus.stage_counts.in_progress || 0)
+      + (factoryStatus.stage_counts.blocked || 0)
+      + (factoryStatus.stage_counts.validation_required || 0)
+    : 0;
+  const factoryDoneStages = factoryStatus?.stage_counts.done || 0;
+  const factoryReady = factoryStatus?.readiness === "pilot_ready" || factoryStatus?.readiness === "full_ready";
+  const factoryStatusLabel = factoryStatusLoading
+    ? (tw.language === "en" ? "Checking" : "확인 중")
+    : factoryStatusError
+      ? (tw.language === "en" ? "Issue" : "확인 필요")
+      : !factoryStatus?.exists
+        ? (tw.language === "en" ? "No state" : "상태 없음")
+        : factoryReady
+          ? factoryStatus.readiness
+          : factoryStatus.readiness || factoryStatus.status || (tw.language === "en" ? "Running" : "진행 중");
+  const factoryStatusTone = factoryStatusError || factoryStatus?.blocked_reason
+    ? "error"
+    : factoryReady
+      ? "ready"
+      : factoryStatus?.exists
+        ? "running"
+        : "missing";
 
   return (
     <div className={cls("h-full w-full flex", dark ? "bg-dbg text-dink" : "bg-cream text-ink")}>
@@ -5181,77 +5485,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           )}
         </div>
         <div className="flex-1 min-h-0 overflow-auto p-2">
-          <div
-            className={cls(
-              "mb-2 rounded-[8px] border overflow-hidden",
-              dark ? "border-dline bg-[#20201e]" : "border-line bg-surface",
-            )}
-          >
-            <button
-              type="button"
-              onClick={() => setShowFactoryBrief((v) => !v)}
-              className={cls(
-                "w-full h-9 px-2.5 flex items-center gap-2 text-left",
-                dark ? "text-dink hover:bg-dmuted" : "text-ink hover:bg-muted",
-              )}
-            >
-              <span className="h-5 w-5 shrink-0 grid place-items-center text-[#e26f4f]">{I.shieldCheck}</span>
-              <span className="min-w-0 flex-1 text-[12px] font-medium truncate">{copy.factoryBriefTitle}</span>
-              <span
-                className={cls(
-                  "h-5 w-5 shrink-0 grid place-items-center transition-transform",
-                  showFactoryBrief ? "rotate-180" : "",
-                  dark ? "text-dsub" : "text-sub",
-                )}
-              >
-                {I.chevron}
-              </span>
-            </button>
-            {showFactoryBrief && (
-              <div className={cls("border-t px-2.5 py-2", dark ? "border-dline" : "border-line")}>
-                <div className={cls("text-[10.5px] leading-[1.45]", dark ? "text-dsub" : "text-sub")}>
-                  {copy.factoryBriefHint}
-                </div>
-                <div className="mt-2 grid grid-cols-2 gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => applyFactoryPreset("goal", copy.factoryRoadmapPrompt)}
-                    className={cls(
-                      "h-8 rounded-[7px] px-2 text-[11px] font-medium inline-flex items-center justify-center gap-1.5 border transition-colors",
-                      dark ? "border-[#e26f4f66] bg-[#3a2a23] text-dink hover:bg-[#463026]" : "border-[#e26f4f66] bg-[#fff1eb] text-ink hover:bg-[#ffe7dc]",
-                    )}
-                  >
-                    <span className="text-[#e26f4f]">{I.zap}</span>
-                    <span className="truncate">{copy.factoryBriefSeedGoal}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => applyFactoryPreset("analyze", copy.factoryAnalyzePrompt)}
-                    className={cls(
-                      "h-8 rounded-[7px] px-2 text-[11px] font-medium inline-flex items-center justify-center gap-1.5 border transition-colors",
-                      dark ? "border-dline bg-dmuted text-dink hover:bg-[#393936]" : "border-line bg-muted text-ink hover:bg-line",
-                    )}
-                  >
-                    <span className={dark ? "text-dsub" : "text-sub"}>{I.eye}</span>
-                    <span className="truncate">{copy.factoryBriefSeedAnalyze}</span>
-                  </button>
-                </div>
-                <div className={cls("mt-2 flex flex-wrap gap-1 text-[9.5px]", dark ? "text-dsub" : "text-sub")}>
-                  {[copy.factoryGoal, copy.factoryAnalyze, copy.factoryProbe, copy.factoryAudit].map((label) => (
-                    <span
-                      key={label}
-                      className={cls(
-                        "h-5 rounded-full border px-2 inline-flex items-center",
-                        dark ? "border-dline bg-[#242421]" : "border-line bg-bg",
-                      )}
-                    >
-                      {label}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
           {sessions.length === 0 && (
             <div className={cls("p-3 text-[12px] leading-[1.55]", dark ? "text-dsub" : "text-sub")}>
               {copy.noMessages}
@@ -5436,87 +5669,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                 </div>
               ) : (
                 <div className="max-w-[920px] mx-auto space-y-5">
-                  {active.messages.map((m) => {
-                    const isAnimatedAssistant = m.role === "assistant" && animatedAssistantIdsRef.current.has(m.id);
-                    const displayText = animatedAssistantIdsRef.current.has(m.id)
-                      ? (visibleTextById[m.id] || "")
-                      : m.text;
-                    const isRevealing = isAnimatedAssistant && displayText !== m.text;
-                    const useStreamingRenderer = isAnimatedAssistant && (m.status === "streaming" || isRevealing);
-                    const renderedText = useStreamingRenderer
-                      ? cleanStreamingText(collapseDumpyText(displayText)).replace(/\s+$/g, "")
-                      : collapseDumpyText(m.text).replace(/\s+$/g, "");
-                    const hasRenderedText = renderedText.trim().length > 0;
-                    return (
-                    <article key={m.id} className={cls("flex min-w-0 gap-3", m.role === "user" ? "justify-end" : "justify-start")}>
-                      {m.role !== "user" && (
-                        <div
-                          className="mt-1 h-7 w-7 shrink-0 rounded-[7px] text-white grid place-items-center text-[10px] font-semibold"
-                          style={{ background: normalizeAgentDotColor(active?.profileDot || activeProviderMeta.dot) }}
-                        >
-                          {activeProviderMeta.short}
-                        </div>
-                      )}
-                      <div
-                        className={cls(
-                          "min-w-0 overflow-hidden text-[13px] break-words",
-                          m.role === "user"
-                            ? cls(
-                                "max-w-[min(78%,760px)] rounded-[8px] px-3.5 py-2.5 border leading-[1.65]",
-                                dark ? "bg-[#34312e] border-[#4a4039] text-dink" : "bg-[#fff8f2] border-[#eed7c8] text-ink",
-                              )
-                            : cls(
-                                "flex-1 max-w-full font-mono leading-[1.55] py-1",
-                                dark ? "text-dink" : "text-ink",
-                              ),
-                        )}
-                      >
-                        {hasRenderedText ? (
-                          useStreamingRenderer ? (
-                            <div className="atelier-streaming-text min-w-0 max-w-full" aria-live="polite">
-                              {renderedText}
-                              <span className="atelier-streaming-caret" aria-hidden="true" />
-                            </div>
-                          ) : (
-                            <div className="atelier-chat-markdown min-w-0 max-w-full">
-                              <ReactMarkdown remarkPlugins={[remarkGfm]} components={CHAT_MARKDOWN_COMPONENTS}>
-                                {renderedText}
-                              </ReactMarkdown>
-                            </div>
-                          )
-                        ) : m.role === "assistant" && m.status === "streaming" ? (
-                          <span className={cls("font-mono", dark ? "text-dsub" : "text-sub")}>
-                            {copy.running}...
-                          </span>
-                        ) : m.role === "assistant" ? (
-                          <span className={cls("font-sans", dark ? "text-dsub" : "text-sub")}>
-                            {copy.noResponse}
-                          </span>
-                        ) : null}
-                        {m.attachments && m.attachments.length > 0 && (
-                          <div className={cls("atelier-chat-attachments", hasRenderedText ? "mt-2" : "")}>
-                            {m.attachments.map((attachment) => (
-                              <div key={attachment.id} className="atelier-chat-attachment" title={attachment.path}>
-                                {I.image}
-                                <span>{attachment.name || attachmentFileName(attachment.path)}</span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        {m.role === "user" && m.status === "queued" && (
-                          <div className={cls("mt-1 text-[10.5px] font-mono", dark ? "text-dsub" : "text-sub")}>
-                            {copy.queued}
-                          </div>
-                        )}
-                        {m.status === "streaming" && (
-                          renderAgentActivity(m)
-                        )}
-                        {m.role === "assistant" && renderChangeSummary(m)}
-                        {m.role === "assistant" && renderAgentLogs(m)}
-                      </div>
-                    </article>
-                    );
-                  })}
+                  {renderedTranscriptMessages}
                 </div>
               )}
             </div>
@@ -5603,6 +5756,82 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                     );
                   })}
                 </div>
+                <div
+                  className={cls(
+                    "mb-2 grid grid-cols-[minmax(0,1fr)_auto] gap-2 rounded-[8px] border px-2.5 py-2 text-[11px]",
+                    factoryStatusTone === "ready"
+                      ? dark
+                        ? "border-[#2f6f56] bg-[#20352d] text-dink"
+                        : "border-[#6abf91] bg-[#edf8f1] text-ink"
+                      : factoryStatusTone === "error"
+                        ? dark
+                          ? "border-[#7c3b3b] bg-[#3a2525] text-dink"
+                          : "border-[#df8a8a] bg-[#fff0f0] text-ink"
+                        : dark
+                          ? "border-dline bg-dsurf text-dink"
+                          : "border-line bg-muted text-ink",
+                  )}
+                >
+                  <div className="min-w-0 flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="inline-flex min-w-0 items-center gap-1.5 font-medium">
+                      <span className={cls(
+                        "h-2 w-2 rounded-full",
+                        factoryStatusTone === "ready"
+                          ? "bg-[#31b879]"
+                          : factoryStatusTone === "error"
+                            ? "bg-[#d9534f]"
+                            : factoryStatus?.exists
+                              ? "bg-[#d79b3d]"
+                              : dark ? "bg-dsub" : "bg-sub",
+                      )} />
+                      <span className="truncate">Factory</span>
+                      <span className="shrink-0 font-mono">{factoryStatusLabel}</span>
+                    </span>
+                    {factoryStatus?.exists && (
+                      <>
+                        <span className={cls("font-mono", dark ? "text-dsub" : "text-sub")}>
+                          {factoryStatus.command_owner || "Stella"} → {factoryStatus.execution_controller || "Release"}
+                        </span>
+                        <span className={cls("font-mono", dark ? "text-dsub" : "text-sub")}>
+                          BP {factoryStatus.agent_blueprints} · AI {factoryStatus.agent_instances}
+                        </span>
+                        <span className={cls("font-mono", dark ? "text-dsub" : "text-sub")}>
+                          done {factoryDoneStages} · open {factoryOpenStages}
+                        </span>
+                      </>
+                    )}
+                    {factoryStatusError && (
+                      <span className={cls("min-w-0 truncate", dark ? "text-[#ffb3b3]" : "text-[#8d2f2f]")}>
+                        {factoryStatusError}
+                      </span>
+                    )}
+                    {factoryStatus?.blocked_reason && (
+                      <span className={cls("min-w-0 truncate", dark ? "text-[#ffb3b3]" : "text-[#8d2f2f]")}>
+                        {factoryStatus.blocked_reason}
+                      </span>
+                    )}
+                    {factoryStatus?.next_step && (
+                      <span className={cls("min-w-0 flex-1 truncate", dark ? "text-dsub" : "text-sub")}>
+                        {factoryStatus.next_step}
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => refreshFactoryStatus().catch(console.error)}
+                    disabled={factoryStatusLoading}
+                    className={cls(
+                      "h-7 w-7 rounded-[7px] border grid place-items-center transition-colors",
+                      dark
+                        ? "border-[#4b4b48] bg-[#2d2d2a] text-dsub hover:text-dink disabled:opacity-60"
+                        : "border-[#d6d0c7] bg-surface text-sub hover:text-ink disabled:opacity-60",
+                    )}
+                    title={tw.language === "en" ? "Refresh Factory status" : "Factory 상태 새로고침"}
+                    aria-label={tw.language === "en" ? "Refresh Factory status" : "Factory 상태 새로고침"}
+                  >
+                    {I.eye}
+                  </button>
+                </div>
 	                {showSlashMenu && (
 	                  <div
 	                    className={cls(
@@ -5647,10 +5876,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                 )}
                 <textarea
                   ref={inputRef}
-                  value={input}
+                  defaultValue={input}
                   onChange={(e) => {
                     inputRevealPauseUntilRef.current = performance.now() + INPUT_REVEAL_PAUSE_MS;
-                    setInput(e.target.value);
+                    inputDraftRef.current = e.target.value;
+                    commitInputSoon();
                   }}
                   onKeyDown={(e) => {
                     if (showSlashMenu) {
@@ -5693,7 +5923,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                         </span>
                         <select
                           value={activeHermesProvider}
-                          onChange={(e) => updateActiveHermesProvider(e.target.value as HermesInferenceProvider)}
+                          onChange={(e) => {
+                            const nextProvider = e.target.value as HermesInferenceProvider;
+                            if (nextProvider === "openrouter") refreshOpenRouterRuntimeModels().catch(console.error);
+                            updateActiveHermesProvider(nextProvider);
+                          }}
                           disabled={!active || !!busyTurnId}
                           className={cls(
                             "h-8 max-w-[132px] rounded-[7px] border px-2 text-[11px] font-mono outline-none",
@@ -5776,12 +6010,13 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                     <span className={cls("text-[11px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
                       {copy.modelLabel}
                     </span>
-                    {activeProvider === "codex" ? (
+                    {activeCodexModelSurface ? (
                       <div ref={modelMenuRef} className="relative">
                         <button
                           type="button"
                           onClick={() => {
                             if (!active || busyTurnId) return;
+                            refreshCodexRuntimeModels().catch(console.error);
                             setShowModelMenu((value) => !value);
                             setCodexMenuPanel("root");
                           }}
@@ -5797,7 +6032,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                           aria-expanded={showModelMenu}
                           title={activeProviderMeta.label}
                         >
-                          <span className="truncate">{activeModelLabel}</span>
+                          <span className="truncate">{activeCodexToolbarLabel}</span>
                           <span className={cls("shrink-0 transition-transform", showModelMenu ? "rotate-180" : "")}>
                             {I.chevron}
                           </span>
@@ -5816,7 +6051,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                             {codexMenuPanel === "root" && (
                               <>
                                 <div className={cls("px-3 pt-1 pb-2 text-[13px]", dark ? "text-dsub" : "text-sub")}>
-                                  {copy.intelligence}
+                                  {copy.reasoning}
                                 </div>
                                 {CODEX_EFFORTS.map((option) => {
                                   const selected = activeCodexEffort === option.value;
@@ -5862,9 +6097,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                                   role="menuitem"
                                 >
                                   <span>{copy.speed}</span>
-                                  <span className="ml-auto text-[13px] opacity-70">
-                                    {labelForCodexSpeed(activeCodexSpeed, tw.language)}
-                                  </span>
                                   <span className={cls("text-[22px]", dark ? "text-dsub" : "text-sub")}>›</span>
                                 </button>
                               </>
@@ -5956,6 +6188,16 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                       <select
                         value={activeModel}
                         onChange={(e) => updateActiveModel(e.target.value)}
+                        onFocus={() => {
+                          if (activeProvider === "hermes" && activeHermesProvider === "openrouter") {
+                            refreshOpenRouterRuntimeModels().catch(console.error);
+                          }
+                        }}
+                        onMouseDown={() => {
+                          if (activeProvider === "hermes" && activeHermesProvider === "openrouter") {
+                            refreshOpenRouterRuntimeModels().catch(console.error);
+                          }
+                        }}
                         disabled={!active || !!busyTurnId}
                         className={cls(
                           "h-8 max-w-[180px] rounded-[7px] border px-2 text-[11px] font-mono outline-none",

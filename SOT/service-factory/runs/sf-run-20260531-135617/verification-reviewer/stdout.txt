@@ -1,0 +1,1 @@
+{"result": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135617/verification-reviewer/result.json", "status": "done", "artifact": "/Users/kansic/Service/atelier/SOT/service-factory/reviewer-report.md"}

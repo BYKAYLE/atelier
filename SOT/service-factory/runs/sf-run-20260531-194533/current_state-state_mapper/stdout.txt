@@ -1,0 +1,1 @@
+{"result": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-194533/current_state-state_mapper/result.json", "status": "done", "artifact": "/Users/kansic/Service/atelier/SOT/service-factory/current-state.md"}

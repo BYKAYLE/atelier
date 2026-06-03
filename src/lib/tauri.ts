@@ -184,8 +184,83 @@ export interface StellaEvidenceRecordResult {
   written: boolean;
 }
 
+export interface StellaFactoryArtifactStatus {
+  path: string;
+  written: boolean;
+  created: boolean;
+}
+
+export interface StellaFactoryBootstrapResult {
+  cwd: string;
+  root: string;
+  state_path: string;
+  artifact_dir: string;
+  created_state: boolean;
+  readiness: string;
+  artifacts: StellaFactoryArtifactStatus[];
+  next_actions: string[];
+  generated_at: number;
+}
+
+export interface StellaFactoryAutopilotResult {
+  cwd: string;
+  root: string;
+  state_path: string;
+  bridge_path?: string | null;
+  ran: boolean;
+  success: boolean;
+  code?: number | null;
+  timed_out: boolean;
+  duration_ms: number;
+  stdout: string;
+  stderr: string;
+  summary?: unknown | null;
+  next_actions: string[];
+  generated_at: number;
+}
+
+export interface StellaFactoryStatusResult {
+  cwd: string;
+  root: string;
+  state_path: string;
+  exists: boolean;
+  factory_id?: string | null;
+  status?: string | null;
+  readiness?: string | null;
+  goal?: string | null;
+  command_owner?: string | null;
+  execution_controller?: string | null;
+  updated_at?: string | null;
+  next_step?: string | null;
+  blocked_reason?: string | null;
+  stage_counts: Record<string, number>;
+  agent_blueprints: number;
+  agent_instances: number;
+  kanban_role?: string | null;
+  reports: StellaPathStatus[];
+  error?: string | null;
+  generated_at: number;
+}
+
 export type AgentProvider = "claude" | "codex" | "hermes";
 export type AgentPermissionMode = "basic" | "auto" | "full";
+
+export interface AgentModelOption {
+  value: string;
+  label: string;
+}
+
+export interface CodexModelOptionsResult {
+  source: string;
+  updated_at?: string | null;
+  models: AgentModelOption[];
+}
+
+export interface OpenRouterModelOptionsResult {
+  source: string;
+  updated_at?: string | null;
+  models: AgentModelOption[];
+}
 
 export async function agentClaudeSend(args: {
   turnId: string;
@@ -211,6 +286,14 @@ export async function agentSend(args: {
   permissionMode?: AgentPermissionMode | null;
 }): Promise<AgentRunResult> {
   return invoke("agent_send", args);
+}
+
+export async function codexModelOptions(): Promise<CodexModelOptionsResult> {
+  return invoke("codex_model_options");
+}
+
+export async function openRouterModelOptions(): Promise<OpenRouterModelOptionsResult> {
+  return invoke("openrouter_model_options");
 }
 
 export async function agentCancel(turnId: string): Promise<boolean> {
@@ -275,6 +358,32 @@ export async function previewServiceStop(url: string): Promise<PreviewServiceSta
 
 export async function stellaProjectAnalysis(cwd?: string | null): Promise<StellaProjectAnalysis> {
   return invoke("stella_project_analysis", { cwd: cwd || null });
+}
+
+export async function stellaFactoryBootstrap(args: {
+  cwd?: string | null;
+  goal: string;
+}): Promise<StellaFactoryBootstrapResult> {
+  return invoke("stella_factory_bootstrap", {
+    cwd: args.cwd || null,
+    goal: args.goal,
+  });
+}
+
+export async function stellaFactoryAutopilot(args: {
+  cwd?: string | null;
+  goal: string;
+  maxCycles?: number | null;
+}): Promise<StellaFactoryAutopilotResult> {
+  return invoke("stella_factory_autopilot", {
+    cwd: args.cwd || null,
+    goal: args.goal,
+    maxCycles: args.maxCycles || null,
+  });
+}
+
+export async function stellaFactoryStatus(cwd?: string | null): Promise<StellaFactoryStatusResult> {
+  return invoke("stella_factory_status", { cwd: cwd || null });
 }
 
 export async function stellaWorkspaceProbe(args: {

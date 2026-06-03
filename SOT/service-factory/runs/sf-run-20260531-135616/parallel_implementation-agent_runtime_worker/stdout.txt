@@ -1,0 +1,1 @@
+{"result": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135616/parallel_implementation-agent_runtime_worker/result.json", "status": "done", "artifact": "/Users/kansic/Service/atelier/SOT/service-factory/implementation-report.md"}

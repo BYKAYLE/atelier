@@ -21,6 +21,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -40,6 +42,10 @@ jobs:
       - name: Install npm deps
         run: npm install --legacy-peer-deps
 
+      - name: Generate release notes
+        id: release-notes
+        run: node .github/scripts/generate-release-notes.mjs
+
       - name: Build and upload macOS bundle
         uses: tauri-apps/tauri-action@v0
         env:
@@ -51,18 +57,7 @@ jobs:
           repo: ${{ env.RELEASE_REPO }}
           tagName: ${{ github.ref_name }}
           releaseName: "Atelier ${{ github.ref_name }}"
-          releaseBody: |
-            ## 변경 사항
-            아래 자동 생성된 changelog 또는 직접 수정해주세요.
-
-            <!-- changelog 자동 생성 영역 -->
-
-            ## Code signing policy
-            Windows release signing is prepared for SignPath Foundation open-source code signing.
-
-            Free code signing provided by SignPath.io, certificate by SignPath Foundation.
-
-            Full policy: https://github.com/BYKAYLE/atelier/blob/main/docs/code-signing-policy.md
+          releaseBody: ${{ steps.release-notes.outputs.body }}
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true

@@ -61,24 +61,6 @@ const NAV_GROUPS: NavGroup[] = [
         hintEn: "Claude · Hermes · Codex",
       },
       {
-        id: "main",
-        screen: "main",
-        icon: I.split,
-        labelKo: "Workbench",
-        labelEn: "Workbench",
-        hintKo: "코드 · 프리뷰",
-        hintEn: "Code · Preview",
-      },
-      {
-        id: "design",
-        screen: "design",
-        icon: I.palette,
-        labelKo: "Design",
-        labelEn: "Design",
-        hintKo: "기획 · 시안",
-        hintEn: "Brief · Drafts",
-      },
-      {
         id: "plugins",
         screen: "plugins",
         icon: I.zap,
@@ -103,16 +85,6 @@ const NAV_GROUPS: NavGroup[] = [
         labelEn: "Appearance",
         hintKo: "테마 · 언어",
         hintEn: "Theme · Language",
-      },
-      {
-        id: "terminal",
-        screen: "settings",
-        settingsSection: "terminal",
-        icon: I.terminal,
-        labelKo: "Terminal",
-        labelEn: "Terminal",
-        hintKo: "글꼴 · 커서",
-        hintEn: "Font · Cursor",
       },
       {
         id: "profiles",
@@ -141,8 +113,8 @@ const NAV_GROUPS: NavGroup[] = [
         icon: I.eye,
         labelKo: "Preview",
         labelEn: "Preview",
-        hintKo: "미리보기 패널",
-        hintEn: "Preview panel",
+        hintKo: "패치 · 제보",
+        hintEn: "Patches · Bugs",
       },
       {
         id: "shortcuts",
@@ -178,13 +150,22 @@ const App: React.FC = () => {
       localStorage.setItem("atelier.agentDefaultMigrated", "1");
       return "agent";
     }
+    if (saved === "main" || saved === "design") return "agent";
     return isScreen(saved) ? saved : "agent";
   });
   const [activeNav, setActiveNav] = useState<string>(() => {
     const savedNav = localStorage.getItem("atelier.nav");
     if (savedNav === "settings") return "appearance";
+    if (savedNav === "terminal") return "appearance";
     if (savedNav === "gateway") return "providers";
-    if (savedNav === "agent" || savedNav === "chat" || savedNav === "models" || savedNav === "factory") return "sessions";
+    if (
+      savedNav === "agent" ||
+      savedNav === "chat" ||
+      savedNav === "models" ||
+      savedNav === "factory" ||
+      savedNav === "main" ||
+      savedNav === "design"
+    ) return "sessions";
     if (savedNav === "skills") return "plugins";
     if (savedNav) return savedNav;
     if (screen === "settings") return "appearance";
@@ -193,8 +174,7 @@ const App: React.FC = () => {
   });
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(() => {
     const saved = localStorage.getItem("atelier.settingsSection");
-    return saved === "terminal" ||
-      saved === "appearance" ||
+    return saved === "appearance" ||
       saved === "profiles" ||
       saved === "shortcuts" ||
       saved === "preview" ||

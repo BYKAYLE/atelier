@@ -356,4 +356,275 @@ Validation evidence:
   '스텔라 팩토리. Atelier를 Antigravity급 로컬 자율 개발 워크스페이스로 고도화해.'`
   routes to `service-factory` with product-wide done_when and stop rules.
 - `npm run build` passed for the updated Atelier frontend.
+
+## 2026-05-31 Stella Factory Bootstrap Runtime
+
+Runtime follow-up:
+
+- Added the `stella_factory_bootstrap` Tauri command.
+- Factory `goal` and `analyze` requests now create or resume
+  `SOT/service-factory-state.json` before the provider turn starts.
+- The bootstrap seeds required product-scale artifacts under
+  `SOT/service-factory/`: mission charter, research dossier, capability map,
+  agent topology, roadmap, QC matrix, readiness report, and progress log.
+- Factory preflight evidence now includes state path, artifact creation counts,
+  readiness, and next executable actions.
+- Added a Rust test proving the bootstrap creates state and required artifacts
+  in a home-scoped workspace.
+- Bootstrapped the active Atelier factory run through the Stella service-factory
+  bridge. The resulting state is valid, generated 12 agent requests, dispatched
+  the first product-manager request into an isolated worktree, and assessed the
+  current readiness as `foundation_ready_but_not_autonomous`.
+
+Validation evidence:
+
+- `cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture` passed 24
+  tests.
+- `npm run build` passed.
+
+## 2026-05-31 Atelier Product Upgrade: Visible Factory Status
+
+Product change:
+
+- Added a Tauri command, `stella_factory_status`, that reads the active
+  `SOT/service-factory-state.json` for the current workspace and returns a
+  compact app-ready summary.
+- Wired the Agent Workspace composer to load and refresh the Factory state.
+- Added a visible Factory status strip showing readiness, Stella -> Release
+  control, AgentBlueprint count, AgentInstance count, done/open stages, blocker,
+  and next step.
+- The status strip is read-only and does not mutate Factory state.
+
+Validation evidence:
+
+- `npm run build` passed.
+- `cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture` passed 24
+  tests.
+
+## 2026-05-31 Stella Factory Autopilot Hardening
+
+Review follow-up:
+
+- Ran independent reviewer and security subagents against the managed autopilot
+  changes.
+- Fixed the first-run schema mismatch by making Tauri bootstrap initialize the
+  Release Service Factory schema when the release script exists.
+- Hardened state trust:
+  - unknown preserved request entries are dropped during planning
+  - `prompt_path` must be project-relative and cannot escape the workspace
+  - invalid existing state is not blindly trusted by the Stella bridge
+- Hardened child result trust:
+  - child `result.json` must match `request_id`, `run_id`, and artifact dir
+  - referenced artifacts must exist under allowed roots
+  - command evidence must include structured argv and return code data
+- Removed false-green readiness from no-cost local workers. Mandatory
+  verification/security/deployment/final-audit stages now require specialist or
+  validation-resolution evidence.
+- Limited managed autopilot side effects to Factory goal mode; `/analyze` now
+  remains analysis-only preflight.
+
+Validation evidence:
+
+- `python3 -m py_compile ~/.claude/skills/release/scripts/service_factory.py
+  ~/.claude/skills/release/scripts/service_factory_local_worker.py
+  ~/.claude/skills/stella/scripts/stella_service_factory.py` passed.
+- `python3 ~/.claude/skills/release/scripts/service_factory.py autopilot
+  --project /Users/kansic/Service/atelier --goal "Atelier Stella Factory smoke
+  rerun" --max-cycles 2 --pretty` no longer reports a false green without
+  specialist evidence.
+- Attached reviewer, critic, Probe, security, deployment, and final-audit
+  evidence through `resolve-validation --force`.
+- Final assessment is `pilot_ready` with readiness score `0.95`, blocker
+  `null`, and no open mandatory verification-chain requests.
+- `npm run tauri:build` passed and produced
+  `src-tauri/target/release/bundle/macos/Atelier.app` plus
+  `src-tauri/target/release/bundle/dmg/Atelier_0.1.45_aarch64.dmg`.
+- `/Applications/Atelier.app` was updated from the new bundle with `ditto`.
+- `codesign --verify --deep --strict --verbose=2 /Applications/Atelier.app`
+  passed.
+- `strings /Applications/Atelier.app/Contents/MacOS/atelier | rg
+  "stella_factory_autopilot|stella_factory_bootstrap"` confirms the installed
+  binary includes the new Factory commands.
+- `python3 ~/.claude/skills/stella/scripts/stella_service_factory.py status
+  --project /Users/kansic/Service/atelier --pretty` passed validation and wrote
+  `SOT/service-factory/antigravity-readiness.md`.
 - `cargo test --manifest-path src-tauri/Cargo.toml` passed: 23 tests.
+
+## 2026-05-31 Stella Factory Managed Autopilot Runtime
+
+Runtime follow-up:
+
+- Added a managed `autopilot` command to the Release Service Factory script and
+  the Stella bridge wrapper.
+- Added a no-cost local worker backend that can execute queued
+  `agent_requests`, write durable `result.json` files, create stage artifacts,
+  run factory validation, and leave residual-risk notes when specialist LLM
+  agents are still required.
+- Added the `stella_factory_autopilot` Tauri command and wired Factory
+  `goal` preflight to run the managed cycle after bootstrap.
+- Updated the Factory prompt contract so providers must run the managed bridge
+  cycle before claiming completion.
+- Ran the active Atelier Factory through managed requests, then attached
+  specialist validation evidence for mandatory review/security/probe/release
+  stages. Readiness is now `pilot_ready` with score `0.95`, blocker `null`,
+  managed backend `spawn_runtime_command`, and recovery proof.
+
+Validation evidence:
+
+- `python3 -m py_compile ~/.claude/skills/release/scripts/service_factory.py
+  ~/.claude/skills/release/scripts/service_factory_local_worker.py
+  ~/.claude/skills/stella/scripts/stella_service_factory.py` passed.
+- `python3 ~/.claude/skills/stella/scripts/stella_service_factory.py autopilot
+  --project /Users/kansic/Service/atelier ... --max-cycles 12 --pretty`
+  completed with `verdict: pilot_ready`.
+- `python3 ~/.claude/skills/release/scripts/service_factory.py validate
+  --project /Users/kansic/Service/atelier --pretty` passed.
+- `python3 ~/.claude/skills/release/scripts/service_factory.py assess
+  --project /Users/kansic/Service/atelier --write-report --pretty` reports
+  `readiness_score: 0.95`, `verdict: pilot_ready`, `primary_blocker: null`.
+- `cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture` passed 24
+  tests.
+- `npm run build` passed.
+
+## 2026-05-31 Stella Factory Final Queue Closure
+
+Runtime follow-up:
+
+- Resolved `parallel_implementation::builder` with actual implementation
+  evidence in `SOT/service-factory/implementation-report.md`.
+- Re-ran factory validation and readiness assessment after the queue closure.
+- Active Factory request counts are now `done: 11`, `queued: 0`,
+  `in_progress: 0`, `blocked: 0`, and `validation_required: 0`.
+
+Validation evidence:
+
+- `python3 ~/.claude/skills/release/scripts/service_factory.py validate
+  --project /Users/kansic/Service/atelier --pretty` passed.
+- `python3 ~/.claude/skills/release/scripts/service_factory.py assess
+  --project /Users/kansic/Service/atelier --write-report --pretty` reports
+  `readiness_score: 0.95`, `verdict: pilot_ready`, `primary_blocker: null`.
+- `python3 ~/.claude/skills/release/scripts/service_factory.py status
+  --project /Users/kansic/Service/atelier --pretty` reports no next queued
+  request.
+- `cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture` passed 24
+  tests after formatting.
+- `npm run tauri:build` passed after the final formatting pass.
+- `/Applications/Atelier.app` was refreshed from the final macOS bundle,
+  re-signed, and verified with
+  `codesign --verify --deep --strict --verbose=2 /Applications/Atelier.app`.
+
+## 2026-05-31 Stella Factory State-Plan-Execute Contract
+
+Runtime follow-up:
+
+- Added the mandatory Stella Factory development order:
+  `current_state -> development_plan -> execution_verification`.
+- Updated frontend Factory prompts so broad goals cannot jump straight into
+  implementation before current-state discovery and goal-to-plan strategy.
+- Updated Tauri bootstrap to seed `current-state.md` and
+  `development-plan.md` artifacts.
+- Updated Release Service Factory stages, agent prompts, execution plan,
+  readiness assessment, handoff, and review reports to carry the same contract.
+- Completed the active `current_state::state_mapper` and
+  `development_plan::strategy_planner` requests through the managed bridge.
+
+Validation evidence:
+
+- `python3 -m py_compile ~/.claude/skills/release/scripts/service_factory.py
+  ~/.claude/skills/release/scripts/service_factory_local_worker.py
+  ~/.claude/skills/stella/scripts/stella_service_factory.py` passed.
+- `python3 ~/.claude/skills/stella/scripts/stella_service_factory.py autopilot
+  --project /Users/kansic/Service/atelier --goal "Stella Factory development
+  method upgrade..." --max-cycles 8 --max-requests 1 --pretty` completed.
+- `python3 ~/.claude/skills/release/scripts/service_factory.py status
+  --project /Users/kansic/Service/atelier --pretty` reports `done: 13`,
+  `queued: 0`, `blocked: 0`, and no next queued request.
+- `python3 ~/.claude/skills/release/scripts/service_factory.py validate
+  --project /Users/kansic/Service/atelier --pretty` passed.
+- `python3 ~/.claude/skills/release/scripts/service_factory.py assess
+  --project /Users/kansic/Service/atelier --write-report --pretty` reports
+  `readiness_score: 0.96`, `verdict: pilot_ready`, `primary_blocker: null`,
+  and `state_plan_execute_contract: ready`.
+- `npm run build` passed.
+- `cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture` passed 24
+  tests.
+- `npm run tauri:build` passed and produced the macOS app bundle plus DMG.
+- `/Applications/Atelier.app` was refreshed from the final bundle, re-signed,
+  and verified with
+  `codesign --verify --deep --strict --verbose=2 /Applications/Atelier.app`.
+- `strings /Applications/Atelier.app/Contents/MacOS/atelier | rg
+  "current-state.md|development-plan.md|state-plan-execute-v1"` confirms the
+  installed binary contains the new development-method contract.
+
+## 2026-05-31 Stella Factory Ontology Grounding
+
+Direction correction:
+
+- Promoted Stella Factory from a prompt/kanban-style execution idea into the
+  Stella ontology layer.
+- Locked `Stella` as the Factory `command_owner`; `Release` is now described as
+  runtime adapter, state ledger, gate, and handoff controller rather than the
+  top commander.
+- Added ontology concepts for `StellaFactory`, `AgentBlueprint`,
+  `AgentInstance`, `AgentTopology`, `StateLedger`, and `KanbanProjection`.
+- Clarified that kanban is only a projection of the state ledger and cannot be
+  used as the source of truth for progress or completion.
+- Clarified that prompt/worktree/result artifacts are not agent creation by
+  themselves; real agent creation must leave blueprint, instance, or manifest
+  evidence.
+
+Validation evidence:
+
+- `python3 ~/.claude/skills/stella/scripts/stella_ontology.py validate`
+  passed.
+- `python3 ~/.claude/skills/stella/scripts/stella_ontology.py normalize
+  "스텔라팩토리로 안티그래비티 같은 프로그램을 사용자 개입 없이 끝까지 개발해"`
+  now emits `command_owner: Stella`, `AgentTopology`, `AgentBlueprint`,
+  `AgentInstance`, `StateLedger`, and `KanbanProjection`.
+
+## 2026-05-31 Atelier Stella Factory Run
+
+Runtime correction:
+
+- Updated the Release Service Factory runtime so every write materializes
+  `command_owner: Stella`, `execution_controller: Release`, `control_plane`,
+  `kanban_projection`, `agent_blueprints`, `agent_instances`, and
+  `agent_topology`.
+- Updated readiness assessment so `stella_command_owner` and `agent_topology`
+  are first-class capabilities rather than undocumented assumptions.
+- Updated handoff and artifact-review reports to include command owner,
+  execution controller, and AgentTopology snapshots.
+- Fixed state-write temp-file naming so concurrent report writers do not race
+  over one shared `.tmp` path.
+- Updated Atelier's Tauri bootstrap fallback and state refresh path to preserve
+  Stella command ownership and the blueprint/instance/manifest distinction.
+- Fixed Stella ontology normalization so `스텔라팩토리로 Atelier ...` targets
+  Atelier but keeps `intent: service_factory`.
+
+Validation evidence:
+
+- `python3 -m py_compile ~/.claude/skills/release/scripts/service_factory.py
+  ~/.claude/skills/stella/scripts/stella_ontology.py` passed.
+- `python3 ~/.claude/skills/stella/scripts/stella_ontology.py validate`
+  passed.
+- `python3 ~/.claude/skills/stella/scripts/stella_ontology.py normalize
+  "스텔라팩토리로 Atelier 프로그램을 사용자 개입 없이 최종 제품 수준까지 개발/검증/릴리스 준비해"`
+  emits `target.name: atelier`, `intent.id: service_factory`,
+  `command_owner: Stella`, and `agent_topology.required: true`.
+- `python3 ~/.claude/skills/release/scripts/service_factory.py plan
+  --project /Users/kansic/Service/atelier --pretty` materialized 15
+  AgentBlueprints and 23 AgentInstances in the active state.
+- `python3 ~/.claude/skills/release/scripts/service_factory.py validate
+  --project /Users/kansic/Service/atelier --pretty` passed with no warnings.
+- `python3 ~/.claude/skills/release/scripts/service_factory.py assess
+  --project /Users/kansic/Service/atelier --write-report --pretty` reports
+  `readiness_score: 0.96`, `verdict: pilot_ready`, `primary_blocker: null`,
+  `stella_command_owner: ready`, and `agent_topology: ready`.
+- `python3 ~/.claude/skills/stella/scripts/stella_service_factory.py autopilot
+  --project /Users/kansic/Service/atelier --goal "Atelier 프로그램을 Stella
+  command_owner 기반 스텔라팩토리로 제품 수준까지 개발/검증/릴리스 준비한다"
+  --max-cycles 1 --max-requests 1 --timeout-seconds 120 --pretty` completed
+  with `stopped_reason: pilot_ready`.
+- `cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture` passed 24
+  tests.
+- `npm run build` passed.

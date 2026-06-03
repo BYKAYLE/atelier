@@ -529,36 +529,407 @@ const ShortcutsSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ 
   );
 };
 
+type PreviewPatchNote = {
+  title: string;
+  body: string;
+  tag: string;
+};
+
+function stripPatchMarkdown(text: string): string {
+  return text
+    .replace(/\[(.*?)\]\((.*?)\)/g, "$1")
+    .replace(/[`*_>#]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parseReleasePatchNotes(notes: string | undefined | null, fallbackTag: string): PreviewPatchNote[] {
+  if (!notes) return [];
+  const ignored = /changelog\s*자동|자동 생성|직접 수정|code signing|signpath|full policy|certificate by|릴리스 본문을 수동/i;
+  const items: PreviewPatchNote[] = [];
+  for (const rawLine of notes.split(/\r?\n/)) {
+    const match = rawLine.trim().match(/^(?:[-*]|\d+[.)])\s+(.+)$/);
+    if (!match) continue;
+    const line = stripPatchMarkdown(match[1]);
+    if (!line || ignored.test(line) || line.length < 4) continue;
+    const tagMatch = line.match(/^\[([^\]]+)\]\s*(.+)$/);
+    const withoutTag = tagMatch ? tagMatch[2] : line;
+    const tag = tagMatch ? tagMatch[1] : fallbackTag;
+    const parts = withoutTag.split(/\s+[—-]\s+|:\s+/);
+    const title = stripPatchMarkdown(parts[0] || withoutTag).slice(0, 80);
+    const body = stripPatchMarkdown(parts.slice(1).join(" — ") || withoutTag);
+    items.push({ title, body, tag });
+    if (items.length >= 8) break;
+  }
+  return items;
+}
+
 const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ dark, language }) => {
-  const copy = language === "en"
+  const [bugTitle, setBugTitle] = React.useState("");
+  const [bugBody, setBugBody] = React.useState("");
+  const [bugArea, setBugArea] = React.useState("preview");
+  const [bugCopied, setBugCopied] = React.useState(false);
+  const [currentVersion, setCurrentVersion] = React.useState("");
+  const [patchLoading, setPatchLoading] = React.useState(false);
+  const [patchSource, setPatchSource] = React.useState<"github" | "fallback">("fallback");
+  const [patchVersion, setPatchVersion] = React.useState("");
+  const [patchDate, setPatchDate] = React.useState("");
+  const [patchUrl, setPatchUrl] = React.useState("");
+  const [patchError, setPatchError] = React.useState("");
+  const [patchNotes, setPatchNotes] = React.useState<PreviewPatchNote[]>([]);
+  const copy = React.useMemo(() => language === "en"
     ? {
         title: "Preview panel",
-        sub: "Choose when Atelier should show live output.",
-        detect: "Auto-detect output",
-        detectHint: "Automatically opens the preview when a session writes HTML, Markdown, or image files.",
-        planned: "(planned — v0.2)",
+        sub: "Recent Atelier patches and issue reporting for the preview workspace.",
+        patchTitle: "Patch notes",
+        patchHint: "Patch notes follow the current app version. GitHub Release notes are used first.",
+        patchLoading: "Loading release notes...",
+        patchSourceGithub: "Source: GitHub Release",
+        patchSourceFallback: "Source: embedded notes",
+        patchRefresh: "Refresh",
+        patchOpenRelease: "Open release",
+        patchFallbackError: (message: string) => `Using embedded notes because release notes could not be loaded: ${message}`,
+        bugTitle: "Report a bug",
+        bugHint: "Attach what happened, what you expected, and any visible error text.",
+        titleLabel: "Title",
+        titlePlaceholder: "Short description of the issue",
+        areaLabel: "Area",
+        bodyLabel: "Details",
+        bodyPlaceholder: "Steps, expected result, actual result, screenshot notes, console or preview errors...",
+        copyReport: "Copy report",
+        copied: "Copied",
+        openIssue: "Open GitHub issue",
+        emptyTitle: "Untitled bug report",
+        version: "Version",
+        areas: [
+          { value: "preview", label: "Preview" },
+          { value: "chat", label: "Chat" },
+          { value: "providers", label: "Providers" },
+          { value: "updates", label: "Updates" },
+          { value: "other", label: "Other" },
+        ],
+        fallbackPatches: [
+          {
+            title: "Faster chat input",
+            body: "Typing now uses a local draft buffer and delayed state commits so long conversations do not re-render on every key.",
+            tag: "Performance",
+          },
+          {
+            title: "Memoized chat transcript",
+            body: "Markdown, tables, logs, and change summaries are cached while the composer changes.",
+            tag: "Chat",
+          },
+          {
+            title: "Hermes backend cleanup",
+            body: "Hermes now offers Codex and OpenRouter only; old Claude backend values are normalized to Codex.",
+            tag: "Hermes",
+          },
+          {
+            title: "Live model catalogs",
+            body: "Codex and OpenRouter model options sync from their current catalogs instead of staying hard-coded.",
+            tag: "Models",
+          },
+        ],
       }
     : {
         title: "미리보기 패널",
-        sub: "Atelier가 언제 라이브 결과물을 보여줄지 설정합니다.",
-        detect: "결과물 자동 감지",
-        detectHint: "세션이 HTML, 마크다운, 이미지 파일을 쓰면 미리보기를 자동으로 엽니다.",
-        planned: "(예정 — v0.2)",
-      };
+        sub: "Atelier 최근 패치 내용과 미리보기/작업공간 버그 제보를 한곳에서 관리합니다.",
+        patchTitle: "패치 내용",
+        patchHint: "패치 내용은 현재 앱 버전 기준으로 표시됩니다. GitHub Release 노트를 먼저 사용합니다.",
+        patchLoading: "릴리스 노트 불러오는 중…",
+        patchSourceGithub: "기준: GitHub Release",
+        patchSourceFallback: "기준: 설치본 내장 노트",
+        patchRefresh: "새로고침",
+        patchOpenRelease: "릴리스 열기",
+        patchFallbackError: (message: string) => `릴리스 노트를 불러오지 못해 설치본 내장 노트를 표시합니다: ${message}`,
+        bugTitle: "버그 제보",
+        bugHint: "발생한 상황, 기대한 동작, 실제 결과, 보이는 에러 문구를 남겨주세요.",
+        titleLabel: "제목",
+        titlePlaceholder: "문제를 짧게 적어주세요",
+        areaLabel: "영역",
+        bodyLabel: "상세 내용",
+        bodyPlaceholder: "재현 순서, 기대 결과, 실제 결과, 스크린샷 설명, 콘솔/프리뷰 에러 문구...",
+        copyReport: "제보 내용 복사",
+        copied: "복사됨",
+        openIssue: "GitHub 이슈 열기",
+        emptyTitle: "제목 없는 버그 제보",
+        version: "버전",
+        areas: [
+          { value: "preview", label: "미리보기" },
+          { value: "chat", label: "채팅" },
+          { value: "providers", label: "제공자 연결" },
+          { value: "updates", label: "업데이트" },
+          { value: "other", label: "기타" },
+        ],
+        fallbackPatches: [
+          {
+            title: "채팅 입력 속도 개선",
+            body: "긴 대화에서도 입력창이 먼저 반응하도록 로컬 draft 버퍼와 지연 상태 반영을 적용했습니다.",
+            tag: "성능",
+          },
+          {
+            title: "채팅 본문 렌더링 캐시",
+            body: "입력 중 마크다운, 표, 로그, 변경 파일 요약을 매번 다시 그리지 않도록 분리했습니다.",
+            tag: "채팅",
+          },
+          {
+            title: "Hermes 백엔드 정리",
+            body: "Hermes 하위 provider에서 Claude를 제거하고 Codex/OpenRouter만 남겼습니다.",
+            tag: "Hermes",
+          },
+          {
+            title: "모델 목록 동기화",
+            body: "Codex와 OpenRouter 모델 목록을 고정값이 아니라 현재 카탈로그 기준으로 불러오게 했습니다.",
+            tag: "모델",
+          },
+        ],
+      }, [language]);
+  const fallbackPatchNotes = copy.fallbackPatches;
+
+  const loadPatchNotes = React.useCallback(async (version: string) => {
+    setPatchLoading(true);
+    setPatchError("");
+    try {
+      const release = version && version !== "dev"
+        ? await fetchGithubReleaseByVersion(version)
+        : await fetchLatestGithubRelease();
+      const parsed = parseReleasePatchNotes(release.notes, language === "en" ? "Release" : "릴리스");
+      if (!parsed.length) {
+        throw new Error(language === "en" ? "release has no usable changelog items" : "릴리스에 표시할 변경 항목이 없습니다");
+      }
+      setPatchSource("github");
+      setPatchVersion(release.version);
+      setPatchDate(release.date || "");
+      setPatchUrl(release.url);
+      setPatchNotes(parsed);
+    } catch (err) {
+      setPatchSource("fallback");
+      setPatchVersion(version || "dev");
+      setPatchDate("");
+      setPatchUrl("");
+      setPatchError(String(err instanceof Error ? err.message : err));
+      setPatchNotes(fallbackPatchNotes);
+    } finally {
+      setPatchLoading(false);
+    }
+  }, [fallbackPatchNotes, language]);
+
+  React.useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const { getVersion } = await import("@tauri-apps/api/app");
+        const version = await getVersion();
+        if (alive) {
+          setCurrentVersion(version);
+          await loadPatchNotes(version);
+        }
+      } catch {
+        if (alive) {
+          setCurrentVersion("dev");
+          await loadPatchNotes("dev");
+        }
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [loadPatchNotes]);
+
+  const selectedArea = copy.areas.find((area) => area.value === bugArea)?.label || bugArea;
+  const reportTitle = bugTitle.trim() || copy.emptyTitle;
+  const reportBody = [
+    `## ${copy.titleLabel}`,
+    reportTitle,
+    "",
+    `## ${copy.areaLabel}`,
+    selectedArea,
+    "",
+    `## ${copy.version}`,
+    currentVersion ? `Atelier v${currentVersion}` : "Atelier",
+    "",
+    `## ${copy.bodyLabel}`,
+    bugBody.trim() || "-",
+  ].join("\n");
+
+  const copyBugReport = async () => {
+    try {
+      await navigator.clipboard.writeText(reportBody);
+      setBugCopied(true);
+      window.setTimeout(() => setBugCopied(false), 1400);
+    } catch {
+      setBugCopied(false);
+    }
+  };
+
+  const openGithubIssue = async () => {
+    const params = new URLSearchParams({
+      title: `[Bug] ${reportTitle}`,
+      body: reportBody,
+    });
+    const url = `https://github.com/${ATELIER_GITHUB_REPO}/issues/new?${params.toString()}`;
+    await openExternalUrl(url);
+  };
+
   return (
     <>
       <SectionHeader dark={dark} title={copy.title} sub={copy.sub} />
-      <Row dark={dark} label={copy.detect} hint={copy.detectHint}>
-        <div className={cls("text-[12px]", dark ? "text-dsub" : "text-sub")}>
-          {copy.planned}
+      <section
+        className={cls(
+          "rounded-[9px] border overflow-hidden mb-5",
+          dark ? "border-dline bg-dpanel" : "border-line bg-panel",
+        )}
+      >
+        <div className={cls("px-4 py-3 border-b", dark ? "border-dline" : "border-line")}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className={cls("text-[14px] font-medium", dark ? "text-dink" : "text-ink")}>{copy.patchTitle}</div>
+              <div className={cls("text-[12px] mt-0.5", dark ? "text-dsub" : "text-sub")}>{copy.patchHint}</div>
+              <div className={cls("text-[11px] mt-2 font-mono", dark ? "text-dsub" : "text-sub")}>
+                v{patchVersion || currentVersion || "dev"}
+                {patchDate ? ` · ${new Date(patchDate).toLocaleDateString(language === "en" ? "en-US" : "ko-KR")}` : ""}
+                {" · "}
+                {patchSource === "github" ? copy.patchSourceGithub : copy.patchSourceFallback}
+              </div>
+              {patchError && (
+                <div className={cls("text-[11.5px] mt-1", dark ? "text-[#ffb3b3]" : "text-[#9a342f]")}>
+                  {copy.patchFallbackError(patchError)}
+                </div>
+              )}
+            </div>
+            <div className="shrink-0 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void loadPatchNotes(currentVersion || "dev")}
+                disabled={patchLoading}
+                className={cls(
+                  "h-8 px-3 rounded-[7px] border text-[12px]",
+                  dark ? "border-dline text-dink hover:bg-dmuted disabled:text-dsub" : "border-line text-ink hover:bg-muted disabled:text-sub",
+                )}
+              >
+                {patchLoading ? copy.patchLoading : copy.patchRefresh}
+              </button>
+              {patchUrl && (
+                <button
+                  type="button"
+                  onClick={() => void openExternalUrl(patchUrl)}
+                  className={cls(
+                    "h-8 px-3 rounded-[7px] border text-[12px]",
+                    dark ? "border-dline text-dink hover:bg-dmuted" : "border-line text-ink hover:bg-muted",
+                  )}
+                >
+                  {copy.patchOpenRelease}
+                </button>
+              )}
+            </div>
+          </div>
         </div>
-      </Row>
+        <div className="divide-y divide-[rgba(128,128,128,0.18)]">
+          {(patchNotes.length ? patchNotes : fallbackPatchNotes).map((patch) => (
+            <div key={patch.title} className="px-4 py-3 grid grid-cols-[1fr_auto] gap-4">
+              <div className="min-w-0">
+                <div className={cls("text-[13.5px] font-medium", dark ? "text-dink" : "text-ink")}>{patch.title}</div>
+                <div className={cls("text-[12px] leading-[1.55] mt-1", dark ? "text-dsub" : "text-sub")}>
+                  {patch.body}
+                </div>
+              </div>
+              <span
+                className={cls(
+                  "h-6 px-2 rounded-full border text-[11px] inline-flex items-center",
+                  dark ? "border-dline text-dsub bg-dmuted" : "border-line text-sub bg-muted",
+                )}
+              >
+                {patch.tag}
+              </span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section
+        className={cls(
+          "rounded-[9px] border p-4",
+          dark ? "border-dline bg-dpanel" : "border-line bg-panel",
+        )}
+      >
+        <div className="mb-4">
+          <div className={cls("text-[14px] font-medium", dark ? "text-dink" : "text-ink")}>{copy.bugTitle}</div>
+          <div className={cls("text-[12px] mt-0.5", dark ? "text-dsub" : "text-sub")}>{copy.bugHint}</div>
+        </div>
+        <div className="grid grid-cols-[1fr_180px] gap-3 mb-3">
+          <label className="min-w-0">
+            <span className={cls("block text-[11px] font-mono uppercase tracking-wider mb-1.5", dark ? "text-dsub" : "text-sub")}>
+              {copy.titleLabel}
+            </span>
+            <input
+              value={bugTitle}
+              onChange={(e) => setBugTitle(e.target.value)}
+              placeholder={copy.titlePlaceholder}
+              className={cls(
+                "h-9 w-full rounded-[7px] border px-3 text-[13px] outline-none",
+                dark ? "bg-dbg border-dline text-dink placeholder:text-dsub" : "bg-cream border-line text-ink placeholder:text-sub",
+              )}
+            />
+          </label>
+          <label>
+            <span className={cls("block text-[11px] font-mono uppercase tracking-wider mb-1.5", dark ? "text-dsub" : "text-sub")}>
+              {copy.areaLabel}
+            </span>
+            <select
+              value={bugArea}
+              onChange={(e) => setBugArea(e.target.value)}
+              className={cls(
+                "h-9 w-full rounded-[7px] border px-2 text-[13px] outline-none",
+                dark ? "bg-dbg border-dline text-dink" : "bg-cream border-line text-ink",
+              )}
+            >
+              {copy.areas.map((area) => (
+                <option key={area.value} value={area.value}>{area.label}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <label className="block">
+          <span className={cls("block text-[11px] font-mono uppercase tracking-wider mb-1.5", dark ? "text-dsub" : "text-sub")}>
+            {copy.bodyLabel}
+          </span>
+          <textarea
+            value={bugBody}
+            onChange={(e) => setBugBody(e.target.value)}
+            placeholder={copy.bodyPlaceholder}
+            className={cls(
+              "min-h-[132px] w-full rounded-[7px] border px-3 py-2 text-[13px] leading-[1.55] outline-none resize-y",
+              dark ? "bg-dbg border-dline text-dink placeholder:text-dsub" : "bg-cream border-line text-ink placeholder:text-sub",
+            )}
+          />
+        </label>
+        <div className="mt-3 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => void copyBugReport()}
+            className={cls(
+              "h-9 px-3 rounded-[7px] border text-[12.5px]",
+              dark ? "border-dline text-dink hover:bg-dmuted" : "border-line text-ink hover:bg-muted",
+            )}
+          >
+            {bugCopied ? copy.copied : copy.copyReport}
+          </button>
+          <button
+            type="button"
+            onClick={() => void openGithubIssue()}
+            className="h-9 px-3 rounded-[7px] border text-[12.5px] bg-[var(--accent)] text-white border-[var(--accent-hover)] hover:opacity-90"
+          >
+            {copy.openIssue}
+          </button>
+        </div>
+      </section>
     </>
   );
 };
 
 const ATELIER_GITHUB_REPO = "BYKAYLE/atelier";
-const ATELIER_GITHUB_API = `https://api.github.com/repos/${ATELIER_GITHUB_REPO}/releases/latest`;
+const ATELIER_GITHUB_API_BASE = `https://api.github.com/repos/${ATELIER_GITHUB_REPO}`;
+const ATELIER_GITHUB_API = `${ATELIER_GITHUB_API_BASE}/releases/latest`;
 const ATELIER_GITHUB_RELEASES = `https://github.com/${ATELIER_GITHUB_REPO}/releases/latest`;
 
 type GithubReleaseInfo = {
@@ -567,6 +938,22 @@ type GithubReleaseInfo = {
   date?: string;
   url: string;
 };
+
+async function openExternalUrl(url: string) {
+  try {
+    const { open } = await import("@tauri-apps/plugin-shell");
+    await open(url);
+  } catch {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+}
+
+function githubReleaseHeaders() {
+  return {
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+}
 
 function normalizeVersion(value: string | undefined | null): string {
   return (value ?? "").trim().replace(/^v/i, "").split("+")[0].split("-")[0];
@@ -583,12 +970,60 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+function githubReleaseFromJson(
+  json: {
+    tag_name?: string;
+    body?: string;
+    published_at?: string;
+    html_url?: string;
+  },
+  fallbackUrl: string,
+): GithubReleaseInfo {
+  const version = normalizeVersion(json.tag_name);
+  if (!version) {
+    throw new Error("GitHub release has no version tag");
+  }
+  return {
+    version,
+    notes: json.body,
+    date: json.published_at,
+    url: json.html_url || fallbackUrl,
+  };
+}
+
+async function fetchGithubReleaseByVersion(version: string): Promise<GithubReleaseInfo> {
+  const normalized = normalizeVersion(version);
+  if (!normalized) {
+    throw new Error("Missing app version");
+  }
+  const candidateTags = Array.from(new Set([`v${normalized}`, normalized]));
+  let notFoundMessage = "";
+  for (const tag of candidateTags) {
+    const tagUrl = `https://github.com/${ATELIER_GITHUB_REPO}/releases/tag/${encodeURIComponent(tag)}`;
+    const res = await fetch(`${ATELIER_GITHUB_API_BASE}/releases/tags/${encodeURIComponent(tag)}`, {
+      headers: githubReleaseHeaders(),
+    });
+    if (res.status === 404) {
+      notFoundMessage = `GitHub release ${tag} was not found`;
+      continue;
+    }
+    if (!res.ok) {
+      throw new Error(`GitHub release ${tag} check failed (${res.status})`);
+    }
+    const json = await res.json() as {
+      tag_name?: string;
+      body?: string;
+      published_at?: string;
+      html_url?: string;
+    };
+    return githubReleaseFromJson(json, tagUrl);
+  }
+  throw new Error(notFoundMessage || `GitHub release for v${normalized} was not found`);
+}
+
 async function fetchLatestGithubRelease(): Promise<GithubReleaseInfo> {
   const res = await fetch(ATELIER_GITHUB_API, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
+    headers: githubReleaseHeaders(),
   });
   if (!res.ok) {
     throw new Error(`GitHub release check failed (${res.status})`);
@@ -599,16 +1034,7 @@ async function fetchLatestGithubRelease(): Promise<GithubReleaseInfo> {
     published_at?: string;
     html_url?: string;
   };
-  const version = normalizeVersion(json.tag_name);
-  if (!version) {
-    throw new Error("GitHub latest release has no version tag");
-  }
-  return {
-    version,
-    notes: json.body,
-    date: json.published_at,
-    url: json.html_url || ATELIER_GITHUB_RELEASES,
-  };
+  return githubReleaseFromJson(json, ATELIER_GITHUB_RELEASES);
 }
 
 /**

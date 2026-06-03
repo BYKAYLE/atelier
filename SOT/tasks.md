@@ -37,12 +37,56 @@ Last updated: 2026-05-31
   `스텔라 팩토리` / `Stella Factory` natural-language requests route into the
   Factory goal path and product-wide goals cannot close after a single feature
   without Service Factory readiness evidence.
+- Added a real Factory bootstrap path: Factory goal requests now create
+  or resume `SOT/service-factory-state.json`, seed required product-scale
+  artifacts, and attach the state/readiness/next-action evidence before the
+  provider starts. `/analyze` remains analysis-only and does not launch the
+  managed autopilot side effect.
+- Added a managed Factory autopilot path: Factory goal requests now run the
+  Stella Service Factory bridge after bootstrap when available, execute
+  queued agent requests through a command-backed local worker, collect
+  `result.json` artifacts, write recovery proof, and report readiness in the
+  preflight evidence.
+- Hardened the managed path after reviewer/security findings so local workers
+  cannot create false-green mandatory review/security/release completion.
+- Ran the active Atelier Factory state to `pilot_ready` with readiness score
+  `0.95`, managed backend `spawn_runtime_command`, attached specialist
+  validation evidence, and no primary blocker.
+- Resolved the remaining `parallel_implementation::builder` request with actual
+  implementation evidence, leaving zero queued/in-progress/blocked Factory
+  requests in the active state.
+- Locked Stella Factory's development method to `current_state ->
+  development_plan -> execution_verification`. Broad Factory goals must now
+  capture the real repo/runtime/SOT/install baseline before planning, then turn
+  the gap into task packets before implementation.
+- Added the active `current_state::state_mapper` and
+  `development_plan::strategy_planner` requests and completed both, leaving the
+  active Factory state with zero queued/in-progress/blocked requests.
+- Moved the Stella Factory direction into the Stella ontology: Stella is now the
+  Factory `command_owner`, Release is the runtime/state/gate adapter, kanban is
+  only a state projection, and agent creation must distinguish
+  AgentBlueprint/AgentInstance/AgentManifest from prompt/worktree artifacts.
+- Materialized the active Atelier Stella Factory state with
+  `command_owner: Stella`, `execution_controller: Release`, explicit
+  `control_plane`, `kanban_projection`, 15 AgentBlueprints, 23 AgentInstances,
+  and `agent_topology`.
+- Upgraded readiness, handoff, and artifact-review surfaces so
+  `stella_command_owner` and `agent_topology` are verified capabilities rather
+  than informal claims.
+- Fixed Release Service Factory atomic writes to use unique temp paths, avoiding
+  concurrent `.tmp` replacement races during report/status generation.
+- Ran Atelier through the Stella bridge autopilot and confirmed
+  `pilot_ready`, no primary blocker, and warning-free Factory validation.
+- Added the first user-visible Atelier product upgrade from that Factory state:
+  the agent workspace now shows a live Factory status strip with readiness,
+  Stella -> Release control, AgentBlueprint/AgentInstance counts, done/open
+  stage counts, blocker, next step, and manual refresh.
 
 ## Next Upgrades
 
-- Add actual `SOT/service-factory-state.json` bootstrap for active long-running
-  Atelier product runs, then wire the run state into a visible Factory status
-  panel.
+- Replace the local no-cost worker with true specialist LLM subagent spawning
+  for implementation-heavy product goals while keeping the same
+  dispatch/collect/result contract.
 - Add a visible task packet/status panel so the user can see objective,
   done_when, checks, and evidence per run.
 - Add preview/dev-screen Probe integration so UI/runtime failures are captured
