@@ -530,11 +530,22 @@ export async function providerClearCredentials(provider: string): Promise<void> 
   return invoke("provider_clear_credentials", { provider });
 }
 
+export interface ProviderLoginOauthResult {
+  provider: string;
+  command: string;
+  started: boolean;
+  completed: boolean;
+  already_logged_in: boolean;
+  browser_opened: boolean;
+  login_url_detected: boolean;
+  message: string;
+}
+
 /**
  * CLI 가 사용자 기본 브라우저로 OAuth(Google/Apple/GitHub 등 SNS) 진입.
  * 즉시 반환 — 사용자가 브라우저에서 로그인 완료할 때까지 폴링으로 status 재확인.
  */
-export async function providerLoginOauth(provider: string, force = false): Promise<void> {
+export async function providerLoginOauth(provider: string, force = false): Promise<ProviderLoginOauthResult> {
   return invoke("provider_login_oauth", { provider, force });
 }
 

@@ -6,9 +6,10 @@ use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::io;
+use std::io::{self, Read};
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -123,20 +124,8 @@ fn redact_login_output(text: &str) -> String {
         .join("\n")
 }
 
-fn login_failure_detail(output: &Output) -> String {
-    let mut combined = String::new();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if !stdout.trim().is_empty() {
-        combined.push_str(stdout.trim());
-    }
-    if !stderr.trim().is_empty() {
-        if !combined.is_empty() {
-            combined.push('\n');
-        }
-        combined.push_str(stderr.trim());
-    }
-    let detail = redact_login_output(&combined);
+fn login_failure_detail_text(text: &str) -> String {
+    let detail = redact_login_output(text);
     if detail.chars().count() <= 1200 {
         detail
     } else {
@@ -145,6 +134,103 @@ fn login_failure_detail(output: &Output) -> String {
             detail.chars().take(1200).collect::<String>()
         )
     }
+}
+
+fn extract_login_url(text: &str) -> Option<String> {
+    text.split_whitespace().find_map(|token| {
+        let trimmed = token.trim_matches(|c: char| {
+            matches!(c, '"' | '\'' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';')
+        });
+        (trimmed.starts_with("https://") || trimmed.starts_with("http://"))
+            .then(|| trimmed.to_string())
+    })
+}
+
+fn captured_login_output(captured: &Arc<Mutex<String>>) -> String {
+    captured
+        .lock()
+        .map(|text| text.clone())
+        .unwrap_or_default()
+}
+
+fn capture_login_pipe<R>(mut reader: R, captured: Arc<Mutex<String>>)
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut buf = [0_u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let chunk = String::from_utf8_lossy(&buf[..n]);
+                    if let Ok(mut text) = captured.lock() {
+                        text.push_str(&chunk);
+                        if text.len() > 64 * 1024 {
+                            let keep_from = text.len().saturating_sub(32 * 1024);
+                            *text = text[keep_from..].to_string();
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+fn open_login_url_in_browser(url: &str) -> bool {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return false;
+    }
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("powershell.exe");
+        command.args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "Start-Process -FilePath $args[0]",
+            url,
+        ]);
+        command
+    };
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg(url);
+        command
+    };
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(url);
+        command
+    };
+
+    configure_background_command(&mut command);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .is_ok()
+}
+
+fn watch_and_open_login_url(captured: Arc<Mutex<String>>) {
+    thread::spawn(move || {
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(90) {
+            let output = captured_login_output(&captured);
+            if let Some(url) = extract_login_url(&output) {
+                let _ = open_login_url_in_browser(&url);
+                break;
+            }
+            thread::sleep(Duration::from_millis(250));
+        }
+    });
 }
 
 fn oauth_logout_args(provider: &str) -> Option<Vec<&'static str>> {
@@ -206,6 +292,18 @@ pub struct ProviderStatus {
     pub api_key_masked: String,
     pub supports_oauth: bool,
     pub supports_api: bool,
+}
+
+#[derive(Serialize)]
+pub struct ProviderLoginOauthResult {
+    pub provider: String,
+    pub command: String,
+    pub started: bool,
+    pub completed: bool,
+    pub already_logged_in: bool,
+    pub browser_opened: bool,
+    pub login_url_detected: bool,
+    pub message: String,
 }
 
 fn keychain_entry(provider: &str, slot: &str) -> Result<Entry, String> {
@@ -659,7 +757,10 @@ pub async fn provider_clear_credentials(provider: String) -> Result<(), String> 
 /// CLI 가 사용자 기본 브라우저를 열어 SNS(Google/Apple/GitHub 등) 로그인 페이지로 보낸다.
 /// blocking 으로 기다리지 않고 즉시 반환 — 프론트가 status polling 으로 완료 감지.
 #[tauri::command]
-pub async fn provider_login_oauth(provider: String, force: Option<bool>) -> Result<(), String> {
+pub async fn provider_login_oauth(
+    provider: String,
+    force: Option<bool>,
+) -> Result<ProviderLoginOauthResult, String> {
     let meta = provider_meta(&provider).ok_or_else(|| format!("unknown provider: {provider}"))?;
     if !meta.supports_oauth {
         return Err(format!("{provider} does not support OAuth"));
@@ -672,7 +773,16 @@ pub async fn provider_login_oauth(provider: String, force: Option<bool>) -> Resu
     let force_login = force.unwrap_or(false);
     if !force_login && detect_oauth(&provider) {
         set_oauth_state(&provider, true);
-        return Ok(());
+        return Ok(ProviderLoginOauthResult {
+            provider,
+            command: format!("{cli} {cmd}"),
+            started: false,
+            completed: true,
+            already_logged_in: true,
+            browser_opened: false,
+            login_url_detected: false,
+            message: "OAuth is already connected.".into(),
+        });
     }
     if force_login {
         if let Err(e) = run_oauth_logout(&provider, cli) {
@@ -685,6 +795,7 @@ pub async fn provider_login_oauth(provider: String, force: Option<bool>) -> Resu
     let cli_owned = cli.to_string();
     let login_args = oauth_login_args(&provider, cmd);
     let cmd_owned = login_args.join(" ");
+    let command_label = format!("{cli_owned} {cmd_owned}");
     let mut command = cli_command(&cli_owned);
     command
         .args(&login_args)
@@ -696,32 +807,58 @@ pub async fn provider_login_oauth(provider: String, force: Option<bool>) -> Resu
     let mut child = command
         .spawn()
         .map_err(|e| format!("oauth spawn {cli_owned} {cmd_owned}: {e}"))?;
+    let captured = Arc::new(Mutex::new(String::new()));
+    if let Some(stdout) = child.stdout.take() {
+        capture_login_pipe(stdout, captured.clone());
+    }
+    if let Some(stderr) = child.stderr.take() {
+        capture_login_pipe(stderr, captured.clone());
+    }
 
     // Claude/Codex CLI가 Windows에서 즉시 실패하는 경우에는 "브라우저가 열렸습니다"
     // 모달을 띄우면 사용자가 무한 대기 상태로 보인다. 짧게만 관찰해서 즉시 실패는
     // 호출자에게 돌려주고, 실제 로그인 대기는 백그라운드에서 계속 처리한다.
     let started = Instant::now();
+    let mut browser_opened = false;
+    let mut login_url_detected = false;
     loop {
+        if !login_url_detected {
+            let output = captured_login_output(&captured);
+            if let Some(url) = extract_login_url(&output) {
+                login_url_detected = true;
+                browser_opened = open_login_url_in_browser(&url);
+            }
+        }
         match child
             .try_wait()
             .map_err(|e| format!("{cli_owned} {cmd_owned} poll: {e}"))?
         {
             Some(status) if status.success() => {
-                let _ = child.wait_with_output();
+                let _ = child.wait();
                 set_oauth_state(&provider_clone, true);
-                return Ok(());
+                return Ok(ProviderLoginOauthResult {
+                    provider,
+                    command: command_label,
+                    started: true,
+                    completed: true,
+                    already_logged_in: false,
+                    browser_opened,
+                    login_url_detected,
+                    message: "OAuth login command completed.".into(),
+                });
             }
             Some(status) => {
-                let detail = child
-                    .wait_with_output()
-                    .ok()
-                    .map(|output| login_failure_detail(&output))
-                    .filter(|detail| !detail.trim().is_empty());
+                let _ = child.wait();
+                thread::sleep(Duration::from_millis(80));
+                let detail =
+                    login_failure_detail_text(&captured_login_output(&captured))
+                        .trim()
+                        .to_string();
                 return Err(match detail {
-                    Some(detail) => {
+                    detail if !detail.is_empty() => {
                         format!("{cli_owned} {cmd_owned} exited with {status}: {detail}")
                     }
-                    None => format!("{cli_owned} {cmd_owned} exited with {status}"),
+                    _ => format!("{cli_owned} {cmd_owned} exited with {status}"),
                 });
             }
             None if started.elapsed() >= Duration::from_millis(1500) => break,
@@ -729,24 +866,40 @@ pub async fn provider_login_oauth(provider: String, force: Option<bool>) -> Resu
         }
     }
 
-    std::thread::spawn(move || match child.wait_with_output() {
-        Ok(output) if output.status.success() => {
+    if !login_url_detected {
+        watch_and_open_login_url(captured.clone());
+    }
+
+    std::thread::spawn(move || match child.wait() {
+        Ok(status) if status.success() => {
             set_oauth_state(&provider_clone, true);
         }
-        Ok(output) => {
-            let detail = login_failure_detail(&output);
+        Ok(status) => {
+            let detail = login_failure_detail_text(&captured_login_output(&captured));
             if detail.trim().is_empty() {
-                log::warn!("{cli_owned} {cmd_owned} exited with {}", output.status);
+                log::warn!("{cli_owned} {cmd_owned} exited with {status}");
             } else {
-                log::warn!(
-                    "{cli_owned} {cmd_owned} exited with {}: {detail}",
-                    output.status
-                );
+                log::warn!("{cli_owned} {cmd_owned} exited with {status}: {detail}");
             }
         }
         Err(e) => log::warn!("{cli_owned} wait: {e}"),
     });
-    Ok(())
+    Ok(ProviderLoginOauthResult {
+        provider,
+        command: command_label,
+        started: true,
+        completed: false,
+        already_logged_in: false,
+        browser_opened,
+        login_url_detected,
+        message: if browser_opened {
+            "OAuth login started and the browser was opened.".into()
+        } else if login_url_detected {
+            "OAuth login started, but Atelier could not open the browser automatically.".into()
+        } else {
+            "OAuth login started. Atelier is watching the CLI output for a browser login URL.".into()
+        },
+    })
 }
 
 /// CLI 자동 설치 — npm 으로 claude-code / codex 를 글로벌 설치.

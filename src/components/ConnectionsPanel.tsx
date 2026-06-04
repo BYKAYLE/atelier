@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { cls, Tweaks } from "../lib/tokens";
 import {
   HermesUpdateStatus,
+  ProviderLoginOauthResult,
   ProviderStatus,
   hermesCheckUpdate,
   hermesUpdate,
@@ -138,9 +139,16 @@ const COPY = {
     refresh: "상태 새로고침",
     loginStartFailed: (name: string, message: string) =>
       `${name} 로그인을 시작하지 못했습니다. ${message}`,
+    loginAlreadyConnected: (name: string) => `${name} 구독 로그인이 이미 연결되어 있습니다.`,
+    loginStartedBrowser: (name: string) =>
+      `${name} 로그인 명령을 시작했고 브라우저를 열었습니다. SNS 로그인을 완료하면 자동으로 감지됩니다.`,
+    loginStartedWatching: (name: string) =>
+      `${name} 로그인 명령을 시작했습니다. 브라우저가 바로 열리지 않으면 Atelier가 CLI 출력의 로그인 URL을 계속 감지합니다.`,
+    loginStartedNoBrowser: (name: string) =>
+      `${name} 로그인 명령을 시작했지만 브라우저를 자동으로 열지 못했습니다. 잠시 뒤 상태를 새로고침하거나 자동 설치 상태를 확인하세요.`,
     loginModalTitle: "브라우저에서 로그인 진행",
     loginModalDesc:
-      "기본 브라우저가 열려 있습니다. SNS(Google/Apple 등) 로그인을 완료하면 자동으로 감지됩니다.",
+      "SNS(Google/Apple 등) 로그인을 완료하면 Atelier가 자동으로 연결 상태를 감지합니다.",
     loginModalCheckingNow: "확인 중…",
     loginModalDetected: "로그인 감지! 곧 자동 닫힘.",
     loginModalCancel: "닫기",
@@ -189,9 +197,16 @@ const COPY = {
     refresh: "Refresh status",
     loginStartFailed: (name: string, message: string) =>
       `Could not start ${name} sign-in. ${message}`,
+    loginAlreadyConnected: (name: string) => `${name} subscription sign-in is already connected.`,
+    loginStartedBrowser: (name: string) =>
+      `${name} sign-in command started and the browser was opened. Finish SNS sign-in and Atelier will detect it automatically.`,
+    loginStartedWatching: (name: string) =>
+      `${name} sign-in command started. If the browser does not open immediately, Atelier will keep watching the CLI output for a login URL.`,
+    loginStartedNoBrowser: (name: string) =>
+      `${name} sign-in command started, but Atelier could not open the browser automatically. Refresh the status shortly or check the automatic install state.`,
     loginModalTitle: "Complete sign-in in your browser",
     loginModalDesc:
-      "Your default browser is open. Finish SNS (Google/Apple/etc.) sign-in and Atelier will detect it automatically.",
+      "Finish SNS (Google/Apple/etc.) sign-in and Atelier will detect the connection automatically.",
     loginModalCheckingNow: "Checking…",
     loginModalDetected: "Sign-in detected! Closing shortly.",
     loginModalCancel: "Close",
@@ -235,8 +250,10 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
     provider: ProviderId;
     name: string;
     detected: boolean;
+    message: string;
   } | null>(null);
   const [panelError, setPanelError] = useState<string | null>(null);
+  const [panelNotice, setPanelNotice] = useState<string | null>(null);
 
   const refresh = useCallback(async (only?: ProviderId) => {
     const targets = only ? [only] : (["claude", "codex", "openrouter", "hermes"] as ProviderId[]);
@@ -280,12 +297,31 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
     };
   }, [loginModal]);
 
+  function loginNoticeForResult(p: ProviderDef, result: ProviderLoginOauthResult) {
+    if (result.already_logged_in) return copy.loginAlreadyConnected(p.name);
+    if (result.browser_opened) return copy.loginStartedBrowser(p.name);
+    if (result.login_url_detected) return copy.loginStartedNoBrowser(p.name);
+    return copy.loginStartedWatching(p.name);
+  }
+
   async function startLogin(p: ProviderDef, force = false) {
     setBusyId(p.id);
     setPanelError(null);
+    setPanelNotice(null);
     try {
-      await providerLoginOauth(p.id, force);
-      setLoginModal({ provider: p.id, name: p.name, detected: false });
+      const result = await providerLoginOauth(p.id, force);
+      const notice = loginNoticeForResult(p, result);
+      setPanelNotice(notice);
+      setLoginModal({
+        provider: p.id,
+        name: p.name,
+        detected: result.completed || result.already_logged_in,
+        message: notice,
+      });
+      void refresh(p.id);
+      if (result.completed || result.already_logged_in) {
+        setTimeout(() => setLoginModal(null), 1400);
+      }
     } catch (e) {
       setPanelError(copy.loginStartFailed(p.name, String(e)));
       void refresh(p.id);
@@ -343,6 +379,16 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
           {panelError}
         </div>
       )}
+      {panelNotice && (
+        <div
+          className={cls(
+            "text-[12px] px-3 py-2 rounded-md border",
+            dark ? "border-dline bg-dbg text-dsub" : "border-line bg-cream text-sub",
+          )}
+        >
+          {panelNotice}
+        </div>
+      )}
 
       <div className="pt-2">
         <button
@@ -362,6 +408,7 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
         <LoginModal
           name={loginModal.name}
           detected={loginModal.detected}
+          message={loginModal.message}
           dark={dark}
           copy={copy}
           onClose={() => setLoginModal(null)}
@@ -500,11 +547,21 @@ const ProviderCard: React.FC<CardProps> = ({
         <div className="mt-3 space-y-1.5">
           <div className="flex items-center gap-2 flex-wrap">
             <button
-              onClick={() => onStartLogin(shouldForceOauthLogin)}
-              disabled={busy || !cliInstalled}
+              onClick={() => {
+                if (!cliInstalled) {
+                  setErrorMsg(`${copy.installPrompt} ${def.installHelp?.[lang] ?? ""}`.trim());
+                  return;
+                }
+                onStartLogin(shouldForceOauthLogin);
+              }}
+              disabled={busy}
               className={cls(
                 "text-[12.5px] h-8 px-3 rounded-md border transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
-                "bg-[var(--accent)] text-white border-[var(--accent-hover)] hover:opacity-90",
+                cliInstalled
+                  ? "bg-[var(--accent)] text-white border-[var(--accent-hover)] hover:opacity-90"
+                  : dark
+                  ? "border-dline bg-dbg text-dsub hover:text-dink"
+                  : "border-line bg-cream text-sub hover:text-ink",
               )}
             >
               {oauthButtonLabel}
@@ -913,10 +970,11 @@ const HermesCard: React.FC<{
 const LoginModal: React.FC<{
   name: string;
   detected: boolean;
+  message: string;
   dark: boolean;
   copy: CopyT;
   onClose: () => void;
-}> = ({ name, detected, dark, copy, onClose }) => {
+}> = ({ name, detected, message, dark, copy, onClose }) => {
   return (
     <div
       role="dialog"
@@ -934,7 +992,7 @@ const LoginModal: React.FC<{
       >
         <div className="text-[16px] font-semibold mb-2">{copy.loginModalTitle}</div>
         <div className={cls("text-[13px] mb-4", dark ? "text-dsub" : "text-sub")}>
-          {copy.loginModalDesc}
+          {message || copy.loginModalDesc}
         </div>
         <div className="flex items-center gap-3">
           {detected ? (
