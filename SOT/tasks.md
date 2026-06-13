@@ -1,6 +1,6 @@
 # Stella Factory Task Ledger
 
-Last updated: 2026-05-31
+Last updated: 2026-06-14
 
 ## Completed
 
@@ -81,6 +81,11 @@ Last updated: 2026-05-31
   the agent workspace now shows a live Factory status strip with readiness,
   Stella -> Release control, AgentBlueprint/AgentInstance counts, done/open
   stage counts, blocker, next step, and manual refresh.
+- Simplified the Agent Workspace Factory controls to one user-facing
+  `Stella Factory` launcher. The former `Goal`, `Analyze`, `Probe`, and `Audit`
+  controls remain compatible internal/legacy commands, but the main UI now
+  treats planning, implementation, verification, security, and final audit as a
+  single autonomous Factory session behind one goal entry point.
 
 ## Next Upgrades
 
@@ -95,8 +100,8 @@ Last updated: 2026-05-31
   selected, so destructive shell commands can be blocked below the prompt layer.
 - Add release readiness checklist integration for updater, GitHub release, MSIX,
   signing, and Store packaging.
-- Expand the Factory brief into a per-run task packet view with objective,
-  constraints, done_when, checks, evidence, and final audit state.
+- Expand the Factory status strip into a per-run task packet view with
+  objective, constraints, done_when, checks, evidence, and final audit state.
 - Add installed-state probing to the `Plugins & Skills` screen so plugins can
   show installed/disabled status before the user clicks install.
 

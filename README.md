@@ -133,14 +133,17 @@ development workspace while preserving the existing terminal and agent features.
 - Project summary: [SOT/L1-project-summary.md](SOT/L1-project-summary.md)
 - Feature notes: [docs/stella-factory.md](docs/stella-factory.md)
 
-Agent Workspace commands attach local evidence before provider execution:
+The Agent Workspace now exposes one primary user entry point:
 
 ```text
-/goal <objective>
-/analyze <scope>
-/probe <scope>
-/audit <scope>
+스텔라 팩토리 <objective>
+Stella Factory <objective>
 ```
+
+That single Factory launcher attaches local evidence and lets Stella/Release run
+planning, implementation, verification, security review, and final audit as one
+autonomous session. `/goal`, `/analyze`, `/probe`, and `/audit` remain internal
+or legacy-compatible commands, but they are no longer the main UI workflow.
 
 The Rust backend also exposes `stella_project_analysis`,
 `stella_workspace_probe`, and `stella_record_evidence` so Factory runs can

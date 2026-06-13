@@ -68,15 +68,14 @@ checks, or user-requested integration checks. Record the reason when they matter
 
 ## Current App Hooks
 
-- `스텔라 팩토리 <objective>` / `Stella Factory <objective>`: natural-language
-  alias for a product-scale `/goal` Factory run.
-- `/goal <objective>`: run a full autonomous development loop.
-- `/analyze <scope>`: analyze code, runtime, docs, tests, and SOT before edits;
-  Atelier attaches Rust-collected project evidence to the provider prompt.
-- `/probe <scope>`: verify implementation evidence and blockers; Atelier runs
-  a provider-independent workspace probe before delegating.
-- `/audit <scope>`: run security, permission, release readiness, and regression
-  audit; Atelier includes project evidence and probe results.
+- `스텔라 팩토리 <objective>` / `Stella Factory <objective>`: the primary
+  user-facing Factory launcher. It starts or resumes a product-scale Factory run
+  and treats planning, implementation, Probe, security, release readiness, and
+  final audit as one autonomous session.
+- `/goal <objective>`: legacy-compatible Factory goal call.
+- `/analyze <scope>`, `/probe <scope>`, `/audit <scope>`: accepted internal or
+  legacy review commands. They should not appear as separate primary user steps
+  because the Factory launcher owns the full verification chain.
 - `/que <message>` and `/queue`: queue work while another turn runs.
 - `/permission basic|auto|full`: choose CLI permission behavior.
 

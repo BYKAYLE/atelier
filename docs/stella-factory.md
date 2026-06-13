@@ -6,8 +6,8 @@ existing terminal and structured agent workspace without replacing them.
 ## What It Adds
 
 - Goal normalization for natural-language development requests.
-- Natural-language Factory invocation through `스텔라 팩토리` / `Stella Factory`,
-  not only `/goal`.
+- One primary user-facing Factory launcher through `스텔라 팩토리` /
+  `Stella Factory`, with `/goal` kept as a compatibility path.
 - Rust-side project analysis before edits.
 - Provider-independent workspace probes for build/test/harness evidence.
 - SOT evidence recording after Factory runs.
@@ -45,33 +45,26 @@ is not yet `pilot_ready` or `full_ready`.
 Direct Claude, Hermes, and Codex sessions remain available without Factory
 wrapping.
 
-## Workspace Commands
+## Workspace Launcher
 
-Use these in the Agent Workspace input:
+Use the single `Stella Factory` button or type one of these natural-language
+launchers in the Agent Workspace input:
 
 ```text
-/스텔라 팩토리 <objective>
 스텔라 팩토리 <objective>
-/goal <objective>
-/analyze <scope>
-/probe <scope>
-/audit <scope>
+Stella Factory <objective>
 ```
 
-These commands keep the selected provider in the loop. Factory goal mode
-(`/goal` or `스텔라 팩토리 ...`) runs the managed Service Factory autopilot when
-the local bridge exists. That means broad goals no longer stop at a single
-feature patch: Atelier bootstraps durable state, runs the managed cycle,
-attaches the readiness verdict, and then sends the provider the full contract
-and evidence.
+The launcher keeps the selected provider in the loop and runs the managed
+Service Factory autopilot when the local bridge exists. Broad goals no longer
+stop at a single feature patch: Atelier bootstraps durable state, runs the
+managed cycle, attaches the readiness verdict, and then sends the provider the
+full contract and evidence.
 
-Before provider execution:
-
-- `/goal` attaches project analysis, bootstrap state, and managed autopilot
-  evidence.
-- `/analyze` attaches project analysis only.
-- `/probe` attaches project analysis plus focused probe output.
-- `/audit` attaches project analysis plus full probe output.
+`/goal`, `/analyze`, `/probe`, and `/audit` remain accepted for compatibility and
+internal review workflows. They should not be presented as separate user steps;
+analysis, Probe, security review, and final audit are part of the single Factory
+session.
 
 After provider execution, Atelier appends a compact evidence entry to
 `SOT/evidence-log.md`.

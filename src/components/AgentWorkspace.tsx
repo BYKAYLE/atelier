@@ -108,12 +108,20 @@ type SlashCommandSpec = {
 };
 
 function activeFactoryCommandFromText(rawText: string): StellaFactoryCommand | null {
-  const match = rawText.trimStart().match(/^\/(goal|analyze|probe|audit)(?:\s|$)/i);
-  return match ? (match[1].toLowerCase() as StellaFactoryCommand) : null;
+  const trimmed = rawText.trimStart();
+  const slash = trimmed.match(/^\/(goal|analyze|probe|audit)(?:\s|$)/i);
+  if (slash) return slash[1].toLowerCase() as StellaFactoryCommand;
+  return /^(?:\/\s*)?(?:스텔라\s*팩토리|stella\s+factory)(?:\s*(?:로|으로|를|을|는|은|:|：|\.|-|—)\s*)?/i.test(trimmed)
+    ? "goal"
+    : null;
 }
 
 function stripFactoryCommandPrefix(rawText: string): string {
-  return rawText.trimStart().replace(/^\/(?:goal|analyze|probe|audit)(?:\s+)?/i, "").trimStart();
+  return rawText
+    .trimStart()
+    .replace(/^\/(?:goal|analyze|probe|audit)(?:\s+)?/i, "")
+    .replace(/^(?:\/\s*)?(?:스텔라\s*팩토리|stella\s+factory)(?:\s*(?:로|으로|를|을|는|은|:|：|\.|-|—)\s*)?/i, "")
+    .trimStart();
 }
 
 type ChatAttachment = {
@@ -1083,29 +1091,8 @@ function slashCommandsFor(
       command: "/goal <objective>",
       insert: "/goal ",
       scope: "atelier",
-      detailKo: "목표 달성까지 계획-실행-검증을 반복하는 Goal 모드로 실행",
-      detailEn: "Run in Goal mode and keep iterating until the objective is satisfied",
-    },
-    {
-      command: "/analyze <scope>",
-      insert: "/analyze ",
-      scope: "atelier",
-      detailKo: "현재 코드/실행/문서/테스트/SOT 상태를 먼저 분석",
-      detailEn: "Analyze code, runtime, docs, tests, and SOT first",
-    },
-    {
-      command: "/probe <scope>",
-      insert: "/probe ",
-      scope: "atelier",
-      detailKo: "구현 결과를 Probe 방식으로 증거 검증",
-      detailEn: "Run evidence-oriented Probe verification",
-    },
-    {
-      command: "/audit <scope>",
-      insert: "/audit ",
-      scope: "atelier",
-      detailKo: "보안/권한/배포준비/최종감사 실행",
-      detailEn: "Run security, permission, release-readiness, and final audit",
+      detailKo: "Stella Factory 호환 Goal 호출. 기본 사용은 버튼의 자연어 런처를 권장",
+      detailEn: "Stella Factory-compatible Goal call. Prefer the button's natural-language launcher",
     },
     ...ACADEMIC_RESEARCH_SLASH_COMMANDS.map((item) => ({
       ...item,
@@ -2372,14 +2359,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         cwd: "Working folder",
         noAgentProfiles: "No Claude/Hermes/Codex profiles in Settings.",
         factoryLabel: "Stella Factory",
-        factoryGoal: "Goal",
-        factoryAnalyze: "Analyze",
-        factoryProbe: "Probe",
-        factoryAudit: "Audit",
-        factoryGoalTitle: "Create a goal-driven autonomous development task",
-        factoryAnalyzeTitle: "Inspect this workspace before implementation",
-        factoryProbeTitle: "Run evidence checks for this workspace",
-        factoryAuditTitle: "Audit security, permissions, release readiness, and regressions",
+        factoryLauncherTitle: "Start or resume a Stella Factory autonomous development session",
         placeholder: "Ask the selected agent to change, inspect, or explain this workspace...",
         send: "Send",
         stopHint: "A running turn finishes through the selected CLI; terminal fallback remains available.",
@@ -2417,10 +2397,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         slashUnknown: (command: string) => `Unknown slash command: ${command}`,
         slashHelp: [
           "Slash commands:",
-          "/goal <objective> - run until the objective is satisfied or clearly blocked",
-          "/analyze <scope> - analyze code, runtime, docs, tests, and SOT before editing",
-          "/probe <scope> - verify implementation evidence and remaining blockers",
-          "/audit <scope> - check security, permissions, release readiness, and regression risk",
+          "Stella Factory <goal> - run planning, execution, verification, security, and final audit automatically",
+          "/goal <objective> - legacy Goal call",
+          "/analyze · /probe · /audit - internal Factory review commands",
           "/stella - turn on Stella/Atelier ontology mode",
           "/mode direct|stella|evidence - change Atelier ontology mode",
           "/que - toggle queue mode",
@@ -2522,14 +2501,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         cwd: "작업 폴더",
         noAgentProfiles: "설정 프로필에 Claude/Hermes/Codex가 없습니다.",
         factoryLabel: "Stella Factory",
-        factoryGoal: "목표",
-        factoryAnalyze: "분석",
-        factoryProbe: "검증",
-        factoryAudit: "감사",
-        factoryGoalTitle: "목표 기반 자율 개발 작업 생성",
-        factoryAnalyzeTitle: "구현 전 현재 작업공간 분석",
-        factoryProbeTitle: "이 작업공간의 증거 검증 실행",
-        factoryAuditTitle: "보안, 권한, 배포준비, 회귀 위험 감사",
+        factoryLauncherTitle: "Stella Factory 자율 개발 세션 시작 또는 재개",
         placeholder: "선택한 에이전트에게 이 작업공간의 수정, 분석, 설명을 요청하세요...",
         send: "보내기",
         stopHint: "실행 중인 턴은 선택한 CLI가 끝낼 때 완료됩니다. 터미널은 보조 화면으로 남겨둡니다.",
@@ -2567,10 +2539,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         slashUnknown: (command: string) => `알 수 없는 슬래시 명령어입니다: ${command}`,
         slashHelp: [
           "슬래시 명령어:",
-          "/goal <objective> - 목표 달성 또는 명확한 차단까지 반복 진행",
-          "/analyze <scope> - 수정 전 코드, 실행, 문서, 테스트, SOT 상태 분석",
-          "/probe <scope> - 구현 증거와 남은 차단점 검증",
-          "/audit <scope> - 보안, 권한, 배포준비, 회귀 위험 최종감사",
+          "스텔라 팩토리 <목표> - 목표 달성까지 계획-실행-검증-감사를 자동 진행",
+          "/goal <objective> - 레거시 Goal 호출",
+          "/analyze · /probe · /audit - Factory 내부 검토 명령",
           "/stella - Stella/Atelier 온톨로지 모드 켜기",
           "/mode direct|stella|evidence - Atelier 온톨로지 실행 모드 변경",
           "/que - 대기열 모드 켜기/끄기",
@@ -4529,17 +4500,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     });
   };
 
-  const applyFactoryCommand = (command: StellaFactoryCommand) => {
+  const applyFactoryLauncher = () => {
     const current = inputDraftRef.current.trim();
-    const activeCommand = activeFactoryCommandFromText(current);
-    const prefix = `/${command} `;
-    const next = activeCommand === command
-      ? stripFactoryCommandPrefix(current)
-      : activeCommand
-        ? `${prefix}${stripFactoryCommandPrefix(current)}`.trimEnd() + " "
-        : current && !current.startsWith("/")
-          ? `${prefix}${current}`
-          : prefix;
+    const body = stripFactoryCommandPrefix(current);
+    const prefix = tw.language === "en" ? "Stella Factory " : "스텔라 팩토리 ";
+    const next = body ? `${prefix}${body}` : prefix;
     setComposerInput(next);
     window.requestAnimationFrame(() => {
       const el = inputRef.current;
@@ -5701,10 +5666,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                     {pasteError && <div className="atelier-attachment-error">{pasteError}</div>}
                   </div>
                 )}
-                <div className={cls("mb-2 flex flex-wrap items-center gap-1.5 border-b pb-2", dark ? "border-dline" : "border-line")}>
+                <div className={cls("mb-2 flex items-center gap-2 border-b pb-2", dark ? "border-dline" : "border-line")}>
                   <button
                     type="button"
-                    onClick={() => applyFactoryCommand(activeFactoryCommand || "goal")}
+                    onClick={applyFactoryLauncher}
                     className={cls(
                       "h-7 shrink-0 rounded-[7px] px-2.5 inline-flex items-center gap-1.5 text-[11px] font-medium border transition-colors",
                       activeFactoryCommand
@@ -5712,49 +5677,21 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                           ? "bg-[#3a2a23] border-[#e26f4f] text-dink"
                           : "bg-[#fff1eb] border-[#e26f4f] text-ink"
                         : dark
-                          ? "border-transparent text-dsub hover:text-dink hover:bg-[#343431]"
-                          : "border-transparent text-sub hover:text-ink hover:bg-line",
+                          ? "border-[#6f4a3f] bg-[#302925] text-dink hover:bg-[#3a2f2a]"
+                          : "border-[#e26f4f] bg-surface text-ink hover:bg-[#fff6f2]",
                     )}
-                    title={copy.factoryGoalTitle}
-                    aria-label={copy.factoryLabel}
-                    aria-pressed={Boolean(activeFactoryCommand)}
+                    title={copy.factoryLauncherTitle}
+                    aria-label={copy.factoryLauncherTitle}
+                    aria-pressed={activeFactoryCommand === "goal"}
                   >
                     <span className="text-[#e26f4f]">{I.zap}</span>
                     <span>{copy.factoryLabel}</span>
                   </button>
-                  {[
-                    { command: "goal" as const, label: copy.factoryGoal, title: copy.factoryGoalTitle, icon: I.zap },
-                    { command: "analyze" as const, label: copy.factoryAnalyze, title: copy.factoryAnalyzeTitle, icon: I.eye },
-                    { command: "probe" as const, label: copy.factoryProbe, title: copy.factoryProbeTitle, icon: I.shieldCheck },
-                    { command: "audit" as const, label: copy.factoryAudit, title: copy.factoryAuditTitle, icon: I.shieldAlert },
-                  ].map((item) => {
-                    const active = activeFactoryCommand === item.command;
-                    return (
-                      <button
-                        key={item.command}
-                        type="button"
-                        onClick={() => applyFactoryCommand(item.command)}
-                        className={cls(
-                          "h-7 rounded-[7px] px-2.5 inline-flex items-center gap-1.5 text-[11px] font-medium border transition-colors",
-                          active
-                            ? dark
-                              ? "bg-[#3a2a23] border-[#e26f4f] text-dink"
-                              : "bg-[#fff1eb] border-[#e26f4f] text-ink"
-                            : dark
-                              ? "border-transparent text-dsub hover:text-dink hover:bg-[#343431]"
-                              : "border-transparent text-sub hover:text-ink hover:bg-line",
-                        )}
-                        title={item.title}
-                        aria-label={item.title}
-                        aria-pressed={active}
-                      >
-                        <span className={cls("shrink-0", active || item.command === "goal" ? "text-[#e26f4f]" : dark ? "text-dsub" : "text-sub")}>
-                          {item.icon}
-                        </span>
-                        <span>{item.label}</span>
-                      </button>
-                    );
-                  })}
+                  <span className={cls("min-w-0 truncate text-[11px]", dark ? "text-dsub" : "text-sub")}>
+                    {tw.language === "en"
+                      ? "One launcher for goal, analysis, verification, security, and final audit."
+                      : "목표만 입력하면 계획, 실행, 검증, 보안, 최종감사까지 자동 진행합니다."}
+                  </span>
                 </div>
                 <div
                   className={cls(
