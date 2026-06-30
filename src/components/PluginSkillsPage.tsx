@@ -1,13 +1,18 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { cls } from "../lib/tokens";
 import type { Tweaks } from "../lib/tokens";
-import { academicResearchInstallClaudePlugin, atelierSkillInstallPublicBundle } from "../lib/tauri";
+import {
+  academicResearchInstallClaudePlugin,
+  atelierSkillInstallPublicBundle,
+  insaneSearchInstallGajecodeSkill,
+  pluginSkillInstallStatus,
+} from "../lib/tauri";
 import { I } from "./Icons";
 
-type InstallStatus = "idle" | "installing" | "installed" | "error";
+type InstallStatus = "checking" | "idle" | "installing" | "installed" | "error";
 
 type CatalogPlugin = {
-  id: "academic-research-claude" | "atelier-skill-public";
+  id: "academic-research-claude" | "atelier-skill-public" | "insane-search-gajecode";
   provider: string;
   short: string;
   color: string;
@@ -15,6 +20,7 @@ type CatalogPlugin = {
   titleEn: string;
   detailKo: string;
   detailEn: string;
+  sourceUrl?: string;
 };
 
 type BuiltInSkill = {
@@ -48,6 +54,30 @@ const PLUGINS: CatalogPlugin[] = [
     detailEn: "Research, literature review, and paper-writing workflow",
   },
 ];
+
+const INSTALLABLE_SKILLS: CatalogPlugin[] = [
+  {
+    id: "insane-search-gajecode",
+    provider: "Gajae Code",
+    short: "Gj",
+    color: "#7a6f1a",
+    titleKo: "Insane Search",
+    titleEn: "Insane Search",
+    detailKo: "차단된 공개 웹페이지, X, Reddit, YouTube, GitHub, Naver 등을 읽기 위한 가재코드 전용 검색 스킬",
+    detailEn: "Gajae Code-only skill for blocked public pages, X, Reddit, YouTube, GitHub, Naver, and more",
+    sourceUrl: "https://github.com/fivetaku/insane-search",
+  },
+];
+
+const CATALOG_PLUGIN_IDS: CatalogPlugin["id"][] = [
+  "atelier-skill-public",
+  "academic-research-claude",
+  "insane-search-gajecode",
+];
+
+function isCatalogPluginId(id: string): id is CatalogPlugin["id"] {
+  return CATALOG_PLUGIN_IDS.includes(id as CatalogPlugin["id"]);
+}
 
 const BUILT_IN_SKILLS: BuiltInSkill[] = [
   {
@@ -98,7 +128,10 @@ const PluginSkillsPage: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         install: "설치",
         installing: "설치 중",
         installed: "설치됨",
+        notInstalled: "미설치",
+        checking: "확인 중",
         failed: "실패",
+        retry: "다시 시도",
         builtIn: "내장",
       }
     : {
@@ -109,9 +142,121 @@ const PluginSkillsPage: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         install: "Install",
         installing: "Installing",
         installed: "Installed",
+        notInstalled: "Not installed",
+        checking: "Checking",
         failed: "Failed",
+        retry: "Retry",
         builtIn: "Built in",
       };
+
+  useEffect(() => {
+    let cancelled = false;
+    setInstallState((prev) => {
+      const next = { ...prev };
+      for (const id of CATALOG_PLUGIN_IDS) {
+        if (next[id]?.status !== "installing") {
+          next[id] = { status: "checking" };
+        }
+      }
+      return next;
+    });
+
+    void pluginSkillInstallStatus()
+      .then((result) => {
+        if (cancelled) return;
+        setInstallState((prev) => {
+          const next = { ...prev };
+          for (const item of result.items) {
+            if (!isCatalogPluginId(item.id) || next[item.id]?.status === "installing") continue;
+            const status: InstallStatus = item.installed ? "installed" : "idle";
+            next[item.id] = { status, message: item.message };
+          }
+          for (const id of CATALOG_PLUGIN_IDS) {
+            if (next[id]?.status === "checking") {
+              next[id] = { status: "idle" };
+            }
+          }
+          return next;
+        });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setInstallState((prev) => {
+          const next = { ...prev };
+          for (const id of CATALOG_PLUGIN_IDS) {
+            if (next[id]?.status !== "installing") {
+              next[id] = { status: "error", message: String(err) };
+            }
+          }
+          return next;
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const installLabel = (state: InstallStatus) =>
+    state === "installed"
+      ? copy.installed
+      : state === "error"
+        ? copy.retry
+        : state === "installing"
+          ? copy.installing
+          : state === "checking"
+            ? copy.checking
+            : copy.install;
+
+  const statusLabel = (state: InstallStatus) =>
+    state === "installed"
+      ? copy.installed
+      : state === "error"
+        ? copy.failed
+        : state === "installing"
+          ? copy.installing
+          : state === "checking"
+            ? copy.checking
+            : copy.notInstalled;
+
+  const renderStatusBadge = (state: InstallStatus) => (
+    <span
+      className={cls(
+        "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10.5px] font-medium",
+        state === "installed"
+          ? dark
+            ? "border-[#225f3a] bg-[#123321] text-[#86efac]"
+            : "border-[#bbf7d0] bg-[#e8f7ee] text-[#166534]"
+          : state === "error"
+            ? dark
+              ? "border-[#713032] bg-[#361f20] text-[#fca5a5]"
+              : "border-[#fecaca] bg-[#fff1f2] text-[#b91c1c]"
+            : state === "installing" || state === "checking"
+              ? dark
+                ? "border-[#5b4a2a] bg-[#2e281d] text-[#fbbf24]"
+                : "border-[#fde68a] bg-[#fffbeb] text-[#92400e]"
+              : dark
+                ? "border-dline bg-[#282826] text-dsub"
+                : "border-line bg-muted text-sub",
+      )}
+    >
+      <span
+        className={cls(
+          "h-1.5 w-1.5 rounded-full",
+          state === "installed"
+            ? "bg-[#22c55e]"
+            : state === "error"
+              ? "bg-[#ef4444]"
+              : state === "installing" || state === "checking"
+                ? "bg-[#f59e0b]"
+                : dark
+                  ? "bg-dsub"
+                  : "bg-sub",
+        )}
+      />
+      {statusLabel(state)}
+    </span>
+  );
 
   const installPlugin = async (plugin: CatalogPlugin) => {
     if (installState[plugin.id]?.status === "installing") return;
@@ -120,7 +265,9 @@ const PluginSkillsPage: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       const result =
         plugin.id === "atelier-skill-public"
           ? await atelierSkillInstallPublicBundle()
-          : await academicResearchInstallClaudePlugin();
+          : plugin.id === "insane-search-gajecode"
+            ? await insaneSearchInstallGajecodeSkill()
+            : await academicResearchInstallClaudePlugin();
       setInstallState((prev) => ({
         ...prev,
         [plugin.id]: {
@@ -156,14 +303,7 @@ const PluginSkillsPage: React.FC<{ tw: Tweaks }> = ({ tw }) => {
             {PLUGINS.map((plugin) => {
               const state = installState[plugin.id]?.status || "idle";
               const message = installState[plugin.id]?.message;
-              const label =
-                state === "installed"
-                  ? copy.installed
-                  : state === "error"
-                    ? copy.failed
-                    : state === "installing"
-                      ? copy.installing
-                      : copy.install;
+              const label = installLabel(state);
               return (
                 <article
                   key={plugin.id}
@@ -187,13 +327,14 @@ const PluginSkillsPage: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                       <div className="flex items-center gap-2">
                         <h3 className="truncate text-[14px] font-semibold">{ko ? plugin.titleKo : plugin.titleEn}</h3>
                         <span className={cls("shrink-0 text-[11px]", dark ? "text-dsub" : "text-sub")}>{plugin.provider}</span>
+                        {renderStatusBadge(state)}
                       </div>
                       <p className={cls("mt-1 text-[12px] leading-[1.45]", dark ? "text-dsub" : "text-sub")}>
                         {ko ? plugin.detailKo : plugin.detailEn}
                       </p>
                     </div>
                   </div>
-                  {message && (
+                  {message && state === "error" && (
                     <p className={cls("mt-3 text-[11px] leading-[1.45]", state === "error" ? "text-red-400" : dark ? "text-dsub" : "text-sub")}>
                       {message}
                     </p>
@@ -201,7 +342,7 @@ const PluginSkillsPage: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                   <button
                     type="button"
                     onClick={() => installPlugin(plugin)}
-                    disabled={state === "installing" || state === "installed"}
+                    disabled={state === "checking" || state === "installing" || state === "installed"}
                     className={cls(
                       "mt-4 h-9 rounded-[7px] px-4 text-[12px] font-medium transition-colors disabled:opacity-65",
                       state === "installed"
@@ -223,6 +364,72 @@ const PluginSkillsPage: React.FC<{ tw: Tweaks }> = ({ tw }) => {
             <h2 className="text-[15px] font-semibold">{copy.skills}</h2>
           </div>
           <div className="grid gap-2 md:grid-cols-2">
+            {INSTALLABLE_SKILLS.map((plugin) => {
+              const state = installState[plugin.id]?.status || "idle";
+              const message = installState[plugin.id]?.message;
+              const label = installLabel(state);
+              return (
+                <article
+                  key={plugin.id}
+                  className={cls(
+                    "rounded-[8px] border p-4",
+                    dark ? "border-dline bg-[#20201e]" : "border-line bg-surface",
+                  )}
+                >
+                  <div className="flex items-start gap-3">
+                    <span
+                      className="grid h-9 w-9 shrink-0 place-items-center rounded-[8px] text-[12px] font-semibold"
+                      style={{
+                        color: plugin.color,
+                        background: `${plugin.color}1f`,
+                        boxShadow: `inset 0 0 0 1px ${plugin.color}66`,
+                      }}
+                    >
+                      {plugin.short}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <h3 className="truncate text-[14px] font-semibold">{ko ? plugin.titleKo : plugin.titleEn}</h3>
+                        <span className={cls("shrink-0 text-[11px]", dark ? "text-dsub" : "text-sub")}>{plugin.provider}</span>
+                        {renderStatusBadge(state)}
+                      </div>
+                      <p className={cls("mt-1 text-[12px] leading-[1.45]", dark ? "text-dsub" : "text-sub")}>
+                        {ko ? plugin.detailKo : plugin.detailEn}
+                      </p>
+                      {plugin.sourceUrl && (
+                        <a
+                          href={plugin.sourceUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className={cls("mt-2 inline-flex text-[11px] underline underline-offset-2", dark ? "text-dsub hover:text-dink" : "text-sub hover:text-ink")}
+                        >
+                          {plugin.sourceUrl}
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                  {message && state === "error" && (
+                    <p className={cls("mt-3 text-[11px] leading-[1.45]", state === "error" ? "text-red-400" : dark ? "text-dsub" : "text-sub")}>
+                      {message}
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => installPlugin(plugin)}
+                    disabled={state === "checking" || state === "installing" || state === "installed"}
+                    className={cls(
+                      "mt-4 h-9 rounded-[7px] px-4 text-[12px] font-medium transition-colors disabled:opacity-65",
+                      state === "installed"
+                        ? dark ? "bg-[#173427] text-[#86efac]" : "bg-[#e8f7ee] text-[#166534]"
+                        : dark ? "bg-dmuted text-dink hover:bg-[#393936]" : "bg-muted text-ink hover:bg-line",
+                    )}
+                  >
+                    {label}
+                  </button>
+                </article>
+              );
+            })}
+
             {BUILT_IN_SKILLS.map((skill) => (
               <article
                 key={skill.id}

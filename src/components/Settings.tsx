@@ -316,6 +316,7 @@ const ProfilesSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => voi
         colorDot: "Color dot",
         name: "Name",
         command: "Command (e.g. claude, python3)",
+        source: "Source",
         minOne: "At least one is required",
         remove: "Remove",
         add: "+ Add profile",
@@ -330,6 +331,7 @@ const ProfilesSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => voi
         colorDot: "색 도트",
         name: "이름",
         command: "실행 명령 (예: claude, python3)",
+        source: "원본",
         minOne: "최소 1개 필요",
         remove: "삭제",
         add: "+ 프로필 추가",
@@ -371,7 +373,7 @@ const ProfilesSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => voi
           <div
             key={p.id}
             className={cls(
-              "flex items-center gap-3 px-4 h-14",
+              "flex items-center gap-3 px-4 py-2 min-h-14",
               i > 0 ? (dark ? "border-t border-dline" : "border-t border-line") : "",
             )}
           >
@@ -394,17 +396,32 @@ const ProfilesSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => voi
                   : "bg-surface border-line text-ink",
               )}
             />
-            <input
-              value={p.cmd}
-              onChange={(e) => updateProfile(i, { cmd: e.target.value })}
-              placeholder={copy.command}
-              className={cls(
-                "flex-1 min-w-0 h-8 px-2.5 rounded-[6px] border font-mono text-[12px] outline-none",
-                dark
-                  ? "bg-dmuted border-dline text-dink"
-                  : "bg-surface border-line text-ink",
+            <div className="flex-1 min-w-0">
+              <input
+                value={p.cmd}
+                onChange={(e) => updateProfile(i, { cmd: e.target.value })}
+                placeholder={copy.command}
+                className={cls(
+                  "w-full h-8 px-2.5 rounded-[6px] border font-mono text-[12px] outline-none",
+                  dark
+                    ? "bg-dmuted border-dline text-dink"
+                    : "bg-surface border-line text-ink",
+                )}
+              />
+              {p.sourceUrl && (
+                <a
+                  href={p.sourceUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={cls(
+                    "inline-flex mt-1 text-[11px] underline underline-offset-2",
+                    dark ? "text-dsub hover:text-dink" : "text-sub hover:text-ink",
+                  )}
+                >
+                  {copy.source}: {p.sourceUrl}
+                </a>
               )}
-            />
+            </div>
             <button
               type="button"
               onClick={() => removeProfile(i)}
@@ -577,6 +594,9 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
   const [patchUrl, setPatchUrl] = React.useState("");
   const [patchError, setPatchError] = React.useState("");
   const [patchNotes, setPatchNotes] = React.useState<PreviewPatchNote[]>([]);
+  const [bugSending, setBugSending] = React.useState(false);
+  const [bugSendStatus, setBugSendStatus] = React.useState("");
+  const [bugSendError, setBugSendError] = React.useState("");
   const copy = React.useMemo(() => language === "en"
     ? {
         title: "Preview panel",
@@ -598,6 +618,10 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
         bodyPlaceholder: "Steps, expected result, actual result, screenshot notes, console or preview errors...",
         copyReport: "Copy report",
         copied: "Copied",
+        emailReport: "Email report",
+        sendingReport: "Sending...",
+        reportSent: "Report sent to indra850@gmail.com.",
+        reportFailed: (message: string) => `Email report failed: ${message}`,
         openIssue: "Open GitHub issue",
         emptyTitle: "Untitled bug report",
         version: "Version",
@@ -651,6 +675,10 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
         bodyPlaceholder: "재현 순서, 기대 결과, 실제 결과, 스크린샷 설명, 콘솔/프리뷰 에러 문구...",
         copyReport: "제보 내용 복사",
         copied: "복사됨",
+        emailReport: "메일로 제보",
+        sendingReport: "전송 중…",
+        reportSent: "indra850@gmail.com으로 제보를 보냈습니다.",
+        reportFailed: (message: string) => `메일 제보 실패: ${message}`,
         openIssue: "GitHub 이슈 열기",
         emptyTitle: "제목 없는 버그 제보",
         version: "버전",
@@ -769,6 +797,41 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
     });
     const url = `https://github.com/${ATELIER_GITHUB_REPO}/issues/new?${params.toString()}`;
     await openExternalUrl(url);
+  };
+
+  const sendBugReportEmail = async () => {
+    setBugSending(true);
+    setBugSendStatus("");
+    setBugSendError("");
+    try {
+      const res = await fetch(BUG_REPORT_ENDPOINT, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          _captcha: "false",
+          _subject: `[Atelier Bug] ${reportTitle}`,
+          _template: "box",
+          app: "Atelier",
+          version: currentVersion ? `v${currentVersion}` : "dev",
+          area: selectedArea,
+          title: reportTitle,
+          details: bugBody.trim() || "-",
+          report: reportBody,
+        }),
+      });
+      const text = await res.text();
+      if (!res.ok) {
+        throw new Error(text.slice(0, 180) || `HTTP ${res.status}`);
+      }
+      setBugSendStatus(copy.reportSent);
+    } catch (err) {
+      setBugSendError(copy.reportFailed(String(err instanceof Error ? err.message : err)));
+    } finally {
+      setBugSending(false);
+    }
   };
 
   return (
@@ -917,11 +980,34 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
           <button
             type="button"
             onClick={() => void openGithubIssue()}
-            className="h-9 px-3 rounded-[7px] border text-[12.5px] bg-[var(--accent)] text-white border-[var(--accent-hover)] hover:opacity-90"
+            className={cls(
+              "h-9 px-3 rounded-[7px] border text-[12.5px]",
+              dark ? "border-dline text-dink hover:bg-dmuted" : "border-line text-ink hover:bg-muted",
+            )}
           >
             {copy.openIssue}
           </button>
+          <button
+            type="button"
+            onClick={() => void sendBugReportEmail()}
+            disabled={bugSending}
+            className="h-9 px-3 rounded-[7px] border text-[12.5px] bg-[var(--accent)] text-white border-[var(--accent-hover)] hover:opacity-90 disabled:opacity-45"
+          >
+            {bugSending ? copy.sendingReport : copy.emailReport}
+          </button>
         </div>
+        {(bugSendStatus || bugSendError) && (
+          <div
+            className={cls(
+              "mt-2 text-[12px] text-right",
+              bugSendError
+                ? dark ? "text-[#ffb3b3]" : "text-[#9a342f]"
+                : dark ? "text-[#9fd0a9]" : "text-[#2c7a43]",
+            )}
+          >
+            {bugSendError || bugSendStatus}
+          </div>
+        )}
       </section>
     </>
   );
@@ -931,6 +1017,8 @@ const ATELIER_GITHUB_REPO = "BYKAYLE/atelier";
 const ATELIER_GITHUB_API_BASE = `https://api.github.com/repos/${ATELIER_GITHUB_REPO}`;
 const ATELIER_GITHUB_API = `${ATELIER_GITHUB_API_BASE}/releases/latest`;
 const ATELIER_GITHUB_RELEASES = `https://github.com/${ATELIER_GITHUB_REPO}/releases/latest`;
+const BUG_REPORT_EMAIL = "indra850@gmail.com";
+const BUG_REPORT_ENDPOINT = `https://formsubmit.co/ajax/${BUG_REPORT_EMAIL}`;
 
 type GithubReleaseInfo = {
   version: string;
@@ -957,6 +1045,16 @@ function githubReleaseHeaders() {
 
 function normalizeVersion(value: string | undefined | null): string {
   return (value ?? "").trim().replace(/^v/i, "").split("+")[0].split("-")[0];
+}
+
+function formatReleaseDate(value: string, language: AppLanguage): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString(language === "en" ? "en-US" : "ko-KR", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
 }
 
 function compareVersions(a: string, b: string): number {
@@ -1051,9 +1149,8 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
         title: "Updates",
         sub: "Checks GitHub Releases for new Atelier versions. Install packages are verified with an ED25519 signature.",
         currentVersion: "Current version",
-        currentVersionHint: "Version embedded in the app bundle metadata (tauri.conf.json).",
+        patchedAt: "Patched",
         check: "Check for updates",
-        checkHint: "Uses the latest GitHub Release tag as the update source, independent of Microsoft Store review timing.",
         checking: "Checking...",
         checkNow: "Check now",
         checkingStatus: "Checking GitHub Releases...",
@@ -1080,9 +1177,8 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
         title: "업데이트",
         sub: "GitHub Releases 기준으로 Atelier 새 버전을 확인합니다. 설치 패키지는 ED25519 서명으로 검증됩니다.",
         currentVersion: "현재 버전",
-        currentVersionHint: "앱 번들 메타데이터에 박힌 버전 (tauri.conf.json).",
+        patchedAt: "패치일",
         check: "업데이트 확인",
-        checkHint: "Microsoft Store 심사 대기와 무관하게 GitHub 최신 릴리스 태그를 기준으로 확인합니다.",
         checking: "확인 중…",
         checkNow: "지금 확인",
         checkingStatus: "GitHub 릴리스 확인 중…",
@@ -1117,6 +1213,7 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
   const [installing, setInstalling] = React.useState(false);
   const [currentVersion, setCurrentVersion] = React.useState<string>("...");
   const [currentVersionRaw, setCurrentVersionRaw] = React.useState<string>("");
+  const [currentPatchDate, setCurrentPatchDate] = React.useState<string>("");
 
   React.useEffect(() => {
     let alive = true;
@@ -1127,6 +1224,12 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
         if (alive) {
           setCurrentVersion(`v${version}`);
           setCurrentVersionRaw(version);
+        }
+        try {
+          const release = await fetchGithubReleaseByVersion(version);
+          if (alive) setCurrentPatchDate(release.date || "");
+        } catch {
+          if (alive) setCurrentPatchDate("");
         }
       } catch {
         if (alive) setCurrentVersion("dev");
@@ -1237,16 +1340,21 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
       <Row
         dark={dark}
         label={copy.currentVersion}
-        hint={copy.currentVersionHint}
       >
-        <div className={cls("text-[12px] font-mono", dark ? "text-dink" : "text-ink")}>
-          {currentVersion}
+        <div className="text-right">
+          <div className={cls("text-[12px] font-mono", dark ? "text-dink" : "text-ink")}>
+            {currentVersion}
+          </div>
+          {currentPatchDate && (
+            <div className={cls("mt-1 text-[11.5px]", dark ? "text-dsub" : "text-sub")}>
+              {copy.patchedAt} {formatReleaseDate(currentPatchDate, language)}
+            </div>
+          )}
         </div>
       </Row>
       <Row
         dark={dark}
         label={copy.check}
-        hint={copy.checkHint}
       >
         <button
           type="button"

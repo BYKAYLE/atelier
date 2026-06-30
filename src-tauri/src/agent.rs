@@ -14,8 +14,10 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::credentials::{
-    env_var_for, read_agent_api_key, read_api_key, should_clear_inherited_agent_api_env,
-    sync_codex_auth_to_hermes,
+    configure_gajecode_runtime_env, env_var_for, gajecode_cli_name, gajecode_executable_path,
+    gajecode_has_claude_subscription_credential, gajecode_skills_dir, gajecode_workspace_dir,
+    read_agent_api_key, read_api_key, repair_gajecode_claude_subscription_credential,
+    should_clear_inherited_agent_api_env, sync_codex_auth_to_hermes,
 };
 
 const RETURN_RAW_EVENT_LIMIT: usize = 120;
@@ -25,6 +27,15 @@ const RETURN_RAW_EVENT_CHAR_LIMIT: usize = 12_000;
 pub struct AgentModelOption {
     value: String,
     label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    disabled: Option<bool>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct ClaudeModelOptionsResult {
+    source: String,
+    updated_at: Option<String>,
+    models: Vec<AgentModelOption>,
 }
 
 #[derive(Clone, Serialize)]
@@ -152,7 +163,11 @@ fn read_codex_model_options_sync() -> CodexModelOptionsResult {
                         let label = json_string(item, "display_name")
                             .or_else(|| json_string(item, "label"))
                             .unwrap_or_else(|| label_from_model_slug(&slug));
-                        models.push(AgentModelOption { value: slug, label });
+                        models.push(AgentModelOption {
+                            value: slug,
+                            label,
+                            disabled: None,
+                        });
                     }
                 }
                 if !models.is_empty() {
@@ -173,7 +188,190 @@ fn read_codex_model_options_sync() -> CodexModelOptionsResult {
         models: vec![AgentModelOption {
             label: label_from_model_slug(&fallback),
             value: fallback,
+            disabled: None,
         }],
+    }
+}
+
+const CLAUDE_MODELS_DOCS_URL: &str =
+    "https://docs.anthropic.com/en/docs/about-claude/models/overview";
+
+const CLAUDE_FALLBACK_MODELS: &[(&str, &str, bool)] = &[
+    ("claude-opus-4-8", "Opus 4.8", false),
+    ("claude-fable-5", "Fable 5 Currently unavailable", true),
+    ("claude-sonnet-4-6", "Sonnet 4.6", false),
+    ("claude-haiku-4-5-20251001", "Haiku 4.5", false),
+];
+
+fn claude_fallback_model_options(source: &str) -> ClaudeModelOptionsResult {
+    ClaudeModelOptionsResult {
+        source: source.to_string(),
+        updated_at: None,
+        models: CLAUDE_FALLBACK_MODELS
+            .iter()
+            .map(|(value, label, disabled)| AgentModelOption {
+                value: (*value).to_string(),
+                label: (*label).to_string(),
+                disabled: if *disabled { Some(true) } else { None },
+            })
+            .collect(),
+    }
+}
+
+fn fetch_claude_models_docs_html() -> Result<String, String> {
+    let mut cmd = command_for_cli("curl");
+    cmd.arg("-fsSL")
+        .arg("--max-time")
+        .arg("20")
+        .arg(CLAUDE_MODELS_DOCS_URL)
+        .env("PATH", crate::augmented_cli_path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let output = cmd
+        .output()
+        .map_err(|e| format!("claude models docs fetch: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "claude models docs fetch exited with {}: {}",
+            output.status,
+            stderr.trim()
+        ));
+    }
+    String::from_utf8(output.stdout).map_err(|e| format!("claude models docs utf8: {e}"))
+}
+
+fn extract_claude_model_ids(raw: &str) -> BTreeSet<String> {
+    let mut ids = BTreeSet::new();
+    let mut offset = 0usize;
+    while let Some(relative) = raw[offset..].find("claude-") {
+        let start = offset + relative;
+        let mut end = start;
+        for ch in raw[start..].chars() {
+            if ch.is_ascii_alphanumeric() || ch == '-' {
+                end += ch.len_utf8();
+            } else {
+                break;
+            }
+        }
+        let candidate = &raw[start..end];
+        if candidate.starts_with("claude-fable-")
+            || candidate.starts_with("claude-opus-")
+            || candidate.starts_with("claude-sonnet-")
+            || candidate.starts_with("claude-haiku-")
+        {
+            ids.insert(normalize_claude_model_id(candidate));
+        }
+        offset = end.max(start + "claude-".len());
+    }
+    ids
+}
+
+fn normalize_claude_model_id(id: &str) -> String {
+    for family in ["fable", "opus", "sonnet", "haiku"] {
+        let prefix = format!("claude-{family}-");
+        let Some(rest) = id.strip_prefix(&prefix) else {
+            continue;
+        };
+        if rest.len() == 2 && rest.chars().all(|ch| ch.is_ascii_digit()) {
+            let mut chars = rest.chars();
+            let major = chars.next().unwrap_or('4');
+            let minor = chars.next().unwrap_or('0');
+            return format!("{prefix}{major}-{minor}");
+        }
+    }
+    id.to_string()
+}
+
+fn claude_model_family(id: &str) -> Option<&'static str> {
+    if id.starts_with("claude-fable-") {
+        Some("fable")
+    } else if id.starts_with("claude-opus-") {
+        Some("opus")
+    } else if id.starts_with("claude-sonnet-") {
+        Some("sonnet")
+    } else if id.starts_with("claude-haiku-") {
+        Some("haiku")
+    } else {
+        None
+    }
+}
+
+fn claude_model_version_key(id: &str) -> Vec<u32> {
+    let Some(family) = claude_model_family(id) else {
+        return Vec::new();
+    };
+    id.trim_start_matches("claude-")
+        .trim_start_matches(family)
+        .trim_start_matches('-')
+        .split('-')
+        .filter_map(|part| part.parse::<u32>().ok())
+        .collect()
+}
+
+fn latest_claude_model_for_family(ids: &BTreeSet<String>, family: &str) -> Option<String> {
+    ids.iter()
+        .filter(|id| claude_model_family(id) == Some(family))
+        .max_by(|left, right| claude_model_version_key(left).cmp(&claude_model_version_key(right)))
+        .cloned()
+}
+
+fn claude_label_from_model_id(id: &str, disabled: bool) -> String {
+    let family = claude_model_family(id).unwrap_or("model");
+    let name = match family {
+        "fable" => "Fable",
+        "opus" => "Opus",
+        "sonnet" => "Sonnet",
+        "haiku" => "Haiku",
+        _ => "Claude",
+    };
+    let version = claude_model_version_key(id)
+        .into_iter()
+        .take(2)
+        .map(|part| part.to_string())
+        .collect::<Vec<_>>()
+        .join(".");
+    let label = if version.is_empty() {
+        name.to_string()
+    } else {
+        format!("{name} {version}")
+    };
+    if disabled {
+        format!("{label} Currently unavailable")
+    } else {
+        label
+    }
+}
+
+fn read_claude_model_options_sync() -> ClaudeModelOptionsResult {
+    let Ok(raw) = fetch_claude_models_docs_html() else {
+        return claude_fallback_model_options("claude_docs_fallback");
+    };
+    let ids = extract_claude_model_ids(&raw);
+    let mut models = Vec::new();
+    let mut seen = BTreeSet::new();
+    for family in ["opus", "fable", "sonnet", "haiku"] {
+        let Some(id) = latest_claude_model_for_family(&ids, family) else {
+            continue;
+        };
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        let disabled = family == "fable";
+        models.push(AgentModelOption {
+            label: claude_label_from_model_id(&id, disabled),
+            value: id,
+            disabled: if disabled { Some(true) } else { None },
+        });
+    }
+    if models.is_empty() {
+        return claude_fallback_model_options("claude_docs_empty_fallback");
+    }
+    ClaudeModelOptionsResult {
+        source: "claude_docs".to_string(),
+        updated_at: Some(chrono::Utc::now().to_rfc3339()),
+        models,
     }
 }
 
@@ -226,7 +424,11 @@ fn parse_openrouter_model_options(raw: &str, source: &str) -> Option<OpenRouterM
             continue;
         }
         let label = json_string(item, "name").unwrap_or_else(|| id.clone());
-        models.push(AgentModelOption { value: id, label });
+        models.push(AgentModelOption {
+            value: id,
+            label,
+            disabled: None,
+        });
     }
     if models.is_empty() {
         return None;
@@ -302,6 +504,7 @@ fn read_openrouter_model_options_sync() -> OpenRouterModelOptionsResult {
             .map(|(value, label)| AgentModelOption {
                 value: (*value).to_string(),
                 label: (*label).to_string(),
+                disabled: None,
             })
             .collect(),
     }
@@ -784,6 +987,16 @@ fn command_for_hermes() -> Command {
     command_for_cli("hermes")
 }
 
+fn command_for_gajecode() -> Result<Command, String> {
+    let executable = gajecode_executable_path().ok_or_else(|| {
+        "가재코드 CLI가 설치되어 있지 않습니다. 설정 > 연결에서 자동 설치를 먼저 실행하세요."
+            .to_string()
+    })?;
+    let mut command = command_for_cli(&executable.to_string_lossy());
+    configure_gajecode_runtime_env(&mut command)?;
+    Ok(command)
+}
+
 fn is_help_request(args: &[String]) -> bool {
     args.iter()
         .any(|arg| matches!(arg.as_str(), "-h" | "--help" | "help"))
@@ -813,6 +1026,39 @@ fn allow_cli_subcommand(
     ))
 }
 
+fn is_known_gajecode_cli_command(command: &str) -> bool {
+    matches!(
+        command,
+        "codex-native-hook"
+            | "state"
+            | "setup"
+            | "skills"
+            | "session"
+            | "harness"
+            | "coordinator"
+            | "team"
+            | "ultragoal"
+            | "gc"
+            | "ralplan"
+            | "config"
+            | "notify"
+            | "daemon"
+            | "web-search"
+            | "q"
+            | "mcp-serve"
+            | "contribute-pr"
+            | "contribution-prep"
+            | "deep-interview"
+            | "migrate"
+            | "rlm"
+            | "update"
+            | "launch"
+            | "--help"
+            | "-h"
+            | "help"
+    )
+}
+
 fn validate_agent_cli_command(provider: &str, args: &[String]) -> Result<(), String> {
     if args.is_empty() {
         return Err("실행할 CLI 명령이 비어 있습니다.".into());
@@ -821,8 +1067,22 @@ fn validate_agent_cli_command(provider: &str, args: &[String]) -> Result<(), Str
         return Err("명령 인자에 허용되지 않는 문자가 있습니다.".into());
     }
 
-    let lowered: Vec<String> = args.iter().map(|arg| arg.to_lowercase()).collect();
+    let mut lowered: Vec<String> = args.iter().map(|arg| arg.to_lowercase()).collect();
+    if provider == "gajecode" && lowered.first().is_some_and(|arg| arg == "gjc") {
+        lowered.remove(0);
+    }
+    if lowered.is_empty() {
+        return Err("실행할 CLI 명령이 비어 있습니다.".into());
+    }
     let first = lowered[0].as_str();
+    let help_requested = lowered
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--help" | "-h" | "help"));
+    if provider == "gajecode" && help_requested {
+        if is_known_gajecode_cli_command(first) {
+            return Ok(());
+        }
+    }
     let blocked = [
         "remove",
         "rm",
@@ -933,6 +1193,64 @@ fn validate_agent_cli_command(provider: &str, args: &[String]) -> Result<(), Str
                 "Codex 작업 탭에서 지원하지 않는 명령입니다: {first}"
             )),
         },
+        "gajecode" => match first {
+            "help" | "--help" | "-h" | "--version" | "-v" | "--smoke-test" => Ok(()),
+            value if value.starts_with("--list-models") => Ok(()),
+            "-p" | "--print" | "--continue" | "-c" | "--resume" | "-r" | "--export"
+            | "--worktree" => Ok(()),
+            "skills" => allow_cli_subcommand(
+                provider,
+                &lowered,
+                "skills",
+                &["list", "read", "browse", "search"],
+            ),
+            "session" => allow_cli_subcommand(provider, &lowered, "session", &["list", "status"]),
+            "setup" => {
+                let component = lowered.get(1).map(String::as_str).unwrap_or("defaults");
+                let check_only = lowered.iter().any(|arg| arg == "--check");
+                let smoke_only =
+                    component == "hermes" && lowered.iter().any(|arg| arg == "--smoke");
+                if check_only
+                    && matches!(
+                        component,
+                        "claude"
+                            | "codex"
+                            | "credentials"
+                            | "defaults"
+                            | "hermes"
+                            | "hooks"
+                            | "provider"
+                            | "python"
+                            | "stt"
+                    )
+                    || smoke_only
+                {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "가재코드 작업 탭에서 지원하지 않는 명령입니다: {}",
+                        lowered.join(" ")
+                    ))
+                }
+            }
+            "notify" => allow_cli_subcommand(provider, &lowered, "notify", &["status", "setup"]),
+            "mcp-serve" => {
+                if lowered.iter().any(|arg| arg == "--check") {
+                    Ok(())
+                } else {
+                    Err("mcp-serve는 --check 점검 모드만 작업 탭에서 실행할 수 있습니다.".into())
+                }
+            }
+            "web-search" | "q" => Ok(()),
+            "rlm" => Ok(()),
+            _ if first.starts_with('-') => Err(format!(
+                "가재코드 작업 탭에서 지원하지 않는 옵션입니다: {first}"
+            )),
+            _ if is_known_gajecode_cli_command(first) => Err(format!(
+                "가재코드 작업 탭에서 지원하지 않는 명령입니다: {first}"
+            )),
+            _ => Ok(()),
+        },
         other => Err(format!("지원하지 않는 provider입니다: {other}")),
     }
 }
@@ -972,19 +1290,27 @@ fn wait_with_timeout(mut child: Child, timeout: Duration) -> Result<(Output, boo
 
 fn run_agent_cli_command(
     provider: String,
-    args: Vec<String>,
+    mut args: Vec<String>,
     cwd: Option<String>,
 ) -> Result<AgentCliCommandResult, String> {
     let provider = provider.to_lowercase();
+    if provider == "gajecode"
+        && args
+            .first()
+            .is_some_and(|arg| arg.eq_ignore_ascii_case("gjc"))
+    {
+        args.remove(0);
+    }
     validate_agent_cli_command(&provider, &args)?;
 
     let mut cmd = match provider.as_str() {
         "hermes" => command_for_hermes(),
         "claude" => command_for_cli("claude"),
         "codex" => command_for_cli("codex"),
+        "gajecode" => command_for_gajecode()?,
         _ => return Err(format!("지원하지 않는 provider입니다: {provider}")),
     };
-    if provider != "hermes" {
+    if provider != "hermes" && provider != "gajecode" {
         inject_agent_cli_credential_env(&mut cmd, &provider);
     }
     if let Some(cwd) = normalize_agent_cwd(cwd)? {
@@ -993,8 +1319,10 @@ fn run_agent_cli_command(
     for arg in &args {
         cmd.arg(arg);
     }
-    cmd.env("PATH", crate::augmented_cli_path())
-        .env("LANG", "ko_KR.UTF-8")
+    if provider != "gajecode" {
+        cmd.env("PATH", crate::augmented_cli_path());
+    }
+    cmd.env("LANG", "ko_KR.UTF-8")
         .env("LC_CTYPE", "ko_KR.UTF-8")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -1070,6 +1398,121 @@ fn academic_research_plugin_state(list_output: &str) -> (bool, bool) {
             .take(5)
             .any(|line| line.contains("Status:") && !line.contains("disabled"));
     (installed, enabled)
+}
+
+fn count_skill_entries(root: &Path) -> usize {
+    fs::read_dir(root)
+        .ok()
+        .into_iter()
+        .flat_map(|entries| entries.filter_map(Result::ok))
+        .filter(|entry| {
+            let path = entry.path();
+            path.is_dir() && path.join("SKILL.md").is_file()
+        })
+        .count()
+}
+
+fn atelier_public_skill_bundle_status() -> PluginSkillInstallStatusItem {
+    let Some(cache_dir) = home_path(&[".atelier", "skills", "atelier-skill"]) else {
+        return PluginSkillInstallStatusItem {
+            id: "atelier-skill-public".to_string(),
+            installed: false,
+            enabled: None,
+            message: "Could not resolve the user home directory.".to_string(),
+        };
+    };
+
+    let skill_count = count_skill_entries(&cache_dir);
+    let installed = cache_dir.join(".git").is_dir() && skill_count > 0;
+    let message = if installed {
+        format!(
+            "Installed from {} with {skill_count} public skill entries.",
+            cache_dir.display()
+        )
+    } else if cache_dir.exists() {
+        format!(
+            "{} exists, but it is not a complete Atelier Skill checkout.",
+            cache_dir.display()
+        )
+    } else {
+        "Atelier Skill is not installed.".to_string()
+    };
+
+    PluginSkillInstallStatusItem {
+        id: "atelier-skill-public".to_string(),
+        installed,
+        enabled: None,
+        message,
+    }
+}
+
+fn academic_research_claude_plugin_status() -> PluginSkillInstallStatusItem {
+    match run_claude_plugin_command(&["plugin", "list"], Duration::from_secs(8)) {
+        Ok((ok, output)) => {
+            let (installed, enabled) = academic_research_plugin_state(&output);
+            let message = if installed && enabled {
+                "Claude Academic Research Skills plugin is installed and enabled.".to_string()
+            } else if installed {
+                "Claude Academic Research Skills plugin is installed, but appears disabled."
+                    .to_string()
+            } else if ok {
+                "Claude Academic Research Skills plugin is not installed.".to_string()
+            } else {
+                format!("Could not confirm Claude plugin state: {output}")
+            };
+            PluginSkillInstallStatusItem {
+                id: "academic-research-claude".to_string(),
+                installed,
+                enabled: Some(enabled),
+                message,
+            }
+        }
+        Err(err) => PluginSkillInstallStatusItem {
+            id: "academic-research-claude".to_string(),
+            installed: false,
+            enabled: Some(false),
+            message: format!("Could not check Claude plugin state: {err}"),
+        },
+    }
+}
+
+fn insane_search_gajecode_skill_status() -> PluginSkillInstallStatusItem {
+    let Some(root) = gajecode_skills_dir() else {
+        return PluginSkillInstallStatusItem {
+            id: "insane-search-gajecode".to_string(),
+            installed: false,
+            enabled: None,
+            message: "Could not resolve the isolated Gajae Code skills directory.".to_string(),
+        };
+    };
+
+    let target = root.join("insane-search");
+    let installed = target.join("SKILL.md").is_file();
+    let message = if installed {
+        format!(
+            "Installed in the isolated Gajae Code skill root: {}",
+            target.display()
+        )
+    } else {
+        "Insane Search is not installed in the isolated Gajae Code skill root.".to_string()
+    };
+
+    PluginSkillInstallStatusItem {
+        id: "insane-search-gajecode".to_string(),
+        installed,
+        enabled: None,
+        message,
+    }
+}
+
+fn plugin_skill_install_status_blocking() -> PluginSkillInstallStatusResult {
+    PluginSkillInstallStatusResult {
+        items: vec![
+            atelier_public_skill_bundle_status(),
+            academic_research_claude_plugin_status(),
+            insane_search_gajecode_skill_status(),
+        ],
+    }
 }
 
 fn install_academic_research_claude_plugin_blocking(
@@ -1160,6 +1603,7 @@ fn install_academic_research_claude_plugin_blocking(
 }
 
 const ATELIER_SKILL_REPOSITORY: &str = "https://github.com/BYKAYLE/atelier-skill.git";
+const INSANE_SEARCH_REPOSITORY: &str = "https://github.com/fivetaku/insane-search.git";
 
 fn run_skill_git_command(args: &[String], cwd: Option<&Path>) -> Result<String, String> {
     let mut command = Command::new("git");
@@ -1190,7 +1634,17 @@ fn copy_skill_dir_missing(src: &Path, dst: &Path) -> Result<(), String> {
     copy_dir_recursive(src, dst)
 }
 
+fn copy_skill_dir_update(src: &Path, dst: &Path) -> Result<usize, String> {
+    fs::create_dir_all(dst).map_err(|e| format!("create skill dir {}: {e}", dst.display()))?;
+    copy_dir_recursive_count(src, dst)
+}
+
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    copy_dir_recursive_count(src, dst).map(|_| ())
+}
+
+fn copy_dir_recursive_count(src: &Path, dst: &Path) -> Result<usize, String> {
+    let mut copied = 0usize;
     for entry in fs::read_dir(src).map_err(|e| format!("read dir {}: {e}", src.display()))? {
         let entry = entry.map_err(|e| format!("read dir entry {}: {e}", src.display()))?;
         let name = entry.file_name();
@@ -1209,14 +1663,15 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
         if file_type.is_dir() {
             fs::create_dir_all(&dst_path)
                 .map_err(|e| format!("create dir {}: {e}", dst_path.display()))?;
-            copy_dir_recursive(&src_path, &dst_path)?;
+            copied += copy_dir_recursive_count(&src_path, &dst_path)?;
         } else if file_type.is_file() {
             fs::copy(&src_path, &dst_path).map_err(|e| {
                 format!("copy {} -> {}: {e}", src_path.display(), dst_path.display())
             })?;
+            copied += 1;
         }
     }
-    Ok(())
+    Ok(copied)
 }
 
 fn install_atelier_public_skill_bundle_blocking() -> Result<SkillBundleInstallResult, String> {
@@ -1317,6 +1772,131 @@ fn install_atelier_public_skill_bundle_blocking() -> Result<SkillBundleInstallRe
     })
 }
 
+fn patch_insane_search_gajecode_skill(skill_md: &Path) -> Result<(), String> {
+    const MARKER: &str = "<!-- ATELIER_GAJECODE_ADAPTER -->";
+    const ADAPTER: &str = r#"
+
+<!-- ATELIER_GAJECODE_ADAPTER -->
+> Atelier/Gajae Code adapter: this copy is installed as a Gajae Code-only skill.
+> Before Step 0, if `CLAUDE_PLUGIN_ROOT` is unset, use the isolated skill root:
+> `export CLAUDE_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-${ATELIER_SKILLS_DIR:-$HOME/.gjc/skills}/insane-search}"`
+> This keeps setup, engine, and references inside Atelier's dedicated Gajae Code skill space.
+
+"#;
+
+    let raw =
+        fs::read_to_string(skill_md).map_err(|e| format!("read {}: {e}", skill_md.display()))?;
+    if raw.contains(MARKER) {
+        return Ok(());
+    }
+    let patched = if raw.starts_with("---\n") {
+        if let Some(relative) = raw[4..].find("\n---\n") {
+            let insert_at = 4 + relative + "\n---\n".len();
+            format!("{}{}{}", &raw[..insert_at], ADAPTER, &raw[insert_at..])
+        } else {
+            format!("{ADAPTER}{raw}")
+        }
+    } else {
+        format!("{ADAPTER}{raw}")
+    };
+    fs::write(skill_md, patched).map_err(|e| format!("write {}: {e}", skill_md.display()))
+}
+
+fn install_insane_search_gajecode_skill_blocking() -> Result<SkillBundleInstallResult, String> {
+    let cache_dir = home_path(&[".atelier", "skills", "insane-search"])
+        .ok_or_else(|| "Could not resolve the user home directory.".to_string())?;
+    let cache_parent = cache_dir
+        .parent()
+        .ok_or_else(|| "Could not resolve the insane-search cache parent.".to_string())?
+        .to_path_buf();
+    fs::create_dir_all(&cache_parent)
+        .map_err(|e| format!("create skill cache {}: {e}", cache_parent.display()))?;
+
+    let mut log_lines = Vec::new();
+    if cache_dir.join(".git").is_dir() {
+        let output = run_skill_git_command(&["pull".into(), "--ff-only".into()], Some(&cache_dir))?;
+        log_lines.push(format!("[ok] update repository: {output}"));
+    } else if cache_dir.exists() {
+        return Err(format!(
+            "{} exists but is not a git checkout. Move it aside before installing insane-search.",
+            cache_dir.display()
+        ));
+    } else {
+        let output = run_skill_git_command(
+            &[
+                "clone".into(),
+                "--depth".into(),
+                "1".into(),
+                INSANE_SEARCH_REPOSITORY.into(),
+                cache_dir.to_string_lossy().to_string(),
+            ],
+            None,
+        )?;
+        log_lines.push(format!("[ok] clone repository: {output}"));
+    }
+
+    let source = cache_dir.join("skills").join("insane-search");
+    if !source.join("SKILL.md").is_file() {
+        return Err(format!(
+            "insane-search repository does not contain skills/insane-search/SKILL.md at {}",
+            source.display()
+        ));
+    }
+
+    let root = gajecode_skills_dir()
+        .ok_or_else(|| "Could not resolve the isolated Gajae Code skills directory.".to_string())?;
+    fs::create_dir_all(&root)
+        .map_err(|e| format!("create Gajae Code skills root {}: {e}", root.display()))?;
+    let target = root.join("insane-search");
+    let already_installed = target.join("SKILL.md").is_file();
+    let copied = copy_skill_dir_update(&source, &target)?;
+
+    let setup_source = cache_dir.join("setup");
+    if setup_source.is_dir() {
+        let setup_target = target.join("setup");
+        let setup_copied = copy_skill_dir_update(&setup_source, &setup_target)?;
+        log_lines.push(format!(
+            "[ok] copy setup support files: {setup_copied} files"
+        ));
+    }
+    for doc in [
+        "LICENSE",
+        "DISCLAIMER.md",
+        "PLATFORMS.md",
+        "README.ko.md",
+        "README.md",
+    ] {
+        let src = cache_dir.join(doc);
+        if src.is_file() {
+            let dst = target.join(doc);
+            fs::copy(&src, &dst)
+                .map_err(|e| format!("copy {} -> {}: {e}", src.display(), dst.display()))?;
+        }
+    }
+    patch_insane_search_gajecode_skill(&target.join("SKILL.md"))?;
+    log_lines.push(format!(
+        "[ok] install Gajae Code skill: {} -> {} ({copied} skill files)",
+        source.display(),
+        target.display()
+    ));
+
+    let message = if already_installed {
+        "insane-search is updated in the isolated Gajae Code skills folder.".to_string()
+    } else {
+        "insane-search is installed as an isolated Gajae Code skill.".to_string()
+    };
+
+    Ok(SkillBundleInstallResult {
+        installed: true,
+        skill_count: 1,
+        skipped_count: usize::from(already_installed),
+        repository_path: cache_dir.to_string_lossy().to_string(),
+        installed_roots: vec![root.to_string_lossy().to_string()],
+        message,
+        log: log_lines.join("\n"),
+    })
+}
+
 fn describe_cli_command(cli: &str) -> String {
     #[cfg(target_os = "windows")]
     {
@@ -1351,6 +1931,15 @@ fn describe_hermes_command() -> String {
         }
     }
     describe_cli_command("hermes")
+}
+
+fn describe_gajecode_command() -> String {
+    let executable =
+        gajecode_executable_path().unwrap_or_else(|| PathBuf::from(gajecode_cli_name()));
+    format!(
+        "program={} isolated_home=true isolated_skills=true",
+        executable.display()
+    )
 }
 
 fn script_interpreter(path: &PathBuf) -> Option<(PathBuf, Vec<String>)> {
@@ -1394,6 +1983,214 @@ fn hermes_heredoc_marker_closed(marker: &str, line: &str) -> bool {
             .chars()
             .next()
             .is_some_and(|c| c.is_ascii_digit() || c == '[')
+}
+
+fn agent_line_has_elapsed_seconds_tail(s: &str) -> bool {
+    let mut t = s.trim();
+    if let Some(stripped) = t.strip_suffix("[error]") {
+        t = stripped.trim_end();
+    }
+    if let Some(rest) = t.strip_suffix(']') {
+        if let Some((before, marker)) = rest.rsplit_once('[') {
+            let marker = marker.trim();
+            if marker
+                .strip_prefix("exit ")
+                .and_then(|code| code.trim().parse::<i32>().ok())
+                .is_some()
+            {
+                t = before.trim_end();
+            }
+        }
+    }
+    let Some(last) = t.split_whitespace().last() else {
+        return false;
+    };
+    let Some(number) = last.strip_suffix('s') else {
+        return false;
+    };
+    !number.is_empty() && number.parse::<f64>().is_ok()
+}
+
+fn agent_line_is_command_dump(s: &str) -> bool {
+    let t = s.trim();
+    if t.is_empty() {
+        return false;
+    }
+    if t.starts_with("from pathlib import Path")
+        || t.contains("proc wait proc_")
+        || t.contains("proc log proc_")
+        || t.contains("proc poll proc_")
+        || t.starts_with("repls={")
+        || t.starts_with("repls = {")
+        || t.contains("repls.items()")
+        || t.contains("p.write_text(")
+        || t.contains("text=text.replace(")
+        || t.contains("text = text.replace(")
+        || ((t.starts_with('\'') || t.starts_with('"'))
+            && (t.contains(".tsx':")
+                || t.contains(".ts':")
+                || t.contains(".jsx':")
+                || t.contains(".js':")
+                || t.contains(".py':")
+                || t.contains(".css':")
+                || t.contains(".json':")
+                || t.contains(".tsx\":")
+                || t.contains(".ts\":")
+                || t.contains(".jsx\":")
+                || t.contains(".js\":")
+                || t.contains(".py\":")
+                || t.contains(".css\":")
+                || t.contains(".json\":")))
+        || t.starts_with("write /tmp/")
+        || t.starts_with("write /var/")
+        || t.starts_with("write /Users/")
+        || t.starts_with("edit /tmp/")
+        || t.starts_with("edit /var/")
+        || t.starts_with("edit /Users/")
+        || t.starts_with("navigate 127.0.0.1")
+        || t.starts_with("navigate localhost")
+        || t.starts_with("navigate http://127.0.0.1")
+        || t.starts_with("navigate http://localhost")
+        || t.contains(" snapshot full ")
+        || t.contains(" browser_c ")
+        || t.contains(" browser-")
+        || ((t.contains("write ")
+            || t.contains("navigate ")
+            || t.contains("snapshot ")
+            || t.contains("browser_")
+            || t.contains("browser-"))
+            && agent_line_has_elapsed_seconds_tail(t))
+        || t.starts_with("for port in [")
+        || t.contains("socket.socket()")
+        || t.contains(".settimeout(")
+        || (t.contains(".connect((") && t.contains("127.0.0.1") && t.contains("port"))
+        || t.starts_with("finally: s.close()")
+        || (t.starts_with("for url in http") && t.contains(" do"))
+        || (t.starts_with("if lsof ") && t.contains("tcp:"))
+        || t.contains("lsof -ti tcp:")
+        || t.contains("kill $(lsof")
+        || (t.contains("/dev/null") && (t.contains("lsof") || t.contains("kill")))
+        || t.starts_with("code=$(curl")
+        || t.starts_with("bytes=$(wc -c")
+        || t.contains("curl -k")
+        || (t.contains("curl ") && t.contains("--max-time"))
+        || t.contains("/tmp/kn_check")
+        || t.contains("/tmp/check")
+        || (t.contains("wc -c") && t.contains("tr -d"))
+        || (t.contains("echo ")
+            && t.contains("$url")
+            && t.contains("$code")
+            && t.contains("$bytes"))
+        || t.starts_with("p=Path(")
+        || t.starts_with("path=Path(")
+        || t.starts_with("env_path=Path(")
+        || t.starts_with("vals={")
+        || t.starts_with("if not line or line.strip()")
+        || t.starts_with("k,v=")
+        || t.starts_with("k, v=")
+        || t.starts_with("for k in")
+        || t.starts_with("v=vals.get(")
+        || t.starts_with("if v is None or v==")
+        || t.starts_with("elif k.endswith(")
+        || t.starts_with("else: status=")
+        || t == "PY"
+        || t.contains("KANSICRICH_MODE")
+        || t.contains("DASHBOARD_API_TOKEN")
+        || t.contains("BINANCE_API_KEY")
+        || t.contains("TELEGRAM_BOT_TOKEN")
+        || t.contains("RUNNER_PORT")
+        || t.contains("docker compose ps")
+        || (t.starts_with("import os") && t.contains("roots=["))
+        || (t.contains("import os") && t.contains("roots=["))
+        || ((t.contains("files=[") || t.contains("roots=["))
+            && (t.contains("rglob(") || t.contains("splitlines(") || t.contains("read_text(")))
+        || (t.contains("def ") && t.contains("subprocess"))
+        || t.contains("files=[p for p in")
+        || (t.contains("for d in [") && t.contains("files="))
+        || t.contains("lines=sum")
+        || t.contains("len(files)")
+        || t.contains("p.read_text(")
+        || t.contains("list(root/d).rglob")
+        || t.starts_with("files if")
+        || t.starts_with("any(")
+        || t.starts_with("in [")
+        || t.starts_with("print(f")
+        || t.starts_with("for p in files")
+        || t.contains("hermes kanban --board")
+        || t.contains("NEW_HYGIENE=")
+        || t.contains("NEW_DASH=")
+        || t.contains("--idempotency-key")
+        || (t.starts_with("printf ")
+            && t.contains("==")
+            && (t.contains("find ")
+                || t.contains("pgrep ")
+                || t.contains("launchctl")
+                || t.contains("PlistBuddy")
+                || t.contains("Applications")
+                || t.contains("LaunchAgents")))
+        || ((t.contains("doneprintf")
+            || t.contains("true/usr/libexec")
+            || t.contains("LaunchAgents")
+            || t.contains("LaunchDaemons"))
+            && agent_line_has_elapsed_seconds_tail(t))
+    {
+        return true;
+    }
+    let looks_like_code = t.starts_with("from ")
+        || t.starts_with("import ")
+        || t.starts_with("root=")
+        || t.starts_with("files=")
+        || t.starts_with("cmd=")
+        || t.starts_with("out=")
+        || t.starts_with("try:")
+        || t.starts_with("except ")
+        || t.starts_with("for ")
+        || t.starts_with("if ")
+        || t.starts_with("print(")
+        || t.starts_with("PY ")
+        || (t.contains(" for ") && t.contains(" in ") && t.contains("print("));
+    let has_tool_context = t.contains("/Users/")
+        || t.contains("subprocess")
+        || t.contains("Path(")
+        || t.contains("Path ")
+        || t.contains("rglob(")
+        || t.contains("splitlines(")
+        || t.contains(".read_text(")
+        || t.ends_with("[error]");
+    let looks_like_shell = (t.starts_with("hermes ")
+        || t.starts_with("python ")
+        || t.starts_with("python3 ")
+        || t.starts_with("npm ")
+        || t.starts_with("npx ")
+        || t.starts_with("pnpm ")
+        || t.starts_with("yarn ")
+        || t.starts_with("bun ")
+        || t.starts_with("cargo ")
+        || t.starts_with("git ")
+        || t.starts_with("node ")
+        || t.starts_with("curl ")
+        || t.starts_with("printf ")
+        || t.starts_with("echo ")
+        || t.starts_with("find ")
+        || t.starts_with("pgrep ")
+        || t.starts_with("launchctl ")
+        || t.starts_with("osascript ")
+        || t.starts_with("cd ")
+        || t.starts_with("bash ")
+        || t.starts_with("sh ")
+        || t.starts_with("zsh ")
+        || t.starts_with("/usr/local/bin/docker ")
+        || t.starts_with("/usr/bin/")
+        || t.starts_with("/bin/")
+        || t.starts_with("/opt/")
+        || t.starts_with("/Users/")
+        || t.starts_with("/Volumes/")
+        || t.starts_with("/volume1/")
+        || t.starts_with("/tmp/")
+        || t.starts_with("docker "))
+        && t.contains(' ')
+        && (agent_line_has_elapsed_seconds_tail(t) || t.contains(" && ") || t.contains(" || "));
+    (looks_like_code && has_tool_context) || looks_like_shell
 }
 
 fn hermes_auth_error_message(text: &str) -> Option<String> {
@@ -1689,6 +2486,19 @@ pub struct SkillBundleInstallResult {
 }
 
 #[derive(Serialize, Clone)]
+pub struct PluginSkillInstallStatusItem {
+    id: String,
+    installed: bool,
+    enabled: Option<bool>,
+    message: String,
+}
+
+#[derive(Serialize, Clone)]
+pub struct PluginSkillInstallStatusResult {
+    items: Vec<PluginSkillInstallStatusItem>,
+}
+
+#[derive(Serialize, Clone)]
 pub struct AgentChangedFile {
     path: String,
     status: String,
@@ -1958,43 +2768,282 @@ fn preview_service_port(url: &str) -> Result<u16, String> {
     parse_local_preview_url(url).map(|parsed| parsed.port)
 }
 
-fn infer_preview_command(cwd: &str, url: &str) -> Result<String, String> {
-    let port = preview_service_port(url)?;
-    let package_json = PathBuf::from(cwd).join("package.json");
-    if !package_json.exists() {
-        return Err(
-            "No package.json found in the working folder. Enter a preview start command.".into(),
-        );
-    }
-    let text =
-        std::fs::read_to_string(&package_json).map_err(|e| format!("read package.json: {e}"))?;
-    let value: Value =
-        serde_json::from_str(&text).map_err(|e| format!("parse package.json: {e}"))?;
+#[derive(Clone, Debug)]
+struct PreviewCommandPlan {
+    cwd: String,
+    command: String,
+}
+
+#[derive(Clone, Debug)]
+struct PreviewPackageCandidate {
+    cwd: PathBuf,
+    script: String,
+    script_command: String,
+    value: Value,
+    score: i32,
+}
+
+fn preview_package_script(value: &Value) -> Option<(String, String)> {
     let scripts = value.get("scripts").and_then(Value::as_object);
-    let script = if scripts
-        .and_then(|s| s.get("dev"))
-        .and_then(Value::as_str)
-        .is_some()
-    {
-        "dev"
-    } else if scripts
-        .and_then(|s| s.get("start"))
-        .and_then(Value::as_str)
-        .is_some()
-    {
-        "start"
-    } else if scripts
-        .and_then(|s| s.get("preview"))
-        .and_then(Value::as_str)
-        .is_some()
-    {
-        "preview"
+    for script in ["dev", "start", "preview"] {
+        if let Some(command) = scripts
+            .and_then(|s| s.get(script))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Some((script.to_string(), command.to_string()));
+        }
+    }
+    None
+}
+
+fn package_dep_names(value: &Value) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for key in ["dependencies", "devDependencies"] {
+        if let Some(deps) = value.get(key).and_then(Value::as_object) {
+            names.extend(deps.keys().map(|name| name.to_ascii_lowercase()));
+        }
+    }
+    names
+}
+
+fn preview_script_uses(value: &Value, script_command: &str, needle: &str) -> bool {
+    let needle = needle.to_ascii_lowercase();
+    script_command.to_ascii_lowercase().contains(&needle)
+        || package_dep_names(value).contains(&needle)
+}
+
+fn preview_command_extra_args(value: &Value, script_command: &str, port: u16) -> String {
+    if preview_script_uses(value, script_command, "next") {
+        format!("--hostname 127.0.0.1 --port {port}")
     } else {
-        return Err("package.json has no dev, start, or preview script.".into());
+        format!("--host 127.0.0.1 --port {port}")
+    }
+}
+
+fn detect_preview_package_manager(cwd: &Path, root: &Path) -> &'static str {
+    let mut current = Some(cwd);
+    while let Some(dir) = current {
+        if dir.join("bun.lockb").exists() || dir.join("bun.lock").exists() {
+            return "bun";
+        }
+        if dir.join("pnpm-lock.yaml").exists() {
+            return "pnpm";
+        }
+        if dir.join("yarn.lock").exists() {
+            return "yarn";
+        }
+        if dir == root {
+            break;
+        }
+        current = dir.parent();
+    }
+    "npm"
+}
+
+fn build_preview_command(
+    root: &Path,
+    cwd: &Path,
+    script: &str,
+    script_command: &str,
+    value: &Value,
+    port: u16,
+) -> String {
+    let manager = detect_preview_package_manager(cwd, root);
+    let extra = preview_command_extra_args(value, script_command, port);
+    match manager {
+        "bun" => format!("bun run {script} -- {extra}"),
+        "pnpm" => format!("pnpm run {script} -- {extra}"),
+        "yarn" => format!("yarn run {script} -- {extra}"),
+        _ => format!("npm run {script} -- {extra}"),
+    }
+}
+
+fn push_preview_candidate_dir(
+    dirs: &mut Vec<(PathBuf, usize)>,
+    seen: &mut BTreeSet<PathBuf>,
+    cwd: PathBuf,
+    depth: usize,
+) {
+    if seen.insert(cwd.clone()) {
+        dirs.push((cwd, depth));
+    }
+}
+
+fn preview_candidate_dirs(root: &Path) -> Vec<(PathBuf, usize)> {
+    let mut dirs = Vec::new();
+    let mut seen = BTreeSet::new();
+    push_preview_candidate_dir(&mut dirs, &mut seen, root.to_path_buf(), 0);
+
+    for rel in [
+        "dashboard",
+        "web",
+        "app",
+        "frontend",
+        "client",
+        "ui",
+        "apps/web",
+        "apps/app",
+        "packages/web",
+        "packages/app",
+    ] {
+        let candidate = root.join(rel);
+        if candidate.is_dir() {
+            let depth = rel.matches('/').count() + 1;
+            push_preview_candidate_dir(&mut dirs, &mut seen, candidate, depth);
+        }
+    }
+
+    let mut queue = VecDeque::from([(root.to_path_buf(), 0usize)]);
+    while let Some((current, depth)) = queue.pop_front() {
+        if depth >= 3 {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(&current) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if matches!(
+                name.as_str(),
+                ".git"
+                    | ".next"
+                    | ".nuxt"
+                    | ".svelte-kit"
+                    | "build"
+                    | "dist"
+                    | "node_modules"
+                    | "out"
+                    | "target"
+            ) {
+                continue;
+            }
+            let next_depth = depth + 1;
+            push_preview_candidate_dir(&mut dirs, &mut seen, path.clone(), next_depth);
+            queue.push_back((path, next_depth));
+            if dirs.len() >= 80 {
+                return dirs;
+            }
+        }
+    }
+
+    dirs
+}
+
+fn read_preview_package_candidate(
+    root: &Path,
+    cwd: &Path,
+    depth: usize,
+) -> Result<Option<PreviewPackageCandidate>, String> {
+    let package_json = cwd.join("package.json");
+    if !package_json.exists() {
+        return Ok(None);
+    }
+    let text = fs::read_to_string(&package_json).map_err(|e| {
+        format!(
+            "read package.json at {}: {e}",
+            package_json.to_string_lossy()
+        )
+    })?;
+    let value: Value = serde_json::from_str(&text).map_err(|e| {
+        format!(
+            "parse package.json at {}: {e}",
+            package_json.to_string_lossy()
+        )
+    })?;
+    let Some((script, script_command)) = preview_package_script(&value) else {
+        return Ok(None);
     };
-    Ok(format!(
-        "npm run {script} -- --host 127.0.0.1 --port {port}"
-    ))
+
+    let mut score = 100 - (depth as i32 * 10);
+    if cwd == root {
+        score += 30;
+        if script_command.contains("--filter")
+            || script_command.contains("workspace")
+            || script_command
+                .split_whitespace()
+                .any(|part| part == "-w" || part == "--workspace-root")
+        {
+            score += 90;
+        }
+    }
+    if script == "dev" {
+        score += 30;
+    } else if script == "start" {
+        score += 10;
+    }
+
+    let name = cwd
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    score += match name.as_str() {
+        "dashboard" => 60,
+        "web" | "app" | "frontend" | "client" | "ui" => 40,
+        _ => 0,
+    };
+    if preview_script_uses(&value, &script_command, "next")
+        || preview_script_uses(&value, &script_command, "vite")
+        || preview_script_uses(&value, &script_command, "astro")
+    {
+        score += 20;
+    }
+
+    Ok(Some(PreviewPackageCandidate {
+        cwd: cwd.to_path_buf(),
+        script,
+        script_command,
+        value,
+        score,
+    }))
+}
+
+fn infer_preview_command(cwd: &str, url: &str) -> Result<PreviewCommandPlan, String> {
+    let port = preview_service_port(url)?;
+    let root = PathBuf::from(cwd);
+    let mut candidates = Vec::new();
+    let mut saw_package_json = false;
+    for (candidate_dir, depth) in preview_candidate_dirs(&root) {
+        if candidate_dir.join("package.json").exists() {
+            saw_package_json = true;
+        }
+        if let Some(candidate) = read_preview_package_candidate(&root, &candidate_dir, depth)? {
+            candidates.push(candidate);
+        }
+    }
+
+    let Some(candidate) = candidates
+        .into_iter()
+        .max_by_key(|candidate| candidate.score)
+    else {
+        if saw_package_json {
+            return Err(
+                "package.json was found, but no dev, start, or preview script is available.".into(),
+            );
+        }
+        return Err(
+            "No package.json found in the working folder or common app subfolders. Enter a preview start command.".into(),
+        );
+    };
+
+    let command = build_preview_command(
+        &root,
+        &candidate.cwd,
+        &candidate.script,
+        &candidate.script_command,
+        &candidate.value,
+        port,
+    );
+    Ok(PreviewCommandPlan {
+        cwd: candidate.cwd.to_string_lossy().into_owned(),
+        command,
+    })
 }
 
 #[cfg(target_os = "windows")]
@@ -2112,11 +3161,19 @@ fn start_preview_service<R: Runtime>(
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| ".".into())
     });
-    let command = command
+    let provided_command = command
         .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .map(Ok)
-        .unwrap_or_else(|| infer_preview_command(&cwd, &parsed.url))?;
+        .filter(|s| !s.is_empty());
+    let plan = if let Some(command) = provided_command {
+        PreviewCommandPlan {
+            cwd: cwd.clone(),
+            command,
+        }
+    } else {
+        infer_preview_command(&cwd, &parsed.url)?
+    };
+    let cwd = plan.cwd;
+    let command = plan.command;
     let id = preview_service_id(&parsed.url);
 
     {
@@ -3047,21 +4104,44 @@ fn normalize_claude_model(model: Option<String>) -> String {
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .unwrap_or("claude-sonnet-4-6");
-    match value {
-        "default" | "sonnet" | "sonnet[1m]" | "claude-sonnet-4" | "claude-sonnet-4-20250514" => {
-            "claude-sonnet-4-6".to_string()
-        }
-        "opus"
+        .unwrap_or("claude-opus-4-8");
+    let lower = value.to_ascii_lowercase().replace('_', "-");
+    match lower.as_str() {
+        "default"
+        | "opus"
         | "best"
         | "opusplan"
         | "opus[1m]"
+        | "opus 48"
+        | "opus 4.8"
+        | "opus 47"
+        | "opus 4.7"
+        | "claude-opus-48"
+        | "claude-opus-4.8"
+        | "claude-opus-4-8"
+        | "claude-opus-47"
+        | "claude-opus-4.7"
+        | "claude-opus-4-7"
         | "claude-opus-4-1"
         | "claude-opus-4-1-20250805"
-        | "claude-opus-4-20250514" => "claude-opus-4-7".to_string(),
-        "haiku" | "claude-haiku-4-5" | "claude-3-5-haiku-latest" | "claude-3-5-haiku-20241022" => {
-            "claude-haiku-4-5-20251001".to_string()
-        }
+        | "claude-opus-4-20250514" => "claude-opus-4-8".to_string(),
+        "sonnet"
+        | "sonnet[1m]"
+        | "sonnet 46"
+        | "sonnet 4.6"
+        | "claude-sonnet-46"
+        | "claude-sonnet-4.6"
+        | "claude-sonnet-4-6"
+        | "claude-sonnet-4"
+        | "claude-sonnet-4-20250514" => "claude-sonnet-4-6".to_string(),
+        "haiku"
+        | "haiku 45"
+        | "haiku 4.5"
+        | "claude-haiku-45"
+        | "claude-haiku-4.5"
+        | "claude-haiku-4-5"
+        | "claude-3-5-haiku-latest"
+        | "claude-3-5-haiku-20241022" => "claude-haiku-4-5-20251001".to_string(),
         other => other.to_string(),
     }
 }
@@ -3729,6 +4809,369 @@ fn run_codex<R: Runtime>(
     })
 }
 
+fn extract_gajecode_session_id(text: &str) -> Option<String> {
+    let mut previous_was_session = false;
+    for raw in text.split_whitespace() {
+        let token = raw.trim_matches(|c: char| {
+            matches!(
+                c,
+                '"' | '\'' | '`' | ':' | ',' | ';' | '(' | ')' | '[' | ']' | '{' | '}'
+            )
+        });
+        let lower = token.to_ascii_lowercase();
+        if previous_was_session && token.len() >= 16 {
+            return Some(token.to_string());
+        }
+        if let Some((key, value)) = token.split_once('=') {
+            if key.eq_ignore_ascii_case("session") && value.len() >= 16 {
+                return Some(value.to_string());
+            }
+        }
+        if lower == "session" || lower == "session:" {
+            previous_was_session = true;
+            continue;
+        }
+        previous_was_session = false;
+    }
+    None
+}
+
+fn gajecode_prompt_with_workspace(prompt: String, project_cwd: Option<&Path>) -> String {
+    let Some(project_cwd) = project_cwd else {
+        return prompt;
+    };
+    format!(
+        "Atelier is running Gajae-Code (gjc) from an isolated provider workspace so existing Claude/Codex/Hermes/project skills are not auto-loaded. Treat this path as the only codebase target for the user's request: {}\n\nUser request:\n{}",
+        project_cwd.display(),
+        prompt
+    )
+}
+
+fn gajecode_model_label_for_prompt(model: &str) -> &'static str {
+    match model {
+        "anthropic/claude-opus-4-8" | "claude-opus-4-8" => "Opus 4.8",
+        "anthropic/claude-sonnet-4-6" | "claude-sonnet-4-6" => "Sonnet 4.6",
+        "anthropic/claude-haiku-4-5-20251001" | "claude-haiku-4-5-20251001" => "Haiku 4.5",
+        _ => "selected model",
+    }
+}
+
+fn gajecode_model_system_prompt(model: &str) -> String {
+    let label = gajecode_model_label_for_prompt(model);
+    format!(
+        "Atelier selected model: {label} (`{model}`). If the user asks which model is selected or running, clearly state that the selected model is {label}. Do not say that the minor version is unavailable.\n\
+\n\
+Atelier response contract:\n\
+- You are answering inside Atelier, a structured local agent workspace. Treat the user as the owner of the workspace and answer professionally.\n\
+- If the user writes in Korean, always use polite Korean 존댓말. Never use 반말, casual imperative phrases, slang, or brusque phrases such as \"달라\", \"골라줘\", \"손볼게\", \"맞는 거 골라줘\".\n\
+- Do not blame ambiguity in a short request. Infer the most likely intent from the active workspace and existing context, inspect what you can, and then answer with the concrete result. Ask one concise clarifying question only when the task is genuinely impossible to disambiguate.\n\
+- Do not expose raw CLI chatter, internal prompts, diffs, or tool logs unless the user explicitly asks for logs. Summarize evidence and next action in natural language.\n\
+- For diagnostics, state: observed symptom, likely cause, what you checked, and what should be fixed next. Avoid ending with \"which one do you mean?\" when you can investigate.\n\
+- Be helpful and complete enough for the user's request. Do not become terse because of model metadata or command-mode metadata."
+    )
+}
+
+fn normalize_gajecode_model_for_cli(model: Option<String>) -> String {
+    let trimmed = model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("claude-opus-4-8");
+    let lower = trimmed.to_ascii_lowercase().replace('_', "-");
+    match lower.as_str() {
+        "default"
+        | "opus"
+        | "best"
+        | "opus 48"
+        | "opus 4.8"
+        | "opus 47"
+        | "opus 4.7"
+        | "claude-opus-4-8"
+        | "claude-opus-48"
+        | "claude-opus-4.8"
+        | "claude-opus-47"
+        | "claude-opus-4.7"
+        | "claude-opus-4-7"
+        | "claude-opus-4-1"
+        | "claude-opus-4-1-20250805"
+        | "claude-opus-4-20250514"
+        | "anthropic/claude-opus-4-8"
+        | "anthropic/claude-opus-4.8"
+        | "deepseek/deepseek-v4-flash"
+        | "deepseek/deepseek-v4-pro"
+        | "gpt-5.5" => "anthropic/claude-opus-4-8".to_string(),
+        "sonnet"
+        | "sonnet 46"
+        | "sonnet 4.6"
+        | "claude-sonnet-4-6"
+        | "claude-sonnet-46"
+        | "claude-sonnet-4.6"
+        | "claude-sonnet-4"
+        | "claude-sonnet-4-20250514"
+        | "anthropic/claude-sonnet-4-6"
+        | "anthropic/claude-sonnet-4.6" => "anthropic/claude-sonnet-4-6".to_string(),
+        "haiku"
+        | "haiku 45"
+        | "haiku 4.5"
+        | "claude-haiku-4-5-20251001"
+        | "claude-haiku-45"
+        | "claude-haiku-4.5"
+        | "claude-haiku-4-5"
+        | "claude-3-5-haiku-latest"
+        | "claude-3-5-haiku-20241022"
+        | "anthropic/claude-haiku-4-5-20251001"
+        | "anthropic/claude-haiku-4.5" => "anthropic/claude-haiku-4-5-20251001".to_string(),
+        _ => trimmed.to_string(),
+    }
+}
+
+fn inject_gajecode_claude_subscription_env(cmd: &mut Command, model: &str) -> bool {
+    let lower = model.to_ascii_lowercase();
+    let uses_claude = lower.contains("claude") || lower.contains("anthropic") || lower == "opus";
+    if !uses_claude {
+        return true;
+    }
+
+    // Prefer Gajae Code's own OAuth credential store. Normal chat execution
+    // must not read macOS Keychain; app updates can otherwise trigger a password
+    // prompt in the middle of a command. Settings/login syncs the credential
+    // into this store, and command execution only verifies that it is present.
+    cmd.env_remove("ANTHROPIC_API_KEY");
+    if gajecode_has_claude_subscription_credential() {
+        return true;
+    }
+    match repair_gajecode_claude_subscription_credential() {
+        Ok(true) => true,
+        Ok(false) => false,
+        Err(err) => {
+            log::warn!("gajecode claude oauth repair failed: {err}");
+            false
+        }
+    }
+}
+
+fn gajecode_auth_error_needs_repair(result: &AgentRunResult) -> bool {
+    let mut text = result.error.clone().unwrap_or_default();
+    for event in &result.raw_events {
+        text.push('\n');
+        text.push_str(event);
+    }
+    let lower = text.to_ascii_lowercase();
+    lower.contains("no api key")
+        || lower.contains("invalid_grant")
+        || lower.contains("oauth refresh failed")
+        || lower.contains("invalid authentication credentials")
+        || lower.contains("authentication_error")
+        || lower.contains("credential is not connected")
+}
+
+fn run_gajecode<R: Runtime>(
+    app: AppHandle<R>,
+    turn_id: String,
+    prompt: String,
+    resume_session_id: Option<String>,
+    cwd: Option<String>,
+    model: Option<String>,
+    permission_mode: Option<String>,
+) -> Result<AgentRunResult, String> {
+    let result = run_gajecode_inner(
+        app.clone(),
+        turn_id.clone(),
+        prompt.clone(),
+        resume_session_id,
+        cwd.clone(),
+        model.clone(),
+        permission_mode.clone(),
+    )?;
+    if !result.is_error || !gajecode_auth_error_needs_repair(&result) {
+        return Ok(result);
+    }
+
+    emit_agent_event(
+        &app,
+        &turn_id,
+        AgentStreamEvent {
+            kind: "status".into(),
+            text: Some(
+                "Claude 구독 연결이 만료되어 Gajae 인증을 복구한 뒤 다시 실행합니다.".into(),
+            ),
+            status: Some("gajecode.repairing_oauth".into()),
+            raw: None,
+            provider_session_id: None,
+            is_error: None,
+        },
+    );
+
+    match repair_gajecode_claude_subscription_credential() {
+        Ok(true) => run_gajecode_inner(app, turn_id, prompt, None, cwd, model, permission_mode),
+        Ok(false) => Ok(result),
+        Err(err) => {
+            log::warn!("gajecode claude oauth retry repair failed: {err}");
+            Ok(result)
+        }
+    }
+}
+
+fn run_gajecode_inner<R: Runtime>(
+    app: AppHandle<R>,
+    turn_id: String,
+    prompt: String,
+    resume_session_id: Option<String>,
+    cwd: Option<String>,
+    model: Option<String>,
+    permission_mode: Option<String>,
+) -> Result<AgentRunResult, String> {
+    let permission_mode = normalize_agent_permission_mode(permission_mode);
+    let requested_model = normalize_gajecode_model_for_cli(model);
+    let _resume_session_id = resume_session_id;
+    let project_cwd = normalize_agent_cwd(cwd)?;
+    let run_dir = gajecode_workspace_dir()
+        .ok_or_else(|| "Could not resolve the isolated 가재코드 workspace.".to_string())?;
+    fs::create_dir_all(&run_dir).map_err(|e| format!("create {}: {e}", run_dir.display()))?;
+
+    let mut cmd = command_for_gajecode()?;
+    if !inject_gajecode_claude_subscription_env(&mut cmd, &requested_model) {
+        return Err(
+            "Claude 구독/API 자격증명이 연결되어 있지 않습니다. 설정 > 연결에서 Claude 구독 로그인을 시작한 뒤, 브라우저 인증 코드를 Atelier 로그인 창에 붙여넣어 주세요."
+                .to_string(),
+        );
+    }
+    let prompt = if !permission_mode.is_empty() {
+        format!(
+            "Requested permission mode: {}\n\n{}",
+            permission_mode, prompt
+        )
+    } else {
+        prompt
+    };
+    cmd.current_dir(&run_dir)
+        .arg("--print")
+        .arg("--no-title")
+        .arg("--no-session")
+        .arg("--append-system-prompt")
+        .arg(gajecode_model_system_prompt(&requested_model))
+        .arg("--model")
+        .arg(&requested_model)
+        .arg(gajecode_prompt_with_workspace(
+            prompt,
+            project_cwd.as_deref(),
+        ))
+        .env("LANG", "ko_KR.UTF-8")
+        .env("LC_CTYPE", "ko_KR.UTF-8")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    emit_agent_event(
+        &app,
+        &turn_id,
+        AgentStreamEvent {
+            kind: "status".into(),
+            text: None,
+            status: Some("gajecode.starting".into()),
+            raw: None,
+            provider_session_id: None,
+            is_error: None,
+        },
+    );
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("gajecode spawn: {e} ({})", describe_gajecode_command()))?;
+    let _child_registration = AgentChildRegistration::new(&turn_id, child.id());
+    let _power_assertion = AgentPowerAssertion::hold_for_child("gajecode", child.id());
+    let stderr = child.stderr.take();
+    let stderr_handle = stderr.map(|stderr| {
+        thread::spawn(move || {
+            let mut out = String::new();
+            let reader = BufReader::new(stderr);
+            for line in reader.lines().flatten() {
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                out.push_str(&line);
+            }
+            out
+        })
+    });
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "gajecode stdout missing".to_string())?;
+    let reader = BufReader::new(stdout);
+    let mut raw_events = Vec::new();
+    let mut final_text = String::new();
+    for line in reader.lines() {
+        let line = line.map_err(|e| format!("gajecode stdout: {e}"))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        raw_events.push(line.clone());
+        let delta = format!("{line}\n");
+        final_text.push_str(&delta);
+        emit_agent_event(
+            &app,
+            &turn_id,
+            AgentStreamEvent {
+                kind: "delta".into(),
+                text: Some(delta),
+                status: None,
+                raw: Some(line),
+                provider_session_id: None,
+                is_error: None,
+            },
+        );
+    }
+
+    let status = child.wait().map_err(|e| format!("gajecode wait: {e}"))?;
+    let stderr_text = stderr_handle
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default();
+    let provider_session_id = extract_gajecode_session_id(&stderr_text);
+    let is_error = !status.success();
+    let error = if is_error {
+        Some(if stderr_text.trim().is_empty() {
+            format_cli_exit("gajecode", status)
+        } else {
+            stderr_text.trim().to_string()
+        })
+    } else {
+        None
+    };
+
+    emit_agent_event(
+        &app,
+        &turn_id,
+        AgentStreamEvent {
+            kind: if is_error {
+                "error".into()
+            } else {
+                "result".into()
+            },
+            text: Some(if is_error {
+                error.clone().unwrap_or_default()
+            } else {
+                final_text.trim().to_string()
+            }),
+            status: Some("gajecode.completed".into()),
+            raw: None,
+            provider_session_id: provider_session_id.clone(),
+            is_error: Some(is_error),
+        },
+    );
+
+    if !stderr_text.trim().is_empty() {
+        raw_events.push(stderr_text);
+    }
+    Ok(AgentRunResult {
+        text: final_text.trim().to_string(),
+        provider_session_id,
+        raw_events: tail_return_raw_events(&raw_events),
+        is_error,
+        error,
+    })
+}
+
 fn run_hermes<R: Runtime>(
     app: AppHandle<R>,
     turn_id: String,
@@ -3986,181 +5429,7 @@ fn run_hermes<R: Runtime>(
                     || t.contains(" browser")
                     || t.contains(" $ ")))
     };
-    let has_elapsed_seconds_tail = |s: &str| -> bool {
-        let mut t = s.trim();
-        if let Some(stripped) = t.strip_suffix("[error]") {
-            t = stripped.trim_end();
-        }
-        let Some(last) = t.split_whitespace().last() else {
-            return false;
-        };
-        let Some(number) = last.strip_suffix('s') else {
-            return false;
-        };
-        !number.is_empty() && number.parse::<f64>().is_ok()
-    };
-    let is_command_dump = |s: &str| -> bool {
-        let t = s.trim();
-        if t.is_empty() {
-            return false;
-        }
-        if t.starts_with("from pathlib import Path")
-            || t.contains("proc wait proc_")
-            || t.contains("proc log proc_")
-            || t.contains("proc poll proc_")
-            || t.starts_with("repls={")
-            || t.starts_with("repls = {")
-            || t.contains("repls.items()")
-            || t.contains("p.write_text(")
-            || t.contains("text=text.replace(")
-            || t.contains("text = text.replace(")
-            || ((t.starts_with('\'') || t.starts_with('"'))
-                && (t.contains(".tsx':")
-                    || t.contains(".ts':")
-                    || t.contains(".jsx':")
-                    || t.contains(".js':")
-                    || t.contains(".py':")
-                    || t.contains(".css':")
-                    || t.contains(".json':")
-                    || t.contains(".tsx\":")
-                    || t.contains(".ts\":")
-                    || t.contains(".jsx\":")
-                    || t.contains(".js\":")
-                    || t.contains(".py\":")
-                    || t.contains(".css\":")
-                    || t.contains(".json\":")))
-            || t.starts_with("write /tmp/")
-            || t.starts_with("write /var/")
-            || t.starts_with("write /Users/")
-            || t.starts_with("edit /tmp/")
-            || t.starts_with("edit /var/")
-            || t.starts_with("edit /Users/")
-            || t.starts_with("navigate 127.0.0.1")
-            || t.starts_with("navigate localhost")
-            || t.starts_with("navigate http://127.0.0.1")
-            || t.starts_with("navigate http://localhost")
-            || t.contains(" snapshot full ")
-            || t.contains(" browser_c ")
-            || t.contains(" browser-")
-            || ((t.contains("write ")
-                || t.contains("navigate ")
-                || t.contains("snapshot ")
-                || t.contains("browser_")
-                || t.contains("browser-"))
-                && has_elapsed_seconds_tail(t))
-            || t.starts_with("for port in [")
-            || t.contains("socket.socket()")
-            || t.contains(".settimeout(")
-            || (t.contains(".connect((") && t.contains("127.0.0.1") && t.contains("port"))
-            || t.starts_with("finally: s.close()")
-            || (t.starts_with("for url in http") && t.contains(" do"))
-            || (t.starts_with("if lsof ") && t.contains("tcp:"))
-            || t.contains("lsof -ti tcp:")
-            || t.contains("kill $(lsof")
-            || (t.contains("/dev/null") && (t.contains("lsof") || t.contains("kill")))
-            || t.starts_with("code=$(curl")
-            || t.starts_with("bytes=$(wc -c")
-            || t.contains("curl -k")
-            || (t.contains("curl ") && t.contains("--max-time"))
-            || t.contains("/tmp/kn_check")
-            || t.contains("/tmp/check")
-            || (t.contains("wc -c") && t.contains("tr -d"))
-            || (t.contains("echo ")
-                && t.contains("$url")
-                && t.contains("$code")
-                && t.contains("$bytes"))
-            || t.starts_with("p=Path(")
-            || t.starts_with("path=Path(")
-            || t.starts_with("env_path=Path(")
-            || t.starts_with("vals={")
-            || t.starts_with("if not line or line.strip()")
-            || t.starts_with("k,v=")
-            || t.starts_with("k, v=")
-            || t.starts_with("for k in")
-            || t.starts_with("v=vals.get(")
-            || t.starts_with("if v is None or v==")
-            || t.starts_with("elif k.endswith(")
-            || t.starts_with("else: status=")
-            || t == "PY"
-            || t.contains("KANSICRICH_MODE")
-            || t.contains("DASHBOARD_API_TOKEN")
-            || t.contains("BINANCE_API_KEY")
-            || t.contains("TELEGRAM_BOT_TOKEN")
-            || t.contains("RUNNER_PORT")
-            || t.contains("docker compose ps")
-            || (t.starts_with("import os") && t.contains("roots=["))
-            || (t.contains("import os") && t.contains("roots=["))
-            || ((t.contains("files=[") || t.contains("roots=["))
-                && (t.contains("rglob(") || t.contains("splitlines(") || t.contains("read_text(")))
-            || (t.contains("def ") && t.contains("subprocess"))
-            || t.contains("files=[p for p in")
-            || (t.contains("for d in [") && t.contains("files="))
-            || t.contains("lines=sum")
-            || t.contains("len(files)")
-            || t.contains("p.read_text(")
-            || t.contains("list(root/d).rglob")
-            || t.starts_with("files if")
-            || t.starts_with("any(")
-            || t.starts_with("in [")
-            || t.starts_with("print(f")
-            || t.starts_with("for p in files")
-            || t.contains("hermes kanban --board")
-            || t.contains("NEW_HYGIENE=")
-            || t.contains("NEW_DASH=")
-            || t.contains("--idempotency-key")
-        {
-            return true;
-        }
-        let looks_like_code = t.starts_with("from ")
-            || t.starts_with("import ")
-            || t.starts_with("root=")
-            || t.starts_with("files=")
-            || t.starts_with("cmd=")
-            || t.starts_with("out=")
-            || t.starts_with("try:")
-            || t.starts_with("except ")
-            || t.starts_with("for ")
-            || t.starts_with("if ")
-            || t.starts_with("print(")
-            || t.starts_with("PY ")
-            || (t.contains(" for ") && t.contains(" in ") && t.contains("print("));
-        let has_tool_context = t.contains("/Users/")
-            || t.contains("subprocess")
-            || t.contains("Path(")
-            || t.contains("Path ")
-            || t.contains("rglob(")
-            || t.contains("splitlines(")
-            || t.contains(".read_text(")
-            || t.ends_with("[error]");
-        let looks_like_shell = (t.starts_with("hermes ")
-            || t.starts_with("python ")
-            || t.starts_with("python3 ")
-            || t.starts_with("npm ")
-            || t.starts_with("npx ")
-            || t.starts_with("pnpm ")
-            || t.starts_with("yarn ")
-            || t.starts_with("bun ")
-            || t.starts_with("cargo ")
-            || t.starts_with("git ")
-            || t.starts_with("node ")
-            || t.starts_with("curl ")
-            || t.starts_with("cd ")
-            || t.starts_with("bash ")
-            || t.starts_with("sh ")
-            || t.starts_with("zsh ")
-            || t.starts_with("/usr/local/bin/docker ")
-            || t.starts_with("/usr/bin/")
-            || t.starts_with("/bin/")
-            || t.starts_with("/opt/")
-            || t.starts_with("/Users/")
-            || t.starts_with("/Volumes/")
-            || t.starts_with("/volume1/")
-            || t.starts_with("/tmp/")
-            || t.starts_with("docker "))
-            && t.contains(" ")
-            && (has_elapsed_seconds_tail(t) || t.contains(" && ") || t.contains(" || "));
-        (looks_like_code && has_tool_context) || looks_like_shell
-    };
+    let is_command_dump = |s: &str| -> bool { agent_line_is_command_dump(s) };
     let is_replacement_dump_line = |s: &str| -> bool {
         let t = s.trim();
         if t.is_empty() {
@@ -4821,6 +6090,15 @@ pub async fn agent_send<R: Runtime>(
             speed,
             permission_mode,
         ),
+        "gajecode" => run_gajecode(
+            app,
+            turn_id,
+            prompt,
+            resume_session_id,
+            cwd,
+            model,
+            permission_mode,
+        ),
         "hermes" => run_hermes(
             app,
             turn_id,
@@ -4835,6 +6113,13 @@ pub async fn agent_send<R: Runtime>(
     })
     .await
     .map_err(|e| format!("agent thread join: {e}"))?
+}
+
+#[tauri::command]
+pub async fn claude_model_options() -> std::result::Result<ClaudeModelOptionsResult, String> {
+    tauri::async_runtime::spawn_blocking(read_claude_model_options_sync)
+        .await
+        .map_err(|e| format!("claude model catalog read: {e}"))
 }
 
 #[tauri::command]
@@ -4877,6 +6162,22 @@ pub async fn atelier_skill_install_public_bundle(
     tauri::async_runtime::spawn_blocking(install_atelier_public_skill_bundle_blocking)
         .await
         .map_err(|e| format!("atelier skill install thread join: {e}"))?
+}
+
+#[tauri::command]
+pub async fn insane_search_install_gajecode_skill(
+) -> std::result::Result<SkillBundleInstallResult, String> {
+    tauri::async_runtime::spawn_blocking(install_insane_search_gajecode_skill_blocking)
+        .await
+        .map_err(|e| format!("insane-search skill install thread join: {e}"))?
+}
+
+#[tauri::command]
+pub async fn plugin_skill_install_status(
+) -> std::result::Result<PluginSkillInstallStatusResult, String> {
+    tauri::async_runtime::spawn_blocking(plugin_skill_install_status_blocking)
+        .await
+        .map_err(|e| format!("plugin skill status thread join: {e}"))
 }
 
 #[tauri::command]
@@ -4935,6 +6236,133 @@ mod tests {
     use super::*;
 
     #[test]
+    fn gajecode_legacy_models_route_to_claude_subscription_defaults() {
+        assert_eq!(
+            normalize_gajecode_model_for_cli(Some("deepseek/deepseek-v4-flash".into())),
+            "anthropic/claude-opus-4-8"
+        );
+        assert_eq!(
+            normalize_gajecode_model_for_cli(Some("gpt-5.5".into())),
+            "anthropic/claude-opus-4-8"
+        );
+        assert_eq!(
+            normalize_gajecode_model_for_cli(Some("sonnet".into())),
+            "anthropic/claude-sonnet-4-6"
+        );
+        assert_eq!(
+            normalize_gajecode_model_for_cli(Some("claude-haiku-4-5".into())),
+            "anthropic/claude-haiku-4-5-20251001"
+        );
+        assert_eq!(
+            normalize_gajecode_model_for_cli(Some("Opus 47".into())),
+            "anthropic/claude-opus-4-8"
+        );
+        assert_eq!(
+            normalize_gajecode_model_for_cli(Some("claude-opus-4-8".into())),
+            "anthropic/claude-opus-4-8"
+        );
+        assert_eq!(
+            normalize_gajecode_model_for_cli(Some("claude-sonnet-4-6".into())),
+            "anthropic/claude-sonnet-4-6"
+        );
+    }
+
+    #[test]
+    fn gajecode_model_prompt_names_opus_48() {
+        let prompt = gajecode_model_system_prompt("anthropic/claude-opus-4-8");
+        assert!(prompt.contains("Opus 4.8"));
+        assert!(prompt.contains("anthropic/claude-opus-4-8"));
+        assert!(prompt.contains("minor version is unavailable"));
+        assert!(prompt.contains("complete enough for the user's request"));
+        assert!(prompt.contains("존댓말"));
+        assert!(prompt.contains("Never use 반말"));
+        assert!(prompt.contains("Do not blame ambiguity"));
+    }
+
+    #[test]
+    fn gajecode_cli_validation_matches_exposed_safe_commands() {
+        for args in [
+            vec!["--help"],
+            vec!["--list-models"],
+            vec!["skills", "list"],
+            vec!["session", "list"],
+            vec!["setup", "defaults", "--check"],
+            vec!["setup", "hermes", "--smoke"],
+            vec!["notify", "status"],
+            vec!["mcp-serve", "coordinator", "--check", "--json"],
+            vec!["web-search", "gajae code"],
+            vec!["q", "gajae code"],
+            vec!["rlm", "summarize this dataset"],
+            vec!["update", "--help"],
+            vec!["gjc", "review", "this", "project"],
+            vec!["review", "this", "project"],
+        ] {
+            let args = args.into_iter().map(String::from).collect::<Vec<_>>();
+            assert!(
+                validate_agent_cli_command("gajecode", &args).is_ok(),
+                "{args:?} should be allowed"
+            );
+        }
+        for args in [
+            vec!["session", "remove", "old"],
+            vec!["update"],
+            vec!["mcp-serve", "coordinator"],
+            vec!["setup", "hermes", "--install"],
+            vec!["daemon"],
+            vec!["--unknown"],
+        ] {
+            let args = args.into_iter().map(String::from).collect::<Vec<_>>();
+            assert!(
+                validate_agent_cli_command("gajecode", &args).is_err(),
+                "{args:?} should be blocked"
+            );
+        }
+    }
+
+    #[test]
+    fn claude_legacy_and_compact_opus_models_route_to_current_default() {
+        assert_eq!(normalize_claude_model(None), "claude-opus-4-8");
+        assert_eq!(
+            normalize_claude_model(Some("claude-opus-47".into())),
+            "claude-opus-4-8"
+        );
+        assert_eq!(
+            normalize_claude_model(Some("Opus 4.7".into())),
+            "claude-opus-4-8"
+        );
+    }
+
+    #[test]
+    fn claude_docs_parser_prefers_current_app_model_order() {
+        let raw = r#"
+            Claude Fable 5 (`claude-fable-5`)
+            Claude Opus 47 (`claude-opus-47`)
+            Claude Opus 4.7 (`claude-opus-4-7`)
+            Claude Opus 4.8 (`claude-opus-4-8`)
+            Claude Sonnet 4.6 (`claude-sonnet-4-6`)
+            Claude Haiku 4.5 (`claude-haiku-4-5` / `claude-haiku-4-5-20251001`)
+        "#;
+        let ids = extract_claude_model_ids(raw);
+        let mut models = Vec::new();
+        for family in ["opus", "fable", "sonnet", "haiku"] {
+            let id = latest_claude_model_for_family(&ids, family).unwrap();
+            let disabled = family == "fable";
+            models.push((
+                id.clone(),
+                claude_label_from_model_id(&id, disabled),
+                disabled,
+            ));
+        }
+        assert_eq!(models[0].0, "claude-opus-4-8");
+        assert_eq!(models[0].1, "Opus 4.8");
+        assert_eq!(models[1].1, "Fable 5 Currently unavailable");
+        assert!(models[1].2);
+        assert_eq!(models[2].1, "Sonnet 4.6");
+        assert_eq!(models[3].0, "claude-haiku-4-5-20251001");
+        assert_eq!(models[3].1, "Haiku 4.5");
+    }
+
+    #[test]
     fn parses_local_preview_url_with_query() {
         let parsed = parse_local_preview_url("http://localhost:5173?view=mobile").unwrap();
         assert_eq!(parsed.connect_host, "127.0.0.1");
@@ -4975,6 +6403,91 @@ mod tests {
         assert!(candidates.contains(&"[::1]".to_string()));
     }
 
+    fn preview_test_root(name: &str) -> PathBuf {
+        let id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("atelier-preview-{name}-{id}"));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn preview_command_detects_dashboard_app_root() {
+        let root = preview_test_root("dashboard-app");
+        let dashboard = root.join("dashboard");
+        fs::create_dir_all(&dashboard).unwrap();
+        fs::write(
+            dashboard.join("package.json"),
+            r#"{"scripts":{"dev":"next dev"},"dependencies":{"next":"15.0.0"}}"#,
+        )
+        .unwrap();
+
+        let plan =
+            infer_preview_command(root.to_str().unwrap(), "http://127.0.0.1:8787/admin/").unwrap();
+
+        assert_eq!(PathBuf::from(&plan.cwd), dashboard);
+        assert!(plan.command.contains("npm run dev"));
+        assert!(plan.command.contains("--hostname 127.0.0.1"));
+        assert!(plan.command.contains("--port 8787"));
+    }
+
+    #[test]
+    fn preview_command_prefers_dashboard_over_generic_root_script() {
+        let root = preview_test_root("root-app");
+        fs::write(
+            root.join("package.json"),
+            r#"{"scripts":{"dev":"vite --host 0.0.0.0"}}"#,
+        )
+        .unwrap();
+        let dashboard = root.join("dashboard");
+        fs::create_dir_all(&dashboard).unwrap();
+        fs::write(
+            dashboard.join("package.json"),
+            r#"{"scripts":{"dev":"next dev"},"dependencies":{"next":"15.0.0"}}"#,
+        )
+        .unwrap();
+
+        let plan = infer_preview_command(root.to_str().unwrap(), "http://localhost:5173/").unwrap();
+
+        assert_eq!(PathBuf::from(&plan.cwd), dashboard);
+        assert!(plan.command.contains("npm run dev"));
+        assert!(plan.command.contains("--hostname 127.0.0.1"));
+        assert!(plan.command.contains("--port 5173"));
+    }
+
+    #[test]
+    fn preview_command_uses_workspace_lockfile_for_child_app() {
+        let root = preview_test_root("workspace-pnpm");
+        fs::write(root.join("pnpm-lock.yaml"), "lockfileVersion: '9.0'\n").unwrap();
+        let dashboard = root.join("dashboard");
+        fs::create_dir_all(&dashboard).unwrap();
+        fs::write(
+            dashboard.join("package.json"),
+            r#"{"scripts":{"dev":"vite --host 0.0.0.0"},"devDependencies":{"vite":"^5.0.0"}}"#,
+        )
+        .unwrap();
+
+        let plan = infer_preview_command(root.to_str().unwrap(), "http://localhost:5173/").unwrap();
+
+        assert_eq!(PathBuf::from(&plan.cwd), dashboard);
+        assert!(plan.command.starts_with("pnpm run dev"));
+        assert!(plan.command.contains("--host 127.0.0.1"));
+    }
+
+    #[test]
+    fn command_dump_detects_launchctl_exit_tail() {
+        let line = r#"printf '= apps =\n'for d in /Applications "$HOME/Applications"; do [ -d "$d" ] && /usr/bin/find "$d" -maxdepth 2 -iname 'hermes' -print; doneprintf '= launchctl =\n'launchctl list | grep -i 'hermes|atelier' || true 0.2s [exit 1]"#;
+        assert!(agent_line_is_command_dump(line));
+    }
+
+    #[test]
+    fn command_dump_does_not_hide_plain_korean_answer() {
+        let line = "프리뷰 실행 위치가 프로젝트 루트가 아니라 dashboard 폴더여야 합니다.";
+        assert!(!agent_line_is_command_dump(line));
+    }
+
     #[test]
     fn normalizes_agent_permission_modes() {
         assert_eq!(
@@ -4990,6 +6503,21 @@ mod tests {
             "full"
         );
         assert_eq!(claude_permission_mode("full"), "bypassPermissions");
+    }
+
+    #[test]
+    fn gajecode_auth_errors_trigger_repair() {
+        let result = AgentRunResult {
+            text: String::new(),
+            provider_session_id: None,
+            raw_events: vec![
+                "Error: No API key for anthropic/claude-opus-4-8".into(),
+                "oauth refresh failed: invalid_grant".into(),
+            ],
+            is_error: true,
+            error: Some("gajecode failed".into()),
+        };
+        assert!(gajecode_auth_error_needs_repair(&result));
     }
 
     #[test]

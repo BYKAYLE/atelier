@@ -1,6 +1,7 @@
 import React, { lazy, Suspense, useEffect, useState } from "react";
 import { useTweaks } from "../lib/useTweaks";
 import { ACCENTS, cls } from "../lib/tokens";
+import { safeLocalStorageGet, safeLocalStorageSet } from "../lib/storage";
 import Welcome from "./Welcome";
 import Main from "./Main";
 import Settings from "./Settings";
@@ -144,17 +145,17 @@ const App: React.FC = () => {
   const [tw, setTw] = useTweaks();
   const accent = ACCENTS[tw.accent] || ACCENTS.terracotta;
   const [screen, setScreen] = useState<AppScreen>(() => {
-    const migrated = localStorage.getItem("atelier.agentDefaultMigrated") === "1";
-    const saved = localStorage.getItem("atelier.screen");
+    const migrated = safeLocalStorageGet("atelier.agentDefaultMigrated") === "1";
+    const saved = safeLocalStorageGet("atelier.screen");
     if (!migrated) {
-      localStorage.setItem("atelier.agentDefaultMigrated", "1");
+      safeLocalStorageSet("atelier.agentDefaultMigrated", "1");
       return "agent";
     }
     if (saved === "main" || saved === "design") return "agent";
     return isScreen(saved) ? saved : "agent";
   });
   const [activeNav, setActiveNav] = useState<string>(() => {
-    const savedNav = localStorage.getItem("atelier.nav");
+    const savedNav = safeLocalStorageGet("atelier.nav");
     if (savedNav === "settings") return "appearance";
     if (savedNav === "terminal") return "appearance";
     if (savedNav === "gateway") return "providers";
@@ -173,7 +174,7 @@ const App: React.FC = () => {
     return screen;
   });
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(() => {
-    const saved = localStorage.getItem("atelier.settingsSection");
+    const saved = safeLocalStorageGet("atelier.settingsSection");
     return saved === "appearance" ||
       saved === "profiles" ||
       saved === "shortcuts" ||
@@ -187,15 +188,15 @@ const App: React.FC = () => {
   const language = tw.language;
 
   useEffect(() => {
-    localStorage.setItem("atelier.screen", screen);
+    safeLocalStorageSet("atelier.screen", screen);
   }, [screen]);
 
   useEffect(() => {
-    localStorage.setItem("atelier.nav", activeNav);
+    safeLocalStorageSet("atelier.nav", activeNav);
   }, [activeNav]);
 
   useEffect(() => {
-    localStorage.setItem("atelier.settingsSection", settingsSection);
+    safeLocalStorageSet("atelier.settingsSection", settingsSection);
   }, [settingsSection]);
 
   useEffect(() => {
@@ -220,7 +221,7 @@ const App: React.FC = () => {
     >
       <aside
         className={cls(
-          "w-[248px] shrink-0 h-full border-r flex flex-col",
+          "atelier-shell-sidebar h-full border-r flex flex-col",
           tw.dark ? "bg-[#191917] border-dline" : "bg-[#f1efe7] border-line",
         )}
       >
@@ -237,7 +238,7 @@ const App: React.FC = () => {
               hintEn: "Claude · Hermes · Codex",
             })
           }
-          className="mx-4 mt-4 mb-3 flex items-center gap-3 rounded-[8px] p-2 text-left transition-colors hover:bg-black/5 dark:hover:bg-white/5"
+          className="atelier-shell-brand mx-4 mt-4 mb-3 flex items-center gap-3 rounded-[8px] p-2 text-left transition-colors hover:bg-black/5 dark:hover:bg-white/5"
         >
           <span
             className="grid h-10 w-10 shrink-0 place-items-center rounded-[10px] text-[21px] font-semibold text-[#fff7ec] shadow-[0_8px_24px_rgba(0,0,0,0.22)]"
@@ -248,7 +249,7 @@ const App: React.FC = () => {
           >
             &gt;
           </span>
-          <span className="min-w-0">
+          <span className="atelier-shell-brand-copy min-w-0">
             <span className={cls("block text-[15px] font-semibold", tw.dark ? "text-dink" : "text-ink")}>
               Atelier
             </span>
@@ -258,12 +259,12 @@ const App: React.FC = () => {
           </span>
         </button>
 
-        <nav className="flex-1 overflow-y-auto px-3 pb-3">
+        <nav className="atelier-shell-nav flex-1 overflow-y-auto px-3 pb-3">
           {NAV_GROUPS.map((group) => (
-            <div key={group.id} className="mb-5">
+            <div key={group.id} className="atelier-shell-nav-group mb-5">
               <div
                 className={cls(
-                  "mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-[0.16em]",
+                  "atelier-shell-section-title mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-[0.16em]",
                   tw.dark ? "text-[#777773]" : "text-[#8d8980]",
                 )}
               >
@@ -278,7 +279,7 @@ const App: React.FC = () => {
                       type="button"
                       onClick={() => openNav(item)}
                       className={cls(
-                        "group grid w-full grid-cols-[22px_1fr] items-center gap-2.5 rounded-[8px] px-2.5 py-2 text-left transition-colors",
+                        "atelier-shell-nav-item group grid w-full grid-cols-[22px_1fr] items-center gap-2.5 rounded-[8px] px-2.5 py-2 text-left transition-colors",
                         active
                           ? tw.dark
                             ? "bg-dmuted text-dink shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)]"
@@ -287,20 +288,20 @@ const App: React.FC = () => {
                             ? "text-dsub hover:bg-white/5 hover:text-dink"
                             : "text-sub hover:bg-black/5 hover:text-ink",
                       )}
-                    >
-                      <span
-                        className={cls(
-                          "flex h-6 w-6 items-center justify-center rounded-[6px] [&>svg]:h-[15px] [&>svg]:w-[15px]",
+                      >
+                        <span
+                          className={cls(
+                          "atelier-shell-nav-icon flex h-6 w-6 items-center justify-center rounded-[6px] [&>svg]:h-[15px] [&>svg]:w-[15px]",
                           active
                             ? "text-[var(--accent)]"
                             : tw.dark
                               ? "text-[#85857e] group-hover:text-dink"
                               : "text-[#77736a] group-hover:text-ink",
                         )}
-                      >
-                        {item.icon}
-                      </span>
-                      <span className="min-w-0">
+                        >
+                          {item.icon}
+                        </span>
+                      <span className="atelier-shell-nav-copy min-w-0">
                         <span className="block truncate text-[13px] font-medium">
                           {language === "en" ? item.labelEn : item.labelKo}
                         </span>
@@ -329,11 +330,11 @@ const App: React.FC = () => {
 
         <div
           className={cls(
-            "mx-3 mb-3 border-t pt-3",
+            "atelier-shell-footer mx-3 mb-3 border-t pt-3",
             tw.dark ? "border-dline" : "border-line",
           )}
         >
-          <div className="grid grid-cols-2 gap-2">
+          <div className="atelier-shell-footer-grid grid grid-cols-2 gap-2">
             <button
               type="button"
               onClick={() => setTw({ dark: !tw.dark })}
@@ -347,7 +348,7 @@ const App: React.FC = () => {
               <span className="[&>svg]:h-[14px] [&>svg]:w-[14px]">
                 {tw.dark ? I.sun : I.moon}
               </span>
-              {tw.dark ? "Light" : "Dark"}
+              <span className="atelier-shell-footer-label">{tw.dark ? "Light" : "Dark"}</span>
             </button>
             <button
               type="button"
@@ -371,7 +372,7 @@ const App: React.FC = () => {
               )}
             >
               <span className="[&>svg]:h-[14px] [&>svg]:w-[14px]">{I.gear}</span>
-              설정
+              <span className="atelier-shell-footer-label">설정</span>
             </button>
           </div>
         </div>

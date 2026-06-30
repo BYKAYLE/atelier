@@ -24,6 +24,11 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Runtime};
 use uuid::Uuid;
 
+use crate::credentials::{
+    gajecode_cache_dir, gajecode_config_dir, gajecode_data_dir, gajecode_executable_path,
+    gajecode_home_dir, gajecode_runtime_path_env, gajecode_skills_dir, gajecode_workspace_dir,
+};
+
 struct Session {
     writer: Arc<std::sync::Mutex<Box<dyn Write + Send>>>,
     master: Arc<std::sync::Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
@@ -248,6 +253,64 @@ fn command_from_line(line: &str) -> CommandBuilder {
     }
 }
 
+fn path_string(path: &std::path::Path) -> String {
+    path.to_string_lossy().to_string()
+}
+
+fn gajecode_pty_command() -> Result<CommandBuilder> {
+    let executable = gajecode_executable_path().ok_or_else(|| {
+        anyhow!(
+            "가재코드 CLI가 설치되어 있지 않습니다. 설정 > 연결에서 자동 설치를 먼저 실행하세요."
+        )
+    })?;
+    let home = gajecode_home_dir().ok_or_else(|| anyhow!("resolve gajecode HOME"))?;
+    let workspace =
+        gajecode_workspace_dir().ok_or_else(|| anyhow!("resolve gajecode workspace"))?;
+    let skills = gajecode_skills_dir().ok_or_else(|| anyhow!("resolve gajecode skills"))?;
+    let config = gajecode_config_dir().ok_or_else(|| anyhow!("resolve gajecode config"))?;
+    let data = gajecode_data_dir().ok_or_else(|| anyhow!("resolve gajecode data"))?;
+    let cache = gajecode_cache_dir().ok_or_else(|| anyhow!("resolve gajecode cache"))?;
+    let bun_install = crate::credentials::gajecode_provider_root()
+        .ok_or_else(|| anyhow!("resolve gajecode root"))?
+        .join("bun");
+    for dir in [&home, &workspace, &skills, &config, &data, &cache] {
+        std::fs::create_dir_all(dir).map_err(|e| anyhow!("create {}: {e}", dir.display()))?;
+    }
+    std::fs::create_dir_all(&bun_install)
+        .map_err(|e| anyhow!("create {}: {e}", bun_install.display()))?;
+
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut cmd = CommandBuilder::new("cmd.exe");
+        cmd.arg("/D");
+        cmd.arg("/Q");
+        cmd.arg("/C");
+        cmd.arg(path_string(&executable));
+        cmd
+    };
+
+    #[cfg(not(windows))]
+    let mut cmd = CommandBuilder::new(path_string(&executable));
+
+    cmd.cwd(path_string(&workspace));
+    cmd.env("PATH", gajecode_runtime_path_env());
+    cmd.env("HOME", path_string(&home));
+    cmd.env("USERPROFILE", path_string(&home));
+    cmd.env("XDG_CONFIG_HOME", path_string(&config));
+    cmd.env("XDG_DATA_HOME", path_string(&data));
+    cmd.env("XDG_CACHE_HOME", path_string(&cache));
+    cmd.env("BUN_INSTALL", path_string(&bun_install));
+    cmd.env("GJC_HOME", path_string(&home.join(".gjc")));
+    cmd.env("GAJAE_CODE_HOME", path_string(&home.join(".gjc")));
+    cmd.env("ATELIER_PROVIDER_ID", "gajecode");
+    cmd.env("ATELIER_SKILLS_DIR", path_string(&skills));
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
+    cmd.env("LANG", "ko_KR.UTF-8");
+    cmd.env("LC_CTYPE", "ko_KR.UTF-8");
+    Ok(cmd)
+}
+
 /// 프로파일 id → 실제 실행 커맨드.
 /// 플랫폼별 기본값은 컴파일 타임 `#[cfg(target_os = ...)]`로 분기된다.
 fn profile_command(profile: &str) -> CommandBuilder {
@@ -316,11 +379,17 @@ fn spawn_impl<R: Runtime>(
         })
         .map_err(|e| anyhow!("openpty failed: {e}"))?;
 
-    let mut cmd = profile_command(&profile);
+    let mut cmd = if profile == "gajecode" {
+        gajecode_pty_command()?
+    } else {
+        profile_command(&profile)
+    };
     // claude는 apply_path_env (PATH + LANG=ko_KR.UTF-8 + TERM=xterm) — UTF-8 한국어 + plain
     // xterm으로 alternate buffer 등 고급 ANSI sequence 회피. xterm-256color는 xterm.js parser
     // error 유발이라 사용 안 함. 그 외 profile은 표준 apply_default_env.
-    if profile == "claude" {
+    if profile == "gajecode" {
+        // Already configured with an isolated HOME/workspace/skills directory.
+    } else if profile == "claude" {
         apply_path_env(&mut cmd);
     } else {
         apply_default_env(&mut cmd);

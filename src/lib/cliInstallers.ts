@@ -20,12 +20,17 @@ const INSTALLS: Record<
     npmPackage: "@openai/codex",
     displayName: "Codex CLI",
   },
+  gajecode: {
+    executable: "",
+    displayName: "가재코드",
+  },
 };
 
 const shQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
 const psQuote = (value: string) => `"${value.replace(/`/g, "``").replace(/"/g, '`"')}"`;
 
 export function autoInstallExecutable(profile: Profile): string | null {
+  if (profile.autoInstall === "gajecode") return null;
   return profile.autoInstall ? INSTALLS[profile.autoInstall].executable : null;
 }
 
@@ -35,6 +40,7 @@ export function autoInstallCommand(
   runAfterInstall?: string,
 ): string | null {
   if (!profile.autoInstall) return null;
+  if (profile.autoInstall === "gajecode") return null;
   const spec = INSTALLS[profile.autoInstall];
   const runCommand = (runAfterInstall?.trim() || spec.executable).replace(/\s+/g, " ");
   const installing =

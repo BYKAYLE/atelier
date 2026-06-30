@@ -124,6 +124,17 @@ export interface SkillBundleInstallResult {
   log: string;
 }
 
+export interface PluginSkillInstallStatusItem {
+  id: string;
+  installed: boolean;
+  enabled?: boolean | null;
+  message: string;
+}
+
+export interface PluginSkillInstallStatusResult {
+  items: PluginSkillInstallStatusItem[];
+}
+
 export interface PreviewCheckResult {
   url: string;
   ok: boolean;
@@ -252,12 +263,19 @@ export interface StellaFactoryStatusResult {
   generated_at: number;
 }
 
-export type AgentProvider = "claude" | "codex" | "hermes";
+export type AgentProvider = "claude" | "codex" | "hermes" | "gajecode";
 export type AgentPermissionMode = "basic" | "auto" | "full";
 
 export interface AgentModelOption {
   value: string;
   label: string;
+  disabled?: boolean;
+}
+
+export interface ClaudeModelOptionsResult {
+  source: string;
+  updated_at?: string | null;
+  models: AgentModelOption[];
 }
 
 export interface CodexModelOptionsResult {
@@ -296,6 +314,10 @@ export async function agentSend(args: {
   permissionMode?: AgentPermissionMode | null;
 }): Promise<AgentRunResult> {
   return invoke("agent_send", args);
+}
+
+export async function claudeModelOptions(): Promise<ClaudeModelOptionsResult> {
+  return invoke("claude_model_options");
 }
 
 export async function codexModelOptions(): Promise<CodexModelOptionsResult> {
@@ -347,6 +369,14 @@ export async function academicResearchInstallClaudePlugin(): Promise<AcademicRes
 
 export async function atelierSkillInstallPublicBundle(): Promise<SkillBundleInstallResult> {
   return invoke("atelier_skill_install_public_bundle");
+}
+
+export async function insaneSearchInstallGajecodeSkill(): Promise<SkillBundleInstallResult> {
+  return invoke("insane_search_install_gajecode_skill");
+}
+
+export async function pluginSkillInstallStatus(): Promise<PluginSkillInstallStatusResult> {
+  return invoke("plugin_skill_install_status");
 }
 
 export async function previewHealthCheck(url: string): Promise<PreviewCheckResult> {
@@ -549,6 +579,10 @@ export async function providerLoginOauth(provider: string, force = false): Promi
   return invoke("provider_login_oauth", { provider, force });
 }
 
+export async function providerSubmitOauthCode(provider: string, code: string): Promise<void> {
+  return invoke("provider_submit_oauth_code", { provider, code });
+}
+
 /** Claude/Codex/Hermes CLI 자동 설치. 백그라운드 실행, 즉시 반환. */
 export async function providerInstallCli(provider: string): Promise<void> {
   return invoke("provider_install_cli", { provider });
@@ -562,6 +596,14 @@ export interface HermesUpdateStatus {
   message: string | null;
 }
 
+export interface GajecodeUpdateStatus {
+  installed: boolean;
+  current_version: string | null;
+  latest_version: string | null;
+  update_available: boolean;
+  message: string | null;
+}
+
 /** Hermes CLI 의 GitHub 기반 업데이트 체크. `hermes --version` 출력의 "Update available" 라인을 파싱. */
 export async function hermesCheckUpdate(): Promise<HermesUpdateStatus> {
   return invoke("hermes_check_update");
@@ -570,4 +612,12 @@ export async function hermesCheckUpdate(): Promise<HermesUpdateStatus> {
 /** `hermes update` 백그라운드 실행. 즉시 반환. */
 export async function hermesUpdate(): Promise<void> {
   return invoke("hermes_update");
+}
+
+export async function gajecodeCheckUpdate(): Promise<GajecodeUpdateStatus> {
+  return invoke("gajecode_check_update");
+}
+
+export async function gajecodeUpdate(): Promise<void> {
+  return invoke("gajecode_update");
 }

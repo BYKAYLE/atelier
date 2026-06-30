@@ -26,7 +26,7 @@ fn reveal_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     match tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
         .title("Atelier")
         .inner_size(1600.0, 900.0)
-        .min_inner_size(900.0, 600.0)
+        .min_inner_size(560.0, 420.0)
         .resizable(true)
         .decorations(true)
         .build()
@@ -766,11 +766,14 @@ pub fn run() {
             design_claude_call,
             agent::agent_claude_send,
             agent::agent_send,
+            agent::claude_model_options,
             agent::codex_model_options,
             agent::openrouter_model_options,
             agent::agent_cli_command,
             agent::academic_research_install_claude_plugin,
             agent::atelier_skill_install_public_bundle,
+            agent::insane_search_install_gajecode_skill,
+            agent::plugin_skill_install_status,
             agent::agent_cancel,
             agent::agent_change_baseline,
             agent::agent_change_summary,
@@ -789,9 +792,12 @@ pub fn run() {
             credentials::provider_save_api_key,
             credentials::provider_clear_credentials,
             credentials::provider_login_oauth,
+            credentials::provider_submit_oauth_code,
             credentials::provider_install_cli,
             credentials::hermes_check_update,
             credentials::hermes_update,
+            credentials::gajecode_check_update,
+            credentials::gajecode_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

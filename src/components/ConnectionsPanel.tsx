@@ -5,10 +5,14 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { cls, Tweaks } from "../lib/tokens";
+import { safeLocalStorageGet, safeLocalStorageSet } from "../lib/storage";
 import {
+  GajecodeUpdateStatus,
   HermesUpdateStatus,
   ProviderLoginOauthResult,
   ProviderStatus,
+  gajecodeCheckUpdate,
+  gajecodeUpdate,
   hermesCheckUpdate,
   hermesUpdate,
   providerClearCredentials,
@@ -16,13 +20,14 @@ import {
   providerLoginOauth,
   providerSaveApiKey,
   providerStatus,
+  providerSubmitOauthCode,
 } from "../lib/tauri";
 
 interface Props {
   tw: Tweaks;
 }
 
-type ProviderId = "claude" | "codex" | "openrouter" | "hermes";
+type ProviderId = "claude" | "codex" | "openrouter" | "hermes" | "gajecode";
 
 interface ProviderDef {
   id: ProviderId;
@@ -88,6 +93,21 @@ const PROVIDERS: ProviderDef[] = [
     },
     apiUrl: "https://openrouter.ai/keys",
   },
+  {
+    id: "gajecode",
+    name: "가재코드 (Gajae Code)",
+    desc: {
+      ko: "Yeachan-Heo/gajae-code 저장소의 gjc CLI를 Atelier 전용 격리 공간에 설치합니다.",
+      en: "Install the gjc CLI from Yeachan-Heo/gajae-code into Atelier's isolated provider space.",
+    },
+    oauthCta: { ko: "", en: "" },
+    apiHelp: { ko: "", en: "" },
+    installHelp: {
+      ko: "가재코드 CLI는 Bun 기반으로 설치되며, 기존 Claude/Codex/Hermes 스킬과 분리된 Atelier 전용 HOME에서 실행됩니다.",
+      en: "Gajae Code CLI installs through Bun and runs under an Atelier-only HOME isolated from existing Claude/Codex/Hermes skills.",
+    },
+    installUrl: "https://github.com/Yeachan-Heo/gajae-code",
+  },
 ];
 
 type HermesBackend = "openai-codex" | "openrouter";
@@ -152,6 +172,11 @@ const COPY = {
     loginModalCheckingNow: "확인 중…",
     loginModalDetected: "로그인 감지! 곧 자동 닫힘.",
     loginModalCancel: "닫기",
+    loginModalCodeLabel: "인증 코드",
+    loginModalCodePlaceholder: "브라우저에 표시된 인증 코드를 붙여넣기",
+    loginModalCodeSubmit: "코드 전달",
+    loginModalCodeSubmitting: "전달 중…",
+    loginModalCodeSubmitted: "전달됨",
     hermesTitle: "Hermes (로컬)",
     hermesDesc:
       "Hermes는 로컬 binary로 동작하고, AI 호출 시 아래 백엔드 중 선택한 자격증명을 그대로 사용합니다.",
@@ -172,6 +197,19 @@ const COPY = {
     hermesUpdateButton: "업데이트",
     hermesRecheck: "다시 확인",
     hermesVersionPrefix: "버전",
+    gajecodeTitle: "가재코드 격리",
+    gajecodeDesc:
+      "설치와 실행 모두 Atelier 전용 HOME에서 진행되어 기존 로컬 스킬을 자동으로 사용하지 않습니다.",
+    gajecodeUpdateLabel: "업데이트",
+    gajecodeUpdateChecking: "확인 중…",
+    gajecodeUpdateLatest: "최신 버전",
+    gajecodeUpdateAvailable: "업데이트 가능",
+    gajecodeUpdating: "업데이트 중…",
+    gajecodeUpdateButton: "업데이트",
+    gajecodeRecheck: "다시 확인",
+    gajecodeVersionPrefix: "버전",
+    gajecodeNotInstalled: "가재코드 CLI가 설치되어 있지 않습니다.",
+    gajecodeInstallIsolation: "설치 후에도 전용 .gjc 폴더만 사용합니다.",
   },
   en: {
     title: "Connections",
@@ -210,6 +248,11 @@ const COPY = {
     loginModalCheckingNow: "Checking…",
     loginModalDetected: "Sign-in detected! Closing shortly.",
     loginModalCancel: "Close",
+    loginModalCodeLabel: "Authentication code",
+    loginModalCodePlaceholder: "Paste the code shown in your browser",
+    loginModalCodeSubmit: "Submit code",
+    loginModalCodeSubmitting: "Submitting…",
+    loginModalCodeSubmitted: "Submitted",
     hermesTitle: "Hermes (local)",
     hermesDesc:
       "Hermes runs locally and uses one of the credentials below as the inference backend.",
@@ -230,6 +273,19 @@ const COPY = {
     hermesUpdateButton: "Update",
     hermesRecheck: "Re-check",
     hermesVersionPrefix: "Version",
+    gajecodeTitle: "Gajae Code isolation",
+    gajecodeDesc:
+      "Install and execution run under Atelier's dedicated HOME, so existing local skills are not auto-used.",
+    gajecodeUpdateLabel: "Update",
+    gajecodeUpdateChecking: "Checking…",
+    gajecodeUpdateLatest: "Up to date",
+    gajecodeUpdateAvailable: "Update available",
+    gajecodeUpdating: "Updating…",
+    gajecodeUpdateButton: "Update",
+    gajecodeRecheck: "Re-check",
+    gajecodeVersionPrefix: "Version",
+    gajecodeNotInstalled: "Gajae Code CLI is not installed.",
+    gajecodeInstallIsolation: "After install, only the dedicated .gjc folder is used.",
   },
 } as const;
 
@@ -244,6 +300,7 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
     codex: null,
     openrouter: null,
     hermes: null,
+    gajecode: null,
   });
   const [busyId, setBusyId] = useState<string | null>(null);
   const [loginModal, setLoginModal] = useState<{
@@ -256,7 +313,7 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
   const [panelNotice, setPanelNotice] = useState<string | null>(null);
 
   const refresh = useCallback(async (only?: ProviderId) => {
-    const targets = only ? [only] : (["claude", "codex", "openrouter", "hermes"] as ProviderId[]);
+    const targets = only ? [only] : (["claude", "codex", "openrouter", "hermes", "gajecode"] as ProviderId[]);
     const results = await Promise.all(
       targets.map(async (pid) => {
         const status = await providerStatus(pid).catch(() => null);
@@ -367,6 +424,14 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
             setTimeout(() => void refresh("hermes"), 1000);
           }}
         />
+
+        <GajecodeCard
+          tw={tw}
+          status={statuses.gajecode}
+          onUpdated={() => {
+            setTimeout(() => void refresh("gajecode"), 1000);
+          }}
+        />
       </div>
 
       {panelError && (
@@ -406,11 +471,13 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
 
       {loginModal && (
         <LoginModal
+          provider={loginModal.provider}
           name={loginModal.name}
           detected={loginModal.detected}
           message={loginModal.message}
           dark={dark}
           copy={copy}
+          onSubmitCode={(code) => providerSubmitOauthCode(loginModal.provider, code)}
           onClose={() => setLoginModal(null)}
         />
       )}
@@ -449,6 +516,7 @@ const ProviderCard: React.FC<CardProps> = ({
 
   const supportsOauth = status?.supports_oauth ?? !!def.oauthCta[lang];
   const supportsApi = status?.supports_api ?? !!def.apiHelp[lang];
+  const supportsInstall = !!def.installHelp;
   const cliInstalled = status?.cli_installed ?? false;
   const oauthLoggedIn = status?.oauth_logged_in ?? false;
   const apiKeyPresent = status?.api_key_present ?? false;
@@ -458,16 +526,16 @@ const ProviderCard: React.FC<CardProps> = ({
 
   const statusLabel = connected
     ? copy.statusOk
-    : supportsOauth && !cliInstalled
+    : supportsInstall && !cliInstalled
     ? copy.statusNoCli
-    : supportsOauth && cliInstalled
+    : supportsInstall && cliInstalled
     ? copy.statusCliReady
     : copy.statusNoKey;
   const statusTone: "ok" | "info" | "warn" | "neutral" = connected
     ? "ok"
-    : supportsOauth && !cliInstalled
+    : supportsInstall && !cliInstalled
     ? "warn"
-    : supportsOauth && cliInstalled
+    : supportsInstall && cliInstalled
     ? "info"
     : "neutral";
 
@@ -543,29 +611,31 @@ const ProviderCard: React.FC<CardProps> = ({
         </div>
       </div>
 
-      {supportsOauth && (
+      {(supportsOauth || supportsInstall) && (
         <div className="mt-3 space-y-1.5">
           <div className="flex items-center gap-2 flex-wrap">
-            <button
-              onClick={() => {
-                if (!cliInstalled) {
-                  setErrorMsg(`${copy.installPrompt} ${def.installHelp?.[lang] ?? ""}`.trim());
-                  return;
-                }
-                onStartLogin(shouldForceOauthLogin);
-              }}
-              disabled={busy}
-              className={cls(
-                "text-[12.5px] h-8 px-3 rounded-md border transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
-                cliInstalled
-                  ? "bg-[var(--accent)] text-white border-[var(--accent-hover)] hover:opacity-90"
-                  : dark
-                  ? "border-dline bg-dbg text-dsub hover:text-dink"
-                  : "border-line bg-cream text-sub hover:text-ink",
-              )}
-            >
-              {oauthButtonLabel}
-            </button>
+            {supportsOauth && (
+              <button
+                onClick={() => {
+                  if (!cliInstalled) {
+                    setErrorMsg(`${copy.installPrompt} ${def.installHelp?.[lang] ?? ""}`.trim());
+                    return;
+                  }
+                  onStartLogin(shouldForceOauthLogin);
+                }}
+                disabled={busy}
+                className={cls(
+                  "text-[12.5px] h-8 px-3 rounded-md border transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
+                  cliInstalled
+                    ? "bg-[var(--accent)] text-white border-[var(--accent-hover)] hover:opacity-90"
+                    : dark
+                    ? "border-dline bg-dbg text-dsub hover:text-dink"
+                    : "border-line bg-cream text-sub hover:text-ink",
+                )}
+              >
+                {oauthButtonLabel}
+              </button>
+            )}
             <button
               onClick={() => void handleAutoInstall()}
               disabled={installing || cliInstalled}
@@ -695,15 +765,15 @@ const HermesCard: React.FC<{
   const installed = hermes?.cli_installed ?? false;
 
   const [backend, setBackend] = useState<HermesBackend>(() => {
-    const saved = localStorage.getItem(HERMES_PREF_KEY);
+    const saved = safeLocalStorageGet(HERMES_PREF_KEY);
     if (saved && HERMES_BACKENDS.some((b) => b.value === saved)) return saved as HermesBackend;
-    if (saved) localStorage.setItem(HERMES_PREF_KEY, "openai-codex");
+    if (saved) safeLocalStorageSet(HERMES_PREF_KEY, "openai-codex");
     return "openai-codex";
   });
 
   function setAndSave(v: HermesBackend) {
     setBackend(v);
-    localStorage.setItem(HERMES_PREF_KEY, v);
+    safeLocalStorageSet(HERMES_PREF_KEY, v);
   }
 
   const [updateStatus, setUpdateStatus] = useState<HermesUpdateStatus | null>(null);
@@ -967,14 +1037,174 @@ const HermesCard: React.FC<{
   );
 };
 
+const GajecodeCard: React.FC<{
+  tw: Tweaks;
+  status: ProviderStatus | null;
+  onUpdated: () => void;
+}> = ({ tw, status, onUpdated }) => {
+  const dark = tw.dark;
+  const copy = COPY[tw.language];
+  const installed = status?.cli_installed ?? false;
+  const [updateStatus, setUpdateStatus] = useState<GajecodeUpdateStatus | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updating, setUpdating] = useState(false);
+
+  const refreshUpdate = useCallback(async () => {
+    setCheckingUpdate(true);
+    try {
+      const next = await gajecodeCheckUpdate();
+      setUpdateStatus(next);
+    } catch {
+      setUpdateStatus(null);
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (installed) void refreshUpdate();
+    else setUpdateStatus(null);
+  }, [installed, refreshUpdate]);
+
+  async function runUpdate() {
+    setUpdating(true);
+    try {
+      await gajecodeUpdate();
+      onUpdated();
+      const started = Date.now();
+      while (Date.now() - started < 5 * 60 * 1000) {
+        await new Promise((resolve) => window.setTimeout(resolve, 3000));
+        const next = await gajecodeCheckUpdate().catch(() => null);
+        if (next) {
+          setUpdateStatus(next);
+          if (!next.update_available) break;
+        }
+      }
+    } finally {
+      setUpdating(false);
+    }
+  }
+
+  return (
+    <div
+      className={cls(
+        "rounded-lg border p-4",
+        dark ? "border-dline bg-dpanel" : "border-line bg-panel",
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-[14px]">{copy.gajecodeTitle}</span>
+            <StatusDot
+              tone={installed ? "ok" : "warn"}
+              label={installed ? copy.statusCliReady : copy.statusNoCli}
+              dark={dark}
+            />
+          </div>
+          <p className={cls("text-[12.5px] leading-relaxed mt-1", dark ? "text-dsub" : "text-sub")}>
+            {copy.gajecodeDesc}
+          </p>
+        </div>
+      </div>
+
+      <div
+        className={cls(
+          "mt-3 rounded-md border px-3 py-2.5 flex items-center gap-2 flex-wrap",
+          dark ? "border-dline bg-dbg" : "border-line bg-cream",
+        )}
+      >
+        <div className="flex-1 min-w-[220px]">
+          <div className={cls("text-[11.5px] uppercase tracking-wider font-semibold", dark ? "text-dsub" : "text-sub")}>
+            {copy.gajecodeUpdateLabel}
+          </div>
+          <div className={cls("text-[11.5px] mt-0.5", dark ? "text-dsub" : "text-sub")}>
+            {installed ? copy.gajecodeInstallIsolation : `${copy.gajecodeNotInstalled} ${copy.installPrompt}`}
+          </div>
+          {updateStatus?.current_version && (
+            <div className={cls("text-[11px] gb-mono mt-1", dark ? "text-dsub" : "text-sub")}>
+              {copy.gajecodeVersionPrefix}: {updateStatus.current_version}
+              {updateStatus.latest_version ? ` → ${updateStatus.latest_version}` : ""}
+            </div>
+          )}
+          {updateStatus?.message && (
+            <div className={cls("text-[11px] mt-1", dark ? "text-dsub" : "text-sub")}>
+              {updateStatus.message}
+            </div>
+          )}
+        </div>
+
+        {installed && (
+          <div className="shrink-0 flex items-center gap-1.5">
+            {checkingUpdate ? (
+              <span className={cls("text-[12px]", dark ? "text-dsub" : "text-sub")}>
+                {copy.gajecodeUpdateChecking}
+              </span>
+            ) : updateStatus?.update_available ? (
+              <button
+                onClick={() => void runUpdate()}
+                disabled={updating || checkingUpdate}
+                className={cls(
+                  "text-[12.5px] h-8 px-3 rounded-md border font-medium transition-colors",
+                  "bg-[var(--accent)]/10 text-[var(--accent)] border-[var(--accent)]/40 hover:bg-[var(--accent)]/20",
+                  "disabled:opacity-50 disabled:cursor-not-allowed",
+                )}
+              >
+                {updating ? copy.gajecodeUpdating : copy.gajecodeUpdateButton}
+              </button>
+            ) : updateStatus ? (
+              <span className="text-[12px] font-medium" style={{ color: "#2f7d5b" }}>
+                ✓ {copy.gajecodeUpdateLatest}
+              </span>
+            ) : null}
+
+            <button
+              onClick={() => void refreshUpdate()}
+              disabled={checkingUpdate || updating}
+              className={cls(
+                "text-[12px] h-8 px-2.5 rounded-md border transition-colors disabled:opacity-50",
+                dark ? "border-dline text-dsub hover:text-dink" : "border-line text-sub hover:text-ink",
+              )}
+              title={copy.gajecodeRecheck}
+              aria-label={copy.gajecodeRecheck}
+            >
+              ↻
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const LoginModal: React.FC<{
+  provider: ProviderId;
   name: string;
   detected: boolean;
   message: string;
   dark: boolean;
   copy: CopyT;
+  onSubmitCode: (code: string) => Promise<void>;
   onClose: () => void;
-}> = ({ name, detected, message, dark, copy, onClose }) => {
+}> = ({ provider, name, detected, message, dark, copy, onSubmitCode, onClose }) => {
+  const [code, setCode] = useState("");
+  const [submitState, setSubmitState] = useState<"idle" | "submitting" | "submitted">("idle");
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const showCodeInput = provider === "claude" && !detected;
+
+  async function handleSubmitCode() {
+    if (!code.trim() || submitState === "submitting") return;
+    setSubmitState("submitting");
+    setSubmitError(null);
+    try {
+      await onSubmitCode(code.trim());
+      setSubmitState("submitted");
+    } catch (e) {
+      setSubmitState("idle");
+      setSubmitError(String(e));
+    }
+  }
+
   return (
     <div
       role="dialog"
@@ -994,6 +1224,45 @@ const LoginModal: React.FC<{
         <div className={cls("text-[13px] mb-4", dark ? "text-dsub" : "text-sub")}>
           {message || copy.loginModalDesc}
         </div>
+        {showCodeInput && (
+          <div className="mb-4 space-y-1.5">
+            <label className={cls("block text-[11.5px] uppercase tracking-wider font-semibold", dark ? "text-dsub" : "text-sub")}>
+              {copy.loginModalCodeLabel}
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                placeholder={copy.loginModalCodePlaceholder}
+                className={cls(
+                  "flex-1 h-9 px-3 rounded-md border text-[12.5px] outline-none gb-mono",
+                  dark
+                    ? "border-dline bg-dbg text-dink placeholder:text-dsub focus:border-[var(--accent)]"
+                    : "border-line bg-panel text-ink placeholder:text-sub focus:border-[var(--accent)]",
+                )}
+              />
+              <button
+                onClick={() => void handleSubmitCode()}
+                disabled={!code.trim() || submitState === "submitting"}
+                className={cls(
+                  "h-9 px-3 rounded-md border text-[12.5px] font-medium",
+                  "bg-[var(--accent)] text-white border-[var(--accent-hover)] hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed",
+                )}
+              >
+                {submitState === "submitting"
+                  ? copy.loginModalCodeSubmitting
+                  : submitState === "submitted"
+                  ? copy.loginModalCodeSubmitted
+                  : copy.loginModalCodeSubmit}
+              </button>
+            </div>
+            {submitError && (
+              <div className={cls("text-[11.5px]", dark ? "text-red-300" : "text-red-700")}>
+                {submitError}
+              </div>
+            )}
+          </div>
+        )}
         <div className="flex items-center gap-3">
           {detected ? (
             <span className="inline-flex items-center gap-2 text-[13px] font-medium" style={{ color: "#2f7d5b" }}>

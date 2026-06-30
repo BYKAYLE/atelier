@@ -26,6 +26,7 @@ import {
   parseStellaFactoryCommand,
 } from "../lib/stellaFactory";
 import type { StellaFactoryCommand } from "../lib/stellaFactory";
+import { safeLocalStorageGet, safeLocalStorageSet } from "../lib/storage";
 import {
   ACADEMIC_RESEARCH_SLASH_COMMANDS,
   parseAcademicResearchCommand,
@@ -43,11 +44,12 @@ import {
   agentChangeBaseline,
   agentChangeSummary,
   agentCliCommand,
-  agentSend,
-  agentUndoChanges,
-  academicResearchInstallClaudePlugin,
-  clipboardSaveImage,
-  codexModelOptions,
+	  agentSend,
+	  agentUndoChanges,
+	  academicResearchInstallClaudePlugin,
+	  clipboardSaveImage,
+	  claudeModelOptions,
+	  codexModelOptions,
   homeDir,
   isTauri,
   onAgentEvent,
@@ -91,6 +93,7 @@ type ProviderMeta = {
 type ModelOption = {
   value: string;
   label: string;
+  disabled?: boolean;
 };
 
 type CodexEffort = "low" | "medium" | "high" | "xhigh";
@@ -107,6 +110,271 @@ type SlashCommandSpec = {
   detailEn: string;
 };
 
+const GAJAE_CODE_COMMANDS: Array<SlashCommandSpec & { quick?: boolean; labelKo?: string; labelEn?: string }> = [
+  {
+    command: "gjc <message>",
+    insert: "/gjc ",
+    scope: "gajecode",
+    detailKo: "일반 Gajae Code 메시지 또는 CLI 인자 실행",
+    detailEn: "Run a regular Gajae Code message or CLI args",
+    quick: true,
+    labelKo: "GJC",
+    labelEn: "GJC",
+  },
+  {
+    command: "gjc --help",
+    insert: "/gjc --help",
+    scope: "gajecode",
+    detailKo: "Gajae Code 전체 도움말",
+    detailEn: "Show Gajae Code help",
+    quick: true,
+    labelKo: "도움말",
+    labelEn: "Help",
+  },
+  {
+    command: "gjc --version",
+    insert: "/gjc --version",
+    scope: "gajecode",
+    detailKo: "설치된 Gajae Code 버전 확인",
+    detailEn: "Show installed Gajae Code version",
+  },
+  {
+    command: "gjc --list-models",
+    insert: "/gjc --list-models",
+    scope: "gajecode",
+    detailKo: "설정된 provider 모델 목록 확인",
+    detailEn: "List configured provider models",
+    quick: true,
+    labelKo: "모델",
+    labelEn: "Models",
+  },
+  {
+    command: "gjc -p <prompt>",
+    insert: "/gjc -p ",
+    scope: "gajecode",
+    detailKo: "비대화형 프롬프트 실행 후 종료",
+    detailEn: "Run a non-interactive prompt and exit",
+    quick: true,
+    labelKo: "프린트",
+    labelEn: "Print",
+  },
+  {
+    command: "gjc --continue <message>",
+    insert: "/gjc --continue ",
+    scope: "gajecode",
+    detailKo: "이전 Gajae Code 세션 이어가기",
+    detailEn: "Continue the previous Gajae Code session",
+  },
+  {
+    command: "gjc --resume <session>",
+    insert: "/gjc --resume ",
+    scope: "gajecode",
+    detailKo: "세션 ID 또는 경로로 재개",
+    detailEn: "Resume by session id or path",
+  },
+  {
+    command: "gjc --worktree <message>",
+    insert: "/gjc --worktree ",
+    scope: "gajecode",
+    detailKo: "격리 worktree에서 작업 시작",
+    detailEn: "Start work in an isolated worktree",
+  },
+  {
+    command: "gjc --export <session.jsonl>",
+    insert: "/gjc --export ",
+    scope: "gajecode",
+    detailKo: "세션 파일을 HTML로 내보내기",
+    detailEn: "Export a session file to HTML",
+  },
+  {
+    command: "gjc skills list",
+    insert: "/gjc skills list",
+    scope: "gajecode",
+    detailKo: "격리된 Gajae Code 스킬 목록",
+    detailEn: "List isolated Gajae Code skills",
+    quick: true,
+    labelKo: "스킬",
+    labelEn: "Skills",
+  },
+  {
+    command: "gjc skills read <name>",
+    insert: "/gjc skills read ",
+    scope: "gajecode",
+    detailKo: "Gajae Code 스킬 내용 읽기",
+    detailEn: "Read a Gajae Code skill",
+  },
+  {
+    command: "gjc session list",
+    insert: "/gjc session list",
+    scope: "gajecode",
+    detailKo: "GJC 관리 tmux 세션 목록",
+    detailEn: "List GJC-managed tmux sessions",
+    quick: true,
+    labelKo: "세션",
+    labelEn: "Sessions",
+  },
+  {
+    command: "gjc session status <session>",
+    insert: "/gjc session status ",
+    scope: "gajecode",
+    detailKo: "GJC 관리 세션 상태 확인",
+    detailEn: "Inspect a GJC-managed session",
+  },
+  {
+    command: "gjc setup defaults --check",
+    insert: "/gjc setup defaults --check",
+    scope: "gajecode",
+    detailKo: "기본 설정 설치 여부만 점검",
+    detailEn: "Check default setup without installing",
+  },
+  {
+    command: "gjc setup python --check",
+    insert: "/gjc setup python --check",
+    scope: "gajecode",
+    detailKo: "Python 도구 의존성 점검",
+    detailEn: "Check Python tool dependencies",
+  },
+  {
+    command: "gjc setup hermes --smoke",
+    insert: "/gjc setup hermes --smoke",
+    scope: "gajecode",
+    detailKo: "Hermes MCP 설정 smoke 점검",
+    detailEn: "Run Hermes MCP setup smoke checks",
+  },
+  {
+    command: "gjc rlm <task>",
+    insert: "/gjc rlm ",
+    scope: "gajecode",
+    detailKo: "RLM 연구 모드 실행",
+    detailEn: "Run RLM research mode",
+    quick: true,
+    labelKo: "RLM",
+    labelEn: "RLM",
+  },
+  {
+    command: "gjc rlm --data <DATA.md> <task>",
+    insert: "/gjc rlm --data ",
+    scope: "gajecode",
+    detailKo: "데이터 문서를 붙인 RLM 연구 모드",
+    detailEn: "Run RLM with a data document",
+  },
+  {
+    command: "gjc notify status",
+    insert: "/gjc notify status",
+    scope: "gajecode",
+    detailKo: "알림/텔레그램 연동 상태 확인",
+    detailEn: "Show notification or Telegram pairing status",
+  },
+  {
+    command: "gjc notify setup",
+    insert: "/gjc notify setup",
+    scope: "gajecode",
+    detailKo: "텔레그램 알림 설정 시작",
+    detailEn: "Start Telegram notification setup",
+  },
+  {
+    command: "gjc mcp-serve coordinator --check --json",
+    insert: "/gjc mcp-serve coordinator --check --json",
+    scope: "gajecode",
+    detailKo: "Coordinator MCP 서버 설정 점검",
+    detailEn: "Check coordinator MCP server configuration",
+    quick: true,
+    labelKo: "MCP 점검",
+    labelEn: "MCP check",
+  },
+  {
+    command: "gjc web-search <query>",
+    insert: "/gjc web-search ",
+    scope: "gajecode",
+    detailKo: "Gajae Code 웹 검색 명령",
+    detailEn: "Run Gajae Code web search",
+  },
+  {
+    command: "gjc q <query>",
+    insert: "/gjc q ",
+    scope: "gajecode",
+    detailKo: "web-search 짧은 별칭",
+    detailEn: "Short alias for web-search",
+  },
+  {
+    command: "gjc harness --help",
+    insert: "/gjc harness --help",
+    scope: "gajecode",
+    detailKo: "Harness 명령 도움말",
+    detailEn: "Show harness command help",
+  },
+  {
+    command: "gjc coordinator --help",
+    insert: "/gjc coordinator --help",
+    scope: "gajecode",
+    detailKo: "Coordinator 명령 도움말",
+    detailEn: "Show coordinator command help",
+  },
+  {
+    command: "gjc team --help",
+    insert: "/gjc team --help",
+    scope: "gajecode",
+    detailKo: "Team 명령 도움말",
+    detailEn: "Show team command help",
+  },
+  {
+    command: "gjc ultragoal --help",
+    insert: "/gjc ultragoal --help",
+    scope: "gajecode",
+    detailKo: "Ultragoal 명령 도움말",
+    detailEn: "Show ultragoal command help",
+  },
+  {
+    command: "gjc config --help",
+    insert: "/gjc config --help",
+    scope: "gajecode",
+    detailKo: "Config 명령 도움말",
+    detailEn: "Show config command help",
+  },
+  {
+    command: "gjc daemon --help",
+    insert: "/gjc daemon --help",
+    scope: "gajecode",
+    detailKo: "Daemon 명령 도움말",
+    detailEn: "Show daemon command help",
+  },
+  {
+    command: "gjc contribute-pr --help",
+    insert: "/gjc contribute-pr --help",
+    scope: "gajecode",
+    detailKo: "기여 PR 준비 명령 도움말",
+    detailEn: "Show contribute-pr command help",
+  },
+  {
+    command: "gjc deep-interview --help",
+    insert: "/gjc deep-interview --help",
+    scope: "gajecode",
+    detailKo: "Deep interview 명령 도움말",
+    detailEn: "Show deep-interview command help",
+  },
+  {
+    command: "gjc migrate --help",
+    insert: "/gjc migrate --help",
+    scope: "gajecode",
+    detailKo: "Migrate 명령 도움말",
+    detailEn: "Show migrate command help",
+  },
+  {
+    command: "gjc launch --help",
+    insert: "/gjc launch --help",
+    scope: "gajecode",
+    detailKo: "Launch 명령 도움말",
+    detailEn: "Show launch command help",
+  },
+  {
+    command: "gjc update --help",
+    insert: "/gjc update --help",
+    scope: "gajecode",
+    detailKo: "Update 명령 도움말",
+    detailEn: "Show update command help",
+  },
+];
+
 function activeFactoryCommandFromText(rawText: string): StellaFactoryCommand | null {
   const trimmed = rawText.trimStart();
   const slash = trimmed.match(/^\/(goal|analyze|probe|audit)(?:\s|$)/i);
@@ -122,6 +390,27 @@ function stripFactoryCommandPrefix(rawText: string): string {
     .replace(/^\/(?:goal|analyze|probe|audit)(?:\s+)?/i, "")
     .replace(/^(?:\/\s*)?(?:스텔라\s*팩토리|stella\s+factory)(?:\s*(?:로|으로|를|을|는|은|:|：|\.|-|—)\s*)?/i, "")
     .trimStart();
+}
+
+type ComposerUiState = {
+  hasText: boolean;
+  slashText: string;
+  factoryCommand: StellaFactoryCommand | null;
+};
+
+function composerUiStateFromText(rawText: string): ComposerUiState {
+  const slashText = rawText.trimStart().startsWith("/") && !rawText.includes("\n") ? rawText : "";
+  return {
+    hasText: rawText.trim().length > 0,
+    slashText,
+    factoryCommand: activeFactoryCommandFromText(rawText),
+  };
+}
+
+function sameComposerUiState(left: ComposerUiState, right: ComposerUiState): boolean {
+  return left.hasText === right.hasText
+    && left.slashText === right.slashText
+    && left.factoryCommand === right.factoryCommand;
 }
 
 type ChatAttachment = {
@@ -261,6 +550,7 @@ const DEV_SCREEN_HOST_KEY = "atelier.agent.devscreen.host.v1";
 const DEV_SCREEN_PORT_KEY = "atelier.agent.devscreen.port.v1";
 const DEV_SCREEN_WINDOW_KEY = "atelier.agent.devscreen.window.v1";
 const TASK_LIST_VISIBLE_KEY = "atelier.agent.tasklist.visible.v1";
+const COMPOSER_HEIGHT_KEY = "atelier.agent.composer.height.v1";
 const FACTORY_DEFAULT_OFF_MIGRATION_KEY = "atelier.agent.factory.defaultOff.v1";
 const DEFAULT_PROVIDER: AgentProvider = "claude";
 const DEFAULT_HERMES_PROVIDER: HermesInferenceProvider = "openai-codex";
@@ -269,16 +559,28 @@ const DEFAULT_CODEX_SPEED: CodexSpeed = "default";
 const DEFAULT_PERMISSION_MODE: AgentPermissionMode = "full";
 const MAX_RAW_EVENTS = 120;
 const MAX_RAW_EVENT_CHARS = 12000;
+const MAX_PERSISTED_SESSIONS = 24;
+const MAX_PERSISTED_MESSAGES_PER_SESSION = 80;
+const MAX_PERSISTED_MESSAGE_TEXT_CHARS = 24000;
+const MAX_PERSISTED_RAW_EVENTS = 24;
+const MAX_PERSISTED_RAW_EVENT_CHARS = 1800;
+const MAX_PERSISTED_ACTIVITIES = 16;
+const MAX_PERSISTED_ATTACHMENTS = 8;
+const MAX_PERSISTED_QUEUED_TURNS = 16;
+const MAX_PERSISTED_CHANGE_FILES = 40;
+const MAX_PERSISTED_CHANGE_DIFF_CHARS = 6000;
+const MAX_PERSISTED_CHANGE_PATCH_CHARS = 12000;
+const FALLBACK_PERSISTED_MESSAGES_PER_SESSION = 24;
+const FALLBACK_PERSISTED_MESSAGE_TEXT_CHARS = 6000;
 const MAX_COMPACT_AGENT_CONTEXT_CHARS = 9000;
 const MAX_COMPACT_AGENT_CONTEXT_MESSAGES = 8;
-const STREAM_FLUSH_MS = 120;
+const STREAM_FLUSH_MS = 70;
 const FINAL_ONLY_WORKSPACE_STREAMING = true;
 const CHANGE_BASELINE_TIMEOUT_MS = 650;
 const SMOOTH_OUTPUT_FPS = 30;
 const SMOOTH_FRAME_MS = 1000 / SMOOTH_OUTPUT_FPS;
 const SMOOTH_BACKGROUND_CATCH_UP_MS = 900;
-const INPUT_REVEAL_PAUSE_MS = 220;
-const INPUT_STATE_COMMIT_DEBOUNCE_MS = 90;
+const INPUT_REVEAL_PAUSE_MS = 80;
 const SESSION_PERSIST_DEBOUNCE_MS = 260;
 const HERMES_GOLD = "#8a8218";
 const PREVIEW_VP_SIZES: Record<Exclude<PreviewViewport, "desktop">, { w: number; h: number }> = {
@@ -313,6 +615,16 @@ function normalizeAgentDotColor(color?: string | null) {
 
 function clampNumber(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
+}
+
+function composerMaxHeight() {
+  if (typeof window === "undefined") return 460;
+  return clampNumber(window.innerHeight - 180, 220, 560);
+}
+
+function initialComposerHeight() {
+  const saved = Number(safeLocalStorageGet(COMPOSER_HEIGHT_KEY));
+  return clampNumber(Number.isFinite(saved) && saved > 0 ? saved : 260, 150, composerMaxHeight());
 }
 
 function noAgentResponseText(language?: string) {
@@ -513,14 +825,14 @@ function isProviderDiagnosticLine(line: string): boolean {
 function isElapsedShellToolLine(text: string): boolean {
   const t = text.trim().replace(/^(?:Hm|Cl|Ci|Cd)\s+/, "");
   if (!t) return false;
-  const hasElapsedTail = /(?:["'`])?\s+\d+(?:\.\d+)?s\s*(?:\[error\])?$/i.test(t);
+  const hasElapsedTail = /(?:["'`])?\s+\d+(?:\.\d+)?s\s*(?:\[(?:error|exit\s+-?\d+)\])?$/i.test(t);
   if (!hasElapsedTail) return false;
   const startsLikeShell =
-    /^\$?\s*(?:cd|docker|ssh|bash|sh|zsh|fish|python3?|npm|npx|pnpm|yarn|bun|cargo|git|node|deno|uv|curl|wget|rsync|scp|sed|awk|grep|rg|cat|tail|head|ls|find|mkdir|cp|mv|rm|printf|echo)\b/i.test(t)
+    /^\$?\s*(?:cd|docker|ssh|bash|sh|zsh|fish|python3?|npm|npx|pnpm|yarn|bun|cargo|git|node|deno|uv|curl|wget|rsync|scp|sed|awk|grep|rg|cat|tail|head|ls|find|mkdir|cp|mv|rm|printf|echo|pgrep|launchctl|osascript)\b/i.test(t)
     || /^\$?\s*\/(?:usr|bin|sbin|opt|Users|Volumes|volume1|tmp|var)\//i.test(t)
     || /^\$?\s*(?:\.\.?\/)?[\w./-]+\.sh\b/i.test(t);
   const containsShellChain =
-    /\s(?:&&|\|\||;)\s*(?:\/(?:usr|bin|sbin|opt|Users|Volumes|volume1|tmp|var)\/)?(?:docker|python3?|npm|npx|pnpm|yarn|cargo|git|node|curl|bash|sh)\b/i.test(t);
+    /\s(?:&&|\|\||;)\s*(?:\/(?:usr|bin|sbin|opt|Users|Volumes|volume1|tmp|var)\/)?(?:docker|python3?|npm|npx|pnpm|yarn|cargo|git|node|curl|bash|sh|find|pgrep|launchctl|printf|echo)\b/i.test(t);
   return startsLikeShell || containsShellChain;
 }
 
@@ -577,6 +889,8 @@ function isAgentCommandDumpLine(line: string): boolean {
   if (/\bhermes\s+kanban\s+--board\b/.test(t)) return true;
   if (/\bNEW_(?:HYGIENE|DASH)=/.test(t)) return true;
   if (/\b--idempotency-key\b/.test(t)) return true;
+  if (/^printf\s+['"]?=+/.test(t) && /\b(?:find|pgrep|launchctl|PlistBuddy|Applications|LaunchAgents)\b/.test(t)) return true;
+  if (/\b(?:doneprintf|true\/usr\/libexec|LaunchAgents|LaunchDaemons)\b/.test(t) && /\d+(?:\.\d+)?s\s*\[exit\s+-?\d+\]$/i.test(t)) return true;
   const looksLikeCode =
     /^(from\s+\w+\s+import|import\s+\w+|root=|files=|cmd=|out=|try:|except\s+|for\s+\w+\s+in|if\s+|print\(|PY\s+)/.test(t) ||
     /\bfor\s+\w+\s+in\b.*\bprint\(/.test(t);
@@ -802,7 +1116,7 @@ const PROVIDERS: ProviderMeta[] = [
     id: "claude",
     label: "Claude Code",
     short: "Cl",
-    defaultModel: "claude-sonnet-4-6",
+    defaultModel: "claude-opus-4-8",
     dot: "#c96442",
     newTitleKo: "새 Claude 작업",
     newTitleEn: "New Claude workspace",
@@ -825,12 +1139,22 @@ const PROVIDERS: ProviderMeta[] = [
     newTitleKo: "새 Codex 작업",
     newTitleEn: "New Codex workspace",
   },
+  {
+    id: "gajecode",
+    label: "가재코드",
+    short: "Gj",
+    defaultModel: "claude-opus-4-8",
+    dot: "#7a6f1a",
+    newTitleKo: "새 가재코드 작업",
+    newTitleEn: "New Gajae Code workspace",
+  },
 ];
 
 const CLAUDE_MODELS: ModelOption[] = [
-  { value: "claude-opus-4-7", label: "Claude Opus 4.7" },
-  { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
-  { value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5 · 20251001" },
+  { value: "claude-opus-4-8", label: "Opus 4.8" },
+  { value: "claude-fable-5", label: "Fable 5 Currently unavailable", disabled: true },
+  { value: "claude-sonnet-4-6", label: "Sonnet 4.6" },
+  { value: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
 ];
 
 const OPENAI_CODEX_MODELS: ModelOption[] = [
@@ -840,7 +1164,7 @@ const OPENAI_CODEX_MODELS: ModelOption[] = [
 const OPENROUTER_MODELS: ModelOption[] = [
   { value: "openai/gpt-5.5", label: "OpenAI GPT-5.5" },
   { value: "openai/gpt-5.5-pro", label: "OpenAI GPT-5.5 Pro" },
-  { value: "anthropic/claude-opus-4.7", label: "Claude Opus 4.7" },
+  { value: "anthropic/claude-opus-4.8", label: "Claude Opus 4.8" },
   { value: "anthropic/claude-sonnet-4.6", label: "Claude Sonnet 4.6" },
   { value: "anthropic/claude-haiku-4.5", label: "Claude Haiku 4.5" },
 ];
@@ -849,10 +1173,18 @@ const CODEX_MODELS: ModelOption[] = [
   { value: "gpt-5.5", label: "GPT-5.5" },
 ];
 
+const GAJECODE_MODELS: ModelOption[] = [
+  { value: "claude-opus-4-8", label: "Opus 4.8" },
+  { value: "claude-fable-5", label: "Fable 5 Currently unavailable", disabled: true },
+  { value: "claude-sonnet-4-6", label: "Sonnet 4.6" },
+  { value: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
+];
+
 const MODEL_OPTIONS: Record<AgentProvider, ModelOption[]> = {
   claude: CLAUDE_MODELS,
   hermes: OPENAI_CODEX_MODELS,
   codex: CODEX_MODELS,
+  gajecode: GAJECODE_MODELS,
 };
 
 const HERMES_PROVIDERS: Array<{ value: HermesInferenceProvider; label: string }> = [
@@ -912,7 +1244,7 @@ const PERMISSION_MODES: Array<{
 ];
 
 const isProvider = (value: unknown): value is AgentProvider =>
-  value === "claude" || value === "hermes" || value === "codex";
+  value === "claude" || value === "hermes" || value === "codex" || value === "gajecode";
 
 const isHermesProvider = (value: unknown): value is HermesInferenceProvider =>
   value === "openai-codex" || value === "openrouter";
@@ -938,6 +1270,7 @@ function providerFromProfile(profile: Profile): AgentProvider | null {
   if (first.includes("claude")) return "claude";
   if (first.includes("hermes")) return "hermes";
   if (first.includes("codex")) return "codex";
+  if (first === "gjc" || first === "gajae-code" || first === "cmdc" || first === "command-code" || (first === "cmd" && /가재|gajae|command code/i.test(profile.name))) return "gajecode";
   return null;
 }
 
@@ -979,9 +1312,11 @@ function modelOptionsFor(
   provider: AgentProvider,
   selected?: string | null,
   hermesProvider: HermesInferenceProvider = DEFAULT_HERMES_PROVIDER,
+  claudeModels: ModelOption[] = CLAUDE_MODELS,
   codexModels: ModelOption[] = CODEX_MODELS,
   openRouterModels: ModelOption[] = OPENROUTER_MODELS,
 ) {
+  const liveClaudeModels = claudeModels.length > 0 ? claudeModels : CLAUDE_MODELS;
   const liveCodexModels = codexModels.length > 0 ? codexModels : CODEX_MODELS;
   const liveOpenRouterModels = openRouterModels.length > 0 ? openRouterModels : OPENROUTER_MODELS;
   const options = provider === "hermes"
@@ -990,12 +1325,16 @@ function modelOptionsFor(
         : hermesProvider === "openrouter"
           ? liveOpenRouterModels
           : HERMES_MODEL_OPTIONS[hermesProvider])
-    : provider === "codex"
-      ? liveCodexModels
-      : MODEL_OPTIONS[provider] || [];
+      : provider === "codex"
+        ? liveCodexModels
+        : provider === "claude"
+          ? liveClaudeModels
+          : provider === "gajecode"
+            ? liveClaudeModels
+          : MODEL_OPTIONS[provider] || [];
   const trimmed = selected?.trim();
   if (!trimmed || options.some((option) => option.value === trimmed)) return options;
-  if (provider === "codex" || (provider === "hermes" && (hermesProvider === "openai-codex" || hermesProvider === "openrouter"))) return options;
+  if (provider === "claude" || provider === "codex" || provider === "gajecode" || (provider === "hermes" && (hermesProvider === "openai-codex" || hermesProvider === "openrouter"))) return options;
   return [{ value: trimmed, label: `사용자 지정: ${trimmed}` }, ...options];
 }
 
@@ -1010,15 +1349,15 @@ function sanitizeModelOptions(options: ModelOption[]) {
     const value = option.value?.trim();
     if (!value || seen.has(value)) continue;
     seen.add(value);
-    clean.push({ value, label: option.label?.trim() || value });
+    clean.push({ value, label: option.label?.trim() || value, disabled: option.disabled });
   }
   return clean;
 }
 
 function coerceModelToOptions(model: string, options: ModelOption[]) {
-  return options.some((option) => option.value === model)
+  return options.some((option) => !option.disabled && option.value === model)
     ? model
-    : options[0]?.value || model;
+    : options.find((option) => !option.disabled)?.value || model;
 }
 
 function normalizeCodexEffort(value?: unknown): CodexEffort {
@@ -1069,7 +1408,7 @@ function findModelOptionValue(options: ModelOption[], input: string) {
   const query = input.trim().toLowerCase();
   if (!query) return null;
   return options.find((option) =>
-    option.value.toLowerCase() === query || option.label.toLowerCase() === query,
+    !option.disabled && (option.value.toLowerCase() === query || option.label.toLowerCase() === query),
   )?.value || null;
 }
 
@@ -1078,7 +1417,7 @@ function slashCommandsFor(
   hermesProvider: HermesInferenceProvider,
   modelOptions: ModelOption[],
 ): SlashCommandSpec[] {
-  const modelValues = modelOptions.map((option) => option.value).join(" | ");
+  const modelValues = modelOptions.filter((option) => !option.disabled).map((option) => option.value).join(" | ");
   const common: SlashCommandSpec[] = [
     {
       command: "/help",
@@ -1336,6 +1675,13 @@ function slashCommandsFor(
     ];
   }
 
+  if (provider === "gajecode") {
+    return [
+      ...common,
+      ...GAJAE_CODE_COMMANDS,
+    ];
+  }
+
   return [
     ...common,
     {
@@ -1401,34 +1747,96 @@ function filterSlashCommands(commands: SlashCommandSpec[], input: string, langua
   });
 }
 
+function modelLookupKey(value: string) {
+  return value.trim().toLowerCase().replace(/_/g, "-").replace(/\s+/g, " ");
+}
+
 function normalizeModel(provider: AgentProvider, model?: string | null) {
   const trimmed = model?.trim();
   if (!trimmed) return providerMeta(provider).defaultModel;
+  const key = modelLookupKey(trimmed);
 
   if (provider === "claude") {
     const legacy: Record<string, string> = {
-      default: "claude-sonnet-4-6",
-      sonnet: "claude-sonnet-4-6",
-      opus: "claude-opus-4-7",
-      haiku: "claude-haiku-4-5-20251001",
-      best: "claude-opus-4-7",
-      opusplan: "claude-opus-4-7",
-      "sonnet[1m]": "claude-sonnet-4-6",
-      "opus[1m]": "claude-opus-4-7",
-      "claude-opus-4-1": "claude-opus-4-7",
-      "claude-opus-4-1-20250805": "claude-opus-4-7",
-      "claude-opus-4-20250514": "claude-opus-4-7",
+	      default: "claude-sonnet-4-6",
+	      sonnet: "claude-sonnet-4-6",
+	      opus: "claude-opus-4-8",
+        "opus 48": "claude-opus-4-8",
+        "opus 4.8": "claude-opus-4-8",
+        "opus 47": "claude-opus-4-8",
+        "opus 4.7": "claude-opus-4-8",
+	      haiku: "claude-haiku-4-5-20251001",
+	      best: "claude-opus-4-8",
+	      opusplan: "claude-opus-4-8",
+	      "sonnet[1m]": "claude-sonnet-4-6",
+	      "opus[1m]": "claude-opus-4-8",
+        "claude-opus-48": "claude-opus-4-8",
+        "claude-opus-4.8": "claude-opus-4-8",
+        "claude-opus-47": "claude-opus-4-8",
+        "claude-opus-4.7": "claude-opus-4-8",
+	      "claude-opus-4-7": "claude-opus-4-8",
+	      "claude-opus-4-1": "claude-opus-4-8",
+	      "claude-opus-4-1-20250805": "claude-opus-4-8",
+	      "claude-opus-4-20250514": "claude-opus-4-8",
+      "sonnet 46": "claude-sonnet-4-6",
+      "sonnet 4.6": "claude-sonnet-4-6",
+      "claude-sonnet-46": "claude-sonnet-4-6",
+      "claude-sonnet-4.6": "claude-sonnet-4-6",
       "claude-sonnet-4": "claude-sonnet-4-6",
       "claude-sonnet-4-20250514": "claude-sonnet-4-6",
+      "haiku 45": "claude-haiku-4-5-20251001",
+      "haiku 4.5": "claude-haiku-4-5-20251001",
+      "claude-haiku-45": "claude-haiku-4-5-20251001",
+      "claude-haiku-4.5": "claude-haiku-4-5-20251001",
       "claude-haiku-4-5": "claude-haiku-4-5-20251001",
       "claude-3-5-haiku-latest": "claude-haiku-4-5-20251001",
       "claude-3-5-haiku-20241022": "claude-haiku-4-5-20251001",
     };
-    return legacy[trimmed] || trimmed;
+    return legacy[key] || trimmed;
   }
 
   if (provider === "codex") {
     return trimmed;
+  }
+
+  if (provider === "gajecode") {
+    const legacy: Record<string, string> = {
+      default: "claude-opus-4-8",
+      opus: "claude-opus-4-8",
+      "opus 48": "claude-opus-4-8",
+      "opus 4.8": "claude-opus-4-8",
+      "opus 47": "claude-opus-4-8",
+      "opus 4.7": "claude-opus-4-8",
+      best: "claude-opus-4-8",
+      sonnet: "claude-sonnet-4-6",
+      haiku: "claude-haiku-4-5-20251001",
+      "deepseek/deepseek-v4-flash": "claude-opus-4-8",
+      "deepseek/deepseek-v4-pro": "claude-opus-4-8",
+      "gpt-5.5": "claude-opus-4-8",
+      "openai/gpt-5.5": "claude-opus-4-8",
+      "claude-opus-48": "claude-opus-4-8",
+      "claude-opus-4.8": "claude-opus-4-8",
+      "claude-opus-47": "claude-opus-4-8",
+      "claude-opus-4.7": "claude-opus-4-8",
+      "claude-opus-4-7": "claude-opus-4-8",
+      "claude-opus-4-1": "claude-opus-4-8",
+      "claude-opus-4-1-20250805": "claude-opus-4-8",
+      "claude-opus-4-20250514": "claude-opus-4-8",
+      "sonnet 46": "claude-sonnet-4-6",
+      "sonnet 4.6": "claude-sonnet-4-6",
+      "claude-sonnet-46": "claude-sonnet-4-6",
+      "claude-sonnet-4.6": "claude-sonnet-4-6",
+      "claude-sonnet-4": "claude-sonnet-4-6",
+      "claude-sonnet-4-20250514": "claude-sonnet-4-6",
+      "haiku 45": "claude-haiku-4-5-20251001",
+      "haiku 4.5": "claude-haiku-4-5-20251001",
+      "claude-haiku-45": "claude-haiku-4-5-20251001",
+      "claude-haiku-4.5": "claude-haiku-4-5-20251001",
+      "claude-haiku-4-5": "claude-haiku-4-5-20251001",
+      "claude-3-5-haiku-latest": "claude-haiku-4-5-20251001",
+      "claude-3-5-haiku-20241022": "claude-haiku-4-5-20251001",
+    };
+    return legacy[key] || trimmed;
   }
 
   return trimmed;
@@ -1441,7 +1849,8 @@ function normalizeHermesModel(hermesProvider: HermesInferenceProvider, model?: s
     if (/^gpt-5\.(?:2|3-codex|4|4-mini)$/.test(trimmed)) return "openai/gpt-5.5";
     const legacy: Record<string, string> = {
       "gpt-5.5": "openai/gpt-5.5",
-      "claude-opus-4-7": "anthropic/claude-opus-4.7",
+	      "claude-opus-4-8": "anthropic/claude-opus-4.8",
+	      "claude-opus-4-7": "anthropic/claude-opus-4.8",
       "claude-sonnet-4-6": "anthropic/claude-sonnet-4.6",
       "claude-haiku-4-5-20251001": "anthropic/claude-haiku-4.5",
     };
@@ -1459,10 +1868,91 @@ function normalizeHermesModel(hermesProvider: HermesInferenceProvider, model?: s
 const nowId = (prefix: string) =>
   `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
+function compactTextForPersistence(text: string | undefined, maxChars: number) {
+  if (!text) return "";
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n\n... truncated for Atelier local history ...`;
+}
+
+function compactRawEventsForPersistence(rawEvents?: string[]) {
+  if (!Array.isArray(rawEvents) || rawEvents.length === 0) return [];
+  return rawEvents
+    .slice(-MAX_PERSISTED_RAW_EVENTS)
+    .map((event) => compactTextForPersistence(event, MAX_PERSISTED_RAW_EVENT_CHARS));
+}
+
+function compactChangeSummaryForPersistence(summary?: AgentChangeSummary | null): AgentChangeSummary | null | undefined {
+  if (!summary) return summary;
+  return {
+    ...summary,
+    files: Array.isArray(summary.files)
+      ? summary.files.slice(0, MAX_PERSISTED_CHANGE_FILES).map((file) => ({
+          ...file,
+          diff: compactTextForPersistence(file.diff, MAX_PERSISTED_CHANGE_DIFF_CHARS),
+        }))
+      : [],
+    patch:
+      typeof summary.patch === "string" && summary.patch.length <= MAX_PERSISTED_CHANGE_PATCH_CHARS
+        ? summary.patch
+        : "",
+  };
+}
+
+function compactMessageForPersistence(message: ChatMessage, textLimit = MAX_PERSISTED_MESSAGE_TEXT_CHARS): ChatMessage {
+  return {
+    ...message,
+    text: compactTextForPersistence(message.text, textLimit),
+    changes: compactChangeSummaryForPersistence(message.changes),
+    changesLoading: false,
+    activities: Array.isArray(message.activities)
+      ? message.activities.slice(-MAX_PERSISTED_ACTIVITIES).map((activity) => ({ ...activity, active: false }))
+      : undefined,
+    attachments: Array.isArray(message.attachments)
+      ? message.attachments.slice(-MAX_PERSISTED_ATTACHMENTS)
+      : undefined,
+    rawEvents: compactRawEventsForPersistence(message.rawEvents),
+  };
+}
+
+function compactQueuedTurnForPersistence(turn: QueuedAgentTurn): QueuedAgentTurn {
+  return {
+    ...turn,
+    text: compactTextForPersistence(turn.text, MAX_PERSISTED_MESSAGE_TEXT_CHARS),
+    displayText: compactTextForPersistence(turn.displayText, MAX_PERSISTED_MESSAGE_TEXT_CHARS),
+    factoryEvidence: compactTextForPersistence(turn.factoryEvidence, MAX_PERSISTED_MESSAGE_TEXT_CHARS),
+    attachments: Array.isArray(turn.attachments) ? turn.attachments.slice(-MAX_PERSISTED_ATTACHMENTS) : [],
+  };
+}
+
+function compactSessionForPersistence(session: AgentSession, fallback = false): AgentSession {
+  const messageLimit = fallback ? FALLBACK_PERSISTED_MESSAGES_PER_SESSION : MAX_PERSISTED_MESSAGES_PER_SESSION;
+  const textLimit = fallback ? FALLBACK_PERSISTED_MESSAGE_TEXT_CHARS : MAX_PERSISTED_MESSAGE_TEXT_CHARS;
+  return {
+    ...session,
+    messages: Array.isArray(session.messages)
+      ? session.messages.slice(-messageLimit).map((message) => compactMessageForPersistence(message, textLimit))
+      : [],
+    queuedTurns: Array.isArray(session.queuedTurns)
+      ? session.queuedTurns.slice(-MAX_PERSISTED_QUEUED_TURNS).map(compactQueuedTurnForPersistence)
+      : [],
+    rawEvents: compactRawEventsForPersistence(session.rawEvents),
+  };
+}
+
+function compactSessionsForPersistence(sessions: AgentSession[], fallback = false) {
+  return sessions
+    .slice(0, MAX_PERSISTED_SESSIONS)
+    .map((session) => compactSessionForPersistence(session, fallback));
+}
+
 function persistSessions(sessions: AgentSession[]) {
   try {
-    localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions));
-  } catch {}
+    const compacted = compactSessionsForPersistence(sessions);
+    if (safeLocalStorageSet(SESSIONS_KEY, JSON.stringify(compacted))) return;
+    safeLocalStorageSet(SESSIONS_KEY, JSON.stringify(compactSessionsForPersistence(sessions, true)));
+  } catch (err) {
+    console.warn("persist sessions skipped", err);
+  }
 }
 
 function relTime(ts: number) {
@@ -1477,11 +1967,11 @@ function relTime(ts: number) {
 
 function loadSessions(): AgentSession[] {
   try {
-    const raw = localStorage.getItem(SESSIONS_KEY);
+    const raw = safeLocalStorageGet(SESSIONS_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
     if (Array.isArray(parsed) && parsed.length > 0) {
-      const shouldResetLegacyStellaDefault = localStorage.getItem(FACTORY_DEFAULT_OFF_MIGRATION_KEY) !== "1";
-      if (shouldResetLegacyStellaDefault) localStorage.setItem(FACTORY_DEFAULT_OFF_MIGRATION_KEY, "1");
+      const shouldResetLegacyStellaDefault = safeLocalStorageGet(FACTORY_DEFAULT_OFF_MIGRATION_KEY) !== "1";
+      if (shouldResetLegacyStellaDefault) safeLocalStorageSet(FACTORY_DEFAULT_OFF_MIGRATION_KEY, "1");
       return parsed.map((session: Partial<AgentSession>) => {
         const provider = isProvider(session.provider) ? session.provider : DEFAULT_PROVIDER;
         const meta = providerMeta(provider);
@@ -1639,6 +2129,13 @@ function splitCliArgs(input: string) {
     args.push(value.replace(/\\"/g, "\""));
   }
   return args;
+}
+
+function parseGajaeCliInput(input: string) {
+  const args = splitCliArgs(input.trim());
+  if (args.length === 0) return null;
+  if (args[0]?.toLowerCase() !== "gjc") return null;
+  return args.slice(1);
 }
 
 function parseCliTableRows(output: string) {
@@ -1993,8 +2490,9 @@ function formatAgentPrompt(
         "",
         "",
         "---",
-        "Atelier display guidance:",
-        "- Output ONLY the final result in natural language. No procedural narration, no thought process, no tool logs.",
+	        "Atelier display guidance:",
+	        "- Maintain a professional, respectful tone. If the user writes in Korean, answer in polite Korean 존댓말 and never use casual 반말.",
+	        "- Output ONLY the final result in natural language. No procedural narration, no thought process, no tool logs.",
         "- NEVER print raw diffs, unified diff hunks (@@ -X,Y +X,Y @@), file path headers (a/path → b/path), or line-by-line added/removed code in the answer. Summarize code changes in one sentence (e.g. \"PositionCard.tsx: removed Trash2 import, switched to getApiToken\").",
         "- Do not print terminal commands, $-prefixed lines, JSON events, MCP routing, or raw tool stdout. Summarize tool work as a count or outcome only.",
         "- Long code blocks must be replaced by a one-line outcome summary unless the user explicitly asked to see the code.",
@@ -2004,8 +2502,9 @@ function formatAgentPrompt(
         "",
         "",
         "---",
-        "Atelier 표시 지침:",
-        "- 최종 결과만 자연어로 답변. 절차 narration, 사고 과정, 도구 로그 출력 금지.",
+	        "Atelier 표시 지침:",
+	        "- 대표님께 답변하듯 전문적이고 공손하게 답변하세요. 한국어 답변은 항상 존댓말을 사용하고 반말, 거친 명령형, 친한 척하는 구어체를 쓰지 마세요.",
+	        "- 최종 결과만 자연어로 답변. 절차 narration, 사고 과정, 도구 로그 출력 금지.",
         "- diff/hunk(@@ -X,Y +X,Y @@), 파일 경로 헤더(a//path → b//path), 한 줄 한 줄 추가/삭제된 코드 절대 출력 금지. 코드 변경은 한 문장으로 요약 (예: \"PositionCard.tsx: Trash2 import 제거 + getApiToken 통합\").",
         "- 터미널 명령, $ 시작 라인, JSON 이벤트, MCP 라우팅, 원본 도구 stdout 그대로 출력 금지. 도구 작업은 건수나 결과만 요약.",
         "- 긴 코드 블록은 한 줄 결과 요약으로 대체하세요. 사용자가 명시적으로 코드 보여달라고 한 경우만 예외.",
@@ -2046,25 +2545,27 @@ function formatOntologyAgentPrompt(
 }
 
 function revealCharsPerSecond(remaining: number) {
-  if (remaining > 9000) return 150;
-  if (remaining > 4200) return 132;
-  if (remaining > 1600) return 112;
-  if (remaining > 520) return 104;
-  return 60;
+  if (remaining > 9000) return 920;
+  if (remaining > 4200) return 760;
+  if (remaining > 1600) return 560;
+  if (remaining > 520) return 420;
+  return 260;
 }
 
 function revealFrameCap(remaining: number) {
-  if (remaining > 520) return 2;
-  return 1;
+  if (remaining > 4200) return 22;
+  if (remaining > 1600) return 16;
+  if (remaining > 520) return 10;
+  return 6;
 }
 
 function revealPauseMs(target: string, nextLength: number, remainingAfter: number) {
   const ch = target[nextLength - 1];
   if (!ch) return 0;
   const longAnswerScale = remainingAfter > 4200 ? 0.45 : remainingAfter > 1200 ? 0.7 : 1;
-  if (ch === "\n") return Math.round((target[nextLength] === "\n" ? 140 : 70) * longAnswerScale);
-  if (/[.!?。！？]/.test(ch)) return Math.round(130 * longAnswerScale);
-  if (/[,;:，、]/.test(ch)) return Math.round(55 * longAnswerScale);
+  if (ch === "\n") return Math.round((target[nextLength] === "\n" ? 55 : 30) * longAnswerScale);
+  if (/[.!?。！？]/.test(ch)) return Math.round(45 * longAnswerScale);
+  if (/[,;:，、]/.test(ch)) return Math.round(15 * longAnswerScale);
   return 0;
 }
 
@@ -2113,31 +2614,32 @@ function revealNextLength(
 const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const dark = tw.dark;
   const [sessions, setSessions] = useState<AgentSession[]>(() => loadSessions());
-  const [activeId, setActiveId] = useState<string | null>(() => localStorage.getItem(ACTIVE_KEY));
+  const [activeId, setActiveId] = useState<string | null>(() => safeLocalStorageGet(ACTIVE_KEY));
   const [input, setInput] = useState("");
+  const [composerUi, setComposerUi] = useState<ComposerUiState>(() => composerUiStateFromText(""));
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
   const [pasteError, setPasteError] = useState<string | null>(null);
   const [isPastingImage, setIsPastingImage] = useState(false);
-  const [cwd, setCwd] = useState(() => localStorage.getItem(CWD_KEY) || "");
-  const [showTaskList, setShowTaskList] = useState(() => localStorage.getItem(TASK_LIST_VISIBLE_KEY) !== "0");
+  const [cwd, setCwd] = useState(() => safeLocalStorageGet(CWD_KEY) || "");
+  const [showTaskList, setShowTaskList] = useState(() => safeLocalStorageGet(TASK_LIST_VISIBLE_KEY) !== "0");
   const [showPreview, setShowPreview] = useState(
-    () => localStorage.getItem(PREVIEW_VISIBLE_KEY) === "1" || localStorage.getItem(DEV_SCREEN_VISIBLE_KEY) === "1",
+    () => safeLocalStorageGet(PREVIEW_VISIBLE_KEY) === "1" || safeLocalStorageGet(DEV_SCREEN_VISIBLE_KEY) === "1",
   );
-  const [previewUrl, setPreviewUrl] = useState(() => cleanStoredPreviewUrl(localStorage.getItem(PREVIEW_KEY) || ""));
-  const [previewInput, setPreviewInput] = useState(() => cleanStoredPreviewUrl(localStorage.getItem(PREVIEW_KEY) || ""));
+  const [previewUrl, setPreviewUrl] = useState(() => cleanStoredPreviewUrl(safeLocalStorageGet(PREVIEW_KEY) || ""));
+  const [previewInput, setPreviewInput] = useState(() => cleanStoredPreviewUrl(safeLocalStorageGet(PREVIEW_KEY) || ""));
   const [previewReloadKey, setPreviewReloadKey] = useState(0);
   const [previewCheck, setPreviewCheck] = useState<PreviewCheckResult | null>(null);
   const [previewChecking, setPreviewChecking] = useState(false);
   const [previewDiagnostics, setPreviewDiagnostics] = useState<PreviewDiagnostic[]>([]);
   const [previewService, setPreviewService] = useState<PreviewServiceStatus | null>(null);
   const [previewServiceCommand, setPreviewServiceCommand] = useState(() =>
-    cleanStoredPreviewServiceCommand(localStorage.getItem(PREVIEW_SERVICE_COMMAND_KEY) || ""),
+    cleanStoredPreviewServiceCommand(safeLocalStorageGet(PREVIEW_SERVICE_COMMAND_KEY) || ""),
   );
   const [previewServiceBusy, setPreviewServiceBusy] = useState(false);
-  const [showDevScreen, setShowDevScreen] = useState(() => localStorage.getItem(DEV_SCREEN_VISIBLE_KEY) === "1");
-  const [devScreenHost, setDevScreenHost] = useState(() => localStorage.getItem(DEV_SCREEN_HOST_KEY) || "127.0.0.1");
-  const [devScreenPort, setDevScreenPort] = useState(() => localStorage.getItem(DEV_SCREEN_PORT_KEY) || "");
-  const [devScreenWindow, setDevScreenWindow] = useState(() => localStorage.getItem(DEV_SCREEN_WINDOW_KEY) || "main");
+  const [showDevScreen, setShowDevScreen] = useState(() => safeLocalStorageGet(DEV_SCREEN_VISIBLE_KEY) === "1");
+  const [devScreenHost, setDevScreenHost] = useState(() => safeLocalStorageGet(DEV_SCREEN_HOST_KEY) || "127.0.0.1");
+  const [devScreenPort, setDevScreenPort] = useState(() => safeLocalStorageGet(DEV_SCREEN_PORT_KEY) || "");
+  const [devScreenWindow, setDevScreenWindow] = useState(() => safeLocalStorageGet(DEV_SCREEN_WINDOW_KEY) || "main");
   const [devScreenBusy, setDevScreenBusy] = useState(false);
   const [devScreenStatusResult, setDevScreenStatusResult] = useState<DevScreenStatusResult | null>(null);
   const [devScreenScreenshotResult, setDevScreenScreenshotResult] = useState<DevScreenScreenshotResult | null>(null);
@@ -2155,19 +2657,32 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const [factoryStatusLoading, setFactoryStatusLoading] = useState(false);
   const [factoryStatusError, setFactoryStatusError] = useState<string | null>(null);
   const [previewWidth, setPreviewWidth] = useState(() =>
-    clampNumber(Number(localStorage.getItem(PREVIEW_WIDTH_KEY)) || 430, 320, 760),
+    clampNumber(Number(safeLocalStorageGet(PREVIEW_WIDTH_KEY)) || 430, 320, 760),
   );
   const [resizingPreview, setResizingPreview] = useState(false);
+  const [composerHeight, setComposerHeight] = useState(() => initialComposerHeight());
+  const [resizingComposer, setResizingComposer] = useState(false);
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [showPermissionMenu, setShowPermissionMenu] = useState(false);
   const [codexMenuPanel, setCodexMenuPanel] = useState<CodexMenuPanel>("root");
+  const [claudeRuntimeModels, setClaudeRuntimeModels] = useState<ModelOption[]>(CLAUDE_MODELS);
   const [codexRuntimeModels, setCodexRuntimeModels] = useState<ModelOption[]>(CODEX_MODELS);
   const [openRouterRuntimeModels, setOpenRouterRuntimeModels] = useState<ModelOption[]>(OPENROUTER_MODELS);
   const [previewVP, setPreviewVP] = useState<PreviewViewport>(() => {
-    const saved = localStorage.getItem(PREVIEW_VP_KEY);
+    const saved = safeLocalStorageGet(PREVIEW_VP_KEY);
     return saved === "mobile" || saved === "tablet" || saved === "desktop" ? saved : "desktop";
   });
   const sessionsRef = useRef<AgentSession[]>(sessions);
+  const refreshClaudeRuntimeModels = useCallback(async () => {
+    if (!isTauri()) return;
+    try {
+      const result = await claudeModelOptions();
+      const next = sanitizeModelOptions(result.models || []);
+      if (next.length > 0) setClaudeRuntimeModels(next);
+    } catch (err) {
+      console.warn("claude model options refresh failed", err);
+    }
+  }, []);
   const refreshCodexRuntimeModels = useCallback(async () => {
     if (!isTauri()) return;
     try {
@@ -2190,14 +2705,16 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   }, []);
 
   useEffect(() => {
+    refreshClaudeRuntimeModels().catch(console.error);
     refreshCodexRuntimeModels().catch(console.error);
     refreshOpenRouterRuntimeModels().catch(console.error);
     const timer = window.setInterval(() => {
+      refreshClaudeRuntimeModels().catch(console.error);
       refreshCodexRuntimeModels().catch(console.error);
       refreshOpenRouterRuntimeModels().catch(console.error);
     }, 5 * 60 * 1000);
     return () => window.clearInterval(timer);
-  }, [refreshCodexRuntimeModels, refreshOpenRouterRuntimeModels]);
+  }, [refreshClaudeRuntimeModels, refreshCodexRuntimeModels, refreshOpenRouterRuntimeModels]);
 
   useEffect(() => {
     sessionsRef.current = sessions;
@@ -2238,7 +2755,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const [slashSelection, setSlashSelection] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const inputDraftRef = useRef(input);
-  const inputCommitTimerRef = useRef<number | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
   const permissionMenuRef = useRef<HTMLDivElement | null>(null);
@@ -2252,33 +2768,27 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const smoothRevealStateRef = useRef<Record<string, SmoothRevealState>>({});
   const smoothFrameRef = useRef<number | null>(null);
   const smoothLastTickRef = useRef(0);
+  const lastActivityPulseRef = useRef<Record<string, { key: string; at: number }>>({});
   const scrollFrameRef = useRef<number | null>(null);
   const inputRevealPauseUntilRef = useRef(0);
   const persistSessionsTimerRef = useRef<number | null>(null);
   const autoScrollRef = useRef(true);
   const activeIdRef = useRef<string | null>(activeId);
   const previewResizeRef = useRef<{ startX: number; startW: number } | null>(null);
+  const composerResizeRef = useRef<{ startY: number; startH: number } | null>(null);
   const previewAutoStartRef = useRef<Record<string, number>>({});
   const lastPreviewCommandRef = useRef<string | null>(null);
 
-  const commitInputSoon = () => {
-    if (inputCommitTimerRef.current !== null) {
-      window.clearTimeout(inputCommitTimerRef.current);
-    }
-    inputCommitTimerRef.current = window.setTimeout(() => {
-      inputCommitTimerRef.current = null;
-      setInput((current) => (current === inputDraftRef.current ? current : inputDraftRef.current));
-    }, INPUT_STATE_COMMIT_DEBOUNCE_MS);
+  const syncComposerUi = (next: string) => {
+    const nextUi = composerUiStateFromText(next);
+    setComposerUi((current) => sameComposerUiState(current, nextUi) ? current : nextUi);
   };
 
   const setComposerInput = (next: string) => {
     inputDraftRef.current = next;
-    if (inputCommitTimerRef.current !== null) {
-      window.clearTimeout(inputCommitTimerRef.current);
-      inputCommitTimerRef.current = null;
-    }
     const el = inputRef.current;
     if (el && el.value !== next) el.value = next;
+    setComposerUi(composerUiStateFromText(next));
     setInput(next);
   };
 
@@ -2357,7 +2867,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         devScreenActionOk: "Screen action complete",
         devScreenActionFailed: (message: string) => `Screen action failed: ${message}`,
         cwd: "Working folder",
-        noAgentProfiles: "No Claude/Hermes/Codex profiles in Settings.",
+        noAgentProfiles: "No Claude/Hermes/Codex/Gajae Code profiles in Settings.",
         factoryLabel: "Stella Factory",
         factoryLauncherTitle: "Start or resume a Stella Factory autonomous development session",
         placeholder: "Ask the selected agent to change, inspect, or explain this workspace...",
@@ -2499,7 +3009,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         devScreenActionOk: "화면 작업 완료",
         devScreenActionFailed: (message: string) => `화면 작업 실패: ${message}`,
         cwd: "작업 폴더",
-        noAgentProfiles: "설정 프로필에 Claude/Hermes/Codex가 없습니다.",
+        noAgentProfiles: "설정 프로필에 Claude/Hermes/Codex/가재코드가 없습니다.",
         factoryLabel: "Stella Factory",
         factoryLauncherTitle: "Stella Factory 자율 개발 세션 시작 또는 재개",
         placeholder: "선택한 에이전트에게 이 작업공간의 수정, 분석, 설명을 요청하세요...",
@@ -2645,13 +3155,13 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     previewHydratedSessionIdRef.current = active.id;
     // URL/서비스 명령은 세션별 고유 데이터 — 글로벌 폴백 없이 비어 있으면 빈 상태로 둔다.
     // 뷰포트/폭은 UI 환경설정이지만 표시 여부는 수동 opt-in으로만 복원한다.
-    const fallbackVisible = localStorage.getItem(PREVIEW_VISIBLE_KEY) === "1" || localStorage.getItem(DEV_SCREEN_VISIBLE_KEY) === "1";
-    const fallbackVPRaw = localStorage.getItem(PREVIEW_VP_KEY);
+    const fallbackVisible = safeLocalStorageGet(PREVIEW_VISIBLE_KEY) === "1" || safeLocalStorageGet(DEV_SCREEN_VISIBLE_KEY) === "1";
+    const fallbackVPRaw = safeLocalStorageGet(PREVIEW_VP_KEY);
     const fallbackVP: PreviewViewport =
       fallbackVPRaw === "mobile" || fallbackVPRaw === "tablet" || fallbackVPRaw === "desktop"
         ? fallbackVPRaw
         : "desktop";
-    const fallbackWidth = clampNumber(Number(localStorage.getItem(PREVIEW_WIDTH_KEY)) || 430, 320, 760);
+    const fallbackWidth = clampNumber(Number(safeLocalStorageGet(PREVIEW_WIDTH_KEY)) || 430, 320, 760);
     const sessionPreviewUrl = cleanStoredPreviewUrl(active.previewUrl ?? "");
     setPreviewUrl(sessionPreviewUrl);
     setPreviewInput(sessionPreviewUrl);
@@ -2679,13 +3189,13 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   useEffect(() => {
     if (!active) return;
     if (previewHydratedSessionIdRef.current !== active.id) return;
-    const fallbackVisible = localStorage.getItem(PREVIEW_VISIBLE_KEY) === "1";
-    const fallbackVPRaw = localStorage.getItem(PREVIEW_VP_KEY);
+    const fallbackVisible = safeLocalStorageGet(PREVIEW_VISIBLE_KEY) === "1";
+    const fallbackVPRaw = safeLocalStorageGet(PREVIEW_VP_KEY);
     const fallbackVP: PreviewViewport =
       fallbackVPRaw === "mobile" || fallbackVPRaw === "tablet" || fallbackVPRaw === "desktop"
         ? fallbackVPRaw
         : "desktop";
-    const fallbackWidth = clampNumber(Number(localStorage.getItem(PREVIEW_WIDTH_KEY)) || 430, 320, 760);
+    const fallbackWidth = clampNumber(Number(safeLocalStorageGet(PREVIEW_WIDTH_KEY)) || 430, 320, 760);
     const expectedVisible = active.previewVisible ?? fallbackVisible;
     const expectedVP = (active.previewViewport as PreviewViewport | undefined) ?? fallbackVP;
     const expectedWidth = active.previewWidth ?? fallbackWidth;
@@ -2748,8 +3258,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const normalizedActiveModel = activeProvider === "hermes"
     ? normalizeHermesModel(activeHermesProvider, rawActiveModel)
     : normalizeModel(activeProvider, rawActiveModel);
-  const activeModelOptions = modelOptionsFor(activeProvider, normalizedActiveModel, activeHermesProvider, codexRuntimeModels, openRouterRuntimeModels);
-  const activeModel = (activeProvider === "codex" || (activeProvider === "hermes" && (activeHermesProvider === "openai-codex" || activeHermesProvider === "openrouter")))
+  const activeModelOptions = modelOptionsFor(activeProvider, normalizedActiveModel, activeHermesProvider, claudeRuntimeModels, codexRuntimeModels, openRouterRuntimeModels);
+  const activeModel = (activeProvider === "claude" || activeProvider === "codex" || activeProvider === "gajecode" || (activeProvider === "hermes" && (activeHermesProvider === "openai-codex" || activeHermesProvider === "openrouter")))
     ? coerceModelToOptions(normalizedActiveModel, activeModelOptions)
     : normalizedActiveModel;
   const activeModelLabel = labelForOption(activeModelOptions, activeModel);
@@ -2758,10 +3268,19 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     [activeProvider, activeHermesProvider, activeModelOptions],
   );
   const visibleSlashCommands = useMemo(
-    () => filterSlashCommands(slashCommands, input, tw.language).slice(0, 18),
-    [slashCommands, input, tw.language],
+    () => {
+      const items = filterSlashCommands(slashCommands, composerUi.slashText, tw.language);
+      return activeProvider === "gajecode" ? items : items.slice(0, 18);
+    },
+    [activeProvider, slashCommands, composerUi.slashText, tw.language],
   );
-  const showSlashMenu = input.trimStart().startsWith("/") && !input.includes("\n") && visibleSlashCommands.length > 0;
+  const gajecodeQuickCommands = useMemo(
+    () => activeProvider === "gajecode"
+      ? GAJAE_CODE_COMMANDS.filter((command) => command.quick)
+      : [],
+    [activeProvider],
+  );
+  const showSlashMenu = Boolean(composerUi.slashText) && visibleSlashCommands.length > 0;
   const activeSlashSelection = Math.min(slashSelection, Math.max(visibleSlashCommands.length - 1, 0));
   const selectedSlashCommand = visibleSlashCommands[activeSlashSelection];
   const activeCodexEffort = normalizeCodexEffort(active?.codexEffort);
@@ -2866,7 +3385,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
 
   useEffect(() => {
     setSlashSelection(0);
-  }, [input, activeProvider, activeHermesProvider]);
+  }, [composerUi.slashText, activeProvider, activeHermesProvider]);
 
   const lastAssistantStatus = (session: AgentSession) => {
     const lastAssistant = [...session.messages].reverse().find((m) => m.role === "assistant");
@@ -2903,6 +3422,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     event.preventDefault();
     previewResizeRef.current = { startX: event.clientX, startW: previewWidth };
     setResizingPreview(true);
+  };
+
+  const startComposerResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    composerResizeRef.current = { startY: event.clientY, startH: composerHeight };
+    setResizingComposer(true);
   };
 
   const scheduleSmoothOutput = () => {
@@ -2990,7 +3515,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   }, [sessions]);
 
   useEffect(() => {
-    if (activeId) localStorage.setItem(ACTIVE_KEY, activeId);
+    if (activeId) safeLocalStorageSet(ACTIVE_KEY, activeId);
     activeIdRef.current = activeId;
   }, [activeId]);
 
@@ -3009,47 +3534,51 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   }, [busyTurnIdsBySession]);
 
   useEffect(() => {
-    localStorage.setItem(CWD_KEY, cwd);
+    safeLocalStorageSet(CWD_KEY, cwd);
   }, [cwd]);
 
   useEffect(() => {
-    localStorage.setItem(TASK_LIST_VISIBLE_KEY, showTaskList ? "1" : "0");
+    safeLocalStorageSet(TASK_LIST_VISIBLE_KEY, showTaskList ? "1" : "0");
   }, [showTaskList]);
 
   useEffect(() => {
-    localStorage.setItem(PREVIEW_VISIBLE_KEY, showPreview ? "1" : "0");
+    safeLocalStorageSet(PREVIEW_VISIBLE_KEY, showPreview ? "1" : "0");
   }, [showPreview]);
 
   useEffect(() => {
-    localStorage.setItem(PREVIEW_KEY, previewUrl);
+    safeLocalStorageSet(PREVIEW_KEY, previewUrl);
   }, [previewUrl]);
 
   useEffect(() => {
-    localStorage.setItem(PREVIEW_WIDTH_KEY, String(previewWidth));
+    safeLocalStorageSet(PREVIEW_WIDTH_KEY, String(previewWidth));
   }, [previewWidth]);
 
   useEffect(() => {
-    localStorage.setItem(PREVIEW_VP_KEY, previewVP);
+    safeLocalStorageSet(COMPOSER_HEIGHT_KEY, String(composerHeight));
+  }, [composerHeight]);
+
+  useEffect(() => {
+    safeLocalStorageSet(PREVIEW_VP_KEY, previewVP);
   }, [previewVP]);
 
   useEffect(() => {
-    localStorage.setItem(PREVIEW_SERVICE_COMMAND_KEY, previewServiceCommand);
+    safeLocalStorageSet(PREVIEW_SERVICE_COMMAND_KEY, previewServiceCommand);
   }, [previewServiceCommand]);
 
   useEffect(() => {
-    localStorage.setItem(DEV_SCREEN_VISIBLE_KEY, showDevScreen ? "1" : "0");
+    safeLocalStorageSet(DEV_SCREEN_VISIBLE_KEY, showDevScreen ? "1" : "0");
   }, [showDevScreen]);
 
   useEffect(() => {
-    localStorage.setItem(DEV_SCREEN_HOST_KEY, devScreenHost);
+    safeLocalStorageSet(DEV_SCREEN_HOST_KEY, devScreenHost);
   }, [devScreenHost]);
 
   useEffect(() => {
-    localStorage.setItem(DEV_SCREEN_PORT_KEY, devScreenPort);
+    safeLocalStorageSet(DEV_SCREEN_PORT_KEY, devScreenPort);
   }, [devScreenPort]);
 
   useEffect(() => {
-    localStorage.setItem(DEV_SCREEN_WINDOW_KEY, devScreenWindow);
+    safeLocalStorageSet(DEV_SCREEN_WINDOW_KEY, devScreenWindow);
   }, [devScreenWindow]);
 
   useEffect(() => {
@@ -3124,6 +3653,34 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   }, [resizingPreview]);
 
   useEffect(() => {
+    if (!resizingComposer) return;
+    const onPointerMove = (event: PointerEvent) => {
+      const state = composerResizeRef.current;
+      if (!state) return;
+      setComposerHeight(clampNumber(state.startH + state.startY - event.clientY, 150, composerMaxHeight()));
+    };
+    const onPointerUp = () => {
+      composerResizeRef.current = null;
+      setResizingComposer(false);
+    };
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+    };
+  }, [resizingComposer]);
+
+  useEffect(() => {
+    const clampComposerToViewport = () => {
+      setComposerHeight((height) => clampNumber(height, 150, composerMaxHeight()));
+    };
+    clampComposerToViewport();
+    window.addEventListener("resize", clampComposerToViewport);
+    return () => window.removeEventListener("resize", clampComposerToViewport);
+  }, []);
+
+  useEffect(() => {
     scheduleTranscriptScroll();
   }, [active?.messages, visibleTextById, busyTurnId]);
 
@@ -3176,10 +3733,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       }
       if (scrollFrameRef.current !== null) {
         window.cancelAnimationFrame(scrollFrameRef.current);
-      }
-      if (inputCommitTimerRef.current !== null) {
-        window.clearTimeout(inputCommitTimerRef.current);
-        inputCommitTimerRef.current = null;
       }
       persistSessionsNow(sessionsRef.current);
       pendingStreamRef.current = {};
@@ -3432,8 +3985,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     const normalizedModel = provider === "hermes"
       ? normalizeHermesModel(hermesProvider || DEFAULT_HERMES_PROVIDER, rawModel)
       : normalizeModel(provider, rawModel);
-    const modelOptions = modelOptionsFor(provider, normalizedModel, hermesProvider || DEFAULT_HERMES_PROVIDER, codexRuntimeModels, openRouterRuntimeModels);
-    const initialModel = (provider === "codex" || (provider === "hermes" && (hermesProvider === "openai-codex" || hermesProvider === "openrouter")))
+    const modelOptions = modelOptionsFor(provider, normalizedModel, hermesProvider || DEFAULT_HERMES_PROVIDER, claudeRuntimeModels, codexRuntimeModels, openRouterRuntimeModels);
+    const initialModel = (provider === "claude" || provider === "codex" || provider === "gajecode" || (provider === "hermes" && (hermesProvider === "openai-codex" || hermesProvider === "openrouter")))
       ? coerceModelToOptions(normalizedModel, modelOptions)
       : normalizedModel;
     const defaultTitle = tw.language === "en"
@@ -3684,8 +4237,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       const normalizedModel = session.provider === "hermes"
         ? normalizeHermesModel(hermesProvider, model)
         : normalizeModel(session.provider, model);
-      const options = modelOptionsFor(session.provider, normalizedModel, hermesProvider, codexRuntimeModels, openRouterRuntimeModels);
-      const nextModel = (session.provider === "codex" || (session.provider === "hermes" && (hermesProvider === "openai-codex" || hermesProvider === "openrouter")))
+      const options = modelOptionsFor(session.provider, normalizedModel, hermesProvider, claudeRuntimeModels, codexRuntimeModels, openRouterRuntimeModels);
+      const nextModel = (session.provider === "claude" || session.provider === "codex" || session.provider === "gajecode" || (session.provider === "hermes" && (hermesProvider === "openai-codex" || hermesProvider === "openrouter")))
         ? coerceModelToOptions(normalizedModel, options)
         : normalizedModel;
       const changed = nextModel !== session.model;
@@ -3695,24 +4248,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         providerSessionId: changed ? undefined : session.providerSessionId,
         providerSessionModel: changed ? undefined : session.providerSessionModel,
         providerSessionHermesProvider: changed ? undefined : session.providerSessionHermesProvider,
-        updatedAt: Date.now(),
-      };
-    });
-  };
-
-  const updateActiveHermesProvider = (hermesProvider: HermesInferenceProvider) => {
-    if (!active) return;
-    patchSession(active.id, (session) => {
-      const normalizedModel = normalizeHermesModel(hermesProvider, session.model);
-      const options = modelOptionsFor("hermes", normalizedModel, hermesProvider, codexRuntimeModels, openRouterRuntimeModels);
-      const nextModel = coerceModelToOptions(normalizedModel, options);
-      return {
-        ...session,
-        hermesProvider,
-        model: nextModel || defaultHermesModel(hermesProvider),
-        providerSessionId: undefined,
-        providerSessionModel: undefined,
-        providerSessionHermesProvider: undefined,
         updatedAt: Date.now(),
       };
     });
@@ -3805,6 +4340,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const pushActivity = (sessionId: string, assistantId: string, event: AgentStreamEvent) => {
     const activity = activityFromEvent(event);
     if (!activity) return;
+    const now = Date.now();
+    const activityKey = `${activity.kind}:${activity.label}`;
+    const previousPulse = lastActivityPulseRef.current[assistantId];
+    if (previousPulse?.key === activityKey && now - previousPulse.at < 650) return;
+    lastActivityPulseRef.current[assistantId] = { key: activityKey, at: now };
     patchSession(sessionId, (session) => ({
       ...session,
       messages: session.messages.map((m) => {
@@ -3814,7 +4354,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         const nextActivity: AgentActivity = {
           ...activity,
           id: nowId("activity"),
-          createdAt: Date.now(),
+          createdAt: now,
           active: m.status === "streaming",
         };
         const next = last?.label === nextActivity.label
@@ -3822,11 +4362,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           : [...prev.map((item) => ({ ...item, active: false })), nextActivity].slice(-4);
         return { ...m, activities: next };
       }),
-      updatedAt: Date.now(),
+      updatedAt: now,
     }));
   };
 
   const finishActivities = (sessionId: string, assistantId: string) => {
+    delete lastActivityPulseRef.current[assistantId];
     patchSession(sessionId, (session) => ({
       ...session,
       messages: session.messages.map((m) =>
@@ -3858,9 +4399,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     patchSession(pending.sessionId, (session) => ({
       ...session,
       providerSessionId: providerSessionId || session.providerSessionId,
-      rawEvents: rawEvents.length
-        ? [...session.rawEvents, ...rawEvents].slice(-MAX_RAW_EVENTS)
-        : session.rawEvents,
+      rawEvents: session.rawEvents,
       messages: text
         ? session.messages.map((m) =>
             m.id === pending.assistantId
@@ -4425,6 +4964,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const providerCommandLabel = (provider: AgentProvider) => {
     if (provider === "hermes") return "Hermes";
     if (provider === "codex") return "Codex";
+    if (provider === "gajecode") return "가재코드";
     return "Claude";
   };
 
@@ -4455,7 +4995,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   };
 
   const runProviderCliSlashCommand = async (session: AgentSession, rawText: string, args: string[]) => {
-    if (args.length === 0) {
+    const runArgs = session.provider === "gajecode" && args[0]?.toLowerCase() === "gjc"
+      ? args.slice(1)
+      : args;
+    if (runArgs.length === 0) {
       localAssistantMessage(
         session.id,
         rawText,
@@ -4466,10 +5009,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     try {
       const result = await agentCliCommand({
         provider: session.provider,
-        args,
+        args: runArgs,
         cwd: session.cwd || cwd,
       });
-      localAssistantMessage(session.id, rawText, formatCliCommandResult(session.provider, args, result));
+      localAssistantMessage(session.id, rawText, formatCliCommandResult(session.provider, runArgs, result));
     } catch (err) {
       localAssistantMessage(
         session.id,
@@ -4542,7 +5085,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       const hermesProvider = session.provider === "hermes"
         ? normalizeHermesProvider(session.hermesProvider || inferHermesProviderFromModel(session.model))
         : DEFAULT_HERMES_PROVIDER;
-      const options = modelOptionsFor(session.provider, session.model || providerMeta(session.provider).defaultModel, hermesProvider, codexRuntimeModels, openRouterRuntimeModels);
+      const options = modelOptionsFor(session.provider, session.model || providerMeta(session.provider).defaultModel, hermesProvider, claudeRuntimeModels, codexRuntimeModels, openRouterRuntimeModels);
       const help = slashCommandsFor(session.provider, hermesProvider, options)
         .map((item) => {
           const detail = tw.language === "en" ? item.detailEn : item.detailKo;
@@ -4665,7 +5208,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       const hermesProvider = session.provider === "hermes"
         ? normalizeHermesProvider(session.hermesProvider || inferHermesProviderFromModel(session.model))
         : DEFAULT_HERMES_PROVIDER;
-      const options = modelOptionsFor(session.provider, session.model || providerMeta(session.provider).defaultModel, hermesProvider, codexRuntimeModels, openRouterRuntimeModels);
+      const options = modelOptionsFor(session.provider, session.model || providerMeta(session.provider).defaultModel, hermesProvider, claudeRuntimeModels, codexRuntimeModels, openRouterRuntimeModels);
       if (!arg) {
         const list = options.map((option) => `- ${option.value} (${option.label})`).join("\n");
         localAssistantMessage(
@@ -4682,8 +5225,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       const normalizedModel = session.provider === "hermes"
         ? normalizeHermesModel(nextHermesProvider, requested)
         : normalizeModel(session.provider, requested);
-      const nextOptions = modelOptionsFor(session.provider, normalizedModel, nextHermesProvider, codexRuntimeModels, openRouterRuntimeModels);
-      const nextModel = (session.provider === "codex" || (session.provider === "hermes" && (nextHermesProvider === "openai-codex" || nextHermesProvider === "openrouter")))
+      const nextOptions = modelOptionsFor(session.provider, normalizedModel, nextHermesProvider, claudeRuntimeModels, codexRuntimeModels, openRouterRuntimeModels);
+      const nextModel = (session.provider === "claude" || session.provider === "codex" || session.provider === "gajecode" || (session.provider === "hermes" && (nextHermesProvider === "openai-codex" || nextHermesProvider === "openrouter")))
         ? coerceModelToOptions(normalizedModel, nextOptions)
         : normalizedModel;
       patchSession(session.id, (current) => ({
@@ -4704,13 +5247,15 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       localAssistantMessage(
         session.id,
         rawText,
-        tw.language === "en" ? `Model changed: ${nextModel}` : `모델을 변경했습니다: ${nextModel}`,
+        tw.language === "en"
+          ? `Model changed: ${nextModel}${session.provider === "hermes" ? `\nNext Hermes run: --provider ${nextHermesProvider} --model ${nextModel}` : ""}`
+          : `모델을 변경했습니다: ${nextModel}${session.provider === "hermes" ? `\n다음 Hermes 실행에 적용됩니다: --provider ${nextHermesProvider} --model ${nextModel}` : ""}`,
       );
       return true;
     }
 
-    if (command === "/hermes" || command === "/claude" || command === "/codex") {
-      const provider = command.slice(1) as AgentProvider;
+    if (command === "/gjc" || command === "/hermes" || command === "/claude" || command === "/codex" || command === "/gajecode") {
+      const provider = command === "/gjc" ? "gajecode" : command.slice(1) as AgentProvider;
       if (session.provider !== provider) {
         localAssistantMessage(session.id, rawText, providerOnlyMessage(provider));
         return true;
@@ -4782,8 +5327,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     }
 
     if (command === "/skills") {
-      if (session.provider !== "hermes") {
-        localAssistantMessage(session.id, rawText, providerOnlyMessage("hermes"));
+      if (session.provider !== "hermes" && session.provider !== "gajecode") {
+        localAssistantMessage(
+          session.id,
+          rawText,
+          tw.language === "en" ? "/skills is available in Hermes and Gajae Code sessions." : "/skills는 Hermes/가재코드 작업에서 사용할 수 있습니다.",
+        );
         return true;
       }
       await runProviderCliSlashCommand(session, rawText, ["skills", "list"]);
@@ -4818,8 +5367,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     }
 
     if (command === "/status") {
-      if (session.provider !== "hermes") {
-        localAssistantMessage(session.id, rawText, providerOnlyMessage("hermes"));
+      if (session.provider !== "hermes" && session.provider !== "gajecode") {
+        localAssistantMessage(
+          session.id,
+          rawText,
+          tw.language === "en" ? "/status is available in Hermes and Gajae Code sessions." : "/status는 Hermes/가재코드 작업에서 사용할 수 있습니다.",
+        );
         return true;
       }
       await runProviderCliSlashCommand(session, rawText, ["status"]);
@@ -4907,7 +5460,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         );
         return true;
       }
-      const providerOptions = modelOptionsFor("hermes", defaultHermesModel(arg), arg, codexRuntimeModels, openRouterRuntimeModels);
+      const providerOptions = modelOptionsFor("hermes", defaultHermesModel(arg), arg, claudeRuntimeModels, codexRuntimeModels, openRouterRuntimeModels);
       const nextModel = arg === "openai-codex" || arg === "openrouter"
         ? providerOptions[0]?.value || defaultHermesModel(arg)
         : defaultHermesModel(arg);
@@ -4924,8 +5477,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         session.id,
         rawText,
         tw.language === "en"
-          ? `Hermes provider changed: ${arg} · ${nextModel}`
-          : `Hermes provider를 변경했습니다: ${arg} · ${nextModel}`,
+          ? `Hermes provider changed: ${arg} · ${nextModel}\nNext Hermes run: --provider ${arg} --model ${nextModel}`
+          : `Hermes provider를 변경했습니다: ${arg} · ${nextModel}\n다음 Hermes 실행에 적용됩니다: --provider ${arg} --model ${nextModel}`,
       );
       return true;
     }
@@ -5007,6 +5560,34 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     return true;
   };
 
+  const runHermesProviderCommandFromPicker = async (hermesProvider: HermesInferenceProvider) => {
+    if (!active || active.provider !== "hermes") return;
+    if (activeHermesProvider === hermesProvider) return;
+    if (hermesProvider === "openrouter") refreshOpenRouterRuntimeModels().catch(console.error);
+    const command = `/provider ${hermesProvider}`;
+    setComposerInput(command);
+    await handleSlashCommand(active, command);
+    setComposerInput("");
+  };
+
+  const runHermesModelCommandFromPicker = async (model: string) => {
+    if (!active || active.provider !== "hermes") return;
+    if (activeModel === model) return;
+    const command = `/model ${model}`;
+    setComposerInput(command);
+    await handleSlashCommand(active, command);
+    setComposerInput("");
+  };
+
+  const runGajaeModelCommandFromPicker = async (model: string) => {
+    if (!active || active.provider !== "gajecode") return;
+    if (activeModel === model) return;
+    const command = `/model ${model}`;
+    setComposerInput(command);
+    await handleSlashCommand(active, command);
+    setComposerInput("");
+  };
+
   const runAgentTurn = async (sessionId: string, payload: QueuedAgentTurn) => {
     if (busyTurnIdsRef.current[sessionId]) return;
     const session = sessionsRef.current.find((item) => item.id === sessionId);
@@ -5023,13 +5604,14 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       ? normalizeHermesModel(hermesProvider || DEFAULT_HERMES_PROVIDER, session.model || meta.defaultModel)
       : normalizeModel(session.provider, session.model || meta.defaultModel);
     const runModelOptions = modelOptionsFor(
-      session.provider,
-      normalizedRunModel,
-      hermesProvider || DEFAULT_HERMES_PROVIDER,
-      codexRuntimeModels,
-      openRouterRuntimeModels,
-    );
-    const runModel = (session.provider === "codex" || (session.provider === "hermes" && (hermesProvider === "openai-codex" || hermesProvider === "openrouter")))
+	      session.provider,
+	      normalizedRunModel,
+	      hermesProvider || DEFAULT_HERMES_PROVIDER,
+	      claudeRuntimeModels,
+	      codexRuntimeModels,
+	      openRouterRuntimeModels,
+	    );
+    const runModel = (session.provider === "claude" || session.provider === "codex" || session.provider === "gajecode" || (session.provider === "hermes" && (hermesProvider === "openai-codex" || hermesProvider === "openrouter")))
       ? coerceModelToOptions(normalizedRunModel, runModelOptions)
       : normalizedRunModel;
     const useHermesCodexFastPath = session.provider === "hermes" && hermesProvider === "openai-codex";
@@ -5302,6 +5884,14 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     setPendingAttachments([]);
     setPasteError(null);
 
+    const directGajaeCliArgs = attachments.length === 0 && session.provider === "gajecode"
+      ? parseGajaeCliInput(userText)
+      : null;
+    if (!quePrefixedText && !factoryRequest && !academicResearchRequest && directGajaeCliArgs) {
+      await runProviderCliSlashCommand(session, userText, directGajaeCliArgs);
+      return;
+    }
+
     if (!quePrefixedText && !factoryRequest && !academicResearchRequest && attachments.length === 0 && await handleSlashCommand(session, userText)) return;
 
     const createdAt = Date.now();
@@ -5362,7 +5952,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     send().catch(console.error);
   };
 
-  const activeFactoryCommand = activeFactoryCommandFromText(input);
+  const activeFactoryCommand = composerUi.factoryCommand;
   const factoryOpenStages = factoryStatus
     ? (factoryStatus.stage_counts.queued || 0)
       + (factoryStatus.stage_counts.in_progress || 0)
@@ -5388,10 +5978,85 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         ? "running"
         : "missing";
 
+  const createSessionFromRail = () => {
+    if (agentProfiles.length === 1) {
+      createSession(agentProfiles[0].profile, agentProfiles[0].provider);
+      return;
+    }
+    setShowTaskList(true);
+    setShowProfilePicker(true);
+  };
+
+  const renderTaskIconRail = (collapsed: boolean) => (
+    <div className="atelier-task-icon-rail">
+      <button
+        type="button"
+        onClick={() => setShowTaskList(collapsed)}
+        className={cls(
+          "atelier-task-icon-button",
+          dark ? "text-dsub hover:bg-dmuted hover:text-dink" : "text-sub hover:bg-muted hover:text-ink",
+        )}
+        title={collapsed ? copy.showTaskList : copy.hideTaskList}
+        aria-label={collapsed ? copy.showTaskList : copy.hideTaskList}
+      >
+        {collapsed ? "›" : "‹"}
+      </button>
+      <button
+        type="button"
+        onClick={createSessionFromRail}
+        className={cls(
+          "atelier-task-icon-button",
+          dark ? "text-dsub hover:bg-dmuted hover:text-dink" : "text-sub hover:bg-muted hover:text-ink",
+        )}
+        title={copy.newSession}
+        aria-label={copy.newSession}
+      >
+        {I.plus}
+      </button>
+      <div className="atelier-task-icon-list">
+        {sessions.map((s) => {
+          const color = normalizeAgentDotColor(s.profileDot || providerMeta(s.provider).dot);
+          const selected = active?.id === s.id;
+          const running = isSessionRunning(s);
+          const done = !running && isSessionDone(s);
+          return (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => selectSession(s.id)}
+              className={cls(
+                "atelier-task-session-icon",
+                selected
+                  ? dark ? "bg-dmuted" : "bg-surface shadow-[0_0_0_1px_#e5e3db]"
+                  : dark ? "hover:bg-[#2a2a28]" : "hover:bg-muted",
+              )}
+              title={s.title || s.profileName || providerMeta(s.provider).label}
+              aria-label={s.title || s.profileName || providerMeta(s.provider).label}
+            >
+              <span
+                className={cls("atelier-task-session-badge", dark ? "text-dink" : "text-ink")}
+                style={{
+                  background: `${color}22`,
+                  boxShadow: `inset 0 0 0 1px ${color}66`,
+                }}
+              >
+                {providerMeta(s.provider).short}
+              </span>
+              {running && <span className="atelier-task-session-indicator atelier-agent-spinner" />}
+              {done && <span className="atelier-task-session-indicator atelier-agent-done-dot" />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+
   return (
-    <div className={cls("h-full w-full flex", dark ? "bg-dbg text-dink" : "bg-cream text-ink")}>
+    <div className={cls("atelier-workspace-root h-full w-full flex min-w-0", dark ? "bg-dbg text-dink" : "bg-cream text-ink")}>
       {showTaskList ? (
-      <aside className={cls("w-[280px] shrink-0 border-r flex flex-col", dark ? "border-dline" : "border-line")}>
+      <aside className={cls("atelier-task-sidebar border-r flex flex-col", dark ? "border-dline" : "border-line")}>
+        <div className="atelier-task-sidebar-compact">{renderTaskIconRail(false)}</div>
+        <div className="atelier-task-sidebar-content flex min-h-0 flex-1 flex-col">
         <div className={cls("h-12 px-3 flex items-center gap-2 border-b relative", dark ? "border-dline" : "border-line")}>
           <div className="font-display text-[18px] font-medium flex-1">{copy.title}</div>
           <button
@@ -5562,43 +6227,30 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
             </div>
           ))}
         </div>
+        </div>
       </aside>
       ) : (
-        <aside className={cls("w-11 shrink-0 border-r flex flex-col items-center py-2", dark ? "border-dline" : "border-line")}>
-          <button
-            type="button"
-            onClick={() => setShowTaskList(true)}
-            className={cls(
-              "h-8 w-8 rounded-[7px] text-[14px] grid place-items-center",
-              dark ? "text-dsub hover:bg-dmuted hover:text-dink" : "text-sub hover:bg-muted hover:text-ink",
-            )}
-            title={copy.showTaskList}
-            aria-label={copy.showTaskList}
-          >
-            ›
-          </button>
-          <div className={cls("mt-3 text-[11px] font-mono [writing-mode:vertical-rl]", dark ? "text-dsub" : "text-sub")}>
-            {copy.title}
-          </div>
+        <aside className={cls("atelier-task-rail border-r flex flex-col items-center py-2", dark ? "border-dline" : "border-line")}>
+          {renderTaskIconRail(true)}
         </aside>
       )}
 
-      <main className="flex-1 min-w-0 flex flex-col">
-        <div className={cls("h-12 px-4 border-b flex items-center gap-3", dark ? "border-dline" : "border-line")}>
+      <main className="atelier-workspace-main flex-1 min-w-0 flex flex-col">
+        <div className={cls("atelier-workspace-header border-b flex items-center gap-3", dark ? "border-dline" : "border-line")}>
           <div className="min-w-0 flex-1">
             <div className="text-[13px] font-medium truncate">{active?.title || active?.profileName || activeProviderMeta.label}</div>
             <div className={cls("text-[11.5px] font-mono truncate", dark ? "text-dsub" : "text-sub")}>
               {copy.subtitle}
             </div>
           </div>
-          <label className={cls("text-[11px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
+          <label className={cls("atelier-cwd-label text-[11px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
             {copy.cwd}
           </label>
           <input
             value={cwd}
             onChange={(e) => updateWorkspaceCwd(e.target.value)}
             className={cls(
-              "h-8 w-[360px] px-2.5 rounded-[6px] border text-[11px] font-mono outline-none",
+              "atelier-cwd-input h-8 px-2.5 rounded-[6px] border text-[11px] font-mono outline-none",
               dark ? "bg-dmuted border-dline text-dink" : "bg-surface border-line text-ink",
             )}
           />
@@ -5633,7 +6285,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                   </div>
                 </div>
               ) : (
-                <div className="max-w-[920px] mx-auto space-y-5">
+                <div className="w-full max-w-[920px] mx-auto space-y-5">
                   {renderedTranscriptMessages}
                 </div>
               )}
@@ -5642,9 +6294,18 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
             <form
               onSubmit={onSubmit}
               onPaste={handleAttachmentPaste}
-              className={cls("border-t p-3", dark ? "border-dline" : "border-line")}
+              className={cls("atelier-composer-shell border-t p-3", dark ? "border-dline" : "border-line")}
+              style={{ height: composerHeight }}
             >
-              <div className={cls("relative max-w-[920px] mx-auto rounded-[9px] border p-2", dark ? "bg-dmuted border-dline" : "bg-surface border-line")}>
+              <div className={cls("atelier-composer-panel relative w-full max-w-[920px] mx-auto rounded-[9px] border p-2", dark ? "bg-dmuted border-dline" : "bg-surface border-line")}>
+                <div
+                  role="separator"
+                  aria-orientation="horizontal"
+                  aria-label={tw.language === "en" ? "Resize chat input" : "채팅 입력창 크기 조절"}
+                  title={tw.language === "en" ? "Drag to resize chat input" : "드래그해서 채팅 입력창 크기 조절"}
+                  onPointerDown={startComposerResize}
+                  className={cls("atelier-composer-resize-handle", resizingComposer ? "atelier-composer-resize-handle-active" : "")}
+                />
                 {(pendingAttachments.length > 0 || isPastingImage || pasteError) && (
                   <div className="atelier-attachment-tray">
                     {pendingAttachments.map((attachment) => (
@@ -5666,109 +6327,155 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                     {pasteError && <div className="atelier-attachment-error">{pasteError}</div>}
                   </div>
                 )}
-                <div className={cls("mb-2 flex items-center gap-2 border-b pb-2", dark ? "border-dline" : "border-line")}>
-                  <button
-                    type="button"
-                    onClick={applyFactoryLauncher}
-                    className={cls(
-                      "h-7 shrink-0 rounded-[7px] px-2.5 inline-flex items-center gap-1.5 text-[11px] font-medium border transition-colors",
-                      activeFactoryCommand
-                        ? dark
-                          ? "bg-[#3a2a23] border-[#e26f4f] text-dink"
-                          : "bg-[#fff1eb] border-[#e26f4f] text-ink"
-                        : dark
-                          ? "border-[#6f4a3f] bg-[#302925] text-dink hover:bg-[#3a2f2a]"
-                          : "border-[#e26f4f] bg-surface text-ink hover:bg-[#fff6f2]",
-                    )}
-                    title={copy.factoryLauncherTitle}
-                    aria-label={copy.factoryLauncherTitle}
-                    aria-pressed={activeFactoryCommand === "goal"}
-                  >
-                    <span className="text-[#e26f4f]">{I.zap}</span>
-                    <span>{copy.factoryLabel}</span>
-                  </button>
-                  <span className={cls("min-w-0 truncate text-[11px]", dark ? "text-dsub" : "text-sub")}>
-                    {tw.language === "en"
-                      ? "One launcher for goal, analysis, verification, security, and final audit."
-                      : "목표만 입력하면 계획, 실행, 검증, 보안, 최종감사까지 자동 진행합니다."}
-                  </span>
-                </div>
-                <div
-                  className={cls(
-                    "mb-2 grid grid-cols-[minmax(0,1fr)_auto] gap-2 rounded-[8px] border px-2.5 py-2 text-[11px]",
-                    factoryStatusTone === "ready"
-                      ? dark
-                        ? "border-[#2f6f56] bg-[#20352d] text-dink"
-                        : "border-[#6abf91] bg-[#edf8f1] text-ink"
-                      : factoryStatusTone === "error"
-                        ? dark
-                          ? "border-[#7c3b3b] bg-[#3a2525] text-dink"
-                          : "border-[#df8a8a] bg-[#fff0f0] text-ink"
-                        : dark
-                          ? "border-dline bg-dsurf text-dink"
-                          : "border-line bg-muted text-ink",
-                  )}
-                >
-                  <div className="min-w-0 flex flex-wrap items-center gap-x-3 gap-y-1">
-                    <span className="inline-flex min-w-0 items-center gap-1.5 font-medium">
-                      <span className={cls(
-                        "h-2 w-2 rounded-full",
-                        factoryStatusTone === "ready"
-                          ? "bg-[#31b879]"
-                          : factoryStatusTone === "error"
-                            ? "bg-[#d9534f]"
-                            : factoryStatus?.exists
-                              ? "bg-[#d79b3d]"
-                              : dark ? "bg-dsub" : "bg-sub",
-                      )} />
-                      <span className="truncate">Factory</span>
-                      <span className="shrink-0 font-mono">{factoryStatusLabel}</span>
-                    </span>
-                    {factoryStatus?.exists && (
-                      <>
-                        <span className={cls("font-mono", dark ? "text-dsub" : "text-sub")}>
-                          {factoryStatus.command_owner || "Stella"} → {factoryStatus.execution_controller || "Release"}
-                        </span>
-                        <span className={cls("font-mono", dark ? "text-dsub" : "text-sub")}>
-                          BP {factoryStatus.agent_blueprints} · AI {factoryStatus.agent_instances}
-                        </span>
-                        <span className={cls("font-mono", dark ? "text-dsub" : "text-sub")}>
-                          done {factoryDoneStages} · open {factoryOpenStages}
-                        </span>
-                      </>
-                    )}
-                    {factoryStatusError && (
-                      <span className={cls("min-w-0 truncate", dark ? "text-[#ffb3b3]" : "text-[#8d2f2f]")}>
-                        {factoryStatusError}
+                {activeProvider === "gajecode" ? (
+                  <div className={cls("mb-2 border-b pb-2", dark ? "border-dline" : "border-line")}>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <div className={cls(
+                        "h-7 shrink-0 rounded-[7px] px-2.5 inline-flex items-center gap-1.5 text-[11px] font-medium border",
+                        dark
+                          ? "border-[#7d4b43] bg-[#302725] text-dink"
+                          : "border-[#d56f55] bg-[#fff6f2] text-ink",
+                      )}>
+                        <span className="text-[#e26f4f]">{I.zap}</span>
+                        <span>{tw.language === "en" ? "gjc commands" : "gjc 명령어"}</span>
+                      </div>
+                      <span className={cls("min-w-0 truncate text-[11px]", dark ? "text-dsub" : "text-sub")}>
+                        {tw.language === "en"
+                          ? "Insert real gjc CLI commands from the Gajae Code docs."
+                          : "Gajae Code 문서 기준 실제 gjc 명령을 입력합니다."}
                       </span>
-                    )}
-                    {factoryStatus?.blocked_reason && (
-                      <span className={cls("min-w-0 truncate", dark ? "text-[#ffb3b3]" : "text-[#8d2f2f]")}>
-                        {factoryStatus.blocked_reason}
-                      </span>
-                    )}
-                    {factoryStatus?.next_step && (
-                      <span className={cls("min-w-0 flex-1 truncate", dark ? "text-dsub" : "text-sub")}>
-                        {factoryStatus.next_step}
-                      </span>
-                    )}
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                      {gajecodeQuickCommands.map((command) => {
+                        const label = tw.language === "en"
+                          ? command.labelEn || command.command
+                          : command.labelKo || command.command;
+                        return (
+                          <button
+                            key={command.command}
+                            type="button"
+                            onClick={() => applySlashCommand(command)}
+                            className={cls(
+                              "h-7 rounded-[7px] border px-2.5 text-[11px] font-medium transition-colors",
+                              dark
+                                ? "border-[#4b4b48] bg-[#272725] text-dink hover:bg-[#343431]"
+                                : "border-line bg-surface text-ink hover:bg-muted",
+                            )}
+                            title={tw.language === "en" ? command.detailEn : command.detailKo}
+                          >
+                            {label}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => refreshFactoryStatus().catch(console.error)}
-                    disabled={factoryStatusLoading}
-                    className={cls(
-                      "h-7 w-7 rounded-[7px] border grid place-items-center transition-colors",
-                      dark
-                        ? "border-[#4b4b48] bg-[#2d2d2a] text-dsub hover:text-dink disabled:opacity-60"
-                        : "border-[#d6d0c7] bg-surface text-sub hover:text-ink disabled:opacity-60",
-                    )}
-                    title={tw.language === "en" ? "Refresh Factory status" : "Factory 상태 새로고침"}
-                    aria-label={tw.language === "en" ? "Refresh Factory status" : "Factory 상태 새로고침"}
-                  >
-                    {I.eye}
-                  </button>
-                </div>
+                ) : (
+                  <>
+                    <div className={cls("mb-2 flex items-center gap-2 border-b pb-2", dark ? "border-dline" : "border-line")}>
+                      <button
+                        type="button"
+                        onClick={applyFactoryLauncher}
+                        className={cls(
+                          "h-7 shrink-0 rounded-[7px] px-2.5 inline-flex items-center gap-1.5 text-[11px] font-medium border transition-colors",
+                          activeFactoryCommand
+                            ? dark
+                              ? "bg-[#3a2a23] border-[#e26f4f] text-dink"
+                              : "bg-[#fff1eb] border-[#e26f4f] text-ink"
+                            : dark
+                              ? "border-[#6f4a3f] bg-[#302925] text-dink hover:bg-[#3a2f2a]"
+                              : "border-[#e26f4f] bg-surface text-ink hover:bg-[#fff6f2]",
+                        )}
+                        title={copy.factoryLauncherTitle}
+                        aria-label={copy.factoryLauncherTitle}
+                        aria-pressed={activeFactoryCommand === "goal"}
+                      >
+                        <span className="text-[#e26f4f]">{I.zap}</span>
+                        <span>{copy.factoryLabel}</span>
+                      </button>
+                      <span className={cls("min-w-0 truncate text-[11px]", dark ? "text-dsub" : "text-sub")}>
+                        {tw.language === "en"
+                          ? "One launcher for goal, analysis, verification, security, and final audit."
+                          : "목표만 입력하면 계획, 실행, 검증, 보안, 최종감사까지 자동 진행합니다."}
+                      </span>
+                    </div>
+                    <div
+                      className={cls(
+                        "mb-2 grid grid-cols-[minmax(0,1fr)_auto] gap-2 rounded-[8px] border px-2.5 py-2 text-[11px]",
+                        factoryStatusTone === "ready"
+                          ? dark
+                            ? "border-[#2f6f56] bg-[#20352d] text-dink"
+                            : "border-[#6abf91] bg-[#edf8f1] text-ink"
+                          : factoryStatusTone === "error"
+                            ? dark
+                              ? "border-[#7c3b3b] bg-[#3a2525] text-dink"
+                              : "border-[#df8a8a] bg-[#fff0f0] text-ink"
+                            : dark
+                              ? "border-dline bg-dsurf text-dink"
+                              : "border-line bg-muted text-ink",
+                      )}
+                    >
+                      <div className="min-w-0 flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span className="inline-flex min-w-0 items-center gap-1.5 font-medium">
+                          <span className={cls(
+                            "h-2 w-2 rounded-full",
+                            factoryStatusTone === "ready"
+                              ? "bg-[#31b879]"
+                              : factoryStatusTone === "error"
+                                ? "bg-[#d9534f]"
+                                : factoryStatus?.exists
+                                  ? "bg-[#d79b3d]"
+                                  : dark ? "bg-dsub" : "bg-sub",
+                          )} />
+                          <span className="truncate">Factory</span>
+                          <span className="shrink-0 font-mono">{factoryStatusLabel}</span>
+                        </span>
+                        {factoryStatus?.exists && (
+                          <>
+                            <span className={cls("font-mono", dark ? "text-dsub" : "text-sub")}>
+                              {factoryStatus.command_owner || "Stella"} → {factoryStatus.execution_controller || "Release"}
+                            </span>
+                            <span className={cls("font-mono", dark ? "text-dsub" : "text-sub")}>
+                              BP {factoryStatus.agent_blueprints} · AI {factoryStatus.agent_instances}
+                            </span>
+                            <span className={cls("font-mono", dark ? "text-dsub" : "text-sub")}>
+                              done {factoryDoneStages} · open {factoryOpenStages}
+                            </span>
+                          </>
+                        )}
+                        {factoryStatusError && (
+                          <span className={cls("min-w-0 truncate", dark ? "text-[#ffb3b3]" : "text-[#8d2f2f]")}>
+                            {factoryStatusError}
+                          </span>
+                        )}
+                        {factoryStatus?.blocked_reason && (
+                          <span className={cls("min-w-0 truncate", dark ? "text-[#ffb3b3]" : "text-[#8d2f2f]")}>
+                            {factoryStatus.blocked_reason}
+                          </span>
+                        )}
+                        {factoryStatus?.next_step && (
+                          <span className={cls("min-w-0 flex-1 truncate", dark ? "text-dsub" : "text-sub")}>
+                            {factoryStatus.next_step}
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => refreshFactoryStatus().catch(console.error)}
+                        disabled={factoryStatusLoading}
+                        className={cls(
+                          "h-7 w-7 rounded-[7px] border grid place-items-center transition-colors",
+                          dark
+                            ? "border-[#4b4b48] bg-[#2d2d2a] text-dsub hover:text-dink disabled:opacity-60"
+                            : "border-[#d6d0c7] bg-surface text-sub hover:text-ink disabled:opacity-60",
+                        )}
+                        title={tw.language === "en" ? "Refresh Factory status" : "Factory 상태 새로고침"}
+                        aria-label={tw.language === "en" ? "Refresh Factory status" : "Factory 상태 새로고침"}
+                      >
+                        {I.eye}
+                      </button>
+                    </div>
+                  </>
+                )}
 	                {showSlashMenu && (
 	                  <div
 	                    className={cls(
@@ -5813,11 +6520,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                 )}
                 <textarea
                   ref={inputRef}
-                  defaultValue={input}
+                  defaultValue={inputDraftRef.current}
                   onChange={(e) => {
                     inputRevealPauseUntilRef.current = performance.now() + INPUT_REVEAL_PAUSE_MS;
                     inputDraftRef.current = e.target.value;
-                    commitInputSoon();
+                    syncComposerUi(e.target.value);
                   }}
                   onKeyDown={(e) => {
                     if (showSlashMenu) {
@@ -5844,15 +6551,15 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                   }}
                   placeholder={copy.placeholder}
                   className={cls(
-                    "w-full min-h-[76px] max-h-[180px] resize-y bg-transparent outline-none text-[13px] leading-[1.6] px-1",
+                    "atelier-composer-textarea w-full min-h-[44px] resize-none bg-transparent outline-none text-[13px] leading-[1.6] px-1",
                     dark ? "text-dink placeholder:text-dsub" : "text-ink placeholder:text-sub",
                   )}
                 />
-                <div className="mt-2 flex items-center gap-2">
+                <div className="atelier-composer-controls mt-2 flex items-center gap-2">
                   <div className={cls("flex-1 text-[12px] leading-[1.45]", dark ? "text-dsub" : "text-sub")}>
                     {busyTurnId ? copy.draftHint : "⌘/Ctrl + Enter"}
                   </div>
-                  <div className="shrink-0 flex items-center gap-1.5">
+                  <div className="atelier-composer-actions shrink-0 flex items-center gap-1.5">
                     {activeProvider === "hermes" && (
                       <>
                         <span className={cls("text-[11px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
@@ -5862,12 +6569,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                           value={activeHermesProvider}
                           onChange={(e) => {
                             const nextProvider = e.target.value as HermesInferenceProvider;
-                            if (nextProvider === "openrouter") refreshOpenRouterRuntimeModels().catch(console.error);
-                            updateActiveHermesProvider(nextProvider);
+                            runHermesProviderCommandFromPicker(nextProvider).catch(console.error);
                           }}
                           disabled={!active || !!busyTurnId}
                           className={cls(
-                            "h-8 max-w-[132px] rounded-[7px] border px-2 text-[11px] font-mono outline-none",
+                            "h-8 min-w-0 max-w-[132px] rounded-[7px] border px-2 text-[11px] font-mono outline-none",
                             dark
                               ? "bg-dsurf border-dline text-dink disabled:text-dsub"
                               : "bg-surface border-line text-ink disabled:text-sub",
@@ -6059,15 +6765,23 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                                       key={option.value}
                                       type="button"
                                       onClick={() => {
-                                        updateActiveModel(option.value);
+                                        if (option.disabled) return;
+                                        if (activeProvider === "hermes") {
+                                          runHermesModelCommandFromPicker(option.value).catch(console.error);
+                                        } else {
+                                          updateActiveModel(option.value);
+                                        }
                                         setCodexMenuPanel("root");
                                       }}
                                       className={cls(
                                         "h-10 w-full rounded-[12px] px-3 flex items-center justify-between gap-3 text-[15px] text-left",
-                                        selected
+                                        option.disabled
+                                          ? dark ? "text-dsub/60 cursor-not-allowed" : "text-sub/60 cursor-not-allowed"
+                                          : selected
                                           ? dark ? "bg-[#444442] text-dink" : "bg-[#dedbd3] text-ink"
                                           : dark ? "hover:bg-[#393937]" : "hover:bg-[#e4e1da]",
                                       )}
+                                      disabled={option.disabled}
                                       role="menuitemradio"
                                       aria-checked={selected}
                                     >
@@ -6124,20 +6838,32 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                     ) : (
                       <select
                         value={activeModel}
-                        onChange={(e) => updateActiveModel(e.target.value)}
+                        onChange={(e) => {
+                          if (activeProvider === "hermes") {
+                            runHermesModelCommandFromPicker(e.target.value).catch(console.error);
+                          } else if (activeProvider === "gajecode") {
+                            runGajaeModelCommandFromPicker(e.target.value).catch(console.error);
+                          } else {
+                            updateActiveModel(e.target.value);
+                          }
+                        }}
                         onFocus={() => {
-                          if (activeProvider === "hermes" && activeHermesProvider === "openrouter") {
+                          if (activeProvider === "claude" || activeProvider === "gajecode") {
+                            refreshClaudeRuntimeModels().catch(console.error);
+                          } else if (activeProvider === "hermes" && activeHermesProvider === "openrouter") {
                             refreshOpenRouterRuntimeModels().catch(console.error);
                           }
                         }}
                         onMouseDown={() => {
-                          if (activeProvider === "hermes" && activeHermesProvider === "openrouter") {
+                          if (activeProvider === "claude" || activeProvider === "gajecode") {
+                            refreshClaudeRuntimeModels().catch(console.error);
+                          } else if (activeProvider === "hermes" && activeHermesProvider === "openrouter") {
                             refreshOpenRouterRuntimeModels().catch(console.error);
                           }
                         }}
                         disabled={!active || !!busyTurnId}
                         className={cls(
-                          "h-8 max-w-[180px] rounded-[7px] border px-2 text-[11px] font-mono outline-none",
+                          "h-8 min-w-0 max-w-[180px] rounded-[7px] border px-2 text-[11px] font-mono outline-none",
                           dark
                             ? "bg-dsurf border-dline text-dink disabled:text-dsub"
                             : "bg-surface border-line text-ink disabled:text-sub",
@@ -6146,7 +6872,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                         title={activeProviderMeta.label}
                       >
                         {activeModelOptions.map((option) => (
-                          <option key={option.value} value={option.value}>
+                          <option key={option.value} value={option.value} disabled={option.disabled}>
                             {option.label}
                           </option>
                         ))}
@@ -6155,7 +6881,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                   </div>
                   <button
                     type="submit"
-                    disabled={(!input.trim() && pendingAttachments.length === 0) || isPastingImage}
+                    disabled={(!composerUi.hasText && pendingAttachments.length === 0) || isPastingImage}
                     className="h-8 px-4 rounded-[7px] text-[12px] font-medium text-white disabled:opacity-40"
                     style={{ background: "var(--accent)" }}
                   >
@@ -6168,7 +6894,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
 
           {showPreview && (
             <aside
-              className={cls("relative shrink-0 border-l flex flex-col", dark ? "border-dline bg-dsurf" : "border-line bg-surface")}
+              className={cls("atelier-preview-pane relative shrink-0 border-l flex flex-col", dark ? "border-dline bg-dsurf" : "border-line bg-surface")}
               style={{ width: previewWidth }}
             >
               <div

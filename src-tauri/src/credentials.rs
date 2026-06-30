@@ -3,12 +3,14 @@
 // 평문 디스크 저장 금지. profiles JSON에는 boolean 플래그만.
 
 use keyring::Entry;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::io::{self, Read};
-use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
+use std::ffi::OsStr;
+use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{ChildStdin, Command, Output, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -16,12 +18,52 @@ use std::time::{Duration, Instant};
 const SERVICE: &str = "com.atelier.app";
 const HERMES_INSTALL_SH: &str =
     "curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- --skip-setup";
+const GAJAE_CODE_PACKAGE_NAME: &str = "gajae-code";
+static OAUTH_LOGIN_STDIN: Lazy<Mutex<HashMap<String, ChildStdin>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 #[cfg(target_os = "windows")]
 const HERMES_INSTALL_PS1: &str =
     "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1))) -SkipSetup -NonInteractive";
 #[cfg(target_os = "windows")]
 const CLAUDE_INSTALL_PS1: &str =
     "& ([scriptblock]::Create((irm https://claude.ai/install.ps1))) stable";
+#[cfg(target_os = "windows")]
+const GAJAE_CODE_INSTALL_PS1: &str = r#"
+$ErrorActionPreference = 'Stop'
+New-Item -ItemType Directory -Force -Path $env:BUN_INSTALL, $env:USERPROFILE, $env:GJC_HOME, $env:ATELIER_SKILLS_DIR | Out-Null
+$env:Path = "$env:BUN_INSTALL\bin;$env:USERPROFILE\.bun\bin;$env:Path"
+$bun = Join-Path $env:BUN_INSTALL 'bin\bun.exe'
+if (!(Test-Path $bun)) {
+  $installer = Invoke-RestMethod https://bun.sh/install.ps1
+  Invoke-Expression $installer
+}
+if (!(Test-Path $bun)) {
+  $fallback = Join-Path $env:USERPROFILE '.bun\bin\bun.exe'
+  if (Test-Path $fallback) {
+    $bun = $fallback
+  }
+}
+if (!(Test-Path $bun)) {
+  throw "Bun install completed but bun.exe was not found in the isolated Gajae Code runtime."
+}
+& $bun install -g gajae-code
+"#;
+#[cfg(not(target_os = "windows"))]
+const GAJAE_CODE_INSTALL_SH: &str = r#"
+set -eu
+mkdir -p "$BUN_INSTALL" "$HOME" "$GJC_HOME" "$ATELIER_SKILLS_DIR"
+export PATH="$BUN_INSTALL/bin:$HOME/.bun/bin:$PATH"
+if [ ! -x "$BUN_INSTALL/bin/bun" ]; then
+  command -v curl >/dev/null 2>&1 || { echo "curl not found. install curl first." >&2; exit 127; }
+  command -v bash >/dev/null 2>&1 || { echo "bash not found. install bash first." >&2; exit 127; }
+  curl -fsSL https://bun.sh/install | bash
+fi
+if [ ! -x "$BUN_INSTALL/bin/bun" ]; then
+  echo "Bun install completed but bun was not found in the isolated Gajae Code runtime." >&2
+  exit 127
+fi
+"$BUN_INSTALL/bin/bun" install -g gajae-code
+"#;
 
 #[cfg(target_os = "windows")]
 fn configure_background_command(command: &mut Command) {
@@ -60,6 +102,25 @@ struct CredentialStateFile {
     providers: HashMap<String, CredentialState>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaudeSubscriptionOauthCredential {
+    pub access: String,
+    pub refresh: Option<String>,
+    pub expires: Option<i64>,
+    pub scopes: Option<String>,
+    pub subscription_type: Option<String>,
+}
+
+impl ClaudeSubscriptionOauthCredential {
+    #[allow(dead_code)]
+    pub fn access_is_fresh(&self) -> bool {
+        let Some(expires) = self.expires else {
+            return true;
+        };
+        expires > chrono::Utc::now().timestamp_millis() + 60_000
+    }
+}
+
 /// 4종 provider — claude/codex 는 OAuth(구독) 또는 API 둘 다 가능.
 fn provider_meta(provider: &str) -> Option<ProviderMeta> {
     match provider {
@@ -86,6 +147,13 @@ fn provider_meta(provider: &str) -> Option<ProviderMeta> {
         }),
         "hermes" => Some(ProviderMeta {
             cli: Some("hermes"),
+            login_cmd: None,
+            env_var: None,
+            supports_oauth: false,
+            supports_api: false,
+        }),
+        "gajecode" => Some(ProviderMeta {
+            cli: Some(gajecode_cli_name()),
             login_cmd: None,
             env_var: None,
             supports_oauth: false,
@@ -139,7 +207,10 @@ fn login_failure_detail_text(text: &str) -> String {
 fn extract_login_url(text: &str) -> Option<String> {
     text.split_whitespace().find_map(|token| {
         let trimmed = token.trim_matches(|c: char| {
-            matches!(c, '"' | '\'' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';')
+            matches!(
+                c,
+                '"' | '\'' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';'
+            )
         });
         (trimmed.starts_with("https://") || trimmed.starts_with("http://"))
             .then(|| trimmed.to_string())
@@ -147,10 +218,19 @@ fn extract_login_url(text: &str) -> Option<String> {
 }
 
 fn captured_login_output(captured: &Arc<Mutex<String>>) -> String {
-    captured
-        .lock()
-        .map(|text| text.clone())
-        .unwrap_or_default()
+    captured.lock().map(|text| text.clone()).unwrap_or_default()
+}
+
+fn store_oauth_login_stdin(provider: &str, stdin: ChildStdin) {
+    if let Ok(mut map) = OAUTH_LOGIN_STDIN.lock() {
+        map.insert(provider.to_string(), stdin);
+    }
+}
+
+fn forget_oauth_login_stdin(provider: &str) {
+    if let Ok(mut map) = OAUTH_LOGIN_STDIN.lock() {
+        map.remove(provider);
+    }
 }
 
 fn capture_login_pipe<R>(mut reader: R, captured: Arc<Mutex<String>>)
@@ -233,6 +313,106 @@ fn watch_and_open_login_url(captured: Arc<Mutex<String>>) {
     });
 }
 
+fn extract_claude_oauth_token_from_text(text: &str) -> Option<String> {
+    text.split_whitespace().find_map(|token| {
+        let token = token.trim_matches(|c: char| {
+            matches!(
+                c,
+                '"' | '\'' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';'
+            )
+        });
+        token.contains("sk-ant-oat").then(|| token.to_string())
+    })
+}
+
+fn cache_claude_setup_token_if_available() {
+    if !which("claude") {
+        return;
+    }
+    let mut command = cli_command("claude");
+    command
+        .args(["setup-token"])
+        .env("PATH", crate::augmented_cli_path())
+        .stdin(Stdio::null());
+    let Ok(Some(output)) = command_output_timeout(command, Duration::from_secs(20)) else {
+        return;
+    };
+    let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
+    combined.push('\n');
+    combined.push_str(&String::from_utf8_lossy(&output.stderr));
+    let Some(token) = extract_claude_oauth_token_from_text(&combined) else {
+        return;
+    };
+    cache_claude_oauth_token(&token);
+}
+
+fn cache_claude_oauth_token(token: &str) {
+    let token = token.trim();
+    if !token.contains("sk-ant-oat") {
+        return;
+    }
+    if let Ok(entry) = keychain_entry("claude", "oauth_token") {
+        if entry.set_password(token).is_ok() {
+            set_oauth_state("claude", true);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_keychain_service_password(service: &str) -> Option<String> {
+    let output = Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", service, "-w"])
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let secret = String::from_utf8_lossy(&output.stdout)
+        .trim_end_matches(['\r', '\n'])
+        .trim()
+        .to_string();
+    (!secret.is_empty()).then_some(secret)
+}
+
+fn sync_claude_code_oauth_keychain_to_app_cache() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let Some(secret) = macos_keychain_service_password("Claude Code-credentials") else {
+            return false;
+        };
+        let Some(credential) = read_claude_oauth_credential_from_json_text(&secret) else {
+            return false;
+        };
+        if credential.refresh.is_none() {
+            return false;
+        }
+        if let Ok(entry) = keychain_entry("claude", "oauth_token") {
+            if entry.set_password(secret.trim()).is_ok() {
+                set_oauth_state("claude", true);
+                return true;
+            }
+        }
+        false
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
+}
+
+fn mark_oauth_login_success(provider: &str) {
+    set_oauth_state(provider, true);
+    if provider == "claude" {
+        if sync_claude_code_oauth_keychain_to_app_cache() {
+            let _ = sync_gajecode_claude_subscription_credential();
+        } else {
+            cache_claude_setup_token_if_available();
+        }
+    }
+}
+
 fn oauth_logout_args(provider: &str) -> Option<Vec<&'static str>> {
     match provider {
         "claude" => Some(vec!["auth", "logout"]),
@@ -268,6 +448,37 @@ fn run_oauth_logout(provider: &str, cli: &str) -> Result<(), String> {
         }
         Ok(None) => Err(format!("{cli} {label} timed out")),
         Err(e) => Err(format!("{cli} {label}: {e}")),
+    }
+}
+
+fn run_gajecode_oauth_logout() -> Result<(), String> {
+    let mut command = gajecode_isolated_cli_command()?;
+    command.arg("logout");
+    match command_output_timeout(command, Duration::from_secs(8)) {
+        Ok(Some(output)) if output.status.success() => Ok(()),
+        Ok(Some(output)) => {
+            let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
+            if !combined.is_empty() {
+                combined.push('\n');
+            }
+            combined.push_str(&String::from_utf8_lossy(&output.stderr));
+            let detail = combined.trim();
+            if detail.is_empty() {
+                Err(format!(
+                    "{} logout exited with {}",
+                    gajecode_cli_name(),
+                    output.status
+                ))
+            } else {
+                Err(format!(
+                    "{} logout exited with {}: {detail}",
+                    gajecode_cli_name(),
+                    output.status
+                ))
+            }
+        }
+        Ok(None) => Err(format!("{} logout timed out", gajecode_cli_name())),
+        Err(e) => Err(format!("{} logout: {e}", gajecode_cli_name())),
     }
 }
 
@@ -311,10 +522,14 @@ fn keychain_entry(provider: &str, slot: &str) -> Result<Entry, String> {
     Entry::new(SERVICE, &username).map_err(|e| format!("keychain entry: {e}"))
 }
 
+fn keychain_username(provider: &str, slot: &str) -> String {
+    format!("{provider}.{slot}")
+}
+
 fn keychain_item_exists(provider: &str, slot: &str) -> bool {
     #[cfg(target_os = "macos")]
     {
-        let username = format!("{provider}.{slot}");
+        let username = keychain_username(provider, slot);
         return Command::new("/usr/bin/security")
             .args(["find-generic-password", "-s", SERVICE, "-a", &username])
             .stdin(Stdio::null())
@@ -369,6 +584,199 @@ fn app_support_dir() -> Option<PathBuf> {
             .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
         Some(base.join("com.atelier.app"))
     }
+}
+
+pub fn gajecode_cli_name() -> &'static str {
+    "gjc"
+}
+
+pub fn gajecode_provider_root() -> Option<PathBuf> {
+    Some(app_support_dir()?.join("providers").join("gajecode"))
+}
+
+pub fn gajecode_home_dir() -> Option<PathBuf> {
+    Some(gajecode_provider_root()?.join("home"))
+}
+
+pub fn gajecode_workspace_dir() -> Option<PathBuf> {
+    Some(gajecode_provider_root()?.join("workspace"))
+}
+
+pub fn gajecode_skills_dir() -> Option<PathBuf> {
+    Some(gajecode_home_dir()?.join(".gjc").join("skills"))
+}
+
+fn gajecode_agent_dir() -> Option<PathBuf> {
+    Some(gajecode_home_dir()?.join(".gjc").join("agent"))
+}
+
+fn ensure_gajecode_models_config(agent_dir: &Path) -> Result<(), String> {
+    let path = agent_dir.join("models.yml");
+    let content = r#"# Atelier managed default for the isolated Gajae Code runtime.
+# Claude subscription OAuth is synchronized into agent.db auth_credentials
+# before each Gajae Code run. Keep models.yml free of apiKeyEnv so stored
+# OAuth can refresh expired access tokens instead of being shadowed by config.
+providers: {}
+"#;
+    if path.exists() {
+        if let Ok(existing) = std::fs::read_to_string(&path) {
+            let is_atelier_managed = existing.contains("Atelier managed default")
+                && existing.contains("ANTHROPIC_OAUTH_TOKEN");
+            if is_atelier_managed && existing != content {
+                std::fs::write(&path, content)
+                    .map_err(|e| format!("write {}: {e}", path.display()))?;
+            }
+        }
+        return Ok(());
+    }
+    std::fs::create_dir_all(agent_dir)
+        .map_err(|e| format!("create {}: {e}", agent_dir.display()))?;
+    std::fs::write(&path, content).map_err(|e| format!("write {}: {e}", path.display()))
+}
+
+fn gajecode_bun_install_dir() -> Option<PathBuf> {
+    Some(gajecode_provider_root()?.join("bun"))
+}
+
+fn gajecode_bun_executable_path() -> Option<PathBuf> {
+    let name = if cfg!(target_os = "windows") {
+        "bun.exe"
+    } else {
+        "bun"
+    };
+    let direct = gajecode_bun_install_dir()?.join("bin").join(name);
+    direct
+        .is_file()
+        .then(|| std::fs::canonicalize(&direct).unwrap_or(direct))
+}
+
+pub fn gajecode_config_dir() -> Option<PathBuf> {
+    Some(gajecode_provider_root()?.join("xdg-config"))
+}
+
+pub fn gajecode_data_dir() -> Option<PathBuf> {
+    Some(gajecode_provider_root()?.join("xdg-data"))
+}
+
+pub fn gajecode_cache_dir() -> Option<PathBuf> {
+    Some(gajecode_provider_root()?.join("xdg-cache"))
+}
+
+fn gajecode_bin_dirs() -> Vec<PathBuf> {
+    let Some(bun_install) = gajecode_bun_install_dir() else {
+        return Vec::new();
+    };
+    let mut dirs = vec![bun_install.join("bin")];
+    if let Some(home) = gajecode_home_dir() {
+        dirs.push(home.join(".bun").join("bin"));
+    }
+    dirs
+}
+
+pub fn gajecode_executable_path() -> Option<PathBuf> {
+    let cli_name = gajecode_cli_name();
+    let names = {
+        #[cfg(target_os = "windows")]
+        {
+            let mut names = vec![cli_name.to_string()];
+            names.push(format!("{cli_name}.cmd"));
+            names.push(format!("{cli_name}.ps1"));
+            names.push(format!("{cli_name}.exe"));
+            names.push("gajae-code.cmd".to_string());
+            names.push("gajae-code.exe".to_string());
+            names
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            vec![cli_name.to_string()]
+        }
+    };
+    for dir in gajecode_bin_dirs() {
+        for name in &names {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(std::fs::canonicalize(&candidate).unwrap_or(candidate));
+            }
+        }
+    }
+    None
+}
+
+fn gajecode_cli_installed() -> bool {
+    gajecode_executable_path().is_some()
+}
+
+pub fn gajecode_runtime_path_env() -> String {
+    let mut paths = gajecode_bin_dirs();
+    paths.extend(std::env::split_paths(&crate::augmented_cli_path()));
+    let mut unique = Vec::new();
+    for path in paths {
+        if !unique.iter().any(|seen| seen == &path) {
+            unique.push(path);
+        }
+    }
+    std::env::join_paths(unique)
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|_| crate::augmented_cli_path())
+}
+
+pub fn configure_gajecode_runtime_env(command: &mut Command) -> Result<(), String> {
+    let root = gajecode_provider_root()
+        .ok_or_else(|| "Could not resolve the 가재코드 provider directory.".to_string())?;
+    let home = gajecode_home_dir()
+        .ok_or_else(|| "Could not resolve the 가재코드 HOME directory.".to_string())?;
+    let workspace = gajecode_workspace_dir()
+        .ok_or_else(|| "Could not resolve the 가재코드 workspace directory.".to_string())?;
+    let skills = gajecode_skills_dir()
+        .ok_or_else(|| "Could not resolve the 가재코드 skills directory.".to_string())?;
+    let config = gajecode_config_dir()
+        .ok_or_else(|| "Could not resolve the 가재코드 config directory.".to_string())?;
+    let data = gajecode_data_dir()
+        .ok_or_else(|| "Could not resolve the 가재코드 data directory.".to_string())?;
+    let cache = gajecode_cache_dir()
+        .ok_or_else(|| "Could not resolve the 가재코드 cache directory.".to_string())?;
+    let agent_dir = gajecode_agent_dir()
+        .ok_or_else(|| "Could not resolve the 가재코드 agent directory.".to_string())?;
+    let bun_install = gajecode_bun_install_dir()
+        .ok_or_else(|| "Could not resolve the 가재코드 Bun install directory.".to_string())?;
+    for dir in [
+        &root,
+        &home,
+        &workspace,
+        &skills,
+        &config,
+        &data,
+        &cache,
+        &agent_dir,
+        &bun_install,
+    ] {
+        std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    }
+    ensure_gajecode_models_config(&agent_dir)?;
+    let gjc_home = home.join(".gjc");
+    command
+        .env("PATH", gajecode_runtime_path_env())
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("XDG_CONFIG_HOME", &config)
+        .env("XDG_DATA_HOME", &data)
+        .env("XDG_CACHE_HOME", &cache)
+        .env("BUN_INSTALL", &bun_install)
+        .env("GJC_HOME", &gjc_home)
+        .env("GAJAE_CODE_HOME", &gjc_home)
+        .env("GJC_CODING_AGENT_DIR", &agent_dir)
+        .env("ATELIER_PROVIDER_ID", "gajecode")
+        .env("ATELIER_SKILLS_DIR", &skills);
+    Ok(())
+}
+
+fn gajecode_isolated_cli_command() -> Result<Command, String> {
+    let executable = gajecode_executable_path().ok_or_else(|| {
+        "가재코드 CLI가 설치되어 있지 않습니다. 자동 설치를 먼저 실행하세요.".to_string()
+    })?;
+    let mut command = cli_command(&executable.to_string_lossy());
+    configure_gajecode_runtime_env(&mut command)?;
+    Ok(command)
 }
 
 fn credential_state_path() -> Option<PathBuf> {
@@ -443,6 +851,22 @@ fn set_api_key_state(provider: &str, key: Option<&str>) {
     });
 }
 
+fn is_valid_api_key_for_provider(provider: &str, value: &str) -> bool {
+    let key = value.trim();
+    if key.is_empty() || key.contains('#') || key.chars().any(char::is_whitespace) {
+        return false;
+    }
+    match provider {
+        "claude" => {
+            key.starts_with("sk-ant-api")
+                || (key.starts_with("sk-ant-") && !key.starts_with("sk-ant-oat"))
+        }
+        "codex" => key.starts_with("sk-"),
+        "openrouter" => key.starts_with("sk-or-v1-"),
+        _ => true,
+    }
+}
+
 fn which(cli: &str) -> bool {
     #[cfg(target_os = "windows")]
     {
@@ -467,6 +891,35 @@ fn command_output_timeout(mut command: Command, timeout: Duration) -> io::Result
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = command.spawn()?;
+    let start = Instant::now();
+    loop {
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output().map(Some);
+        }
+        if start.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(None);
+        }
+        thread::sleep(Duration::from_millis(40));
+    }
+}
+
+fn command_output_with_stdin_timeout(
+    mut command: Command,
+    input: &[u8],
+    timeout: Duration,
+) -> io::Result<Option<Output>> {
+    configure_background_command(&mut command);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(input)?;
+        stdin.flush()?;
+    }
     let start = Instant::now();
     loop {
         if child.try_wait()?.is_some() {
@@ -541,6 +994,438 @@ fn home_file(parts: &[&str]) -> Option<PathBuf> {
         path.push(part);
     }
     Some(path)
+}
+
+fn value_string(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn value_i64(value: Option<&Value>) -> Option<i64> {
+    value.and_then(|value| {
+        value
+            .as_i64()
+            .or_else(|| value.as_u64().and_then(|number| i64::try_from(number).ok()))
+            .or_else(|| value.as_str()?.trim().parse::<i64>().ok())
+    })
+}
+
+fn value_string_or_array(value: Option<&Value>) -> Option<String> {
+    let value = value?;
+    if let Some(text) = value.as_str() {
+        let text = text.trim();
+        return (!text.is_empty()).then(|| text.to_string());
+    }
+    let array = value.as_array()?;
+    let joined = array
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!joined.is_empty()).then_some(joined)
+}
+
+fn claude_oauth_credential_from_value(value: &Value) -> Option<ClaudeSubscriptionOauthCredential> {
+    let oauth = value
+        .get("claudeAiOauth")
+        .or_else(|| value.get("oauth"))
+        .or_else(|| value.get("tokens"))
+        .unwrap_or(value);
+
+    let access = value_string(
+        oauth
+            .get("accessToken")
+            .or_else(|| oauth.get("access_token"))
+            .or_else(|| oauth.get("access")),
+    )
+    .filter(|token| token.contains("sk-ant-oat"))?;
+    let refresh = value_string(
+        oauth
+            .get("refreshToken")
+            .or_else(|| oauth.get("refresh_token"))
+            .or_else(|| oauth.get("refresh")),
+    );
+    let expires = value_i64(
+        oauth
+            .get("expiresAt")
+            .or_else(|| oauth.get("expires_at"))
+            .or_else(|| oauth.get("expires")),
+    );
+    let scopes = value_string_or_array(oauth.get("scopes").or_else(|| oauth.get("scope")));
+    let subscription_type = value_string(
+        oauth
+            .get("subscriptionType")
+            .or_else(|| oauth.get("subscription_type")),
+    );
+
+    Some(ClaudeSubscriptionOauthCredential {
+        access,
+        refresh,
+        expires,
+        scopes,
+        subscription_type,
+    })
+}
+
+#[allow(dead_code)]
+fn claude_oauth_token_from_value(value: &Value) -> Option<String> {
+    let credential = claude_oauth_credential_from_value(value)?;
+    if !credential.access_is_fresh() {
+        return None;
+    }
+    Some(credential.access)
+}
+
+#[allow(dead_code)]
+fn read_claude_oauth_token_from_json_text(text: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(text).ok()?;
+    claude_oauth_token_from_value(&value)
+}
+
+fn read_claude_oauth_credential_from_json_text(
+    text: &str,
+) -> Option<ClaudeSubscriptionOauthCredential> {
+    let value: Value = serde_json::from_str(text).ok()?;
+    claude_oauth_credential_from_value(&value)
+}
+
+#[allow(dead_code)]
+fn read_claude_oauth_token_from_credentials_file() -> Option<String> {
+    let path = home_file(&[".claude", ".credentials.json"])?;
+    let text = std::fs::read_to_string(path).ok()?;
+    read_claude_oauth_token_from_json_text(&text)
+}
+
+fn read_claude_oauth_credential_from_credentials_file() -> Option<ClaudeSubscriptionOauthCredential>
+{
+    let path = home_file(&[".claude", ".credentials.json"])?;
+    let text = std::fs::read_to_string(path).ok()?;
+    read_claude_oauth_credential_from_json_text(&text)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_keychain_password(service: &str, account: &str) -> Option<String> {
+    let output = Command::new("/usr/bin/security")
+        .args(["find-generic-password", "-s", service, "-a", account, "-w"])
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let secret = String::from_utf8_lossy(&output.stdout)
+        .trim_end_matches(['\r', '\n'])
+        .trim()
+        .to_string();
+    (!secret.is_empty()).then_some(secret)
+}
+
+fn read_app_keychain_password(provider: &str, slot: &str) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let username = keychain_username(provider, slot);
+        return macos_keychain_password(SERVICE, &username);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let entry = keychain_entry(provider, slot).ok()?;
+        entry.get_password().ok()
+    }
+}
+
+#[allow(dead_code)]
+fn read_claude_oauth_token_from_atelier_keychain() -> Option<String> {
+    let secret = read_app_keychain_password("claude", "oauth_token")?;
+    let secret = secret.trim();
+    if secret.contains("sk-ant-oat") && !secret.starts_with('{') {
+        return Some(secret.to_string());
+    }
+    read_claude_oauth_token_from_json_text(secret)
+}
+
+fn read_claude_oauth_credential_from_atelier_keychain() -> Option<ClaudeSubscriptionOauthCredential>
+{
+    let secret = read_app_keychain_password("claude", "oauth_token")?;
+    let secret = secret.trim();
+    if secret.contains("sk-ant-oat") && !secret.starts_with('{') {
+        return Some(ClaudeSubscriptionOauthCredential {
+            access: secret.to_string(),
+            refresh: None,
+            expires: None,
+            scopes: None,
+            subscription_type: None,
+        });
+    }
+    read_claude_oauth_credential_from_json_text(secret)
+}
+
+#[allow(dead_code)]
+pub fn read_claude_subscription_oauth_token() -> Option<String> {
+    for key in ["ANTHROPIC_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"] {
+        if let Ok(token) = std::env::var(key) {
+            let token = token.trim().to_string();
+            if token.contains("sk-ant-oat") {
+                return Some(token);
+            }
+        }
+    }
+
+    if let Some(token) = read_claude_oauth_token_from_credentials_file() {
+        return Some(token);
+    }
+
+    // Normal command execution must not touch Claude Code's own Keychain item.
+    // macOS will prompt for "Claude Code-credentials" every time Atelier reads
+    // that external service. The app-owned cache is synchronized during the
+    // explicit login/repair path and is the steady-state credential source.
+    if let Some(token) = read_claude_oauth_token_from_atelier_keychain() {
+        return Some(token);
+    }
+
+    None
+}
+
+pub fn read_claude_subscription_oauth_credential() -> Option<ClaudeSubscriptionOauthCredential> {
+    let mut env_credential = None;
+    for key in ["ANTHROPIC_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"] {
+        if let Ok(token) = std::env::var(key) {
+            let token = token.trim().to_string();
+            if token.contains("sk-ant-oat") {
+                let credential = ClaudeSubscriptionOauthCredential {
+                    access: token,
+                    refresh: std::env::var("CLAUDE_CODE_OAUTH_REFRESH_TOKEN")
+                        .ok()
+                        .map(|value| value.trim().to_string())
+                        .filter(|value| !value.is_empty()),
+                    expires: None,
+                    scopes: std::env::var("CLAUDE_CODE_OAUTH_SCOPES")
+                        .ok()
+                        .map(|value| value.trim().to_string())
+                        .filter(|value| !value.is_empty()),
+                    subscription_type: None,
+                };
+                if credential.refresh.is_some() {
+                    return Some(credential);
+                }
+                env_credential = Some(credential);
+            }
+        }
+    }
+
+    if let Some(credential) = read_claude_oauth_credential_from_credentials_file() {
+        if credential.refresh.is_some() {
+            return Some(credential);
+        }
+        env_credential.get_or_insert(credential);
+    }
+
+    if let Some(credential) = read_claude_oauth_credential_from_atelier_keychain() {
+        if credential.refresh.is_some() {
+            return Some(credential);
+        }
+        env_credential.get_or_insert(credential);
+    }
+
+    env_credential
+}
+
+fn sync_gajecode_claude_subscription_credential_value(
+    credential: ClaudeSubscriptionOauthCredential,
+) -> Result<bool, String> {
+    let Some(refresh) = credential
+        .refresh
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(false);
+    };
+    let Some(agent_dir) = gajecode_agent_dir() else {
+        return Ok(false);
+    };
+    let Some(bun) = gajecode_bun_executable_path() else {
+        return Ok(false);
+    };
+
+    std::fs::create_dir_all(&agent_dir)
+        .map_err(|e| format!("create {}: {e}", agent_dir.display()))?;
+    ensure_gajecode_models_config(&agent_dir)?;
+
+    let agent_db = agent_dir.join("agent.db");
+    let expires = credential
+        .expires
+        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+    let payload = serde_json::json!({
+        "agentDb": agent_db.to_string_lossy(),
+        "access": credential.access,
+        "refresh": refresh,
+        "expires": expires,
+        "scopes": credential.scopes,
+        "subscriptionType": credential.subscription_type,
+    })
+    .to_string();
+    let script = r#"
+import { Database } from "bun:sqlite";
+
+const chunks = [];
+for await (const chunk of Bun.stdin.stream()) {
+  chunks.push(Buffer.from(chunk));
+}
+const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+const db = new Database(input.agentDb);
+db.exec(`
+CREATE TABLE IF NOT EXISTS auth_credentials (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider TEXT NOT NULL,
+  credential_type TEXT NOT NULL,
+  data TEXT NOT NULL,
+  disabled_cause TEXT,
+  identity_key TEXT,
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+`);
+const now = Math.floor(Date.now() / 1000);
+const identityKey = "atelier-claude-subscription";
+const data = JSON.stringify({
+  access: input.access,
+  refresh: input.refresh,
+  expires: Number(input.expires) || Date.now(),
+  ...(input.scopes ? { scopes: input.scopes } : {}),
+  ...(input.subscriptionType ? { subscriptionType: input.subscriptionType } : {}),
+});
+const existing = db
+  .query(`
+    SELECT id
+    FROM auth_credentials
+    WHERE provider = 'anthropic'
+      AND credential_type = 'oauth'
+      AND (identity_key = ? OR identity_key IS NULL)
+    ORDER BY CASE WHEN identity_key = ? THEN 0 ELSE 1 END, id ASC
+    LIMIT 1
+  `)
+  .get(identityKey, identityKey);
+if (existing?.id) {
+  db.query(`
+    UPDATE auth_credentials
+    SET data = ?, identity_key = ?, disabled_cause = NULL, updated_at = ?
+    WHERE id = ?
+  `).run(data, identityKey, now, existing.id);
+  console.log(JSON.stringify({ ok: true, action: "updated" }));
+} else {
+  db.query(`
+    INSERT INTO auth_credentials
+      (provider, credential_type, data, disabled_cause, identity_key, created_at, updated_at)
+    VALUES ('anthropic', 'oauth', ?, NULL, ?, ?, ?)
+  `).run(data, identityKey, now, now);
+  console.log(JSON.stringify({ ok: true, action: "inserted" }));
+}
+db.close();
+"#;
+
+    let mut command = Command::new(bun);
+    command.arg("--eval").arg(script);
+    let output =
+        command_output_with_stdin_timeout(command, payload.as_bytes(), Duration::from_secs(8))
+            .map_err(|e| format!("가재코드 Claude 자격증명 동기화 실행 실패: {e}"))?;
+    let Some(output) = output else {
+        return Err("가재코드 Claude 자격증명 동기화 시간이 초과되었습니다.".to_string());
+    };
+    if !output.status.success() {
+        return Err("가재코드 Claude 자격증명 동기화가 실패했습니다.".to_string());
+    }
+    Ok(true)
+}
+
+pub fn sync_gajecode_claude_subscription_credential() -> Result<bool, String> {
+    let Some(credential) = read_claude_subscription_oauth_credential() else {
+        return Ok(false);
+    };
+    sync_gajecode_claude_subscription_credential_value(credential)
+}
+
+pub fn repair_gajecode_claude_subscription_credential() -> Result<bool, String> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(secret) = macos_keychain_service_password("Claude Code-credentials") {
+            if let Some(credential) = read_claude_oauth_credential_from_json_text(&secret) {
+                if credential.refresh.is_some() {
+                    if let Ok(entry) = keychain_entry("claude", "oauth_token") {
+                        if entry.set_password(secret.trim()).is_ok() {
+                            set_oauth_state("claude", true);
+                        }
+                    }
+                    return sync_gajecode_claude_subscription_credential_value(credential);
+                }
+            }
+        }
+    }
+
+    sync_gajecode_claude_subscription_credential()
+}
+
+pub fn gajecode_has_claude_subscription_credential() -> bool {
+    let Some(agent_dir) = gajecode_agent_dir() else {
+        return false;
+    };
+    let Some(bun) = gajecode_bun_executable_path() else {
+        return false;
+    };
+    let agent_db = agent_dir.join("agent.db");
+    if !agent_db.exists() {
+        return false;
+    }
+    if std::fs::create_dir_all(&agent_dir).is_err() {
+        return false;
+    }
+    if ensure_gajecode_models_config(&agent_dir).is_err() {
+        return false;
+    }
+
+    let script = r#"
+import { Database } from "bun:sqlite";
+
+try {
+  const db = new Database(process.env.ATELIER_GAJAECODE_AGENT_DB, { readonly: true });
+  const row = db
+    .query(`
+      SELECT data, disabled_cause
+      FROM auth_credentials
+      WHERE provider = 'anthropic'
+        AND credential_type = 'oauth'
+      ORDER BY CASE WHEN disabled_cause IS NULL THEN 0 ELSE 1 END, updated_at DESC, id DESC
+      LIMIT 1
+    `)
+    .get();
+  db.close();
+  if (!row || row.disabled_cause) {
+    console.log("missing");
+    process.exit(0);
+  }
+  const data = JSON.parse(row.data || "{}");
+  const access = typeof data.access === "string" && data.access.trim();
+  const refresh = typeof data.refresh === "string" && data.refresh.trim();
+  console.log(access && refresh ? "ok" : "missing");
+} catch {
+  console.log("missing");
+}
+"#;
+
+    let mut command = Command::new(bun);
+    command
+        .arg("--eval")
+        .arg(script)
+        .env("ATELIER_GAJAECODE_AGENT_DB", &agent_db);
+    let Ok(Some(output)) = command_output_timeout(command, Duration::from_secs(4)) else {
+        return false;
+    };
+    output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "ok"
 }
 
 fn json_string(value: &Value, key: &str) -> String {
@@ -679,20 +1564,24 @@ pub fn sync_codex_auth_to_hermes() -> Result<bool, String> {
 #[tauri::command]
 pub async fn provider_status(provider: String) -> Result<ProviderStatus, String> {
     let meta = provider_meta(&provider).ok_or_else(|| format!("unknown provider: {provider}"))?;
-    let cli_installed = meta.cli.map(which).unwrap_or(false);
+    let cli_installed = if provider == "gajecode" {
+        gajecode_cli_installed()
+    } else {
+        meta.cli.map(which).unwrap_or(false)
+    };
     let oauth_logged_in = meta.supports_oauth && detect_oauth(&provider);
-    let saved_state = credential_state(&provider);
-
     let (api_key_present, api_key_masked) = if meta.supports_api {
-        if saved_state.api_key_present {
-            (true, saved_state.api_key_masked)
-        } else if keychain_item_exists(&provider, "api_key") {
+        if let Some(key) = read_api_key(&provider) {
             let _ = update_credential_state(&provider, |state| {
                 state.api_key_present = true;
-                state.api_key_masked = "••••".to_string();
+                state.api_key_masked = mask_key(&key);
             });
-            (true, "••••".to_string())
+            (true, mask_key(&key))
         } else {
+            let _ = update_credential_state(&provider, |state| {
+                state.api_key_present = false;
+                state.api_key_masked.clear();
+            });
             (false, String::new())
         }
     } else {
@@ -720,6 +1609,11 @@ pub async fn provider_save_api_key(provider: String, api_key: String) -> Result<
     if trimmed.is_empty() {
         return Err("api_key is empty".into());
     }
+    if !is_valid_api_key_for_provider(&provider, trimmed) {
+        return Err(format!(
+            "{provider} API key format is invalid. Subscription browser auth codes must be pasted into the subscription login step, not saved as API keys."
+        ));
+    }
     let entry = keychain_entry(&provider, "api_key")?;
     entry
         .set_password(trimmed)
@@ -731,13 +1625,19 @@ pub async fn provider_save_api_key(provider: String, api_key: String) -> Result<
 #[tauri::command]
 pub async fn provider_clear_credentials(provider: String) -> Result<(), String> {
     let meta = provider_meta(&provider).ok_or_else(|| format!("unknown provider: {provider}"))?;
-    for slot in ["api_key", "oauth_marker"] {
+    for slot in ["api_key", "oauth_marker", "oauth_token"] {
         if let Ok(entry) = keychain_entry(&provider, slot) {
             let _ = entry.delete_credential();
         }
     }
     if meta.supports_oauth {
-        if let Some(cli) = meta.cli {
+        if provider == "gajecode" {
+            if gajecode_cli_installed() {
+                if let Err(e) = run_gajecode_oauth_logout() {
+                    log::warn!("oauth logout during credential clear failed for {provider}: {e}");
+                }
+            }
+        } else if let Some(cli) = meta.cli {
             if which(cli) {
                 if let Err(e) = run_oauth_logout(&provider, cli) {
                     log::warn!("oauth logout during credential clear failed for {provider}: {e}");
@@ -767,7 +1667,12 @@ pub async fn provider_login_oauth(
     }
     let cli = meta.cli.ok_or("cli not configured")?;
     let cmd = meta.login_cmd.ok_or("login_cmd not configured")?;
-    if !which(cli) {
+    let cli_installed = if provider == "gajecode" {
+        gajecode_cli_installed()
+    } else {
+        which(cli)
+    };
+    if !cli_installed {
         return Err(format!("CLI '{cli}' is not installed"));
     }
     let force_login = force.unwrap_or(false);
@@ -796,18 +1701,32 @@ pub async fn provider_login_oauth(
     let login_args = oauth_login_args(&provider, cmd);
     let cmd_owned = login_args.join(" ");
     let command_label = format!("{cli_owned} {cmd_owned}");
-    let mut command = cli_command(&cli_owned);
+    let mut command = if provider == "gajecode" {
+        gajecode_isolated_cli_command()?
+    } else {
+        let mut command = cli_command(&cli_owned);
+        command.env("PATH", crate::augmented_cli_path());
+        command
+    };
     command
         .args(&login_args)
-        .env("PATH", crate::augmented_cli_path())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .stdin(Stdio::null());
+        .stdin(if provider == "claude" {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        });
     configure_background_command(&mut command);
     let mut child = command
         .spawn()
         .map_err(|e| format!("oauth spawn {cli_owned} {cmd_owned}: {e}"))?;
     let captured = Arc::new(Mutex::new(String::new()));
+    if provider == "claude" {
+        if let Some(stdin) = child.stdin.take() {
+            store_oauth_login_stdin(&provider_clone, stdin);
+        }
+    }
     if let Some(stdout) = child.stdout.take() {
         capture_login_pipe(stdout, captured.clone());
     }
@@ -835,7 +1754,8 @@ pub async fn provider_login_oauth(
         {
             Some(status) if status.success() => {
                 let _ = child.wait();
-                set_oauth_state(&provider_clone, true);
+                forget_oauth_login_stdin(&provider_clone);
+                mark_oauth_login_success(&provider_clone);
                 return Ok(ProviderLoginOauthResult {
                     provider,
                     command: command_label,
@@ -849,11 +1769,11 @@ pub async fn provider_login_oauth(
             }
             Some(status) => {
                 let _ = child.wait();
+                forget_oauth_login_stdin(&provider_clone);
                 thread::sleep(Duration::from_millis(80));
-                let detail =
-                    login_failure_detail_text(&captured_login_output(&captured))
-                        .trim()
-                        .to_string();
+                let detail = login_failure_detail_text(&captured_login_output(&captured))
+                    .trim()
+                    .to_string();
                 return Err(match detail {
                     detail if !detail.is_empty() => {
                         format!("{cli_owned} {cmd_owned} exited with {status}: {detail}")
@@ -872,9 +1792,11 @@ pub async fn provider_login_oauth(
 
     std::thread::spawn(move || match child.wait() {
         Ok(status) if status.success() => {
-            set_oauth_state(&provider_clone, true);
+            forget_oauth_login_stdin(&provider_clone);
+            mark_oauth_login_success(&provider_clone);
         }
         Ok(status) => {
+            forget_oauth_login_stdin(&provider_clone);
             let detail = login_failure_detail_text(&captured_login_output(&captured));
             if detail.trim().is_empty() {
                 log::warn!("{cli_owned} {cmd_owned} exited with {status}");
@@ -882,7 +1804,10 @@ pub async fn provider_login_oauth(
                 log::warn!("{cli_owned} {cmd_owned} exited with {status}: {detail}");
             }
         }
-        Err(e) => log::warn!("{cli_owned} wait: {e}"),
+        Err(e) => {
+            forget_oauth_login_stdin(&provider_clone);
+            log::warn!("{cli_owned} wait: {e}");
+        }
     });
     Ok(ProviderLoginOauthResult {
         provider,
@@ -897,9 +1822,33 @@ pub async fn provider_login_oauth(
         } else if login_url_detected {
             "OAuth login started, but Atelier could not open the browser automatically.".into()
         } else {
-            "OAuth login started. Atelier is watching the CLI output for a browser login URL.".into()
+            "OAuth login started. Atelier is watching the CLI output for a browser login URL."
+                .into()
         },
     })
+}
+
+#[tauri::command]
+pub async fn provider_submit_oauth_code(provider: String, code: String) -> Result<(), String> {
+    let code = code.trim();
+    if code.is_empty() {
+        return Err("authentication code is empty".into());
+    }
+    if code.len() > 4096 || code.chars().any(|c| c == '\n' || c == '\r') {
+        return Err("authentication code format is invalid".into());
+    }
+    let mut map = OAUTH_LOGIN_STDIN
+        .lock()
+        .map_err(|_| "login stdin lock poisoned".to_string())?;
+    let stdin = map.get_mut(&provider).ok_or_else(|| {
+        "No active OAuth login is waiting for an authentication code.".to_string()
+    })?;
+    stdin
+        .write_all(format!("{code}\n").as_bytes())
+        .map_err(|e| format!("write authentication code: {e}"))?;
+    stdin
+        .flush()
+        .map_err(|e| format!("flush authentication code: {e}"))
 }
 
 /// CLI 자동 설치 — npm 으로 claude-code / codex 를 글로벌 설치.
@@ -910,6 +1859,7 @@ pub async fn provider_install_cli(provider: String) -> Result<(), String> {
         "claude" => install_claude_cli(),
         "codex" => install_npm_cli("codex", "@openai/codex"),
         "hermes" => install_hermes_cli(),
+        "gajecode" => install_gajecode_cli(),
         _ => Err(format!("automatic install not available for {provider}")),
     }
 }
@@ -920,9 +1870,14 @@ fn spawn_cli_installer(
     after_success: Option<fn()>,
 ) -> Result<(), String> {
     configure_background_command(&mut command);
+    let has_explicit_path = command
+        .get_envs()
+        .any(|(key, value)| value.is_some() && key == OsStr::new("PATH"));
     std::thread::spawn(move || {
+        if !has_explicit_path {
+            command.env("PATH", crate::augmented_cli_path());
+        }
         match command
-            .env("PATH", crate::augmented_cli_path())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .stdin(Stdio::null())
@@ -1018,6 +1973,146 @@ fn install_hermes_cli() -> Result<(), String> {
         command.arg("-c").arg(HERMES_INSTALL_SH);
         spawn_cli_installer(command, "hermes", None)
     }
+}
+
+fn install_gajecode_cli() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("powershell.exe");
+        command
+            .arg("-NoProfile")
+            .arg("-WindowStyle")
+            .arg("Hidden")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-Command")
+            .arg(GAJAE_CODE_INSTALL_PS1);
+        configure_background_command(&mut command);
+        command
+    };
+
+    #[cfg(not(target_os = "windows"))]
+    let mut command = {
+        let mut command = Command::new("sh");
+        command.arg("-lc").arg(GAJAE_CODE_INSTALL_SH);
+        command
+    };
+
+    configure_gajecode_runtime_env(&mut command)?;
+    spawn_cli_installer(command, "gajecode", None)
+}
+
+#[derive(Serialize)]
+pub struct GajecodeUpdateStatus {
+    pub installed: bool,
+    pub current_version: Option<String>,
+    pub latest_version: Option<String>,
+    pub update_available: bool,
+    pub message: Option<String>,
+}
+
+fn first_semver_token(text: &str) -> Option<String> {
+    text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_'))
+        .map(str::trim)
+        .find(|token| token.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .map(|token| {
+            token
+                .trim_matches(|c: char| {
+                    !(c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
+                })
+                .to_string()
+        })
+        .filter(|token| !token.is_empty())
+}
+
+fn semver_parts(version: &str) -> Vec<u64> {
+    version
+        .split(|c: char| c == '.' || c == '-' || c == '_')
+        .filter_map(|part| part.parse::<u64>().ok())
+        .collect()
+}
+
+fn version_is_newer(latest: &str, current: &str) -> bool {
+    let latest_parts = semver_parts(latest);
+    let current_parts = semver_parts(current);
+    for index in 0..latest_parts.len().max(current_parts.len()) {
+        let left = *latest_parts.get(index).unwrap_or(&0);
+        let right = *current_parts.get(index).unwrap_or(&0);
+        if left != right {
+            return left > right;
+        }
+    }
+    false
+}
+
+fn read_gajecode_current_version() -> Option<String> {
+    let mut command = gajecode_isolated_cli_command().ok()?;
+    command
+        .arg("--version")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null());
+    configure_background_command(&mut command);
+    let output = command.output().ok()?;
+    let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
+    combined.push('\n');
+    combined.push_str(&String::from_utf8_lossy(&output.stderr));
+    first_semver_token(&combined)
+}
+
+fn read_gajecode_latest_version() -> Option<String> {
+    if !which("npm") {
+        return None;
+    }
+    let mut command = Command::new("npm");
+    command
+        .arg("view")
+        .arg(GAJAE_CODE_PACKAGE_NAME)
+        .arg("version")
+        .arg("--json")
+        .env("PATH", crate::augmented_cli_path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null());
+    configure_background_command(&mut command);
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let trimmed = raw.trim().trim_matches('"').to_string();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
+#[tauri::command]
+pub async fn gajecode_check_update() -> Result<GajecodeUpdateStatus, String> {
+    let installed = gajecode_cli_installed();
+    let current_version = installed.then(read_gajecode_current_version).flatten();
+    let latest_version = read_gajecode_latest_version();
+    let update_available = match (&latest_version, &current_version) {
+        (Some(latest), Some(current)) => version_is_newer(latest, current),
+        (Some(_), None) => installed,
+        _ => false,
+    };
+    let message = if !installed {
+        Some("가재코드 CLI가 설치되어 있지 않습니다.".to_string())
+    } else if latest_version.is_none() {
+        Some("npm에서 최신 버전을 확인하지 못했습니다.".to_string())
+    } else {
+        None
+    };
+    Ok(GajecodeUpdateStatus {
+        installed,
+        current_version,
+        latest_version,
+        update_available,
+        message,
+    })
+}
+
+#[tauri::command]
+pub async fn gajecode_update() -> Result<(), String> {
+    install_gajecode_cli()
 }
 
 #[derive(Serialize)]
@@ -1135,9 +2230,9 @@ pub fn read_api_key(provider: &str) -> Option<String> {
     if !meta.supports_api {
         return None;
     }
-    let entry = keychain_entry(provider, "api_key").ok()?;
-    let v = entry.get_password().ok()?;
-    if v.is_empty() {
+    let v = read_app_keychain_password(provider, "api_key")?;
+    let v = v.trim().to_string();
+    if v.is_empty() || !is_valid_api_key_for_provider(provider, &v) {
         None
     } else {
         Some(v)
@@ -1217,5 +2312,73 @@ mod tests {
         assert!(detail.contains("[credential output redacted]"));
         assert!(!detail.contains("code_challenge=secret"));
         assert!(!detail.contains("access_token=abc"));
+    }
+
+    #[test]
+    fn claude_oauth_token_parser_supports_legacy_and_keychain_shapes() {
+        let legacy = serde_json::json!({
+            "claudeAiOauth": {
+                "accessToken": "sk-ant-oat-legacy",
+                "expiresAt": chrono::Utc::now().timestamp_millis() + 120_000,
+                "subscriptionType": "max"
+            }
+        });
+        let keychain = serde_json::json!({
+            "claudeAiOauth": {
+                "accessToken": "sk-ant-oat-keychain",
+                "refreshToken": "redacted",
+                "expiresAt": (chrono::Utc::now().timestamp_millis() + 120_000).to_string(),
+                "subscriptionType": "max"
+            }
+        });
+
+        assert_eq!(
+            claude_oauth_token_from_value(&legacy),
+            Some("sk-ant-oat-legacy".into())
+        );
+        assert_eq!(
+            claude_oauth_token_from_value(&keychain),
+            Some("sk-ant-oat-keychain".into())
+        );
+    }
+
+    #[test]
+    fn claude_oauth_token_parser_rejects_expired_tokens() {
+        let value = serde_json::json!({
+            "claudeAiOauth": {
+                "accessToken": "sk-ant-oat-expired",
+                "refreshToken": "refresh-token",
+                "expiresAt": chrono::Utc::now().timestamp_millis() - 1
+            }
+        });
+
+        assert_eq!(claude_oauth_token_from_value(&value), None);
+        let credential = claude_oauth_credential_from_value(&value).unwrap();
+        assert_eq!(credential.access, "sk-ant-oat-expired");
+        assert_eq!(credential.refresh.as_deref(), Some("refresh-token"));
+        assert!(!credential.access_is_fresh());
+    }
+
+    #[test]
+    fn claude_oauth_credential_parser_supports_access_refresh_aliases() {
+        let value = serde_json::json!({
+            "oauth": {
+                "access": "sk-ant-oat-access",
+                "refresh": "refresh-token",
+                "expires": "1782709680730",
+                "scopes": ["org:create_api_key", "user:profile"],
+                "subscription_type": "max"
+            }
+        });
+
+        let credential = claude_oauth_credential_from_value(&value).unwrap();
+        assert_eq!(credential.access, "sk-ant-oat-access");
+        assert_eq!(credential.refresh.as_deref(), Some("refresh-token"));
+        assert_eq!(credential.expires, Some(1782709680730));
+        assert_eq!(
+            credential.scopes.as_deref(),
+            Some("org:create_api_key user:profile")
+        );
+        assert_eq!(credential.subscription_type.as_deref(), Some("max"));
     }
 }

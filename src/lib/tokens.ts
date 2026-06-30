@@ -44,17 +44,21 @@ export interface Profile {
   name: string;
   cmd: string;
   dot: string;
-  autoInstall?: "claude" | "hermes" | "codex";
+  autoInstall?: "claude" | "hermes" | "codex" | "gajecode";
+  sourceUrl?: string;
 }
 
 interface ProfileDef extends Profile {
   platforms: PlatformOS[];
 }
 
+export const GAJAE_CODE_REPO_URL = "https://github.com/Yeachan-Heo/gajae-code";
+
 const ALL_PROFILES: ProfileDef[] = [
   { id: "claude", name: "Claude Code", cmd: "claude", dot: "#c96442", autoInstall: "claude", platforms: ["macos", "windows", "linux"] },
   { id: "hermes", name: "Hermes", cmd: "hermes chat -m gpt-5.5 --max-turns 25", dot: "#8a8218", autoInstall: "hermes", platforms: ["macos", "windows", "linux"] },
   { id: "codex", name: "Codex CLI", cmd: "codex", dot: "#4b7bd1", autoInstall: "codex", platforms: ["macos", "windows", "linux"] },
+  { id: "gajecode", name: "가재코드", cmd: "gjc", dot: "#7a6f1a", autoInstall: "gajecode", sourceUrl: GAJAE_CODE_REPO_URL, platforms: ["macos", "windows", "linux"] },
   { id: "zsh", name: "Zsh", cmd: "zsh", dot: "#9aae63", platforms: ["macos", "linux"] },
   { id: "bash", name: "Bash", cmd: "bash", dot: "#6b9a4a", platforms: ["macos", "linux", "windows"] },
   { id: "pwsh", name: "PowerShell", cmd: "pwsh", dot: "#4b7bd1", platforms: ["windows", "macos", "linux"] },
@@ -67,10 +71,13 @@ export const PROFILES: Profile[] = ALL_PROFILES
   .filter((p) => p.platforms.includes(PLATFORM))
   .map(({ platforms: _platforms, ...rest }) => rest);
 
-const CORE_PROFILE_IDS = ["claude", "hermes", "codex"];
+const CORE_PROFILE_IDS = ["claude", "hermes", "codex", "gajecode"];
 
 function migrateLegacyProfileCommand(profile: Profile): Profile {
   const command = profile.cmd.trim().replace(/\s+/g, " ");
+  if (profile.id === "gajecode" && /^(cmd|cmdc|command-code)$/i.test(command)) {
+    return { ...profile, cmd: "gjc", sourceUrl: profile.sourceUrl || GAJAE_CODE_REPO_URL };
+  }
   const legacyHermesCodexModel = /^hermes chat -m gpt-5\.(?:2|3-codex|4|4-mini) --max-turns 25$/;
   if (command === "hermes" || legacyHermesCodexModel.test(command)) {
     const hermesDefault = PROFILES.find((p) => p.id === "hermes");
