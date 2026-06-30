@@ -7,6 +7,15 @@ export interface PtySpawnResult {
   log_id: string;
 }
 
+export interface RuntimeInstallInfo {
+  exe_path: string;
+  windows_store_like: boolean;
+}
+
+export async function runtimeInstallInfo(): Promise<RuntimeInstallInfo> {
+  return invoke("runtime_install_info");
+}
+
 export async function ptySpawn(
   profile: string,
   cols: number,

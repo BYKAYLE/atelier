@@ -7,6 +7,7 @@ const releaseOwner = process.env.RELEASE_OWNER;
 const releaseRepo = process.env.RELEASE_REPO;
 const releaseTag = process.env.RELEASE_TAG ?? process.env.GITHUB_REF_NAME;
 const preferWindowsInstaller = process.env.PREFER_WINDOWS_INSTALLER ?? 'nsis';
+const includeGenericWindowsTarget = process.env.INCLUDE_WINDOWS_GENERIC_TARGET === 'true';
 
 if (!releaseOwner || !releaseRepo || !releaseTag) {
   throw new Error('RELEASE_OWNER, RELEASE_REPO and RELEASE_TAG/GITHUB_REF_NAME are required');
@@ -84,10 +85,14 @@ for (const entry of entries) {
   };
 }
 
-const preferred = entries.find((entry) => entry.bundle === preferWindowsInstaller) ?? entries[0];
-latest.platforms['windows-x86_64'] = {
-  signature: preferred.signature,
-  url: preferred.url,
-};
+delete latest.platforms['windows-x86_64'];
+
+if (includeGenericWindowsTarget) {
+  const preferred = entries.find((entry) => entry.bundle === preferWindowsInstaller) ?? entries[0];
+  latest.platforms['windows-x86_64'] = {
+    signature: preferred.signature,
+    url: preferred.url,
+  };
+}
 
 writeFileSync(latestJsonPath, `${JSON.stringify(latest, null, 2)}\n`);

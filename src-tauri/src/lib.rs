@@ -92,6 +92,32 @@ struct DirEntry {
     size: u64,
 }
 
+#[derive(Serialize)]
+struct RuntimeInstallInfo {
+    exe_path: String,
+    windows_store_like: bool,
+}
+
+#[tauri::command]
+async fn runtime_install_info() -> std::result::Result<RuntimeInstallInfo, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+    let exe_path = exe.to_string_lossy().into_owned();
+
+    #[cfg(target_os = "windows")]
+    let windows_store_like = {
+        let lower = exe_path.to_ascii_lowercase().replace('/', "\\");
+        lower.contains("\\windowsapps\\")
+    };
+
+    #[cfg(not(target_os = "windows"))]
+    let windows_store_like = false;
+
+    Ok(RuntimeInstallInfo {
+        exe_path,
+        windows_store_like,
+    })
+}
+
 /// 사용자 HOME 디렉토리를 root로 간주하는 sandbox. 입력 경로가 HOME 하위가 아니면 거부.
 /// symlink는 canonicalize 결과로 평가되어 외부로 탈출 불가.
 fn sandbox_path(input: &str) -> std::result::Result<std::path::PathBuf, String> {
@@ -753,6 +779,7 @@ pub fn run() {
             pty::session_log_clear,
             clipboard::clipboard_save_image,
             dump_debug,
+            runtime_install_info,
             list_dir,
             read_text_file,
             home_dir,

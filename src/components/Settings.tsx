@@ -9,6 +9,7 @@ import {
   Tweaks,
   WELCOME_COPY,
 } from "../lib/tokens";
+import { runtimeInstallInfo, type RuntimeInstallInfo } from "../lib/tauri";
 import ConnectionsPanel from "./ConnectionsPanel";
 
 interface Props {
@@ -1135,6 +1136,45 @@ async function fetchLatestGithubRelease(): Promise<GithubReleaseInfo> {
   return githubReleaseFromJson(json, ATELIER_GITHUB_RELEASES);
 }
 
+interface UpdateInstallInfo extends RuntimeInstallInfo {
+  bundleType?: string | null;
+}
+
+function isWindowsRuntime(): boolean {
+  return /Windows/i.test(window.navigator.userAgent);
+}
+
+async function readUpdateInstallInfo(): Promise<UpdateInstallInfo> {
+  const [runtime, bundleType] = await Promise.all([
+    runtimeInstallInfo().catch(() => ({
+      exe_path: "",
+      windows_store_like: false,
+    })),
+    import("@tauri-apps/api/app")
+      .then((m) => m.getBundleType())
+      .catch(() => null),
+  ]);
+  return {
+    ...runtime,
+    bundleType: typeof bundleType === "string" ? bundleType : null,
+  };
+}
+
+function windowsUpdaterTarget(info: UpdateInstallInfo | null): string | null | undefined {
+  if (!isWindowsRuntime()) return undefined;
+  const bundleType = info?.bundleType?.toLowerCase();
+  if (bundleType === "msi") return "windows-x86_64-msi";
+  if (bundleType === "nsis") return "windows-x86_64-nsis";
+  return null;
+}
+
+function canUseInAppUpdater(info: UpdateInstallInfo | null): boolean {
+  if (!isWindowsRuntime()) return true;
+  if (!info) return false;
+  if (info.windows_store_like) return false;
+  return windowsUpdaterTarget(info) !== null;
+}
+
 /**
  * UpdatesSection — GitHub Releases 기준.
  * 업데이트 유무는 GitHub 최신 릴리스 태그로 판단하고,
@@ -1150,6 +1190,10 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
         sub: "Checks GitHub Releases for new Atelier versions. Install packages are verified with an ED25519 signature.",
         currentVersion: "Current version",
         patchedAt: "Patched",
+        installChannel: "Install channel",
+        detectingChannel: "Detecting...",
+        unknownChannel: "Unknown Windows package",
+        storeChannel: "Microsoft Store / WindowsApps",
         check: "Check for updates",
         checking: "Checking...",
         checkNow: "Check now",
@@ -1167,6 +1211,8 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
           `Download ${pct}% (${downloaded.toFixed(1)}MB / ${total.toFixed(1)}MB)`,
         installed: "Install complete. Restarting...",
         installFailed: (message: string) => `Install failed: ${message}`,
+        unsupportedInstall:
+          "This install channel cannot be replaced safely by the GitHub updater. Open the GitHub release and install the matching package, or update from Microsoft Store if this is the Store build.",
         availableTitle: (version: string) => `v${version} available`,
         installing: "Installing...",
         install: "Install + restart",
@@ -1178,6 +1224,10 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
         sub: "GitHub Releases 기준으로 Atelier 새 버전을 확인합니다. 설치 패키지는 ED25519 서명으로 검증됩니다.",
         currentVersion: "현재 버전",
         patchedAt: "패치일",
+        installChannel: "설치 채널",
+        detectingChannel: "확인 중…",
+        unknownChannel: "알 수 없는 Windows 패키지",
+        storeChannel: "Microsoft Store / WindowsApps",
         check: "업데이트 확인",
         checking: "확인 중…",
         checkNow: "지금 확인",
@@ -1195,6 +1245,8 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
           `다운로드 ${pct}% (${downloaded.toFixed(1)}MB / ${total.toFixed(1)}MB)`,
         installed: "설치 완료. 재시작 중…",
         installFailed: (message: string) => `설치 실패: ${message}`,
+        unsupportedInstall:
+          "현재 설치 채널은 GitHub updater로 안전하게 덮어쓸 수 없습니다. GitHub 릴리스에서 현재 채널과 맞는 설치 파일을 직접 설치하거나, Store 설치본이면 Microsoft Store 업데이트를 사용해야 합니다.",
         availableTitle: (version: string) => `v${version} 사용 가능`,
         installing: "설치 중…",
         install: "지금 설치 + 재시작",
@@ -1214,6 +1266,16 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
   const [currentVersion, setCurrentVersion] = React.useState<string>("...");
   const [currentVersionRaw, setCurrentVersionRaw] = React.useState<string>("");
   const [currentPatchDate, setCurrentPatchDate] = React.useState<string>("");
+  const [installInfo, setInstallInfo] = React.useState<UpdateInstallInfo | null>(null);
+  const updateInstallUnsupported = isWindowsRuntime() && !!installInfo && !canUseInAppUpdater(installInfo);
+
+  const installChannelLabel = React.useMemo(() => {
+    if (!installInfo) return copy.detectingChannel;
+    if (installInfo.windows_store_like) return copy.storeChannel;
+    const bundleType = installInfo.bundleType?.toUpperCase();
+    if (isWindowsRuntime()) return bundleType || copy.unknownChannel;
+    return bundleType || "APP";
+  }, [copy.detectingChannel, copy.storeChannel, copy.unknownChannel, installInfo]);
 
   React.useEffect(() => {
     let alive = true;
@@ -1235,6 +1297,20 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
         if (alive) setCurrentVersion("dev");
       }
     })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    let alive = true;
+    readUpdateInstallInfo()
+      .then((info) => {
+        if (alive) setInstallInfo(info);
+      })
+      .catch(() => {
+        if (alive) setInstallInfo(null);
+      });
     return () => {
       alive = false;
     };
@@ -1263,7 +1339,13 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
     } catch (e) {
       try {
         const { check } = await import("@tauri-apps/plugin-updater");
-        const update = await check();
+        const target = windowsUpdaterTarget(installInfo);
+        if (target === null || (installInfo?.windows_store_like ?? false)) {
+          setError(copy.checkFailed(copy.unsupportedInstall));
+          setStatus("");
+          return;
+        }
+        const update = await check(target ? { target } : undefined);
         if (update) {
           setAvailable({
             version: update.version,
@@ -1289,8 +1371,19 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
     setError(null);
     setStatus(copy.installingStatus);
     try {
+      let activeInstallInfo = installInfo;
+      if (isWindowsRuntime() && !activeInstallInfo) {
+        activeInstallInfo = await readUpdateInstallInfo();
+        setInstallInfo(activeInstallInfo);
+      }
+      const target = windowsUpdaterTarget(activeInstallInfo);
+      if (target === null || (activeInstallInfo?.windows_store_like ?? false)) {
+        setError(copy.installFailed(copy.unsupportedInstall));
+        setStatus("");
+        return;
+      }
       const { check } = await import("@tauri-apps/plugin-updater");
-      const update = await check();
+      const update = await check(target ? { target } : undefined);
       if (!update) {
         setError(available ? copy.signedPackageMissing(available.version) : copy.noUpdateOnRetry);
         return;
@@ -1310,8 +1403,10 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
           setStatus(copy.installed);
         }
       });
-      const { relaunch } = await import("@tauri-apps/plugin-process");
-      await relaunch();
+      if (!isWindowsRuntime()) {
+        const { relaunch } = await import("@tauri-apps/plugin-process");
+        await relaunch();
+      }
     } catch (e) {
       setError(copy.installFailed(String(e)));
       setStatus("");
@@ -1350,6 +1445,14 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
               {copy.patchedAt} {formatReleaseDate(currentPatchDate, language)}
             </div>
           )}
+        </div>
+      </Row>
+      <Row
+        dark={dark}
+        label={copy.installChannel}
+      >
+        <div className={cls("text-right text-[12px] font-mono", dark ? "text-dink" : "text-ink")}>
+          {installChannelLabel}
         </div>
       </Row>
       <Row
@@ -1411,10 +1514,15 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
               {available.notes}
             </pre>
           )}
+          {updateInstallUnsupported && (
+            <div className="mb-3 p-3 rounded-[6px] border border-red-300/40 bg-red-50/10 text-[12px] text-red-500">
+              {copy.unsupportedInstall}
+            </div>
+          )}
           <button
             type="button"
             onClick={installAndRestart}
-            disabled={installing}
+            disabled={installing || updateInstallUnsupported}
             className="h-9 px-4 rounded-[6px] text-[12px] font-medium text-white whitespace-nowrap disabled:opacity-40"
             style={{ background: "#c96442" }}
             data-testid="settings-install-update"
