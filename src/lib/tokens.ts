@@ -71,7 +71,8 @@ export const PROFILES: Profile[] = ALL_PROFILES
   .filter((p) => p.platforms.includes(PLATFORM))
   .map(({ platforms: _platforms, ...rest }) => rest);
 
-const CORE_PROFILE_IDS = ["claude", "hermes", "codex", "gajecode"];
+export const FIXED_PROFILE_IDS = ["claude", "codex", "hermes", "gajecode"] as const;
+const FIXED_PROFILE_ID_SET = new Set<string>(FIXED_PROFILE_IDS);
 
 function migrateLegacyProfileCommand(profile: Profile): Profile {
   const command = profile.cmd.trim().replace(/\s+/g, " ");
@@ -88,16 +89,18 @@ function migrateLegacyProfileCommand(profile: Profile): Profile {
 
 export function mergeDefaultProfiles(profiles: Profile[]): Profile[] {
   const defaultsById = new Map(PROFILES.map((p) => [p.id, p]));
-  const merged = profiles.map((input) => {
-    const p = migrateLegacyProfileCommand(input);
-    const def = defaultsById.get(p.id);
-    return def ? { ...def, ...p, autoInstall: p.autoInstall ?? def.autoInstall } : p;
-  });
-  const present = new Set(merged.map((p) => p.id));
-  for (const id of CORE_PROFILE_IDS) {
-    if (present.has(id)) continue;
+  const inputsById = new Map(
+    profiles
+      .map((input) => migrateLegacyProfileCommand(input))
+      .filter((p) => FIXED_PROFILE_ID_SET.has(p.id))
+      .map((p) => [p.id, p]),
+  );
+  const merged: Profile[] = [];
+  for (const id of FIXED_PROFILE_IDS) {
     const def = defaultsById.get(id);
-    if (def) merged.push(def);
+    if (!def) continue;
+    const saved = inputsById.get(id);
+    merged.push(saved ? { ...def, ...saved, autoInstall: saved.autoInstall ?? def.autoInstall } : def);
   }
   return merged;
 }
@@ -124,7 +127,7 @@ export const DEFAULT_TWEAKS: Tweaks = {
   welcomeSub: WELCOME_COPY.ko.sub,
   density: "cozy",
   cursorStyle: "block",
-  profiles: PROFILES.filter((p) => p.id !== "custom"),
+  profiles: PROFILES.filter((p) => FIXED_PROFILE_ID_SET.has(p.id)),
 };
 
 export const cls = (...a: Array<string | false | null | undefined>) =>

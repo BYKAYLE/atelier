@@ -299,8 +299,6 @@ const AppearanceSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => v
   );
 };
 
-const DEFAULT_DOTS = ["#c96442", "#9aae63", "#4b7bd1", "#8a8218", "#6b9a4a", "#b08a4a", "#3d8d87"];
-
 const ProfilesSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => void }> = ({
   tw,
   setTw,
@@ -310,53 +308,25 @@ const ProfilesSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => voi
   const copy = tw.language === "en"
     ? {
         title: "Profiles",
-        sub: "Register the CLIs you use often. Add with + and remove with x.",
-        removeFallback: "this profile",
-        removeConfirm: (label: string) =>
-          `Delete "${label}" profile?\nTabs opened with this profile stay open, but you cannot create new ones until it is registered again.`,
+        sub: "Atelier shows the four supported CLI profiles after GitHub updates.",
         colorDot: "Color dot",
         name: "Name",
         command: "Command (e.g. claude, python3)",
         source: "Source",
-        minOne: "At least one is required",
-        remove: "Remove",
-        add: "+ Add profile",
-        newProfile: "New profile",
       }
     : {
         title: "프로필",
-        sub: "자주 쓰는 CLI를 등록하세요. + 버튼으로 추가, ✕ 버튼으로 삭제할 수 있습니다.",
-        removeFallback: "이 프로필",
-        removeConfirm: (label: string) =>
-          `"${label}" 프로필을 삭제하시겠습니까?\n이 프로필로 열려 있는 탭은 유지되지만, 재등록 전까지 새로 열 수 없습니다.`,
+        sub: "GitHub 최신 패치 후에도 지원하는 CLI 프로필 4개만 표시합니다.",
         colorDot: "색 도트",
         name: "이름",
         command: "실행 명령 (예: claude, python3)",
         source: "원본",
-        minOne: "최소 1개 필요",
-        remove: "삭제",
-        add: "+ 프로필 추가",
-        newProfile: "새 프로필",
       };
 
   const updateProfile = (idx: number, patch: Partial<Profile>) => {
     const next = profiles.map((p, i) => (i === idx ? { ...p, ...patch } : p));
     setTw({ profiles: next });
   };
-  const removeProfile = (idx: number) => {
-    if (profiles.length <= 1) return;
-    const target = profiles[idx];
-    const label = target?.name?.trim() || copy.removeFallback;
-    const ok = window.confirm(copy.removeConfirm(label));
-    if (!ok) return;
-    setTw({ profiles: profiles.filter((_, i) => i !== idx) });
-  };
-  const addProfile = () => {
-    const dot = DEFAULT_DOTS[profiles.length % DEFAULT_DOTS.length];
-    const id = `custom-${Date.now().toString(36)}`;
-    setTw({ profiles: [...profiles, { id, name: copy.newProfile, cmd: "", dot }] });
-  };
-
   return (
     <>
       <SectionHeader
@@ -423,36 +393,8 @@ const ProfilesSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => voi
                 </a>
               )}
             </div>
-            <button
-              type="button"
-              onClick={() => removeProfile(i)}
-              disabled={profiles.length <= 1}
-              className={cls(
-                "shrink-0 h-7 w-7 rounded-[6px] text-[13px] transition-colors",
-                profiles.length <= 1
-                  ? "opacity-30 cursor-not-allowed"
-                  : dark
-                    ? "text-dsub hover:bg-[#3d3d3b] hover:text-dink"
-                    : "text-sub hover:bg-line hover:text-ink",
-              )}
-              title={profiles.length <= 1 ? copy.minOne : copy.remove}
-            >
-              ✕
-            </button>
           </div>
         ))}
-        <div className={cls("px-4 h-12 flex items-center", dark ? "border-t border-dline" : "border-t border-line")}>
-          <button
-            type="button"
-            onClick={addProfile}
-            className={cls(
-              "h-8 px-3 rounded-[6px] text-[12.5px] font-medium transition-colors",
-              dark ? "text-dsub hover:bg-dmuted hover:text-dink" : "text-sub hover:bg-muted hover:text-ink",
-            )}
-          >
-            {copy.add}
-          </button>
-        </div>
       </div>
     </>
   );
