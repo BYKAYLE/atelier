@@ -7,7 +7,10 @@ const releaseOwner = process.env.RELEASE_OWNER;
 const releaseRepo = process.env.RELEASE_REPO;
 const releaseTag = process.env.RELEASE_TAG ?? process.env.GITHUB_REF_NAME;
 const preferWindowsInstaller = process.env.PREFER_WINDOWS_INSTALLER ?? 'nsis';
-const includeGenericWindowsTarget = process.env.INCLUDE_WINDOWS_GENERIC_TARGET === 'true';
+// Keep the generic Windows target for already-installed Atelier builds that
+// still use Tauri's default `windows-x86_64` updater platform. Newer builds pass
+// explicit MSI/NSIS targets, but older builds cannot update without this entry.
+const includeGenericWindowsTarget = process.env.INCLUDE_WINDOWS_GENERIC_TARGET !== 'false';
 
 if (!releaseOwner || !releaseRepo || !releaseTag) {
   throw new Error('RELEASE_OWNER, RELEASE_REPO and RELEASE_TAG/GITHUB_REF_NAME are required');
