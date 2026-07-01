@@ -378,6 +378,74 @@ fn spawn_background_null(mut command: Command) -> bool {
         .is_ok()
 }
 
+fn oauth_browser_helper_path() -> Option<PathBuf> {
+    let dir = std::env::temp_dir().join("atelier-oauth-browser");
+    std::fs::create_dir_all(&dir).ok()?;
+
+    #[cfg(target_os = "windows")]
+    {
+        let path = dir.join("open-url.cmd");
+        let script = r#"@echo off
+setlocal
+set "url=%~1"
+if "%url%"=="" exit /b 0
+start "" "%url%"
+exit /b 0
+"#;
+        std::fs::write(&path, script).ok()?;
+        Some(path)
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let path = dir.join("open-url.sh");
+        let script = r#"#!/bin/sh
+url="$1"
+[ -n "$url" ] || exit 0
+/usr/bin/open "$url" >/dev/null 2>&1
+exit 0
+"#;
+        std::fs::write(&path, script).ok()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&path).ok()?.permissions();
+            perms.set_mode(0o700);
+            let _ = std::fs::set_permissions(&path, perms);
+        }
+        Some(path)
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let path = dir.join("open-url.sh");
+        let script = r#"#!/bin/sh
+url="$1"
+[ -n "$url" ] || exit 0
+xdg-open "$url" >/dev/null 2>&1
+exit 0
+"#;
+        std::fs::write(&path, script).ok()?;
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&path).ok()?.permissions();
+        perms.set_mode(0o700);
+        let _ = std::fs::set_permissions(&path, perms);
+        Some(path)
+    }
+}
+
+fn configure_login_browser_env_for_command(command: &mut Command) {
+    if let Some(helper) = oauth_browser_helper_path() {
+        command.env("BROWSER", helper);
+    }
+}
+
+fn configure_login_browser_env_for_pty(cmd: &mut CommandBuilder) {
+    if let Some(helper) = oauth_browser_helper_path() {
+        cmd.env("BROWSER", helper.to_string_lossy().into_owned());
+    }
+}
+
 fn open_login_url_in_browser(url: &str) -> bool {
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return false;
@@ -476,6 +544,7 @@ fn configure_login_pty_env(cmd: &mut CommandBuilder) {
     cmd.env("COLORTERM", "truecolor");
     cmd.env("LANG", "en_US.UTF-8");
     cmd.env("LC_CTYPE", "en_US.UTF-8");
+    configure_login_browser_env_for_pty(cmd);
 }
 
 fn extract_claude_oauth_token_from_text(text: &str) -> Option<String> {
@@ -2027,6 +2096,7 @@ pub async fn provider_login_oauth(
             } else {
                 Stdio::null()
             });
+        configure_login_browser_env_for_command(&mut command);
         configure_background_command(&mut command);
         let mut child = command
             .spawn()
