@@ -4,6 +4,7 @@
 
 use keyring::Entry;
 use once_cell::sync::Lazy;
+use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -19,7 +20,13 @@ const SERVICE: &str = "com.atelier.app";
 const HERMES_INSTALL_SH: &str =
     "curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- --skip-setup";
 const GAJAE_CODE_PACKAGE_NAME: &str = "gajae-code";
-static OAUTH_LOGIN_STDIN: Lazy<Mutex<HashMap<String, ChildStdin>>> =
+
+enum OAuthLoginInput {
+    Process(ChildStdin),
+    Pty(Box<dyn Write + Send>),
+}
+
+static OAUTH_LOGIN_STDIN: Lazy<Mutex<HashMap<String, OAuthLoginInput>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 #[cfg(target_os = "windows")]
 const HERMES_INSTALL_PS1: &str =
@@ -230,7 +237,13 @@ fn captured_login_output(captured: &Arc<Mutex<String>>) -> String {
 
 fn store_oauth_login_stdin(provider: &str, stdin: ChildStdin) {
     if let Ok(mut map) = OAUTH_LOGIN_STDIN.lock() {
-        map.insert(provider.to_string(), stdin);
+        map.insert(provider.to_string(), OAuthLoginInput::Process(stdin));
+    }
+}
+
+fn store_oauth_login_pty_writer(provider: &str, writer: Box<dyn Write + Send>) {
+    if let Ok(mut map) = OAUTH_LOGIN_STDIN.lock() {
+        map.insert(provider.to_string(), OAuthLoginInput::Pty(writer));
     }
 }
 
@@ -318,6 +331,36 @@ fn watch_and_open_login_url(captured: Arc<Mutex<String>>) {
             thread::sleep(Duration::from_millis(250));
         }
     });
+}
+
+fn claude_oauth_login_command(cli: &str, login_args: &[&str]) -> CommandBuilder {
+    #[cfg(target_os = "windows")]
+    {
+        // npm-installed CLIs are commonly .cmd shims on Windows. Running through
+        // cmd.exe inside the PTY avoids Win32 executable errors while still
+        // keeping the console hidden from the user.
+        let mut cmd = CommandBuilder::new("cmd.exe");
+        cmd.args(["/D", "/C", cli]);
+        cmd.args(login_args);
+        configure_login_pty_env(&mut cmd);
+        cmd
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let mut cmd = CommandBuilder::new(cli);
+        cmd.args(login_args);
+        configure_login_pty_env(&mut cmd);
+        cmd
+    }
+}
+
+fn configure_login_pty_env(cmd: &mut CommandBuilder) {
+    cmd.env("PATH", crate::augmented_cli_path());
+    cmd.env("TERM", "xterm");
+    cmd.env("COLORTERM", "truecolor");
+    cmd.env("LANG", "en_US.UTF-8");
+    cmd.env("LC_CTYPE", "en_US.UTF-8");
 }
 
 fn extract_claude_oauth_token_from_text(text: &str) -> Option<String> {
@@ -1712,6 +1755,147 @@ pub async fn provider_login_oauth(
         let provider_clone = provider.clone();
         let cmd_owned = login_args.join(" ");
         let command_label = format!("{cli_owned} {cmd_owned}");
+        if provider == "claude" {
+            let pty_system = NativePtySystem::default();
+            let pair = pty_system
+                .openpty(PtySize {
+                    rows: 24,
+                    cols: 120,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .map_err(|e| format!("oauth openpty {cli_owned} {cmd_owned}: {e}"))?;
+            let cmd = claude_oauth_login_command(&cli_owned, &login_args);
+            let mut child = pair
+                .slave
+                .spawn_command(cmd)
+                .map_err(|e| format!("oauth spawn {cli_owned} {cmd_owned}: {e}"))?;
+            drop(pair.slave);
+
+            let captured = Arc::new(Mutex::new(String::new()));
+            let reader = pair
+                .master
+                .try_clone_reader()
+                .map_err(|e| format!("oauth clone reader {cli_owned} {cmd_owned}: {e}"))?;
+            let writer = pair
+                .master
+                .take_writer()
+                .map_err(|e| format!("oauth take writer {cli_owned} {cmd_owned}: {e}"))?;
+            store_oauth_login_pty_writer(&provider_clone, writer);
+            capture_login_pipe(reader, captured.clone());
+
+            let started = Instant::now();
+            let mut browser_opened = false;
+            let mut login_url_detected = false;
+            loop {
+                if !login_url_detected {
+                    let output = captured_login_output(&captured);
+                    if let Some(url) = extract_login_url(&output) {
+                        login_url_detected = true;
+                        browser_opened = open_login_url_in_browser(&url);
+                    }
+                }
+
+                match child
+                    .try_wait()
+                    .map_err(|e| format!("{cli_owned} {cmd_owned} poll: {e}"))?
+                {
+                    Some(status) if status.success() => {
+                        let _ = child.wait();
+                        forget_oauth_login_stdin(&provider_clone);
+                        mark_oauth_login_success(&provider_clone);
+                        return Ok(ProviderLoginOauthResult {
+                            provider,
+                            command: command_label,
+                            started: true,
+                            completed: true,
+                            already_logged_in: false,
+                            browser_opened,
+                            login_url_detected,
+                            message: "OAuth login command completed.".into(),
+                        });
+                    }
+                    Some(status) => {
+                        let _ = child.wait();
+                        forget_oauth_login_stdin(&provider_clone);
+                        thread::sleep(Duration::from_millis(80));
+                        let detail = login_failure_detail_text(&captured_login_output(&captured))
+                            .trim()
+                            .to_string();
+                        let failure = match detail {
+                            detail if !detail.is_empty() => {
+                                format!("{cli_owned} {cmd_owned} exited with {status:?}: {detail}")
+                            }
+                            _ => format!("{cli_owned} {cmd_owned} exited with {status:?}"),
+                        };
+                        if attempt_index + 1 < attempt_count {
+                            log::warn!(
+                                "oauth login attempt failed for {provider} ({cmd_owned}); trying fallback: {failure}"
+                            );
+                            last_failure = Some(failure);
+                            break;
+                        }
+                        return Err(failure);
+                    }
+                    None if started.elapsed() >= Duration::from_millis(1500) => {
+                        if !login_url_detected {
+                            watch_and_open_login_url(captured.clone());
+                        }
+
+                        let master = pair.master;
+                        std::thread::spawn(move || {
+                            let _keep_master_alive = master;
+                            match child.wait() {
+                                Ok(status) if status.success() => {
+                                    forget_oauth_login_stdin(&provider_clone);
+                                    mark_oauth_login_success(&provider_clone);
+                                }
+                                Ok(status) => {
+                                    forget_oauth_login_stdin(&provider_clone);
+                                    let detail = login_failure_detail_text(&captured_login_output(
+                                        &captured,
+                                    ));
+                                    if detail.trim().is_empty() {
+                                        log::warn!(
+                                            "{cli_owned} {cmd_owned} exited with {status:?}"
+                                        );
+                                    } else {
+                                        log::warn!(
+                                            "{cli_owned} {cmd_owned} exited with {status:?}: {detail}"
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    forget_oauth_login_stdin(&provider_clone);
+                                    log::warn!("{cli_owned} wait: {e}");
+                                }
+                            }
+                        });
+                        return Ok(ProviderLoginOauthResult {
+                            provider,
+                            command: command_label,
+                            started: true,
+                            completed: false,
+                            already_logged_in: false,
+                            browser_opened,
+                            login_url_detected,
+                            message: if browser_opened {
+                                "OAuth login started and the browser was opened.".into()
+                            } else if login_url_detected {
+                                "OAuth login started, but Atelier could not open the browser automatically.".into()
+                            } else {
+                                "OAuth login started. Atelier is waiting for the CLI browser code."
+                                    .into()
+                            },
+                        });
+                    }
+                    None => thread::sleep(Duration::from_millis(80)),
+                }
+            }
+
+            continue;
+        }
+
         let mut command = if provider == "gajecode" {
             gajecode_isolated_cli_command()?
         } else {
@@ -1868,12 +2052,25 @@ pub async fn provider_submit_oauth_code(provider: String, code: String) -> Resul
     let stdin = map.get_mut(&provider).ok_or_else(|| {
         "No active OAuth login is waiting for an authentication code.".to_string()
     })?;
-    stdin
-        .write_all(format!("{code}\n").as_bytes())
-        .map_err(|e| format!("write authentication code: {e}"))?;
-    stdin
-        .flush()
-        .map_err(|e| format!("flush authentication code: {e}"))
+    let line = format!("{code}\n");
+    match stdin {
+        OAuthLoginInput::Process(stdin) => {
+            stdin
+                .write_all(line.as_bytes())
+                .map_err(|e| format!("write authentication code: {e}"))?;
+            stdin
+                .flush()
+                .map_err(|e| format!("flush authentication code: {e}"))
+        }
+        OAuthLoginInput::Pty(writer) => {
+            writer
+                .write_all(line.as_bytes())
+                .map_err(|e| format!("write authentication code: {e}"))?;
+            writer
+                .flush()
+                .map_err(|e| format!("flush authentication code: {e}"))
+        }
+    }
 }
 
 /// CLI 자동 설치 — npm 으로 claude-code / codex 를 글로벌 설치.
