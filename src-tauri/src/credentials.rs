@@ -180,6 +180,10 @@ fn oauth_login_attempts(provider: &str, fallback_cmd: &'static str) -> Vec<Vec<&
     }
 }
 
+fn oauth_login_uses_pty(provider: &str) -> bool {
+    matches!(provider, "claude" | "codex")
+}
+
 fn redact_login_output(text: &str) -> String {
     text.lines()
         .map(str::trim)
@@ -218,7 +222,46 @@ fn login_failure_detail_text(text: &str) -> String {
     }
 }
 
+fn strip_ansi_sequences(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch != '\u{1b}' {
+            if !ch.is_control() || matches!(ch, '\n' | '\r' | '\t') {
+                out.push(ch);
+            }
+            continue;
+        }
+
+        match chars.peek().copied() {
+            Some('[') => {
+                chars.next();
+                for code in chars.by_ref() {
+                    if ('@'..='~').contains(&code) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                chars.next();
+                let mut previous = '\0';
+                for code in chars.by_ref() {
+                    if code == '\u{7}' || (previous == '\u{1b}' && code == '\\') {
+                        break;
+                    }
+                    previous = code;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    out
+}
+
 fn extract_login_url(text: &str) -> Option<String> {
+    let text = strip_ansi_sequences(text);
     text.split_whitespace().find_map(|token| {
         let trimmed = token.trim_matches(|c: char| {
             matches!(
@@ -277,13 +320,29 @@ where
     });
 }
 
+fn spawn_background_null(mut command: Command) -> bool {
+    configure_background_command(&mut command);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .is_ok()
+}
+
 fn open_login_url_in_browser(url: &str) -> bool {
     if !(url.starts_with("https://") || url.starts_with("http://")) {
         return false;
     }
 
     #[cfg(target_os = "windows")]
-    let mut command = {
+    {
+        let mut command = Command::new("cmd.exe");
+        command.args(["/D", "/C", "start", "", url]);
+        if spawn_background_null(command) {
+            return true;
+        }
+
         let mut command = Command::new("powershell.exe");
         command.args([
             "-NoProfile",
@@ -293,30 +352,22 @@ fn open_login_url_in_browser(url: &str) -> bool {
             "Start-Process -FilePath $args[0]",
             url,
         ]);
-        command
-    };
+        return spawn_background_null(command);
+    }
 
     #[cfg(target_os = "macos")]
-    let mut command = {
+    {
         let mut command = Command::new("open");
         command.arg(url);
-        command
-    };
+        return spawn_background_null(command);
+    }
 
     #[cfg(all(unix, not(target_os = "macos")))]
-    let mut command = {
+    {
         let mut command = Command::new("xdg-open");
         command.arg(url);
-        command
-    };
-
-    configure_background_command(&mut command);
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .is_ok()
+        return spawn_background_null(command);
+    }
 }
 
 fn watch_and_open_login_url(captured: Arc<Mutex<String>>) {
@@ -333,7 +384,7 @@ fn watch_and_open_login_url(captured: Arc<Mutex<String>>) {
     });
 }
 
-fn claude_oauth_login_command(cli: &str, login_args: &[&str]) -> CommandBuilder {
+fn oauth_pty_login_command(cli: &str, login_args: &[&str]) -> CommandBuilder {
     #[cfg(target_os = "windows")]
     {
         // npm-installed CLIs are commonly .cmd shims on Windows. Running through
@@ -1755,7 +1806,7 @@ pub async fn provider_login_oauth(
         let provider_clone = provider.clone();
         let cmd_owned = login_args.join(" ");
         let command_label = format!("{cli_owned} {cmd_owned}");
-        if provider == "claude" {
+        if oauth_login_uses_pty(&provider) {
             let pty_system = NativePtySystem::default();
             let pair = pty_system
                 .openpty(PtySize {
@@ -1765,7 +1816,7 @@ pub async fn provider_login_oauth(
                     pixel_height: 0,
                 })
                 .map_err(|e| format!("oauth openpty {cli_owned} {cmd_owned}: {e}"))?;
-            let cmd = claude_oauth_login_command(&cli_owned, &login_args);
+            let cmd = oauth_pty_login_command(&cli_owned, &login_args);
             let mut child = pair
                 .slave
                 .spawn_command(cmd)
@@ -2517,6 +2568,14 @@ mod tests {
     }
 
     #[test]
+    fn direct_subscription_logins_use_headless_pty() {
+        assert!(oauth_login_uses_pty("claude"));
+        assert!(oauth_login_uses_pty("codex"));
+        assert!(!oauth_login_uses_pty("gajecode"));
+        assert!(!oauth_login_uses_pty("openrouter"));
+    }
+
+    #[test]
     fn direct_subscription_clis_clear_inherited_api_env() {
         assert!(should_clear_inherited_agent_api_env("claude"));
         assert!(should_clear_inherited_agent_api_env("codex"));
@@ -2534,6 +2593,14 @@ mod tests {
         assert!(detail.contains("[credential output redacted]"));
         assert!(!detail.contains("code_challenge=secret"));
         assert!(!detail.contains("access_token=abc"));
+    }
+
+    #[test]
+    fn login_url_extraction_ignores_ansi_wrapping() {
+        let url =
+            extract_login_url("\u{1b}[36mhttps://claude.ai/oauth/authorize?state=abc\u{1b}[0m")
+                .expect("url should be extracted");
+        assert_eq!(url, "https://claude.ai/oauth/authorize?state=abc");
     }
 
     #[test]
