@@ -819,6 +819,8 @@ pub fn run() {
             credentials::provider_save_api_key,
             credentials::provider_clear_credentials,
             credentials::provider_login_oauth,
+            credentials::provider_oauth_login_state,
+            credentials::provider_open_oauth_login_url,
             credentials::provider_submit_oauth_code,
             credentials::provider_install_cli,
             credentials::hermes_check_update,

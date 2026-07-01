@@ -577,7 +577,17 @@ export interface ProviderLoginOauthResult {
   already_logged_in: boolean;
   browser_opened: boolean;
   login_url_detected: boolean;
+  login_url?: string | null;
+  diagnostic?: string | null;
   message: string;
+}
+
+export interface ProviderOauthLoginState {
+  provider: string;
+  active: boolean;
+  login_url?: string | null;
+  output: string;
+  updated_at_ms: number;
 }
 
 /**
@@ -586,6 +596,14 @@ export interface ProviderLoginOauthResult {
  */
 export async function providerLoginOauth(provider: string, force = false): Promise<ProviderLoginOauthResult> {
   return invoke("provider_login_oauth", { provider, force });
+}
+
+export async function providerOauthLoginState(provider: string): Promise<ProviderOauthLoginState> {
+  return invoke("provider_oauth_login_state", { provider });
+}
+
+export async function providerOpenOauthLoginUrl(url: string): Promise<void> {
+  return invoke("provider_open_oauth_login_url", { url });
 }
 
 export async function providerSubmitOauthCode(provider: string, code: string): Promise<void> {

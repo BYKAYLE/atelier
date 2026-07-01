@@ -18,6 +18,8 @@ import {
   providerClearCredentials,
   providerInstallCli,
   providerLoginOauth,
+  providerOpenOauthLoginUrl,
+  providerOauthLoginState,
   providerSaveApiKey,
   providerStatus,
   providerSubmitOauthCode,
@@ -177,6 +179,11 @@ const COPY = {
     loginModalCodeSubmit: "코드 전달",
     loginModalCodeSubmitting: "전달 중…",
     loginModalCodeSubmitted: "전달됨",
+    loginModalWaitingUrl: "브라우저가 열리지 않으면 로그인 URL을 감지하는 즉시 아래에 표시합니다.",
+    loginModalOpenUrl: "브라우저 열기",
+    loginModalCopyUrl: "URL 복사",
+    loginModalUrlCopied: "복사됨",
+    loginModalCliOutput: "CLI 출력",
     hermesTitle: "Hermes (로컬)",
     hermesDesc:
       "Hermes는 로컬 binary로 동작하고, AI 호출 시 아래 백엔드 중 선택한 자격증명을 그대로 사용합니다.",
@@ -253,6 +260,11 @@ const COPY = {
     loginModalCodeSubmit: "Submit code",
     loginModalCodeSubmitting: "Submitting…",
     loginModalCodeSubmitted: "Submitted",
+    loginModalWaitingUrl: "If the browser does not open, Atelier will show the login URL here as soon as it is detected.",
+    loginModalOpenUrl: "Open browser",
+    loginModalCopyUrl: "Copy URL",
+    loginModalUrlCopied: "Copied",
+    loginModalCliOutput: "CLI output",
     hermesTitle: "Hermes (local)",
     hermesDesc:
       "Hermes runs locally and uses one of the credentials below as the inference backend.",
@@ -291,6 +303,21 @@ const COPY = {
 
 type CopyT = typeof COPY[keyof typeof COPY];
 
+async function openExternalUrl(url: string) {
+  try {
+    await providerOpenOauthLoginUrl(url);
+    return;
+  } catch {
+    // Fall through to the webview/browser fallback below.
+  }
+  try {
+    const { open } = await import("@tauri-apps/plugin-shell");
+    await open(url);
+  } catch {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+}
+
 export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
   const dark = tw.dark;
   const lang = tw.language;
@@ -308,6 +335,8 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
     name: string;
     detected: boolean;
     message: string;
+    loginUrl?: string | null;
+    diagnostic?: string | null;
   } | null>(null);
   const [panelError, setPanelError] = useState<string | null>(null);
   const [panelNotice, setPanelNotice] = useState<string | null>(null);
@@ -336,6 +365,18 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
     if (!loginModal) return;
     const start = Date.now();
     pollRef.current = window.setInterval(async () => {
+      const loginState = await providerOauthLoginState(loginModal.provider).catch(() => null);
+      if (loginState) {
+        setLoginModal((m) =>
+          m
+            ? {
+                ...m,
+                loginUrl: loginState.login_url || m.loginUrl || null,
+                diagnostic: loginState.output || m.diagnostic || null,
+              }
+            : null,
+        );
+      }
       const s = await providerStatus(loginModal.provider).catch(() => null);
       if (s) {
         setStatuses((prev) => ({ ...prev, [loginModal.provider]: s }));
@@ -379,6 +420,8 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
         name: p.name,
         detected: result.completed || result.already_logged_in,
         message: notice,
+        loginUrl: result.login_url || null,
+        diagnostic: result.diagnostic || null,
       });
       void refresh(p.id);
       if (result.completed || result.already_logged_in) {
@@ -480,6 +523,8 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
           name={loginModal.name}
           detected={loginModal.detected}
           message={loginModal.message}
+          loginUrl={loginModal.loginUrl}
+          diagnostic={loginModal.diagnostic}
           dark={dark}
           copy={copy}
           onSubmitCode={(code) => providerSubmitOauthCode(loginModal.provider, code)}
@@ -1187,14 +1232,17 @@ const LoginModal: React.FC<{
   name: string;
   detected: boolean;
   message: string;
+  loginUrl?: string | null;
+  diagnostic?: string | null;
   dark: boolean;
   copy: CopyT;
   onSubmitCode: (code: string) => Promise<void>;
   onClose: () => void;
-}> = ({ provider, name, detected, message, dark, copy, onSubmitCode, onClose }) => {
+}> = ({ provider, name, detected, message, loginUrl, diagnostic, dark, copy, onSubmitCode, onClose }) => {
   const [code, setCode] = useState("");
   const [submitState, setSubmitState] = useState<"idle" | "submitting" | "submitted">("idle");
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
   const showCodeInput = provider === "claude" && !detected;
 
   async function handleSubmitCode() {
@@ -1207,6 +1255,17 @@ const LoginModal: React.FC<{
     } catch (e) {
       setSubmitState("idle");
       setSubmitError(String(e));
+    }
+  }
+
+  async function handleCopyUrl() {
+    if (!loginUrl) return;
+    try {
+      await navigator.clipboard.writeText(loginUrl);
+      setCopyState("copied");
+      window.setTimeout(() => setCopyState("idle"), 1200);
+    } catch {
+      setCopyState("idle");
     }
   }
 
@@ -1229,6 +1288,39 @@ const LoginModal: React.FC<{
         <div className={cls("text-[13px] mb-4", dark ? "text-dsub" : "text-sub")}>
           {message || copy.loginModalDesc}
         </div>
+        {!detected && (
+          <div
+            className={cls(
+              "mb-4 rounded-md border p-3 text-[12px]",
+              dark ? "border-dline bg-dbg text-dsub" : "border-line bg-panel text-sub",
+            )}
+          >
+            {loginUrl ? (
+              <div className="space-y-2">
+                <code className="block truncate gb-mono text-[11.5px]">{loginUrl}</code>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => void openExternalUrl(loginUrl)}
+                    className="h-8 px-3 rounded-md border bg-[var(--accent)] text-white border-[var(--accent-hover)] text-[12px] font-medium"
+                  >
+                    {copy.loginModalOpenUrl}
+                  </button>
+                  <button
+                    onClick={() => void handleCopyUrl()}
+                    className={cls(
+                      "h-8 px-3 rounded-md border text-[12px]",
+                      dark ? "border-dline text-dsub hover:text-dink" : "border-line text-sub hover:text-ink",
+                    )}
+                  >
+                    {copyState === "copied" ? copy.loginModalUrlCopied : copy.loginModalCopyUrl}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div>{copy.loginModalWaitingUrl}</div>
+            )}
+          </div>
+        )}
         {showCodeInput && (
           <div className="mb-4 space-y-1.5">
             <label className={cls("block text-[11.5px] uppercase tracking-wider font-semibold", dark ? "text-dsub" : "text-sub")}>
@@ -1267,6 +1359,21 @@ const LoginModal: React.FC<{
               </div>
             )}
           </div>
+        )}
+        {!detected && diagnostic && (
+          <details className="mb-4">
+            <summary className={cls("cursor-pointer text-[12px]", dark ? "text-dsub" : "text-sub")}>
+              {copy.loginModalCliOutput}
+            </summary>
+            <pre
+              className={cls(
+                "mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded-md border p-2 text-[11px] gb-mono",
+                dark ? "border-dline bg-dbg text-dsub" : "border-line bg-panel text-sub",
+              )}
+            >
+              {diagnostic}
+            </pre>
+          </details>
         )}
         <div className="flex items-center gap-3">
           {detected ? (

@@ -28,6 +28,17 @@ enum OAuthLoginInput {
 
 static OAUTH_LOGIN_STDIN: Lazy<Mutex<HashMap<String, OAuthLoginInput>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Clone, Default)]
+struct OAuthLoginRuntimeState {
+    active: bool,
+    login_url: Option<String>,
+    output: String,
+    updated_at_ms: i64,
+}
+
+static OAUTH_LOGIN_RUNTIME: Lazy<Mutex<HashMap<String, OAuthLoginRuntimeState>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 #[cfg(target_os = "windows")]
 const HERMES_INSTALL_PS1: &str =
     "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1))) -SkipSetup -NonInteractive";
@@ -219,6 +230,85 @@ fn login_failure_detail_text(text: &str) -> String {
             detail.chars().take(1200).collect::<String>()
         )
     }
+}
+
+fn oauth_runtime_now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
+fn start_oauth_login_runtime(provider: &str) {
+    if let Ok(mut map) = OAUTH_LOGIN_RUNTIME.lock() {
+        map.insert(
+            provider.to_string(),
+            OAuthLoginRuntimeState {
+                active: true,
+                updated_at_ms: oauth_runtime_now_ms(),
+                ..Default::default()
+            },
+        );
+    }
+}
+
+fn finish_oauth_login_runtime(provider: &str) {
+    if let Ok(mut map) = OAUTH_LOGIN_RUNTIME.lock() {
+        let entry = map.entry(provider.to_string()).or_default();
+        entry.active = false;
+        entry.updated_at_ms = oauth_runtime_now_ms();
+    }
+}
+
+fn remember_oauth_login_url(provider: &str, url: &str) {
+    if let Ok(mut map) = OAUTH_LOGIN_RUNTIME.lock() {
+        let entry = map.entry(provider.to_string()).or_default();
+        entry.login_url = Some(url.to_string());
+        entry.updated_at_ms = oauth_runtime_now_ms();
+    }
+}
+
+fn refresh_oauth_login_runtime(provider: &str, captured: &Arc<Mutex<String>>) {
+    let raw = captured_login_output(captured);
+    let login_url = extract_login_url(&raw);
+    let output = login_failure_detail_text(&raw).trim().to_string();
+    if let Ok(mut map) = OAUTH_LOGIN_RUNTIME.lock() {
+        let entry = map.entry(provider.to_string()).or_default();
+        if let Some(url) = login_url {
+            entry.login_url = Some(url);
+        }
+        entry.output = output;
+        entry.updated_at_ms = oauth_runtime_now_ms();
+    }
+}
+
+fn spawn_oauth_login_runtime_watcher(provider: String, captured: Arc<Mutex<String>>) {
+    thread::spawn(move || {
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(5 * 60) {
+            refresh_oauth_login_runtime(&provider, &captured);
+            let active = OAUTH_LOGIN_RUNTIME
+                .lock()
+                .ok()
+                .and_then(|map| map.get(&provider).map(|state| state.active))
+                .unwrap_or(false);
+            if !active {
+                break;
+            }
+            thread::sleep(Duration::from_millis(500));
+        }
+    });
+}
+
+fn oauth_login_runtime_snapshot(provider: &str) -> OAuthLoginRuntimeState {
+    OAUTH_LOGIN_RUNTIME
+        .lock()
+        .ok()
+        .and_then(|map| map.get(provider).cloned())
+        .unwrap_or_default()
+}
+
+fn oauth_login_result_extras(provider: &str) -> (Option<String>, Option<String>) {
+    let snapshot = oauth_login_runtime_snapshot(provider);
+    let diagnostic = (!snapshot.output.trim().is_empty()).then_some(snapshot.output);
+    (snapshot.login_url, diagnostic)
 }
 
 fn strip_ansi_sequences(text: &str) -> String {
@@ -502,12 +592,13 @@ fn open_login_url_in_browser(url: &str) -> bool {
     }
 }
 
-fn watch_and_open_login_url(captured: Arc<Mutex<String>>) {
+fn watch_and_open_login_url(provider: String, captured: Arc<Mutex<String>>) {
     thread::spawn(move || {
         let started = Instant::now();
         while started.elapsed() < Duration::from_secs(90) {
             let output = captured_login_output(&captured);
             if let Some(url) = extract_login_url(&output) {
+                remember_oauth_login_url(&provider, &url);
                 let _ = open_login_url_in_browser(&url);
                 break;
             }
@@ -748,7 +839,18 @@ pub struct ProviderLoginOauthResult {
     pub already_logged_in: bool,
     pub browser_opened: bool,
     pub login_url_detected: bool,
+    pub login_url: Option<String>,
+    pub diagnostic: Option<String>,
     pub message: String,
+}
+
+#[derive(Serialize)]
+pub struct ProviderOauthLoginState {
+    pub provider: String,
+    pub active: bool,
+    pub login_url: Option<String>,
+    pub output: String,
+    pub updated_at_ms: i64,
 }
 
 fn keychain_entry(provider: &str, slot: &str) -> Result<Entry, String> {
@@ -1920,6 +2022,8 @@ pub async fn provider_login_oauth(
             already_logged_in: true,
             browser_opened: false,
             login_url_detected: false,
+            login_url: None,
+            diagnostic: None,
             message: "OAuth is already connected.".into(),
         });
     }
@@ -1939,6 +2043,7 @@ pub async fn provider_login_oauth(
         let provider_clone = provider.clone();
         let cmd_owned = login_args.join(" ");
         let command_label = format!("{cli_owned} {cmd_owned}");
+        start_oauth_login_runtime(&provider_clone);
         if oauth_login_uses_pty(&provider) {
             let pty_system = NativePtySystem::default();
             let pair = pty_system
@@ -1967,6 +2072,7 @@ pub async fn provider_login_oauth(
                 .map_err(|e| format!("oauth take writer {cli_owned} {cmd_owned}: {e}"))?;
             store_oauth_login_pty_writer(&provider_clone, writer);
             capture_login_pipe(reader, captured.clone());
+            spawn_oauth_login_runtime_watcher(provider_clone.clone(), captured.clone());
 
             let started = Instant::now();
             let mut browser_opened = false;
@@ -1975,6 +2081,7 @@ pub async fn provider_login_oauth(
                 if !login_url_detected {
                     let output = captured_login_output(&captured);
                     if let Some(url) = extract_login_url(&output) {
+                        remember_oauth_login_url(&provider_clone, &url);
                         login_url_detected = true;
                         browser_opened = open_login_url_in_browser(&url);
                     }
@@ -1988,6 +2095,9 @@ pub async fn provider_login_oauth(
                         let _ = child.wait();
                         forget_oauth_login_stdin(&provider_clone);
                         mark_oauth_login_success(&provider_clone);
+                        refresh_oauth_login_runtime(&provider_clone, &captured);
+                        finish_oauth_login_runtime(&provider_clone);
+                        let (login_url, diagnostic) = oauth_login_result_extras(&provider_clone);
                         return Ok(ProviderLoginOauthResult {
                             provider,
                             command: command_label,
@@ -1996,12 +2106,15 @@ pub async fn provider_login_oauth(
                             already_logged_in: false,
                             browser_opened,
                             login_url_detected,
+                            login_url,
+                            diagnostic,
                             message: "OAuth login command completed.".into(),
                         });
                     }
                     Some(status) => {
                         let _ = child.wait();
                         forget_oauth_login_stdin(&provider_clone);
+                        finish_oauth_login_runtime(&provider_clone);
                         thread::sleep(Duration::from_millis(80));
                         let detail = login_failure_detail_text(&captured_login_output(&captured))
                             .trim()
@@ -2023,8 +2136,10 @@ pub async fn provider_login_oauth(
                     }
                     None if started.elapsed() >= Duration::from_millis(1500) => {
                         if !login_url_detected {
-                            watch_and_open_login_url(captured.clone());
+                            watch_and_open_login_url(provider_clone.clone(), captured.clone());
                         }
+                        refresh_oauth_login_runtime(&provider_clone, &captured);
+                        let (login_url, diagnostic) = oauth_login_result_extras(&provider_clone);
 
                         let master = pair.master;
                         std::thread::spawn(move || {
@@ -2033,6 +2148,7 @@ pub async fn provider_login_oauth(
                                 Ok(status) if status.success() => {
                                     forget_oauth_login_stdin(&provider_clone);
                                     mark_oauth_login_success(&provider_clone);
+                                    finish_oauth_login_runtime(&provider_clone);
                                 }
                                 Ok(status) => {
                                     forget_oauth_login_stdin(&provider_clone);
@@ -2048,10 +2164,12 @@ pub async fn provider_login_oauth(
                                             "{cli_owned} {cmd_owned} exited with {status:?}: {detail}"
                                         );
                                     }
+                                    finish_oauth_login_runtime(&provider_clone);
                                 }
                                 Err(e) => {
                                     forget_oauth_login_stdin(&provider_clone);
                                     log::warn!("{cli_owned} wait: {e}");
+                                    finish_oauth_login_runtime(&provider_clone);
                                 }
                             }
                         });
@@ -2063,6 +2181,8 @@ pub async fn provider_login_oauth(
                             already_logged_in: false,
                             browser_opened,
                             login_url_detected,
+                            login_url,
+                            diagnostic,
                             message: if browser_opened {
                                 "OAuth login started and the browser was opened.".into()
                             } else if login_url_detected {
@@ -2113,6 +2233,7 @@ pub async fn provider_login_oauth(
         if let Some(stderr) = child.stderr.take() {
             capture_login_pipe(stderr, captured.clone());
         }
+        spawn_oauth_login_runtime_watcher(provider_clone.clone(), captured.clone());
 
         // Claude/Codex CLI가 Windows에서 즉시 실패하는 경우에는 "브라우저가 열렸습니다"
         // 모달을 띄우면 사용자가 무한 대기 상태로 보인다. 짧게만 관찰해서 즉시 실패는
@@ -2124,6 +2245,7 @@ pub async fn provider_login_oauth(
             if !login_url_detected {
                 let output = captured_login_output(&captured);
                 if let Some(url) = extract_login_url(&output) {
+                    remember_oauth_login_url(&provider_clone, &url);
                     login_url_detected = true;
                     browser_opened = open_login_url_in_browser(&url);
                 }
@@ -2136,6 +2258,9 @@ pub async fn provider_login_oauth(
                     let _ = child.wait();
                     forget_oauth_login_stdin(&provider_clone);
                     mark_oauth_login_success(&provider_clone);
+                    refresh_oauth_login_runtime(&provider_clone, &captured);
+                    finish_oauth_login_runtime(&provider_clone);
+                    let (login_url, diagnostic) = oauth_login_result_extras(&provider_clone);
                     return Ok(ProviderLoginOauthResult {
                         provider,
                         command: command_label,
@@ -2144,12 +2269,15 @@ pub async fn provider_login_oauth(
                         already_logged_in: false,
                         browser_opened,
                         login_url_detected,
+                        login_url,
+                        diagnostic,
                         message: "OAuth login command completed.".into(),
                     });
                 }
                 Some(status) => {
                     let _ = child.wait();
                     forget_oauth_login_stdin(&provider_clone);
+                    finish_oauth_login_runtime(&provider_clone);
                     thread::sleep(Duration::from_millis(80));
                     let detail = login_failure_detail_text(&captured_login_output(&captured))
                         .trim()
@@ -2171,13 +2299,16 @@ pub async fn provider_login_oauth(
                 }
                 None if started.elapsed() >= Duration::from_millis(1500) => {
                     if !login_url_detected {
-                        watch_and_open_login_url(captured.clone());
+                        watch_and_open_login_url(provider_clone.clone(), captured.clone());
                     }
+                    refresh_oauth_login_runtime(&provider_clone, &captured);
+                    let (login_url, diagnostic) = oauth_login_result_extras(&provider_clone);
 
                     std::thread::spawn(move || match child.wait() {
                         Ok(status) if status.success() => {
                             forget_oauth_login_stdin(&provider_clone);
                             mark_oauth_login_success(&provider_clone);
+                            finish_oauth_login_runtime(&provider_clone);
                         }
                         Ok(status) => {
                             forget_oauth_login_stdin(&provider_clone);
@@ -2190,10 +2321,12 @@ pub async fn provider_login_oauth(
                                     "{cli_owned} {cmd_owned} exited with {status}: {detail}"
                                 );
                             }
+                            finish_oauth_login_runtime(&provider_clone);
                         }
                         Err(e) => {
                             forget_oauth_login_stdin(&provider_clone);
                             log::warn!("{cli_owned} wait: {e}");
+                            finish_oauth_login_runtime(&provider_clone);
                         }
                     });
                     return Ok(ProviderLoginOauthResult {
@@ -2204,6 +2337,8 @@ pub async fn provider_login_oauth(
                         already_logged_in: false,
                         browser_opened,
                         login_url_detected,
+                        login_url,
+                        diagnostic,
                         message: if browser_opened {
                             "OAuth login started and the browser was opened.".into()
                         } else if login_url_detected {
@@ -2220,6 +2355,33 @@ pub async fn provider_login_oauth(
     }
 
     Err(last_failure.unwrap_or_else(|| format!("{cli_owned} {cmd} login failed")))
+}
+
+#[tauri::command]
+pub async fn provider_oauth_login_state(
+    provider: String,
+) -> Result<ProviderOauthLoginState, String> {
+    let snapshot = oauth_login_runtime_snapshot(&provider);
+    Ok(ProviderOauthLoginState {
+        provider,
+        active: snapshot.active,
+        login_url: snapshot.login_url,
+        output: snapshot.output,
+        updated_at_ms: snapshot.updated_at_ms,
+    })
+}
+
+#[tauri::command]
+pub async fn provider_open_oauth_login_url(url: String) -> Result<(), String> {
+    let url = url.trim();
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("Only http/https login URLs can be opened.".into());
+    }
+    if open_login_url_in_browser(url) {
+        Ok(())
+    } else {
+        Err("Failed to open the login URL in the default browser.".into())
+    }
 }
 
 #[tauri::command]
