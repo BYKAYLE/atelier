@@ -172,10 +172,9 @@ fn provider_meta(provider: &str) -> Option<ProviderMeta> {
 
 fn oauth_login_attempts(provider: &str, fallback_cmd: &'static str) -> Vec<Vec<&'static str>> {
     match provider {
-        // Windows Claude Code builds have repeatedly exited early from
-        // `auth login --claudeai`; keep it first for compatible CLIs, then
-        // fall back to the stable subscription code-paste flow.
-        "claude" => vec![vec!["auth", "login", "--claudeai"], vec!["setup-token"]],
+        // Windows Claude Code builds repeatedly fail or produce mojibake stderr
+        // from `auth login --claudeai`. Prefer the code-paste flow first.
+        "claude" => vec![vec!["setup-token"], vec!["auth", "login", "--claudeai"]],
         _ => vec![vec![fallback_cmd]],
     }
 }
@@ -260,17 +259,66 @@ fn strip_ansi_sequences(text: &str) -> String {
     out
 }
 
+fn login_url_start(text: &str) -> Option<usize> {
+    match (text.find("https://"), text.find("http://")) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
+}
+
+fn login_url_delimiter(ch: char) -> bool {
+    ch.is_whitespace()
+        || ch.is_control()
+        || matches!(
+            ch,
+            '"' | '\'' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';'
+        )
+}
+
+fn trim_login_url_candidate(candidate: &str) -> &str {
+    candidate.trim_matches(|c: char| {
+        matches!(
+            c,
+            '"' | '\'' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';' | '.'
+        )
+    })
+}
+
+fn extract_login_url_candidate(text: &str) -> Option<String> {
+    let mut offset = 0;
+    while offset < text.len() {
+        let search = &text[offset..];
+        let Some(start_rel) = login_url_start(search) else {
+            break;
+        };
+        let start = offset + start_rel;
+        let mut end = text.len();
+        for (rel, ch) in text[start..].char_indices().skip(1) {
+            if login_url_delimiter(ch) {
+                end = start + rel;
+                break;
+            }
+        }
+
+        let candidate = trim_login_url_candidate(&text[start..end]);
+        if candidate.starts_with("https://") || candidate.starts_with("http://") {
+            return Some(candidate.to_string());
+        }
+
+        offset = end.saturating_add(1);
+    }
+    None
+}
+
 fn extract_login_url(text: &str) -> Option<String> {
-    let text = strip_ansi_sequences(text);
-    text.split_whitespace().find_map(|token| {
-        let trimmed = token.trim_matches(|c: char| {
-            matches!(
-                c,
-                '"' | '\'' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';'
-            )
-        });
-        (trimmed.starts_with("https://") || trimmed.starts_with("http://"))
-            .then(|| trimmed.to_string())
+    // Terminal CLIs often emit clickable OSC-8 hyperlinks. The ANSI stripper
+    // discards OSC payloads, so first scan the raw stream and only then scan a
+    // cleaned plain-text copy.
+    extract_login_url_candidate(text).or_else(|| {
+        let text = strip_ansi_sequences(text);
+        extract_login_url_candidate(&text)
     })
 }
 
@@ -337,6 +385,12 @@ fn open_login_url_in_browser(url: &str) -> bool {
 
     #[cfg(target_os = "windows")]
     {
+        let mut command = Command::new("cmd.exe");
+        command.arg("/D").arg("/C").arg("start").arg("").arg(url);
+        if spawn_background_null(command) {
+            return true;
+        }
+
         let mut command = Command::new("explorer.exe");
         command.arg(url);
         if spawn_background_null(command) {
@@ -362,10 +416,7 @@ fn open_login_url_in_browser(url: &str) -> bool {
             return true;
         }
 
-        let escaped_url = url.replace('"', "\"\"");
-        let mut command = Command::new("cmd.exe");
-        command.args(["/D", "/C", &format!("start \"\" \"{escaped_url}\"")]);
-        return spawn_background_null(command);
+        false
     }
 
     #[cfg(target_os = "macos")]
@@ -2575,7 +2626,7 @@ mod tests {
     fn claude_subscription_login_falls_back_to_setup_token() {
         assert_eq!(
             oauth_login_attempts("claude", "login"),
-            vec![vec!["auth", "login", "--claudeai"], vec!["setup-token"]]
+            vec![vec!["setup-token"], vec!["auth", "login", "--claudeai"]]
         );
         assert_eq!(oauth_login_attempts("codex", "login"), vec![vec!["login"]]);
     }
@@ -2614,6 +2665,16 @@ mod tests {
             extract_login_url("\u{1b}[36mhttps://claude.ai/oauth/authorize?state=abc\u{1b}[0m")
                 .expect("url should be extracted");
         assert_eq!(url, "https://claude.ai/oauth/authorize?state=abc");
+    }
+
+    #[test]
+    fn login_url_extraction_reads_osc8_hyperlinks() {
+        let text = "\u{1b}]8;;https://chatgpt.com/backend-api/codex/auth?state=abc&code_challenge=def\u{1b}\\Open browser\u{1b}]8;;\u{1b}\\";
+        let url = extract_login_url(text).expect("osc8 url should be extracted");
+        assert_eq!(
+            url,
+            "https://chatgpt.com/backend-api/codex/auth?state=abc&code_challenge=def"
+        );
     }
 
     #[test]
