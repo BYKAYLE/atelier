@@ -337,8 +337,8 @@ fn open_login_url_in_browser(url: &str) -> bool {
 
     #[cfg(target_os = "windows")]
     {
-        let mut command = Command::new("cmd.exe");
-        command.args(["/D", "/C", "start", "", url]);
+        let mut command = Command::new("explorer.exe");
+        command.arg(url);
         if spawn_background_null(command) {
             return true;
         }
@@ -352,6 +352,19 @@ fn open_login_url_in_browser(url: &str) -> bool {
             "Start-Process -FilePath $args[0]",
             url,
         ]);
+        if spawn_background_null(command) {
+            return true;
+        }
+
+        let mut command = Command::new("rundll32.exe");
+        command.args(["url.dll,FileProtocolHandler", url]);
+        if spawn_background_null(command) {
+            return true;
+        }
+
+        let escaped_url = url.replace('"', "\"\"");
+        let mut command = Command::new("cmd.exe");
+        command.args(["/D", "/C", &format!("start \"\" \"{escaped_url}\"")]);
         return spawn_background_null(command);
     }
 
