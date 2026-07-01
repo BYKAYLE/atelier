@@ -6,10 +6,12 @@ const signedAssetsDir = process.env.SIGNED_ASSETS_DIR ?? 'release-assets/windows
 const releaseOwner = process.env.RELEASE_OWNER;
 const releaseRepo = process.env.RELEASE_REPO;
 const releaseTag = process.env.RELEASE_TAG ?? process.env.GITHUB_REF_NAME;
-const preferWindowsInstaller = process.env.PREFER_WINDOWS_INSTALLER ?? 'nsis';
+const preferWindowsInstaller = (process.env.PREFER_WINDOWS_INSTALLER ?? 'msi').toLowerCase();
 // Keep the generic Windows target for already-installed Atelier builds that
 // still use Tauri's default `windows-x86_64` updater platform. Newer builds pass
 // explicit MSI/NSIS targets, but older builds cannot update without this entry.
+// Prefer MSI for the generic compatibility key because it upgrades the existing
+// Windows product/shortcuts more reliably than launching a setup.exe side by side.
 const includeGenericWindowsTarget = process.env.INCLUDE_WINDOWS_GENERIC_TARGET !== 'false';
 
 if (!releaseOwner || !releaseRepo || !releaseTag) {

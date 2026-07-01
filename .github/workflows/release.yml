@@ -230,7 +230,13 @@ jobs:
         shell: pwsh
         env:
           RELEASE_TAG: ${{ github.ref_name }}
+          PREFER_WINDOWS_INSTALLER: msi
         run: node .github/scripts/update-tauri-latest-json.mjs
+
+      - name: Validate Windows updater compatibility target
+        shell: pwsh
+        run: |
+          node -e "const j=require('./release-assets/latest.json'); const url=j.platforms?.['windows-x86_64']?.url || ''; if (!url.endsWith('.msi')) { console.error('windows-x86_64 must point to MSI for legacy updater compatibility:', url); process.exit(1); } console.log('windows-x86_64 compatibility target:', url);"
 
       - name: Upload Windows assets
         shell: pwsh
