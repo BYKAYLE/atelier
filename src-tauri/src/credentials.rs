@@ -163,10 +163,13 @@ fn provider_meta(provider: &str) -> Option<ProviderMeta> {
     }
 }
 
-fn oauth_login_args(provider: &str, fallback_cmd: &'static str) -> Vec<&'static str> {
+fn oauth_login_attempts(provider: &str, fallback_cmd: &'static str) -> Vec<Vec<&'static str>> {
     match provider {
-        "claude" => vec!["auth", "login", "--claudeai"],
-        _ => vec![fallback_cmd],
+        // Windows Claude Code builds have repeatedly exited early from
+        // `auth login --claudeai`; keep it first for compatible CLIs, then
+        // fall back to the stable subscription code-paste flow.
+        "claude" => vec![vec!["auth", "login", "--claudeai"], vec!["setup-token"]],
+        _ => vec![vec![fallback_cmd]],
     }
 }
 
@@ -194,6 +197,10 @@ fn redact_login_output(text: &str) -> String {
 
 fn login_failure_detail_text(text: &str) -> String {
     let detail = redact_login_output(text);
+    let replacement_count = detail.chars().filter(|c| *c == '\u{fffd}').count();
+    if replacement_count >= 3 {
+        return "The CLI returned unreadable non-UTF-8 error output. Update the Claude Code CLI, then try the subscription sign-in again.".to_string();
+    }
     if detail.chars().count() <= 1200 {
         detail
     } else {
@@ -1696,136 +1703,154 @@ pub async fn provider_login_oauth(
         set_oauth_state(&provider, false);
     }
 
-    let provider_clone = provider.clone();
     let cli_owned = cli.to_string();
-    let login_args = oauth_login_args(&provider, cmd);
-    let cmd_owned = login_args.join(" ");
-    let command_label = format!("{cli_owned} {cmd_owned}");
-    let mut command = if provider == "gajecode" {
-        gajecode_isolated_cli_command()?
-    } else {
-        let mut command = cli_command(&cli_owned);
-        command.env("PATH", crate::augmented_cli_path());
+    let login_attempts = oauth_login_attempts(&provider, cmd);
+    let attempt_count = login_attempts.len();
+    let mut last_failure: Option<String> = None;
+
+    for (attempt_index, login_args) in login_attempts.into_iter().enumerate() {
+        let provider_clone = provider.clone();
+        let cmd_owned = login_args.join(" ");
+        let command_label = format!("{cli_owned} {cmd_owned}");
+        let mut command = if provider == "gajecode" {
+            gajecode_isolated_cli_command()?
+        } else {
+            let mut command = cli_command(&cli_owned);
+            command.env("PATH", crate::augmented_cli_path());
+            command
+        };
         command
-    };
-    command
-        .args(&login_args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .stdin(if provider == "claude" {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        });
-    configure_background_command(&mut command);
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("oauth spawn {cli_owned} {cmd_owned}: {e}"))?;
-    let captured = Arc::new(Mutex::new(String::new()));
-    if provider == "claude" {
-        if let Some(stdin) = child.stdin.take() {
-            store_oauth_login_stdin(&provider_clone, stdin);
-        }
-    }
-    if let Some(stdout) = child.stdout.take() {
-        capture_login_pipe(stdout, captured.clone());
-    }
-    if let Some(stderr) = child.stderr.take() {
-        capture_login_pipe(stderr, captured.clone());
-    }
-
-    // Claude/Codex CLI가 Windows에서 즉시 실패하는 경우에는 "브라우저가 열렸습니다"
-    // 모달을 띄우면 사용자가 무한 대기 상태로 보인다. 짧게만 관찰해서 즉시 실패는
-    // 호출자에게 돌려주고, 실제 로그인 대기는 백그라운드에서 계속 처리한다.
-    let started = Instant::now();
-    let mut browser_opened = false;
-    let mut login_url_detected = false;
-    loop {
-        if !login_url_detected {
-            let output = captured_login_output(&captured);
-            if let Some(url) = extract_login_url(&output) {
-                login_url_detected = true;
-                browser_opened = open_login_url_in_browser(&url);
-            }
-        }
-        match child
-            .try_wait()
-            .map_err(|e| format!("{cli_owned} {cmd_owned} poll: {e}"))?
-        {
-            Some(status) if status.success() => {
-                let _ = child.wait();
-                forget_oauth_login_stdin(&provider_clone);
-                mark_oauth_login_success(&provider_clone);
-                return Ok(ProviderLoginOauthResult {
-                    provider,
-                    command: command_label,
-                    started: true,
-                    completed: true,
-                    already_logged_in: false,
-                    browser_opened,
-                    login_url_detected,
-                    message: "OAuth login command completed.".into(),
-                });
-            }
-            Some(status) => {
-                let _ = child.wait();
-                forget_oauth_login_stdin(&provider_clone);
-                thread::sleep(Duration::from_millis(80));
-                let detail = login_failure_detail_text(&captured_login_output(&captured))
-                    .trim()
-                    .to_string();
-                return Err(match detail {
-                    detail if !detail.is_empty() => {
-                        format!("{cli_owned} {cmd_owned} exited with {status}: {detail}")
-                    }
-                    _ => format!("{cli_owned} {cmd_owned} exited with {status}"),
-                });
-            }
-            None if started.elapsed() >= Duration::from_millis(1500) => break,
-            None => thread::sleep(Duration::from_millis(80)),
-        }
-    }
-
-    if !login_url_detected {
-        watch_and_open_login_url(captured.clone());
-    }
-
-    std::thread::spawn(move || match child.wait() {
-        Ok(status) if status.success() => {
-            forget_oauth_login_stdin(&provider_clone);
-            mark_oauth_login_success(&provider_clone);
-        }
-        Ok(status) => {
-            forget_oauth_login_stdin(&provider_clone);
-            let detail = login_failure_detail_text(&captured_login_output(&captured));
-            if detail.trim().is_empty() {
-                log::warn!("{cli_owned} {cmd_owned} exited with {status}");
+            .args(&login_args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .stdin(if provider == "claude" {
+                Stdio::piped()
             } else {
-                log::warn!("{cli_owned} {cmd_owned} exited with {status}: {detail}");
+                Stdio::null()
+            });
+        configure_background_command(&mut command);
+        let mut child = command
+            .spawn()
+            .map_err(|e| format!("oauth spawn {cli_owned} {cmd_owned}: {e}"))?;
+        let captured = Arc::new(Mutex::new(String::new()));
+        if provider == "claude" {
+            if let Some(stdin) = child.stdin.take() {
+                store_oauth_login_stdin(&provider_clone, stdin);
             }
         }
-        Err(e) => {
-            forget_oauth_login_stdin(&provider_clone);
-            log::warn!("{cli_owned} wait: {e}");
+        if let Some(stdout) = child.stdout.take() {
+            capture_login_pipe(stdout, captured.clone());
         }
-    });
-    Ok(ProviderLoginOauthResult {
-        provider,
-        command: command_label,
-        started: true,
-        completed: false,
-        already_logged_in: false,
-        browser_opened,
-        login_url_detected,
-        message: if browser_opened {
-            "OAuth login started and the browser was opened.".into()
-        } else if login_url_detected {
-            "OAuth login started, but Atelier could not open the browser automatically.".into()
-        } else {
-            "OAuth login started. Atelier is watching the CLI output for a browser login URL."
-                .into()
-        },
-    })
+        if let Some(stderr) = child.stderr.take() {
+            capture_login_pipe(stderr, captured.clone());
+        }
+
+        // Claude/Codex CLI가 Windows에서 즉시 실패하는 경우에는 "브라우저가 열렸습니다"
+        // 모달을 띄우면 사용자가 무한 대기 상태로 보인다. 짧게만 관찰해서 즉시 실패는
+        // 호출자에게 돌려주고, 실제 로그인 대기는 백그라운드에서 계속 처리한다.
+        let started = Instant::now();
+        let mut browser_opened = false;
+        let mut login_url_detected = false;
+        loop {
+            if !login_url_detected {
+                let output = captured_login_output(&captured);
+                if let Some(url) = extract_login_url(&output) {
+                    login_url_detected = true;
+                    browser_opened = open_login_url_in_browser(&url);
+                }
+            }
+            match child
+                .try_wait()
+                .map_err(|e| format!("{cli_owned} {cmd_owned} poll: {e}"))?
+            {
+                Some(status) if status.success() => {
+                    let _ = child.wait();
+                    forget_oauth_login_stdin(&provider_clone);
+                    mark_oauth_login_success(&provider_clone);
+                    return Ok(ProviderLoginOauthResult {
+                        provider,
+                        command: command_label,
+                        started: true,
+                        completed: true,
+                        already_logged_in: false,
+                        browser_opened,
+                        login_url_detected,
+                        message: "OAuth login command completed.".into(),
+                    });
+                }
+                Some(status) => {
+                    let _ = child.wait();
+                    forget_oauth_login_stdin(&provider_clone);
+                    thread::sleep(Duration::from_millis(80));
+                    let detail = login_failure_detail_text(&captured_login_output(&captured))
+                        .trim()
+                        .to_string();
+                    let failure = match detail {
+                        detail if !detail.is_empty() => {
+                            format!("{cli_owned} {cmd_owned} exited with {status}: {detail}")
+                        }
+                        _ => format!("{cli_owned} {cmd_owned} exited with {status}"),
+                    };
+                    if attempt_index + 1 < attempt_count {
+                        log::warn!(
+                            "oauth login attempt failed for {provider} ({cmd_owned}); trying fallback: {failure}"
+                        );
+                        last_failure = Some(failure);
+                        break;
+                    }
+                    return Err(failure);
+                }
+                None if started.elapsed() >= Duration::from_millis(1500) => {
+                    if !login_url_detected {
+                        watch_and_open_login_url(captured.clone());
+                    }
+
+                    std::thread::spawn(move || match child.wait() {
+                        Ok(status) if status.success() => {
+                            forget_oauth_login_stdin(&provider_clone);
+                            mark_oauth_login_success(&provider_clone);
+                        }
+                        Ok(status) => {
+                            forget_oauth_login_stdin(&provider_clone);
+                            let detail =
+                                login_failure_detail_text(&captured_login_output(&captured));
+                            if detail.trim().is_empty() {
+                                log::warn!("{cli_owned} {cmd_owned} exited with {status}");
+                            } else {
+                                log::warn!(
+                                    "{cli_owned} {cmd_owned} exited with {status}: {detail}"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            forget_oauth_login_stdin(&provider_clone);
+                            log::warn!("{cli_owned} wait: {e}");
+                        }
+                    });
+                    return Ok(ProviderLoginOauthResult {
+                        provider,
+                        command: command_label,
+                        started: true,
+                        completed: false,
+                        already_logged_in: false,
+                        browser_opened,
+                        login_url_detected,
+                        message: if browser_opened {
+                            "OAuth login started and the browser was opened.".into()
+                        } else if login_url_detected {
+                            "OAuth login started, but Atelier could not open the browser automatically.".into()
+                        } else {
+                            "OAuth login started. Atelier is waiting for the CLI browser code."
+                                .into()
+                        },
+                    });
+                }
+                None => thread::sleep(Duration::from_millis(80)),
+            }
+        }
+    }
+
+    Err(last_failure.unwrap_or_else(|| format!("{cli_owned} {cmd} login failed")))
 }
 
 #[tauri::command]
@@ -2286,12 +2311,12 @@ mod tests {
     }
 
     #[test]
-    fn claude_subscription_login_uses_current_auth_command() {
+    fn claude_subscription_login_falls_back_to_setup_token() {
         assert_eq!(
-            oauth_login_args("claude", "login"),
-            vec!["auth", "login", "--claudeai"]
+            oauth_login_attempts("claude", "login"),
+            vec![vec!["auth", "login", "--claudeai"], vec!["setup-token"]]
         );
-        assert_eq!(oauth_login_args("codex", "login"), vec!["login"]);
+        assert_eq!(oauth_login_attempts("codex", "login"), vec![vec!["login"]]);
     }
 
     #[test]

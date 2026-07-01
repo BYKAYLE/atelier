@@ -357,6 +357,11 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
   function loginNoticeForResult(p: ProviderDef, result: ProviderLoginOauthResult) {
     if (result.already_logged_in) return copy.loginAlreadyConnected(p.name);
     if (result.browser_opened) return copy.loginStartedBrowser(p.name);
+    if (p.id === "claude") {
+      return tw.language === "en"
+        ? "Claude sign-in started. Paste the browser authentication code into the field below."
+        : "Claude 로그인 명령을 시작했습니다. 브라우저에 표시된 인증 코드를 아래 입력칸에 붙여넣으세요.";
+    }
     if (result.login_url_detected) return copy.loginStartedNoBrowser(p.name);
     return copy.loginStartedWatching(p.name);
   }
