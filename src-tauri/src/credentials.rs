@@ -469,14 +469,29 @@ fn spawn_background_null(mut command: Command) -> bool {
 }
 
 #[cfg(target_os = "windows")]
-fn run_background_null(mut command: Command) -> bool {
-    configure_background_command(&mut command);
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+fn windows_shell_execute_url(url: &str) -> bool {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    fn wide(value: &str) -> Vec<u16> {
+        OsStr::new(value).encode_wide().chain(Some(0)).collect()
+    }
+
+    let operation = wide("open");
+    let target = wide(url);
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            operation.as_ptr(),
+            target.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    (result as isize) > 32
 }
 
 fn oauth_browser_helper_path() -> Option<PathBuf> {
@@ -485,20 +500,8 @@ fn oauth_browser_helper_path() -> Option<PathBuf> {
 
     #[cfg(target_os = "windows")]
     {
-        let path = dir.join("open-url.cmd");
-        let script = r#"@echo off
-setlocal
-set "url=%~1"
-if "%url%"=="" exit /b 0
-powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Start-Process -FilePath $args[0]" "%url%" >nul 2>nul
-if not errorlevel 1 exit /b 0
-explorer.exe "%url%" >nul 2>nul
-if not errorlevel 1 exit /b 0
-start "" "%url%"
-exit /b 0
-"#;
-        std::fs::write(&path, script).ok()?;
-        Some(path)
+        let _ = dir;
+        None
     }
 
     #[cfg(target_os = "macos")]
@@ -560,39 +563,7 @@ fn open_login_url_in_browser(url: &str) -> bool {
 
     #[cfg(target_os = "windows")]
     {
-        let mut command = Command::new("powershell.exe");
-        command.args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            "Start-Process -FilePath $args[0]",
-            url,
-        ]);
-        if run_background_null(command) {
-            return true;
-        }
-
-        let mut command = Command::new("explorer.exe");
-        command.arg(url);
-        if run_background_null(command) {
-            return true;
-        }
-
-        let mut command = Command::new("cmd.exe");
-        command.arg("/D").arg("/C").arg("start").arg("").arg(url);
-        if run_background_null(command) {
-            return true;
-        }
-
-        let mut command = Command::new("rundll32.exe");
-        command.args(["url.dll,FileProtocolHandler", url]);
-        if run_background_null(command) {
-            return true;
-        }
-
-        false
+        windows_shell_execute_url(url)
     }
 
     #[cfg(target_os = "macos")]

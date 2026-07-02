@@ -129,7 +129,7 @@ dependencies = [
 
 [[package]]
 name = "atelier"
-version = "0.1.62"
+version = "0.1.63"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -155,6 +155,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tokio",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 [package]
 name = "atelier"
-version = "0.1.62"
+version = "0.1.63"
 description = "Atelier — 이미지 붙여넣기가 되는 GUI 터미널"
 authors = ["BYKAYLE <indra850@gmail.com>"]
 edition = "2021"
@@ -43,6 +43,9 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [features]
 default = ["custom-protocol"]
