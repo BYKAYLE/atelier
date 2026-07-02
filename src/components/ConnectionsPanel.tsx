@@ -304,16 +304,23 @@ const COPY = {
 type CopyT = typeof COPY[keyof typeof COPY];
 
 async function openExternalUrl(url: string) {
-  try {
-    await providerOpenOauthLoginUrl(url);
-    return;
-  } catch {
-    // Fall through to the webview/browser fallback below.
-  }
+  let opened = false;
   try {
     const { open } = await import("@tauri-apps/plugin-shell");
     await open(url);
+    opened = true;
   } catch {
+    // Fall through to the Rust/browser fallback below.
+  }
+  if (!opened) {
+    try {
+      await providerOpenOauthLoginUrl(url);
+      opened = true;
+    } catch {
+      // Fall through to the webview fallback below.
+    }
+  }
+  if (!opened) {
     window.open(url, "_blank", "noopener,noreferrer");
   }
 }
@@ -361,17 +368,23 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
   }, [refresh]);
 
   const pollRef = useRef<number | null>(null);
+  const openedLoginUrlsRef = useRef<Record<string, string | null>>({});
   useEffect(() => {
     if (!loginModal) return;
     const start = Date.now();
     pollRef.current = window.setInterval(async () => {
       const loginState = await providerOauthLoginState(loginModal.provider).catch(() => null);
       if (loginState) {
+        const nextUrl = loginState.login_url || loginModal.loginUrl || null;
+        if (nextUrl && openedLoginUrlsRef.current[loginModal.provider] !== nextUrl) {
+          openedLoginUrlsRef.current[loginModal.provider] = nextUrl;
+          void openExternalUrl(nextUrl);
+        }
         setLoginModal((m) =>
           m
             ? {
                 ...m,
-                loginUrl: loginState.login_url || m.loginUrl || null,
+                loginUrl: nextUrl,
                 diagnostic: loginState.output || m.diagnostic || null,
               }
             : null,
@@ -411,6 +424,7 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
     setBusyId(p.id);
     setPanelError(null);
     setPanelNotice(null);
+    openedLoginUrlsRef.current[p.id] = null;
     try {
       const result = await providerLoginOauth(p.id, force);
       const notice = loginNoticeForResult(p, result);
@@ -423,6 +437,10 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
         loginUrl: result.login_url || null,
         diagnostic: result.diagnostic || null,
       });
+      if (result.login_url) {
+        openedLoginUrlsRef.current[p.id] = result.login_url;
+        void openExternalUrl(result.login_url);
+      }
       void refresh(p.id);
       if (result.completed || result.already_logged_in) {
         setTimeout(() => setLoginModal(null), 1400);

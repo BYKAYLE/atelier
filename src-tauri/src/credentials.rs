@@ -468,6 +468,17 @@ fn spawn_background_null(mut command: Command) -> bool {
         .is_ok()
 }
 
+#[cfg(target_os = "windows")]
+fn run_background_null(mut command: Command) -> bool {
+    configure_background_command(&mut command);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 fn oauth_browser_helper_path() -> Option<PathBuf> {
     let dir = std::env::temp_dir().join("atelier-oauth-browser");
     std::fs::create_dir_all(&dir).ok()?;
@@ -479,6 +490,10 @@ fn oauth_browser_helper_path() -> Option<PathBuf> {
 setlocal
 set "url=%~1"
 if "%url%"=="" exit /b 0
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Start-Process -FilePath $args[0]" "%url%" >nul 2>nul
+if not errorlevel 1 exit /b 0
+explorer.exe "%url%" >nul 2>nul
+if not errorlevel 1 exit /b 0
 start "" "%url%"
 exit /b 0
 "#;
@@ -528,12 +543,14 @@ fn configure_login_browser_env_for_command(command: &mut Command) {
     if let Some(helper) = oauth_browser_helper_path() {
         command.env("BROWSER", helper);
     }
+    command.env("ATELIER_OAUTH_BROWSER", "1");
 }
 
 fn configure_login_browser_env_for_pty(cmd: &mut CommandBuilder) {
     if let Some(helper) = oauth_browser_helper_path() {
         cmd.env("BROWSER", helper.to_string_lossy().into_owned());
     }
+    cmd.env("ATELIER_OAUTH_BROWSER", "1");
 }
 
 fn open_login_url_in_browser(url: &str) -> bool {
@@ -543,34 +560,35 @@ fn open_login_url_in_browser(url: &str) -> bool {
 
     #[cfg(target_os = "windows")]
     {
-        let mut command = Command::new("cmd.exe");
-        command.arg("/D").arg("/C").arg("start").arg("").arg(url);
-        if spawn_background_null(command) {
-            return true;
-        }
-
-        let mut command = Command::new("explorer.exe");
-        command.arg(url);
-        if spawn_background_null(command) {
-            return true;
-        }
-
         let mut command = Command::new("powershell.exe");
         command.args([
             "-NoProfile",
+            "-NonInteractive",
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
             "Start-Process -FilePath $args[0]",
             url,
         ]);
-        if spawn_background_null(command) {
+        if run_background_null(command) {
+            return true;
+        }
+
+        let mut command = Command::new("explorer.exe");
+        command.arg(url);
+        if run_background_null(command) {
+            return true;
+        }
+
+        let mut command = Command::new("cmd.exe");
+        command.arg("/D").arg("/C").arg("start").arg("").arg(url);
+        if run_background_null(command) {
             return true;
         }
 
         let mut command = Command::new("rundll32.exe");
         command.args(["url.dll,FileProtocolHandler", url]);
-        if spawn_background_null(command) {
+        if run_background_null(command) {
             return true;
         }
 
