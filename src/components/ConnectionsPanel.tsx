@@ -179,10 +179,11 @@ const COPY = {
     loginModalCodeSubmit: "코드 전달",
     loginModalCodeSubmitting: "전달 중…",
     loginModalCodeSubmitted: "전달됨",
-    loginModalWaitingUrl: "브라우저가 열리지 않으면 로그인 URL을 감지하는 즉시 아래에 표시합니다.",
+    loginModalWaitingUrl: "브라우저가 열리지 않으면 로그인 URL을 감지하는 즉시 여기 표시합니다.",
     loginModalOpenUrl: "브라우저 열기",
     loginModalCopyUrl: "URL 복사",
     loginModalUrlCopied: "복사됨",
+    loginModalOpenFailed: "자동 열기에 실패했습니다. URL을 복사해서 브라우저 주소창에 붙여넣어 주세요.",
     loginModalCliOutput: "CLI 출력",
     hermesTitle: "Hermes (로컬)",
     hermesDesc:
@@ -264,6 +265,7 @@ const COPY = {
     loginModalOpenUrl: "Open browser",
     loginModalCopyUrl: "Copy URL",
     loginModalUrlCopied: "Copied",
+    loginModalOpenFailed: "Automatic open failed. Copy the URL and paste it into your browser address bar.",
     loginModalCliOutput: "CLI output",
     hermesTitle: "Hermes (local)",
     hermesDesc:
@@ -303,7 +305,7 @@ const COPY = {
 
 type CopyT = typeof COPY[keyof typeof COPY];
 
-async function openExternalUrl(url: string) {
+async function openExternalUrl(url: string): Promise<boolean> {
   let opened = false;
   try {
     const { open } = await import("@tauri-apps/plugin-shell");
@@ -321,8 +323,9 @@ async function openExternalUrl(url: string) {
     }
   }
   if (!opened) {
-    window.open(url, "_blank", "noopener,noreferrer");
+    opened = window.open(url, "_blank", "noopener,noreferrer") !== null;
   }
+  return opened;
 }
 
 export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
@@ -1261,6 +1264,7 @@ const LoginModal: React.FC<{
   const [submitState, setSubmitState] = useState<"idle" | "submitting" | "submitted">("idle");
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
+  const [openError, setOpenError] = useState<string | null>(null);
   const showCodeInput = provider === "claude" && !detected;
 
   async function handleSubmitCode() {
@@ -1285,6 +1289,13 @@ const LoginModal: React.FC<{
     } catch {
       setCopyState("idle");
     }
+  }
+
+  async function handleOpenUrl() {
+    if (!loginUrl) return;
+    setOpenError(null);
+    const opened = await openExternalUrl(loginUrl);
+    if (!opened) setOpenError(copy.loginModalOpenFailed);
   }
 
   return (
@@ -1315,10 +1326,17 @@ const LoginModal: React.FC<{
           >
             {loginUrl ? (
               <div className="space-y-2">
-                <code className="block truncate gb-mono text-[11.5px]">{loginUrl}</code>
+                <code
+                  className={cls(
+                    "block max-h-16 overflow-auto break-all rounded border p-2 gb-mono text-[11.5px]",
+                    dark ? "border-dline bg-dpanel text-dink" : "border-line bg-cream text-ink",
+                  )}
+                >
+                  {loginUrl}
+                </code>
                 <div className="flex items-center gap-2 flex-wrap">
                   <button
-                    onClick={() => void openExternalUrl(loginUrl)}
+                    onClick={() => void handleOpenUrl()}
                     className="h-8 px-3 rounded-md border bg-[var(--accent)] text-white border-[var(--accent-hover)] text-[12px] font-medium"
                   >
                     {copy.loginModalOpenUrl}
@@ -1333,6 +1351,11 @@ const LoginModal: React.FC<{
                     {copyState === "copied" ? copy.loginModalUrlCopied : copy.loginModalCopyUrl}
                   </button>
                 </div>
+                {openError && (
+                  <div className={cls("text-[11.5px]", dark ? "text-red-300" : "text-red-700")}>
+                    {openError}
+                  </div>
+                )}
               </div>
             ) : (
               <div>{copy.loginModalWaitingUrl}</div>

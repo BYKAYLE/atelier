@@ -494,52 +494,51 @@ fn windows_shell_execute_url(url: &str) -> bool {
     (result as isize) > 32
 }
 
+#[cfg(target_os = "windows")]
+fn oauth_browser_helper_path() -> Option<PathBuf> {
+    // Avoid generating a temporary .cmd/.ps1 browser helper on Windows. Smart
+    // App Control can block those transient scripts, while explorer.exe is a
+    // trusted system binary and accepts a URL argument from OAuth CLIs.
+    Some(PathBuf::from("explorer.exe"))
+}
+
+#[cfg(target_os = "macos")]
 fn oauth_browser_helper_path() -> Option<PathBuf> {
     let dir = std::env::temp_dir().join("atelier-oauth-browser");
     std::fs::create_dir_all(&dir).ok()?;
 
-    #[cfg(target_os = "windows")]
-    {
-        let _ = dir;
-        None
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let path = dir.join("open-url.sh");
-        let script = r#"#!/bin/sh
+    let path = dir.join("open-url.sh");
+    let script = r#"#!/bin/sh
 url="$1"
 [ -n "$url" ] || exit 0
 /usr/bin/open "$url" >/dev/null 2>&1
 exit 0
 "#;
-        std::fs::write(&path, script).ok()?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&path).ok()?.permissions();
-            perms.set_mode(0o700);
-            let _ = std::fs::set_permissions(&path, perms);
-        }
-        Some(path)
-    }
+    std::fs::write(&path, script).ok()?;
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = std::fs::metadata(&path).ok()?.permissions();
+    perms.set_mode(0o700);
+    let _ = std::fs::set_permissions(&path, perms);
+    Some(path)
+}
 
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let path = dir.join("open-url.sh");
-        let script = r#"#!/bin/sh
+#[cfg(all(unix, not(target_os = "macos")))]
+fn oauth_browser_helper_path() -> Option<PathBuf> {
+    let dir = std::env::temp_dir().join("atelier-oauth-browser");
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join("open-url.sh");
+    let script = r#"#!/bin/sh
 url="$1"
 [ -n "$url" ] || exit 0
 xdg-open "$url" >/dev/null 2>&1
 exit 0
 "#;
-        std::fs::write(&path, script).ok()?;
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&path).ok()?.permissions();
-        perms.set_mode(0o700);
-        let _ = std::fs::set_permissions(&path, perms);
-        Some(path)
-    }
+    std::fs::write(&path, script).ok()?;
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = std::fs::metadata(&path).ok()?.permissions();
+    perms.set_mode(0o700);
+    let _ = std::fs::set_permissions(&path, perms);
+    Some(path)
 }
 
 fn configure_login_browser_env_for_command(command: &mut Command) {
@@ -563,7 +562,22 @@ fn open_login_url_in_browser(url: &str) -> bool {
 
     #[cfg(target_os = "windows")]
     {
-        windows_shell_execute_url(url)
+        if windows_shell_execute_url(url) {
+            return true;
+        }
+        let mut explorer = Command::new("explorer.exe");
+        explorer.arg(url);
+        if spawn_background_null(explorer) {
+            return true;
+        }
+        let mut rundll32 = Command::new("rundll32.exe");
+        rundll32.args(["url.dll,FileProtocolHandler", url]);
+        if spawn_background_null(rundll32) {
+            return true;
+        }
+        let mut cmd = Command::new("cmd.exe");
+        cmd.args(["/D", "/C", "start", "", url]);
+        spawn_background_null(cmd)
     }
 
     #[cfg(target_os = "macos")]
