@@ -1096,8 +1096,13 @@ async function readUpdateInstallInfo(): Promise<UpdateInstallInfo> {
       .then((m) => m.getBundleType())
       .catch(() => null),
   ]);
+  const exePath = runtime.exe_path || "";
+  const exePathLower = exePath.toLowerCase().replace(/\//g, "\\");
+  const windowsStoreLike = runtime.windows_store_like
+    || (isWindowsRuntime() && (exePathLower.includes("\\windowsapps\\") || exePathLower.includes("atelieragent")));
   return {
     ...runtime,
+    windows_store_like: windowsStoreLike,
     bundleType: typeof bundleType === "string" ? bundleType : null,
   };
 }
@@ -1154,7 +1159,7 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
         installed: "Install complete. Restarting...",
         installFailed: (message: string) => `Install failed: ${message}`,
         unsupportedInstall:
-          "This install channel cannot be replaced safely by the GitHub updater. Open the GitHub release and install the matching package, or update from Microsoft Store if this is the Store build.",
+          "This is the Microsoft Store app (Atelier Agent). GitHub installers use a separate desktop package identity and would create another Atelier app instead of updating Atelier Agent. Update Atelier Agent through Microsoft Store / Partner Center, or uninstall the Store build before switching to the GitHub build.",
         availableTitle: (version: string) => `v${version} available`,
         installing: "Installing...",
         install: "Install + restart",
@@ -1188,7 +1193,7 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
         installed: "설치 완료. 재시작 중…",
         installFailed: (message: string) => `설치 실패: ${message}`,
         unsupportedInstall:
-          "현재 설치 채널은 GitHub updater로 안전하게 덮어쓸 수 없습니다. GitHub 릴리스에서 현재 채널과 맞는 설치 파일을 직접 설치하거나, Store 설치본이면 Microsoft Store 업데이트를 사용해야 합니다.",
+          "현재 설치본은 Microsoft Store용 Atelier Agent입니다. GitHub 설치 파일은 별도 데스크탑 패키지라서 Atelier Agent를 버전업하지 못하고 새로운 Atelier 앱을 하나 더 만들 수 있습니다. Atelier Agent는 Microsoft Store/Partner Center 패키지로 업데이트하거나, GitHub 빌드로 전환하려면 Store 설치본을 먼저 제거해야 합니다.",
         availableTitle: (version: string) => `v${version} 사용 가능`,
         installing: "설치 중…",
         install: "지금 설치 + 재시작",

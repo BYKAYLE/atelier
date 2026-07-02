@@ -2721,6 +2721,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   }, [sessions]);
   // 세션별 busy turn 추적 — 한 세션에서 진행 중이어도 다른 세션은 입력 가능.
   const [busyTurnIdsBySession, setBusyTurnIdsBySession] = useState<Record<string, string>>({});
+  const [stoppingTurnId, setStoppingTurnId] = useState<string | null>(null);
   const busyTurnIdsRef = useRef<Record<string, string>>({});
   const setBusyForSession = (sessionId: string, turnId: string | null) => {
     setBusyTurnIdsBySession((prev) => {
@@ -2745,6 +2746,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     const handle = window.setInterval(() => setNowTickMs(Date.now()), 1000);
     return () => window.clearInterval(handle);
   }, [anyBusy]);
+  useEffect(() => {
+    if (!stoppingTurnId) return;
+    if (Object.values(busyTurnIdsBySession).includes(stoppingTurnId)) return;
+    setStoppingTurnId(null);
+  }, [busyTurnIdsBySession, stoppingTurnId]);
   const [visibleTextById, setVisibleTextById] = useState<Record<string, string>>({});
   const [reviewOpenById, setReviewOpenById] = useState<Record<string, boolean>>({});
   const [expandedDiffByKey, setExpandedDiffByKey] = useState<Record<string, boolean>>({});
@@ -2762,6 +2768,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const previewHydratingSessionRef = useRef<string | null>(null);
   const pendingStreamRef = useRef<Record<string, PendingAgentStream>>({});
   const interruptedTurnIdsRef = useRef<Set<string>>(new Set());
+  const stoppedTurnIdsRef = useRef<Set<string>>(new Set());
   const animatedAssistantIdsRef = useRef<Set<string>>(new Set());
   const backgroundedAssistantIdsRef = useRef<Set<string>>(new Set());
   const smoothTargetsRef = useRef<Record<string, string>>({});
@@ -2872,7 +2879,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         factoryLauncherTitle: "Start or resume a Stella Factory autonomous development session",
         placeholder: "Ask the selected agent to change, inspect, or explain this workspace...",
         send: "Send",
+        stop: "Stop",
+        stopping: "Stopping...",
         stopHint: "A running turn finishes through the selected CLI; terminal fallback remains available.",
+        stoppedResponse: "Run stopped by the user.",
+        stopFailed: (message: string) => `Stop failed: ${message}`,
         draftHint: "You can keep typing the next message while this turn runs.",
         noMessages: "Start a structured agent session. Messages and raw events are saved locally.",
         events: "Events",
@@ -3014,7 +3025,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         factoryLauncherTitle: "Stella Factory 자율 개발 세션 시작 또는 재개",
         placeholder: "선택한 에이전트에게 이 작업공간의 수정, 분석, 설명을 요청하세요...",
         send: "보내기",
+        stop: "중지",
+        stopping: "중지 중…",
         stopHint: "실행 중인 턴은 선택한 CLI가 끝낼 때 완료됩니다. 터미널은 보조 화면으로 남겨둡니다.",
+        stoppedResponse: "사용자가 실행을 중지했습니다.",
+        stopFailed: (message: string) => `중지 실패: ${message}`,
         draftHint: "실행 중에도 다음 메시지를 계속 입력할 수 있습니다.",
         noMessages: "구조화된 에이전트 세션을 시작하세요. 메시지와 원본 이벤트가 로컬에 저장됩니다.",
         events: "이벤트",
@@ -3100,6 +3115,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   );
   // active 세션 기준 busy 가드 — 다른 세션이 바빠도 active가 한가하면 입력 가능.
   const busyTurnId: string | null = active ? busyTurnIdsBySession[active.id] || null : null;
+  const isStoppingActiveTurn = Boolean(busyTurnId && stoppingTurnId === busyTurnId);
 
   const refreshFactoryStatus = async () => {
     if (!isTauri() || !cwd.trim()) {
@@ -5685,6 +5701,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         flushAgentStream(assistantId);
         delete pendingStreamRef.current[assistantId];
         const wasInterrupted = interruptedTurnIdsRef.current.has(turnId);
+        const wasStopped = stoppedTurnIdsRef.current.has(turnId);
         let finalTextForReveal = "";
         const fallbackRawEvents = result.raw_events.slice(-MAX_RAW_EVENTS).map(clipRawEvent);
         patchSession(sessionId, (s) => ({
@@ -5708,16 +5725,16 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                   text: (() => {
                     finalTextForReveal = cleanAgentText(result.text)
                     || cleanAgentText(m.text)
-                    || (wasInterrupted ? copy.interruptedResponse : "")
+                    || (wasStopped ? copy.stoppedResponse : wasInterrupted ? copy.interruptedResponse : "")
                     || cleanAgentText(result.error)
                     || (result.is_error ? `실행 실패: ${result.error || "Agent error"}` : copy.noResponse);
                     return finalTextForReveal;
                   })(),
-                  status: wasInterrupted ? "done" : result.is_error ? "error" : "done",
+                  status: wasStopped || wasInterrupted ? "done" : result.is_error ? "error" : "done",
                   rawEvents: messageRawEvents.length ? messageRawEvents.slice(-MAX_RAW_EVENTS) : m.rawEvents,
-                  changeBaselineId: !result.is_error && !wasInterrupted ? changeBaseline?.id || null : null,
-                  changeCwd: !result.is_error && !wasInterrupted ? runCwd : m.changeCwd,
-                  changes: !result.is_error && !wasInterrupted ? null : m.changes,
+                  changeBaselineId: !result.is_error && !wasInterrupted && !wasStopped ? changeBaseline?.id || null : null,
+                  changeCwd: !result.is_error && !wasInterrupted && !wasStopped ? runCwd : m.changeCwd,
+                  changes: !result.is_error && !wasInterrupted && !wasStopped ? null : m.changes,
                   changesLoading: false,
                   changesChecked: false,
                   changesError: null,
@@ -5738,7 +5755,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
               `Provider: ${session.provider}`,
               `Model: ${runModel}`,
               `Workspace: ${runCwd || "(not set)"}`,
-              `Status: ${wasInterrupted ? "interrupted" : result.is_error ? "error" : "done"}`,
+              `Status: ${wasStopped ? "stopped" : wasInterrupted ? "interrupted" : result.is_error ? "error" : "done"}`,
               payload.factoryEvidence ? `\nPreflight:\n${clipBlockText(payload.factoryEvidence, 4000)}` : "",
               `\nResult:\n${clipBlockText(finalTextForReveal || result.error || copy.noResponse, 6000)}`,
             ].filter(Boolean).join("\n"),
@@ -5759,6 +5776,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       flushAgentStream(assistantId);
       delete pendingStreamRef.current[assistantId];
       const wasInterrupted = interruptedTurnIdsRef.current.has(turnId);
+      const wasStopped = stoppedTurnIdsRef.current.has(turnId);
       let finalTextForReveal = "";
       patchSession(sessionId, (s) => ({
         ...s,
@@ -5768,10 +5786,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                 ...m,
                 text: (() => {
                   finalTextForReveal = cleanAgentText(m.text)
-                    || (wasInterrupted ? copy.interruptedResponse : `실행 실패: ${String(err)}`);
+                    || (wasStopped ? copy.stoppedResponse : wasInterrupted ? copy.interruptedResponse : `실행 실패: ${String(err)}`);
                   return finalTextForReveal;
                 })(),
-                status: wasInterrupted ? "done" : "error",
+                status: wasStopped || wasInterrupted ? "done" : "error",
               }
             : m,
         ),
@@ -5799,6 +5817,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       flushAgentStream(assistantId);
       delete pendingStreamRef.current[assistantId];
       interruptedTurnIdsRef.current.delete(turnId);
+      stoppedTurnIdsRef.current.delete(turnId);
       setBusyForSession(sessionId, null);
       startNextQueuedTurn(sessionId);
     }
@@ -5945,6 +5964,28 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       return;
     }
     await runAgentTurn(session.id, payload);
+  };
+
+  const stopActiveTurn = async () => {
+    if (!active || !busyTurnId || isStoppingActiveTurn) return;
+    if (!isTauri()) {
+      setPasteError(copy.stopFailed("Tauri runtime unavailable"));
+      return;
+    }
+    const turnId = busyTurnId;
+    stoppedTurnIdsRef.current.add(turnId);
+    setStoppingTurnId(turnId);
+    setPasteError(null);
+    try {
+      const stopped = await agentCancel(turnId);
+      if (!stopped) {
+        setPasteError(copy.stopFailed(tw.language === "en" ? "No running process was found." : "실행 중인 프로세스를 찾지 못했습니다."));
+      }
+    } catch (err) {
+      stoppedTurnIdsRef.current.delete(turnId);
+      setStoppingTurnId((current) => current === turnId ? null : current);
+      setPasteError(copy.stopFailed(String(err)));
+    }
   };
 
   const onSubmit = (e: React.FormEvent) => {
@@ -6879,6 +6920,21 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                       </select>
                     )}
                   </div>
+                  {busyTurnId && (
+                    <button
+                      type="button"
+                      onClick={stopActiveTurn}
+                      disabled={isStoppingActiveTurn}
+                      className={cls(
+                        "h-8 px-3 rounded-[7px] border text-[12px] font-medium whitespace-nowrap disabled:opacity-50",
+                        dark
+                          ? "border-[#7a4638] bg-[#2a211e] text-[#f28b68] hover:bg-[#342722]"
+                          : "border-[#d7a08a] bg-[#fff4ef] text-[#b94f2f] hover:bg-[#ffe8df]",
+                      )}
+                    >
+                      {isStoppingActiveTurn ? copy.stopping : copy.stop}
+                    </button>
+                  )}
                   <button
                     type="submit"
                     disabled={(!composerUi.hasText && pendingAttachments.length === 0) || isPastingImage}

@@ -106,7 +106,7 @@ async fn runtime_install_info() -> std::result::Result<RuntimeInstallInfo, Strin
     #[cfg(target_os = "windows")]
     let windows_store_like = {
         let lower = exe_path.to_ascii_lowercase().replace('/', "\\");
-        lower.contains("\\windowsapps\\")
+        lower.contains("\\windowsapps\\") || lower.contains("atelieragent")
     };
 
     #[cfg(not(target_os = "windows"))]
