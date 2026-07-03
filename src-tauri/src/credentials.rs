@@ -183,11 +183,24 @@ fn provider_meta(provider: &str) -> Option<ProviderMeta> {
 
 fn oauth_login_attempts(provider: &str, fallback_cmd: &'static str) -> Vec<Vec<&'static str>> {
     match provider {
-        // Windows Claude Code builds repeatedly fail or produce mojibake stderr
-        // from `auth login --claudeai`. Prefer the code-paste flow first.
-        "claude" => vec![vec!["setup-token"], vec!["auth", "login", "--claudeai"]],
+        "claude" => claude_oauth_login_attempts(),
         _ => vec![vec![fallback_cmd]],
     }
+}
+
+#[cfg(target_os = "windows")]
+fn claude_oauth_login_attempts() -> Vec<Vec<&'static str>> {
+    // Windows Claude Code builds repeatedly fail or produce mojibake stderr
+    // from `auth login --claudeai`. Prefer the code-paste flow first there.
+    vec![vec!["setup-token"], vec!["auth", "login", "--claudeai"]]
+}
+
+#[cfg(not(target_os = "windows"))]
+fn claude_oauth_login_attempts() -> Vec<Vec<&'static str>> {
+    // On macOS/Linux, `auth login --claudeai` emits a full OAuth authorize URL
+    // with redirect_uri/code_challenge. `setup-token` can open Claude's code
+    // page directly and hit "missing redirect_uri" in a desktop OAuth handoff.
+    vec![vec!["auth", "login", "--claudeai"], vec!["setup-token"]]
 }
 
 fn oauth_login_uses_pty(provider: &str) -> bool {
@@ -2858,10 +2871,16 @@ mod tests {
     }
 
     #[test]
-    fn claude_subscription_login_falls_back_to_setup_token() {
+    fn claude_subscription_login_uses_platform_specific_attempt_order() {
+        #[cfg(target_os = "windows")]
         assert_eq!(
             oauth_login_attempts("claude", "login"),
             vec![vec!["setup-token"], vec!["auth", "login", "--claudeai"]]
+        );
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(
+            oauth_login_attempts("claude", "login"),
+            vec![vec!["auth", "login", "--claudeai"], vec!["setup-token"]]
         );
         assert_eq!(oauth_login_attempts("codex", "login"), vec![vec!["login"]]);
     }
@@ -2910,6 +2929,15 @@ mod tests {
             url,
             "https://chatgpt.com/backend-api/codex/auth?state=abc&code_challenge=def"
         );
+    }
+
+    #[test]
+    fn login_url_extraction_preserves_claude_redirect_uri() {
+        let text = "Open browser: https://claude.com/cai/oauth/authorize?code=true&client_id=abc&redirect_uri=https%3A%2F%2Fconsole.anthropic.com%2Foauth%2Fcode%2Fcallback&code_challenge=secret&state=xyz";
+        let url = extract_login_url(text).expect("claude login url should be extracted");
+        assert!(url.contains("redirect_uri="));
+        assert!(url.contains("code_challenge=secret"));
+        assert!(url.ends_with("state=xyz"));
     }
 
     #[test]
