@@ -1236,6 +1236,37 @@ fn which(cli: &str) -> bool {
     }
 }
 
+fn cli_runs_for_provider(provider: &str, cli: &str) -> bool {
+    if !which(cli) {
+        return false;
+    }
+
+    // `command -v` only proves that a shim exists. npm-installed agent CLIs can
+    // still be broken when their native vendor binary is missing, which makes
+    // OAuth look like a browser failure even though the CLI never starts.
+    if !matches!(provider, "claude" | "codex") {
+        return true;
+    }
+
+    let mut command = cli_command(cli);
+    command
+        .arg("--version")
+        .env("PATH", crate::augmented_cli_path());
+    matches!(
+        command_output_timeout(command, Duration::from_secs(3)),
+        Ok(Some(output)) if output.status.success()
+    )
+}
+
+fn provider_cli_installed(provider: &str, meta: &ProviderMeta) -> bool {
+    if provider == "gajecode" {
+        return gajecode_cli_installed();
+    }
+    meta.cli
+        .map(|cli| cli_runs_for_provider(provider, cli))
+        .unwrap_or(false)
+}
+
 fn command_output_timeout(mut command: Command, timeout: Duration) -> io::Result<Option<Output>> {
     configure_background_command(&mut command);
     command
@@ -1287,7 +1318,7 @@ fn command_output_with_stdin_timeout(
 }
 
 fn detect_oauth(provider: &str) -> bool {
-    if provider == "codex" && which("codex") {
+    if provider == "codex" && cli_runs_for_provider(provider, "codex") {
         let mut command = cli_command("codex");
         command
             .args(["login", "status"])
@@ -1311,7 +1342,7 @@ fn detect_oauth(provider: &str) -> bool {
         }
     }
 
-    if provider == "claude" && which("claude") {
+    if provider == "claude" && cli_runs_for_provider(provider, "claude") {
         let mut command = cli_command("claude");
         command
             .args(["auth", "status"])
@@ -1916,11 +1947,7 @@ pub fn sync_codex_auth_to_hermes() -> Result<bool, String> {
 #[tauri::command]
 pub async fn provider_status(provider: String) -> Result<ProviderStatus, String> {
     let meta = provider_meta(&provider).ok_or_else(|| format!("unknown provider: {provider}"))?;
-    let cli_installed = if provider == "gajecode" {
-        gajecode_cli_installed()
-    } else {
-        meta.cli.map(which).unwrap_or(false)
-    };
+    let cli_installed = provider_cli_installed(&provider, &meta);
     let oauth_logged_in = meta.supports_oauth && detect_oauth(&provider);
     let (api_key_present, api_key_masked) = if meta.supports_api {
         if let Some(key) = read_api_key(&provider) {
@@ -2019,13 +2046,11 @@ pub async fn provider_login_oauth(
     }
     let cli = meta.cli.ok_or("cli not configured")?;
     let cmd = meta.login_cmd.ok_or("login_cmd not configured")?;
-    let cli_installed = if provider == "gajecode" {
-        gajecode_cli_installed()
-    } else {
-        which(cli)
-    };
+    let cli_installed = provider_cli_installed(&provider, &meta);
     if !cli_installed {
-        return Err(format!("CLI '{cli}' is not installed"));
+        return Err(format!(
+            "CLI '{cli}' is not installed or cannot run. Use automatic install, then try subscription sign-in again."
+        ));
     }
     let force_login = force.unwrap_or(false);
     if !force_login && detect_oauth(&provider) {

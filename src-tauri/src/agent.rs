@@ -2196,6 +2196,10 @@ fn agent_line_is_command_dump(s: &str) -> bool {
 fn hermes_auth_error_message(text: &str) -> Option<String> {
     let lower = text.to_ascii_lowercase();
     let looks_like_auth_error = lower.contains("refresh token was already consumed")
+        || lower.contains("access token could not be refreshed")
+        || lower.contains("could not be refreshed because you have since logged out")
+        || lower.contains("logged out or signed in to another account")
+        || lower.contains("please sign in again")
         || lower.contains("run `hermes auth`")
         || lower.contains("run hermes auth")
         || lower.contains("hermes model` to re-authenticate")
@@ -2212,9 +2216,13 @@ fn hermes_auth_error_message(text: &str) -> Option<String> {
         .filter(|line| {
             !line.is_empty()
                 && (line.contains("refresh token")
+                    || line.contains("access token")
                     || line.contains("Codex")
                     || line.contains("credentials")
                     || line.contains("credential")
+                    || line.contains("logged out")
+                    || line.contains("signed in")
+                    || line.contains("sign in again")
                     || line.contains("hermes auth")
                     || line.contains("hermes model")
                     || line.contains("re-authenticate")
@@ -2224,10 +2232,10 @@ fn hermes_auth_error_message(text: &str) -> Option<String> {
         .join("\n");
 
     Some(if detail.is_empty() {
-        "Hermes/Codex 인증이 만료되어 실행을 이어가지 못했습니다. 터미널에서 codex 인증을 갱신한 뒤 hermes auth 또는 hermes model 재인증이 필요합니다.".to_string()
+        "Codex 구독 인증 토큰이 만료되었거나 다른 계정 로그인으로 무효화되었습니다. 설정 > 연결에서 ChatGPT 구독 로그인을 다시 진행해 주세요.".to_string()
     } else {
         format!(
-            "Hermes/Codex 인증이 만료되어 실행을 이어가지 못했습니다.\n{}",
+            "Codex 구독 인증이 만료되어 실행을 이어가지 못했습니다.\n\n설정 > 연결에서 ChatGPT 구독 로그인을 다시 진행해 주세요.\n\n원문:\n{}",
             detail
         )
     })
@@ -4777,6 +4785,25 @@ fn run_codex<R: Runtime>(
     let stderr_text = stderr_handle
         .and_then(|h| h.join().ok())
         .unwrap_or_default();
+    let auth_error =
+        hermes_auth_error_message(&format!("{}\n{}", raw_events.join("\n"), stderr_text));
+    if let Some(auth_error) = auth_error {
+        is_error = true;
+        final_text = auth_error.clone();
+        error = Some(auth_error.clone());
+        emit_agent_event(
+            &app,
+            &turn_id,
+            AgentStreamEvent {
+                kind: "error".into(),
+                text: Some(auth_error),
+                status: Some("codex.auth".into()),
+                raw: None,
+                provider_session_id: provider_session_id.clone(),
+                is_error: Some(true),
+            },
+        );
+    }
     if !status.success() {
         is_error = true;
         if error.is_none() {
@@ -6535,8 +6562,18 @@ mod tests {
             "Codex refresh token was already consumed by another client (e.g. Codex CLI or VS Code extension). Run `codex` in your terminal to generate fresh tokens, then run `hermes auth` to re-authenticate. Run `hermes model` to re-authenticate.",
         )
         .unwrap();
-        assert!(message.contains("Hermes/Codex 인증"));
+        assert!(message.contains("Codex 구독 인증"));
         assert!(message.contains("hermes auth"));
+    }
+
+    #[test]
+    fn codex_refresh_token_toast_is_promoted_to_relogin_message() {
+        let message = hermes_auth_error_message(
+            "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.",
+        )
+        .unwrap();
+        assert!(message.contains("ChatGPT 구독 로그인"));
+        assert!(message.contains("다시 진행"));
     }
 
     #[test]

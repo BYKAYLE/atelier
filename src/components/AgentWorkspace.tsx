@@ -2221,6 +2221,33 @@ function cleanAgentText(text?: string | null) {
   return collapseDumpyText(normalized).trim();
 }
 
+function improveReadableMarkdown(text: string) {
+  if (!text) return text;
+  const lines = text.split("\n");
+  let inCodeFence = false;
+  const out = lines.map((line) => {
+    if (/^\s*```/.test(line)) {
+      inCodeFence = !inCodeFence;
+      return line;
+    }
+    if (inCodeFence) return line;
+    const trimmed = line.trim();
+    if (
+      !trimmed ||
+      /^(\||#{1,6}\s|[-*+]\s|\d+\.\s|>|<\/?\w+)/.test(trimmed)
+    ) {
+      return line;
+    }
+    return line
+      .replace(/([^\n])\s+(\d{1,2})\.\s+(?=\S)/g, "$1\n\n$2. ")
+      .replace(/\s+(이\s+\d+개(?:가|는)\s+)/g, "\n\n$1")
+      .replace(/\s+(대상\s+코드베이스\b)/g, "\n\n$1")
+      .replace(/\s+(혹시\s+[^.?!。]*[?？])\s*/g, "\n\n$1\n\n")
+      .replace(/\s+(예를\s+들어[:：]?)/g, "\n\n$1");
+  });
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function cleanAgentDelta(text?: string | null) {
   if (!text) return "";
   return collapseDumpyText(stripAnsi(text).replace(/\r\n?/g, "\n"));
@@ -4825,9 +4852,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         : m.text;
       const isRevealing = isAnimatedAssistant && displayText !== m.text;
       const useStreamingRenderer = isAnimatedAssistant && (m.status === "streaming" || isRevealing);
-      const renderedText = useStreamingRenderer
+      const cleanedRenderedText = useStreamingRenderer
         ? cleanStreamingText(collapseDumpyText(displayText)).replace(/\s+$/g, "")
         : collapseDumpyText(m.text).replace(/\s+$/g, "");
+      const renderedText = m.role === "assistant" && !useStreamingRenderer
+        ? improveReadableMarkdown(cleanedRenderedText)
+        : cleanedRenderedText;
       const hasRenderedText = renderedText.trim().length > 0;
       return (
         <article key={m.id} className={cls("flex min-w-0 gap-3", m.role === "user" ? "justify-end" : "justify-start")}>
@@ -4848,7 +4878,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                     dark ? "bg-[#34312e] border-[#4a4039] text-dink" : "bg-[#fff8f2] border-[#eed7c8] text-ink",
                   )
                 : cls(
-                    "flex-1 max-w-full font-mono leading-[1.55] py-1",
+                    "flex-1 max-w-full text-[13.5px] leading-[1.68] py-1",
                     dark ? "text-dink" : "text-ink",
                   ),
             )}

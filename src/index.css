@@ -176,6 +176,7 @@ body.dark {
   min-width: 0;
   overflow-wrap: anywhere;
   word-break: normal;
+  line-height: 1.72;
 }
 .atelier-chat-markdown > :first-child {
   margin-top: 0;
@@ -184,7 +185,7 @@ body.dark {
   margin-bottom: 0;
 }
 .atelier-chat-markdown p {
-  margin: 0 0 0.55em;
+  margin: 0 0 0.75em;
 }
 .atelier-chat-markdown h1,
 .atelier-chat-markdown h2,
@@ -204,11 +205,11 @@ body.dark {
 }
 .atelier-chat-markdown ul,
 .atelier-chat-markdown ol {
-  margin: 0 0 0.65em;
+  margin: 0.15em 0 0.85em;
   padding-left: 1.35em;
 }
 .atelier-chat-markdown li {
-  margin: 0.15em 0;
+  margin: 0.28em 0;
 }
 .atelier-chat-markdown strong {
   font-weight: 700;
