@@ -5036,7 +5036,28 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     const icon = !last || last.kind === "thinking" ? "…" : I.terminal;
     return (
       <div className="atelier-activity-codex" aria-live="polite">
-        <div className="atelier-activity-elapsed">{elapsedLabel}</div>
+        <div className="flex items-center justify-between gap-3">
+          <div className="atelier-activity-elapsed">{elapsedLabel}</div>
+          {busyTurnId && (
+            <button
+              type="button"
+              onClick={stopActiveTurn}
+              disabled={isStoppingActiveTurn}
+              className={cls(
+                "shrink-0 h-8 rounded-[7px] border px-3 inline-flex items-center gap-2 text-[12px] font-medium disabled:opacity-50",
+                dark
+                  ? "border-[#7a4638] bg-[#2a211e] text-[#f28b68] hover:bg-[#342722]"
+                  : "border-[#d7a08a] bg-[#fff4ef] text-[#b94f2f] hover:bg-[#ffe8df]",
+              )}
+              aria-label={isStoppingActiveTurn ? copy.stopping : copy.stop}
+              title={isStoppingActiveTurn ? copy.stopping : copy.stop}
+              data-testid="agent-stop-activity"
+            >
+              <span aria-hidden="true" className="h-2.5 w-2.5 rounded-[2px] bg-current" />
+              <span>{isStoppingActiveTurn ? copy.stopping : copy.stop}</span>
+            </button>
+          )}
+        </div>
         <div className="atelier-activity-line atelier-activity-active">
           <span className="atelier-activity-icon" aria-hidden="true">{icon}</span>
           <span className="atelier-activity-label">{currentLabel}</span>
@@ -6271,7 +6292,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     await runAgentTurn(session.id, payload);
   };
 
-  const stopActiveTurn = async () => {
+  async function stopActiveTurn() {
     if (!active || !busyTurnId || isStoppingActiveTurn) return;
     if (!isTauri()) {
       setPasteError(copy.stopFailed("Tauri runtime unavailable"));
@@ -6291,7 +6312,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       setStoppingTurnId((current) => current === turnId ? null : current);
       setPasteError(copy.stopFailed(String(err)));
     }
-  };
+  }
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -7260,13 +7281,17 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                       onClick={stopActiveTurn}
                       disabled={isStoppingActiveTurn}
                       className={cls(
-                        "h-8 px-3 rounded-[7px] border text-[12px] font-medium whitespace-nowrap disabled:opacity-50",
+                        "shrink-0 h-8 px-3 rounded-[7px] border inline-flex items-center gap-2 text-[12px] font-medium whitespace-nowrap disabled:opacity-50",
                         dark
                           ? "border-[#7a4638] bg-[#2a211e] text-[#f28b68] hover:bg-[#342722]"
                           : "border-[#d7a08a] bg-[#fff4ef] text-[#b94f2f] hover:bg-[#ffe8df]",
                       )}
+                      aria-label={isStoppingActiveTurn ? copy.stopping : copy.stop}
+                      title={isStoppingActiveTurn ? copy.stopping : copy.stop}
+                      data-testid="agent-stop-composer"
                     >
-                      {isStoppingActiveTurn ? copy.stopping : copy.stop}
+                      <span aria-hidden="true" className="h-2.5 w-2.5 rounded-[2px] bg-current" />
+                      <span>{isStoppingActiveTurn ? copy.stopping : copy.stop}</span>
                     </button>
                   )}
                   <button

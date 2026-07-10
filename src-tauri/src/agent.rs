@@ -2497,6 +2497,22 @@ fn agent_children() -> &'static Mutex<HashMap<String, u32>> {
     CHILDREN.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+fn configure_agent_process_tree(command: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+
+        // Give every agent turn its own process group so cancelling the turn also
+        // stops shell commands and tool subprocesses spawned by the CLI.
+        command.process_group(0);
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = command;
+    }
+}
+
 struct AgentChildRegistration {
     turn_id: String,
 }
@@ -2523,7 +2539,12 @@ impl Drop for AgentChildRegistration {
 fn terminate_agent_pid(pid: u32) -> bool {
     #[cfg(unix)]
     {
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) == 0 }
+        let pid = pid as libc::pid_t;
+        unsafe {
+            // The group id matches the leader pid configured above. Keep a
+            // direct-pid fallback for turns started by an older app process.
+            libc::kill(-pid, libc::SIGTERM) == 0 || libc::kill(pid, libc::SIGTERM) == 0
+        }
     }
 
     #[cfg(windows)]
@@ -4559,6 +4580,7 @@ fn run_claude<R: Runtime>(
         },
     );
 
+    configure_agent_process_tree(&mut cmd);
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("claude spawn: {e} ({})", describe_cli_command("claude")))?;
@@ -4854,6 +4876,7 @@ fn run_codex<R: Runtime>(
         },
     );
 
+    configure_agent_process_tree(&mut cmd);
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("codex spawn: {e} ({})", describe_cli_command("codex")))?;
@@ -5284,6 +5307,7 @@ fn run_gajecode_inner<R: Runtime>(
         },
     );
 
+    configure_agent_process_tree(&mut cmd);
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("gajecode spawn: {e} ({})", describe_gajecode_command()))?;
@@ -5474,6 +5498,7 @@ fn run_hermes<R: Runtime>(
         },
     );
 
+    configure_agent_process_tree(&mut cmd);
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("hermes spawn: {e} ({})", describe_hermes_command()))?;
@@ -6467,6 +6492,33 @@ pub async fn agent_undo_changes(cwd: String, patch: String) -> std::result::Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn terminate_agent_pid_stops_agent_process_group() {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "sleep 30 & wait"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        configure_agent_process_tree(&mut command);
+
+        let mut child = command.spawn().expect("spawn isolated agent process group");
+        assert!(terminate_agent_pid(child.id()));
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            match child.try_wait().expect("poll cancelled agent") {
+                Some(_) => break,
+                None if Instant::now() < deadline => thread::sleep(Duration::from_millis(25)),
+                None => {
+                    let _ = child.kill();
+                    panic!("cancelled agent process group did not exit");
+                }
+            }
+        }
+    }
 
     #[test]
     fn gajecode_legacy_models_route_to_claude_subscription_defaults() {

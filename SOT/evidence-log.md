@@ -1,5 +1,27 @@
 # Evidence Log
 
+## 2026-07-11 Agent Turn Cancellation
+
+Implemented:
+
+- Added an explicit square stop control beside live agent activity and in the
+  composer action row for every active turn.
+- Connected both controls to the existing `agent_cancel` command with visible
+  stopping and failure states.
+- Started each Unix agent CLI in its own process group and changed cancellation
+  to terminate that group, covering subprocesses spawned by agent tool calls.
+- Bumped the local release candidate metadata to 0.1.80.
+
+Validation evidence:
+
+- Frontend build, fixture harness, Rust fmt/clippy, release audit, and all 51
+  Rust tests passed.
+- `terminate_agent_pid_stops_agent_process_group` proves an agent shell and its
+  inherited child process exit through the cancel path.
+- `npm run tauri:build` produced `Atelier_0.1.80_aarch64.dmg`.
+- `/Applications/Atelier.app` reports 0.1.80, passes strict code-signature
+  verification, and is running from the installed bundle.
+
 ## 2026-07-10 Release Stability and OAuth Hardening
 
 Observed failure classes:

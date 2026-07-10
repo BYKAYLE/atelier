@@ -1,18 +1,19 @@
 # Stella Factory Final Audit
 
-generated_at: 2026-07-10T18:28:00+09:00
+generated_at: 2026-07-11T02:27:59+09:00
 
 ## Judgment
 
-Atelier 0.1.79 is a local release candidate. The stability pass closes the
+Atelier 0.1.80 is a local release candidate. The stability pass closes the
 observed cross-provider execution, OAuth URL, Windows launcher, credential
 fan-out, retry, permission-default, and unsigned-release weaknesses at the code
-and automated-gate levels.
+and automated-gate levels. Active turns now expose stop controls and cancel the
+full agent process group on Unix.
 
 ## Evidence-Based Status
 
 - `code_test`: ready
-- `mac_installed`: reflected, version 0.1.79
+- `mac_installed`: reflected, version 0.1.80
 - `mac_public_release`: blocked by Developer ID/notarization
 - `windows_ci_package`: release candidate
 - `windows_interactive_oauth`: validation required on physical Windows

@@ -1,6 +1,6 @@
 # Readiness Report
 
-generated_at: 2026-07-10T18:28:00+09:00
+generated_at: 2026-07-11T02:27:59+09:00
 
 ## Goal
 
@@ -14,7 +14,7 @@ difference between source readiness, installed state, and public release state.
 ## Truth Surfaces
 
 - Source and automated checks: ready.
-- Installed macOS app: reflected at 0.1.79 and running from
+- Installed macOS app: reflected at 0.1.80 and running from
   `/Applications/Atelier.app`.
 - Public macOS release: blocked on Developer ID signing and notarization.
 - Windows source and package gates: ready for CI execution.
