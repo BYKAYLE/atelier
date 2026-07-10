@@ -1,35 +1,43 @@
 # Stella Factory Security Audit
 
-generated_at: 2026-05-31T14:20:00+09:00
+generated_at: 2026-07-10T18:28:00+09:00
 
 ## Scope
 
-Local Factory bootstrap/autopilot, state-file trust, command execution, child
-result trust, and frontend-triggered Factory execution.
+Provider login and execution, credential storage/refresh, permission defaults,
+OAuth URL handling, updater packaging, dependency advisories, and release
+publication gates.
 
 ## Result
 
-- CRITICAL: 0
-- HIGH: 0
-- MEDIUM: 0
-- LOW: 1
+- Known exploitable dependency advisories: 0.
+- Release-blocking credential findings: 0.
+- Unsigned public Windows fallback: removed.
+- Public macOS trust: not yet satisfied; external signing gate remains.
 
 ## Findings Closed
 
-- HIGH fixed: repo-controlled absolute or root-escaping `prompt_path` values
-  are rejected, and unknown preserved request entries are dropped during plan
-  merge.
-- MEDIUM fixed: child `result.json` trust now requires matching `request_id`,
-  matching `run_id`, matching artifact directory, existing artifact paths, and
-  structured command evidence.
-- LOW reduced: `/analyze` no longer launches the managed autopilot path; only
-  explicit Factory goal mode does.
+- OAuth URLs can no longer be silently truncated by the login PTY width.
+- Browser URLs are accepted only for provider HTTPS hosts before opening.
+- Windows browser opening uses native trusted executables instead of generated
+  helper scripts.
+- Atelier no longer reads Claude Code's external macOS keychain item.
+- Gajae does not persist the Claude subscription credential in its database.
+- Hermes receives only a staged Codex access token, which is scrubbed after the
+  provider run; refresh credentials remain owned by their source CLI.
+- Missing or invalid permission state now defaults to automatic workspace
+  access, not full access.
+- The locked vulnerable `quinn-proto` version was updated to 0.11.15.
+- Release Tauri builds no longer enable devtools.
 
 ## Residual Risk
 
-- The goal path can still run a long local Factory cycle. This matches the
-  requested "스텔라팩토리 호출 시 끝까지 진행" behavior, but a future UI should show
-  cancellable background progress rather than blocking the send path.
+- Explicit full permission intentionally bypasses provider sandbox/approval
+  controls.
+- Interactive Windows OAuth and Smart App Control behavior require target-host
+  validation and cannot be proven from macOS.
+- The local macOS certificate is not a Developer ID certificate, so Gatekeeper
+  correctly rejects the locally signed bundle for public distribution.
 
 ## Safety Gates Preserved
 

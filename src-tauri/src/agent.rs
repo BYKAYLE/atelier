@@ -15,9 +15,9 @@ use tauri::{AppHandle, Emitter, Runtime};
 
 use crate::credentials::{
     configure_gajecode_runtime_env, env_var_for, gajecode_cli_name, gajecode_executable_path,
-    gajecode_has_claude_subscription_credential, gajecode_skills_dir, gajecode_workspace_dir,
-    read_agent_api_key, read_api_key, repair_gajecode_claude_subscription_credential,
-    should_clear_inherited_agent_api_env, sync_codex_auth_to_hermes,
+    gajecode_skills_dir, gajecode_workspace_dir, prepare_gajecode_claude_subscription_token,
+    read_agent_api_key, read_api_key, scrub_staged_codex_access_from_hermes,
+    should_clear_inherited_agent_api_env, stage_codex_access_for_hermes,
 };
 
 const RETURN_RAW_EVENT_LIMIT: usize = 120;
@@ -198,7 +198,7 @@ const CLAUDE_MODELS_DOCS_URL: &str =
 
 const CLAUDE_FALLBACK_MODELS: &[(&str, &str, bool)] = &[
     ("claude-opus-4-8", "Opus 4.8", false),
-    ("claude-fable-5", "Fable 5 Currently unavailable", true),
+    ("claude-fable-5", "Fable 5", false),
     ("claude-sonnet-4-6", "Sonnet 4.6", false),
     ("claude-haiku-4-5-20251001", "Haiku 4.5", false),
 ];
@@ -216,6 +216,13 @@ fn claude_fallback_model_options(source: &str) -> ClaudeModelOptionsResult {
             })
             .collect(),
     }
+}
+
+fn claude_fallback_model_for_family(family: &str) -> Option<(&'static str, &'static str, bool)> {
+    CLAUDE_FALLBACK_MODELS
+        .iter()
+        .find(|(value, _, _)| claude_model_family(value) == Some(family))
+        .copied()
 }
 
 fn fetch_claude_models_docs_html() -> Result<String, String> {
@@ -261,7 +268,10 @@ fn extract_claude_model_ids(raw: &str) -> BTreeSet<String> {
             || candidate.starts_with("claude-sonnet-")
             || candidate.starts_with("claude-haiku-")
         {
-            ids.insert(normalize_claude_model_id(candidate));
+            let normalized = normalize_claude_model_id(candidate);
+            if is_valid_claude_model_id(&normalized) {
+                ids.insert(normalized);
+            }
         }
         offset = end.max(start + "claude-".len());
     }
@@ -282,6 +292,22 @@ fn normalize_claude_model_id(id: &str) -> String {
         }
     }
     id.to_string()
+}
+
+fn is_valid_claude_model_id(id: &str) -> bool {
+    let Some(family) = claude_model_family(id) else {
+        return false;
+    };
+    let rest = id
+        .trim_start_matches("claude-")
+        .trim_start_matches(family)
+        .trim_start_matches('-');
+    let parts = rest.split('-').collect::<Vec<_>>();
+    !parts.is_empty()
+        && parts.len() <= 3
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.chars().all(|ch| ch.is_ascii_digit()))
 }
 
 fn claude_model_family(id: &str) -> Option<&'static str> {
@@ -306,6 +332,14 @@ fn claude_model_version_key(id: &str) -> Vec<u32> {
         .trim_start_matches(family)
         .trim_start_matches('-')
         .split('-')
+        .enumerate()
+        .map(|(index, part)| {
+            if index == 1 && part.len() == 8 {
+                "0"
+            } else {
+                part
+            }
+        })
         .filter_map(|part| part.parse::<u32>().ok())
         .collect()
 }
@@ -352,15 +386,23 @@ fn read_claude_model_options_sync() -> ClaudeModelOptionsResult {
     let mut models = Vec::new();
     let mut seen = BTreeSet::new();
     for family in ["opus", "fable", "sonnet", "haiku"] {
-        let Some(id) = latest_claude_model_for_family(&ids, family) else {
+        let (id, fallback_label, fallback_disabled) = if let Some(id) =
+            latest_claude_model_for_family(&ids, family)
+        {
+            (id, None, None)
+        } else if let Some((value, label, disabled)) = claude_fallback_model_for_family(family) {
+            (value.to_string(), Some(label), Some(disabled))
+        } else {
             continue;
         };
         if !seen.insert(id.clone()) {
             continue;
         }
-        let disabled = family == "fable";
+        let disabled = fallback_disabled.unwrap_or(false);
         models.push(AgentModelOption {
-            label: claude_label_from_model_id(&id, disabled),
+            label: fallback_label
+                .map(str::to_string)
+                .unwrap_or_else(|| claude_label_from_model_id(&id, disabled)),
             value: id,
             disabled: if disabled { Some(true) } else { None },
         });
@@ -670,6 +712,30 @@ impl WindowsCommandSpec {
 }
 
 #[cfg(target_os = "windows")]
+pub(crate) fn windows_cli_command_parts(cli: &str) -> (PathBuf, Vec<String>) {
+    let spec = windows_cli_command_spec(cli);
+    (spec.program, spec.args)
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn windows_git_bash_path() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH") {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
+    [
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\bin\bash.exe",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .find(|path| path.is_file())
+}
+
+#[cfg(target_os = "windows")]
 fn windows_find_command(name: &str, preferred_extensions: &[&str]) -> Option<PathBuf> {
     let direct = PathBuf::from(name);
     if direct.is_absolute() || name.contains('/') || name.contains('\\') {
@@ -956,17 +1022,8 @@ fn configure_windows_background_command(command: &mut Command) {
 
 #[cfg(target_os = "windows")]
 fn configure_windows_agent_cli_env(command: &mut Command) {
-    if std::env::var_os("CLAUDE_CODE_GIT_BASH_PATH").is_some() {
-        return;
-    }
-    for candidate in [
-        r"C:\Program Files\Git\bin\bash.exe",
-        r"C:\Program Files (x86)\Git\bin\bash.exe",
-    ] {
-        if PathBuf::from(candidate).is_file() {
-            command.env("CLAUDE_CODE_GIT_BASH_PATH", candidate);
-            break;
-        }
+    if let Some(path) = windows_git_bash_path() {
+        command.env("CLAUDE_CODE_GIT_BASH_PATH", path);
     }
 }
 
@@ -1078,10 +1135,8 @@ fn validate_agent_cli_command(provider: &str, args: &[String]) -> Result<(), Str
     let help_requested = lowered
         .iter()
         .any(|arg| matches!(arg.as_str(), "--help" | "-h" | "help"));
-    if provider == "gajecode" && help_requested {
-        if is_known_gajecode_cli_command(first) {
-            return Ok(());
-        }
+    if provider == "gajecode" && help_requested && is_known_gajecode_cli_command(first) {
+        return Ok(());
     }
     let blocked = [
         "remove",
@@ -1789,8 +1844,8 @@ fn patch_insane_search_gajecode_skill(skill_md: &Path) -> Result<(), String> {
     if raw.contains(MARKER) {
         return Ok(());
     }
-    let patched = if raw.starts_with("---\n") {
-        if let Some(relative) = raw[4..].find("\n---\n") {
+    let patched = if let Some(stripped) = raw.strip_prefix("---\n") {
+        if let Some(relative) = stripped.find("\n---\n") {
             let insert_at = 4 + relative + "\n---\n".len();
             format!("{}{}{}", &raw[..insert_at], ADAPTER, &raw[insert_at..])
         } else {
@@ -2241,6 +2296,47 @@ fn hermes_auth_error_message(text: &str) -> Option<String> {
     })
 }
 
+fn provider_cooldown_seconds(text: &str) -> Option<u64> {
+    let lower = text.to_ascii_lowercase();
+    let looks_like_provider_cooldown = lower.contains("temporarily limiting requests")
+        || lower.contains("accounts exhausted")
+        || lower.contains("server is temporarily limiting")
+        || (lower.contains("retry in") && lower.contains("not your usage limit"));
+    if !looks_like_provider_cooldown {
+        return None;
+    }
+
+    if let Some(start) = lower.find("retry in") {
+        let mut digits = String::new();
+        for ch in lower[start + "retry in".len()..].chars() {
+            if ch.is_ascii_digit() {
+                digits.push(ch);
+            } else if !digits.is_empty() {
+                break;
+            }
+        }
+        if let Ok(seconds) = digits.parse::<u64>() {
+            if seconds > 0 {
+                return Some(seconds);
+            }
+        }
+    }
+
+    Some(300)
+}
+
+fn provider_cooldown_message(provider: &str, text: &str) -> Option<String> {
+    let seconds = provider_cooldown_seconds(text)?;
+    let source = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or(text.trim());
+    Some(format!(
+        "{provider} 공급자 계정 풀이 일시 제한에 걸렸습니다. 사용량 초과가 아니라 서버가 요청을 잠시 제한한 상태입니다. 약 {seconds}초 뒤 같은 작업을 다시 시도할 수 있습니다.\n\n원문: {source}"
+    ))
+}
+
 fn extract_claude_error_from_raw_events(raw_events: &[String]) -> Option<String> {
     for line in raw_events.iter().rev() {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
@@ -2252,18 +2348,23 @@ fn extract_claude_error_from_raw_events(raw_events: &[String]) -> Option<String>
             .unwrap_or_default();
         if event_type == "result" && value.get("is_error").and_then(Value::as_bool) == Some(true) {
             if let Some(status) = value.get("api_error_status").and_then(Value::as_str) {
-                return Some(format!("Claude API error: {status}"));
+                let message = format!("Claude API error: {status}");
+                return provider_cooldown_message("Claude/TeamClaude", &message).or(Some(message));
             }
             if let Some(result) = value.get("result").and_then(Value::as_str) {
                 if !result.trim().is_empty() {
-                    return Some(result.trim().to_string());
+                    let message = result.trim().to_string();
+                    return provider_cooldown_message("Claude/TeamClaude", &message)
+                        .or(Some(message));
                 }
             }
         }
         if event_type == "error" {
             if let Some(message) = value.get("message").and_then(Value::as_str) {
                 if !message.trim().is_empty() {
-                    return Some(message.trim().to_string());
+                    let message = message.trim().to_string();
+                    return provider_cooldown_message("Claude/TeamClaude", &message)
+                        .or(Some(message));
                 }
             }
         }
@@ -2319,6 +2420,8 @@ fn is_hermes_provider_diagnostic_line(line: &str) -> bool {
     let lower = t.to_ascii_lowercase();
     lower.contains("no response from provider")
         || lower.contains("api call failed")
+        || lower.contains("temporarily limiting requests")
+        || lower.contains("accounts exhausted")
         || lower.contains("timeout")
             && (lower.contains("non-streaming")
                 || lower.contains("provider")
@@ -2634,7 +2737,7 @@ fn parse_local_preview_url(input: &str) -> Result<LocalPreviewUrl, String> {
     }
 
     let rest = &url["http://".len()..];
-    let (authority, path) = match rest.find(|c| c == '/' || c == '?' || c == '#') {
+    let (authority, path) = match rest.find(['/', '?', '#']) {
         Some(idx) => (&rest[..idx], &rest[idx..]),
         None => (rest, "/"),
     };
@@ -3099,7 +3202,7 @@ fn spawn_preview_output_reader<R, T>(
 {
     thread::spawn(move || {
         let reader = BufReader::new(stream);
-        for line in reader.lines().flatten() {
+        for line in reader.lines().map_while(Result::ok) {
             push_preview_output(&id, line.clone());
             let _ = app.emit(
                 &format!("preview-service://{id}/event"),
@@ -3233,8 +3336,7 @@ fn extract_title(html: &str) -> Option<String> {
     let after_start = lower[start..].find('>')? + start + 1;
     let end = lower[after_start..].find("</title>")? + after_start;
     let title = html[after_start..end]
-        .replace('\n', " ")
-        .replace('\r', " ")
+        .replace(['\n', '\r'], " ")
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
@@ -4133,6 +4235,8 @@ fn normalize_claude_model(model: Option<String>) -> String {
         | "claude-opus-4-1"
         | "claude-opus-4-1-20250805"
         | "claude-opus-4-20250514" => "claude-opus-4-8".to_string(),
+        "fable" | "fable 55" | "fable 5" | "fable 5.5" | "claude-fable-55" | "claude-fable-5"
+        | "claude-fable-5.5" | "claude-fable-5-5" => "claude-fable-5".to_string(),
         "sonnet"
         | "sonnet[1m]"
         | "sonnet 46"
@@ -4174,12 +4278,12 @@ fn normalize_agent_permission_mode(permission_mode: Option<String>) -> String {
         .map(str::trim)
         .map(str::to_ascii_lowercase)
         .as_deref()
-        .unwrap_or("full")
+        .unwrap_or("auto")
     {
         "basic" | "default" => "basic".to_string(),
         "auto" | "autoreview" | "auto-review" => "auto".to_string(),
         "full" | "bypass" | "danger" => "full".to_string(),
-        _ => "full".to_string(),
+        _ => "auto".to_string(),
     }
 }
 
@@ -4188,17 +4292,23 @@ fn claude_permission_mode(permission_mode: &str) -> &'static str {
         "basic" => "default",
         "auto" => "auto",
         "full" => "bypassPermissions",
-        _ => "bypassPermissions",
+        _ => "auto",
     }
 }
 
-fn push_codex_permission_args(cmd: &mut Command, permission_mode: &str, can_set_sandbox: bool) {
+fn push_codex_permission_args(cmd: &mut Command, permission_mode: &str) {
     match permission_mode {
-        "basic" if can_set_sandbox => {
-            cmd.arg("--sandbox").arg("workspace-write");
+        "basic" => {
+            cmd.arg("--sandbox")
+                .arg("workspace-write")
+                .arg("--ask-for-approval")
+                .arg("on-request");
         }
         "auto" => {
-            cmd.arg("--full-auto");
+            cmd.arg("--sandbox")
+                .arg("workspace-write")
+                .arg("--ask-for-approval")
+                .arg("never");
         }
         "full" => {
             cmd.arg("--dangerously-bypass-approvals-and-sandbox");
@@ -4346,12 +4456,16 @@ fn parse_claude_line<R: Runtime>(
                 *final_text = result.to_string();
             }
             if *is_error {
-                *error = Some(
-                    v.get("api_error_status")
-                        .and_then(Value::as_str)
-                        .unwrap_or("Claude returned an error")
-                        .to_string(),
-                );
+                let raw_error = v
+                    .get("result")
+                    .and_then(Value::as_str)
+                    .or_else(|| v.get("api_error_status").and_then(Value::as_str))
+                    .unwrap_or("Claude returned an error")
+                    .to_string();
+                let message =
+                    provider_cooldown_message("Claude/TeamClaude", &raw_error).unwrap_or(raw_error);
+                *final_text = message.clone();
+                *error = Some(message);
             }
             emit_agent_event(
                 app,
@@ -4371,11 +4485,12 @@ fn parse_claude_line<R: Runtime>(
         }
         "error" => {
             *is_error = true;
-            let msg = v
+            let raw_msg = v
                 .get("message")
                 .and_then(Value::as_str)
                 .unwrap_or("Claude stream error")
                 .to_string();
+            let msg = provider_cooldown_message("Claude/TeamClaude", &raw_msg).unwrap_or(raw_msg);
             *error = Some(msg.clone());
             emit_agent_event(
                 app,
@@ -4461,7 +4576,7 @@ fn run_claude<R: Runtime>(
         thread::spawn(move || {
             let mut out = String::new();
             let reader = BufReader::new(stderr);
-            for line in reader.lines().flatten() {
+            for line in reader.lines().map_while(Result::ok) {
                 if !out.is_empty() {
                     out.push('\n');
                 }
@@ -4513,6 +4628,12 @@ fn run_claude<R: Runtime>(
             } else {
                 stderr_text.trim().to_string()
             });
+        }
+        if let Some(current) = error.clone() {
+            if let Some(message) = provider_cooldown_message("Claude/TeamClaude", &current) {
+                final_text = message.clone();
+                error = Some(message);
+            }
         }
         emit_agent_event(
             &app,
@@ -4668,6 +4789,7 @@ fn parse_codex_line<R: Runtime>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_codex<R: Runtime>(
     app: AppHandle<R>,
     turn_id: String,
@@ -4682,6 +4804,7 @@ fn run_codex<R: Runtime>(
     let permission_mode = normalize_agent_permission_mode(permission_mode);
     let mut cmd = command_for_cli("codex");
     inject_agent_cli_credential_env(&mut cmd, "codex");
+    push_codex_permission_args(&mut cmd, &permission_mode);
     cmd.arg("exec");
     if let Some(cwd) = normalize_agent_cwd(cwd)? {
         cmd.arg("--cd").arg(cwd);
@@ -4710,13 +4833,11 @@ fn run_codex<R: Runtime>(
 
     if let Some(session_id) = resume_session_id.filter(|s| !s.trim().is_empty()) {
         cmd.arg("resume");
-        push_codex_permission_args(&mut cmd, &permission_mode, false);
         cmd.arg("--json")
             .arg("--skip-git-repo-check")
             .arg(session_id)
             .arg(prompt);
     } else {
-        push_codex_permission_args(&mut cmd, &permission_mode, true);
         cmd.arg("--json").arg("--skip-git-repo-check").arg(prompt);
     }
 
@@ -4743,7 +4864,7 @@ fn run_codex<R: Runtime>(
         thread::spawn(move || {
             let mut out = String::new();
             let reader = BufReader::new(stderr);
-            for line in reader.lines().flatten() {
+            for line in reader.lines().map_while(Result::ok) {
                 if !out.is_empty() {
                     out.push('\n');
                 }
@@ -4877,6 +4998,10 @@ fn gajecode_prompt_with_workspace(prompt: String, project_cwd: Option<&Path>) ->
 fn gajecode_model_label_for_prompt(model: &str) -> &'static str {
     match model {
         "anthropic/claude-opus-4-8" | "claude-opus-4-8" => "Opus 4.8",
+        "anthropic/claude-fable-5"
+        | "claude-fable-5"
+        | "anthropic/claude-fable-5-5"
+        | "claude-fable-5-5" => "Fable 5",
         "anthropic/claude-sonnet-4-6" | "claude-sonnet-4-6" => "Sonnet 4.6",
         "anthropic/claude-haiku-4-5-20251001" | "claude-haiku-4-5-20251001" => "Haiku 4.5",
         _ => "selected model",
@@ -4927,6 +5052,17 @@ fn normalize_gajecode_model_for_cli(model: Option<String>) -> String {
         | "deepseek/deepseek-v4-flash"
         | "deepseek/deepseek-v4-pro"
         | "gpt-5.5" => "anthropic/claude-opus-4-8".to_string(),
+        "fable"
+        | "fable 55"
+        | "fable 5"
+        | "fable 5.5"
+        | "claude-fable-55"
+        | "claude-fable-5"
+        | "claude-fable-5.5"
+        | "claude-fable-5-5"
+        | "anthropic/claude-fable-5"
+        | "anthropic/claude-fable-5.5"
+        | "anthropic/claude-fable-5-5" => "anthropic/claude-fable-5".to_string(),
         "sonnet"
         | "sonnet 46"
         | "sonnet 4.6"
@@ -4952,6 +5088,87 @@ fn normalize_gajecode_model_for_cli(model: Option<String>) -> String {
     }
 }
 
+fn parse_teamclaude_export_value(line: &str, key: &str) -> Option<String> {
+    let prefix = format!("export {key}=");
+    let raw = line.trim().strip_prefix(&prefix)?.trim();
+    let unquoted = raw
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .or_else(|| {
+            raw.strip_prefix('\'')
+                .and_then(|value| value.strip_suffix('\''))
+        })
+        .unwrap_or(raw)
+        .trim();
+    (!unquoted.is_empty()).then(|| unquoted.to_string())
+}
+
+fn parse_teamclaude_env_output(text: &str) -> Option<(String, String)> {
+    let mut base_url = None;
+    let mut api_key = None;
+    for line in text.lines() {
+        if base_url.is_none() {
+            base_url = parse_teamclaude_export_value(line, "ANTHROPIC_BASE_URL");
+        }
+        if api_key.is_none() {
+            api_key = parse_teamclaude_export_value(line, "ANTHROPIC_API_KEY");
+        }
+    }
+    let base_url = base_url?;
+    let api_key = api_key?;
+    if !base_url.starts_with("http://127.0.0.1")
+        && !base_url.starts_with("http://localhost")
+        && !base_url.starts_with("https://127.0.0.1")
+        && !base_url.starts_with("https://localhost")
+    {
+        return None;
+    }
+    Some((base_url, api_key))
+}
+
+fn teamclaude_proxy_is_running() -> bool {
+    let mut status = command_for_cli("teamclaude");
+    status
+        .arg("status")
+        .env("PATH", crate::augmented_cli_path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let Ok(output) = status.output() else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let mut text = String::from_utf8_lossy(&output.stdout).to_string();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    let lower = text.to_ascii_lowercase();
+    lower.contains("server:") && lower.contains("running") && lower.contains("port")
+}
+
+fn teamclaude_env_for_gajecode() -> Option<(String, String)> {
+    if !teamclaude_proxy_is_running() {
+        return None;
+    }
+    let mut env_cmd = command_for_cli("teamclaude");
+    env_cmd
+        .arg("env")
+        .env("PATH", crate::augmented_cli_path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let Ok(output) = env_cmd.output() else {
+        return None;
+    };
+    if !output.status.success() {
+        return None;
+    }
+    let mut text = String::from_utf8_lossy(&output.stdout).to_string();
+    text.push('\n');
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    parse_teamclaude_env_output(&text)
+}
+
 fn inject_gajecode_claude_subscription_env(cmd: &mut Command, model: &str) -> bool {
     let lower = model.to_ascii_lowercase();
     let uses_claude = lower.contains("claude") || lower.contains("anthropic") || lower == "opus";
@@ -4959,37 +5176,30 @@ fn inject_gajecode_claude_subscription_env(cmd: &mut Command, model: &str) -> bo
         return true;
     }
 
-    // Prefer Gajae Code's own OAuth credential store. Normal chat execution
-    // must not read macOS Keychain; app updates can otherwise trigger a password
-    // prompt in the middle of a command. Settings/login syncs the credential
-    // into this store, and command execution only verifies that it is present.
+    cmd.env_remove("ANTHROPIC_BASE_URL");
     cmd.env_remove("ANTHROPIC_API_KEY");
-    if gajecode_has_claude_subscription_credential() {
+    cmd.env_remove("ANTHROPIC_OAUTH_TOKEN");
+    cmd.env_remove("CLAUDE_CODE_OAUTH_TOKEN");
+    if let Some((base_url, api_key)) = teamclaude_env_for_gajecode() {
+        cmd.env("ANTHROPIC_BASE_URL", base_url);
+        cmd.env("ANTHROPIC_API_KEY", api_key);
         return true;
     }
-    match repair_gajecode_claude_subscription_credential() {
-        Ok(true) => true,
-        Ok(false) => false,
+
+    // Keep refresh tokens in the OS credential store. Gajae supports an
+    // OAuth access token through the child-process environment, so no secret
+    // needs to be copied into agent.db.
+    match prepare_gajecode_claude_subscription_token() {
+        Ok(Some(token)) => {
+            cmd.env("ANTHROPIC_OAUTH_TOKEN", token);
+            true
+        }
+        Ok(None) => false,
         Err(err) => {
-            log::warn!("gajecode claude oauth repair failed: {err}");
+            log::warn!("gajecode claude oauth preparation failed: {err}");
             false
         }
     }
-}
-
-fn gajecode_auth_error_needs_repair(result: &AgentRunResult) -> bool {
-    let mut text = result.error.clone().unwrap_or_default();
-    for event in &result.raw_events {
-        text.push('\n');
-        text.push_str(event);
-    }
-    let lower = text.to_ascii_lowercase();
-    lower.contains("no api key")
-        || lower.contains("invalid_grant")
-        || lower.contains("oauth refresh failed")
-        || lower.contains("invalid authentication credentials")
-        || lower.contains("authentication_error")
-        || lower.contains("credential is not connected")
 }
 
 fn run_gajecode<R: Runtime>(
@@ -5001,42 +5211,15 @@ fn run_gajecode<R: Runtime>(
     model: Option<String>,
     permission_mode: Option<String>,
 ) -> Result<AgentRunResult, String> {
-    let result = run_gajecode_inner(
-        app.clone(),
-        turn_id.clone(),
-        prompt.clone(),
+    run_gajecode_inner(
+        app,
+        turn_id,
+        prompt,
         resume_session_id,
-        cwd.clone(),
-        model.clone(),
-        permission_mode.clone(),
-    )?;
-    if !result.is_error || !gajecode_auth_error_needs_repair(&result) {
-        return Ok(result);
-    }
-
-    emit_agent_event(
-        &app,
-        &turn_id,
-        AgentStreamEvent {
-            kind: "status".into(),
-            text: Some(
-                "Claude 구독 연결이 만료되어 Gajae 인증을 복구한 뒤 다시 실행합니다.".into(),
-            ),
-            status: Some("gajecode.repairing_oauth".into()),
-            raw: None,
-            provider_session_id: None,
-            is_error: None,
-        },
-    );
-
-    match repair_gajecode_claude_subscription_credential() {
-        Ok(true) => run_gajecode_inner(app, turn_id, prompt, None, cwd, model, permission_mode),
-        Ok(false) => Ok(result),
-        Err(err) => {
-            log::warn!("gajecode claude oauth retry repair failed: {err}");
-            Ok(result)
-        }
-    }
+        cwd,
+        model,
+        permission_mode,
+    )
 }
 
 fn run_gajecode_inner<R: Runtime>(
@@ -5111,7 +5294,7 @@ fn run_gajecode_inner<R: Runtime>(
         thread::spawn(move || {
             let mut out = String::new();
             let reader = BufReader::new(stderr);
-            for line in reader.lines().flatten() {
+            for line in reader.lines().map_while(Result::ok) {
                 if !out.is_empty() {
                     out.push('\n');
                 }
@@ -5199,6 +5382,19 @@ fn run_gajecode_inner<R: Runtime>(
     })
 }
 
+struct StagedHermesCodexAccess(bool);
+
+impl Drop for StagedHermesCodexAccess {
+    fn drop(&mut self) {
+        if self.0 {
+            if let Err(err) = scrub_staged_codex_access_from_hermes() {
+                log::warn!("failed to scrub staged Hermes Codex access: {err}");
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run_hermes<R: Runtime>(
     app: AppHandle<R>,
     turn_id: String,
@@ -5218,9 +5414,18 @@ fn run_hermes<R: Runtime>(
         "openrouter" => "openrouter",
         _ => "openrouter",
     };
-    if hermes_provider == "openai-codex" {
-        let _ = sync_codex_auth_to_hermes();
-    }
+    let staged_codex_access = if hermes_provider == "openai-codex" {
+        match stage_codex_access_for_hermes() {
+            Ok(staged) => staged,
+            Err(err) => {
+                log::warn!("failed to stage Codex access for Hermes: {err}");
+                false
+            }
+        }
+    } else {
+        false
+    };
+    let _staged_codex_access = StagedHermesCodexAccess(staged_codex_access);
     inject_backend_credential_env(&mut cmd, hermes_credential_provider);
     // -Q (quiet) 는 banner·spinner·도구 프리뷰를 차단해 stdout 무음이 됨 → 진행 표시 불가.
     // 진행 흐름 노출을 위해 quiet 끄고, 대신 --source tool 로 세션 리스트 노출만 차단.
@@ -5279,7 +5484,7 @@ fn run_hermes<R: Runtime>(
         thread::spawn(move || {
             let mut out = String::new();
             let reader = BufReader::new(stderr);
-            for line in reader.lines().flatten() {
+            for line in reader.lines().map_while(Result::ok) {
                 if !out.is_empty() {
                     out.push('\n');
                 }
@@ -6081,6 +6286,7 @@ pub async fn agent_claude_send<R: Runtime>(
     .map_err(|e| format!("agent thread join: {e}"))?
 }
 
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn agent_send<R: Runtime>(
     app: AppHandle<R>,
@@ -6292,6 +6498,14 @@ mod tests {
             normalize_gajecode_model_for_cli(Some("claude-sonnet-4-6".into())),
             "anthropic/claude-sonnet-4-6"
         );
+        assert_eq!(
+            normalize_gajecode_model_for_cli(Some("Fable 5.5".into())),
+            "anthropic/claude-fable-5"
+        );
+        assert_eq!(
+            normalize_gajecode_model_for_cli(Some("claude-fable-5".into())),
+            "anthropic/claude-fable-5"
+        );
     }
 
     #[test]
@@ -6304,6 +6518,41 @@ mod tests {
         assert!(prompt.contains("존댓말"));
         assert!(prompt.contains("Never use 반말"));
         assert!(prompt.contains("Do not blame ambiguity"));
+    }
+
+    #[test]
+    fn gajecode_model_prompt_names_fable_5() {
+        let prompt = gajecode_model_system_prompt("anthropic/claude-fable-5");
+        assert!(prompt.contains("Fable 5"));
+        assert!(prompt.contains("anthropic/claude-fable-5"));
+    }
+
+    #[test]
+    fn teamclaude_env_parser_accepts_export_lines_only() {
+        let parsed = parse_teamclaude_env_output(
+            r#"
+Created temporary API key for proxy use.
+export ANTHROPIC_BASE_URL=http://localhost:3456
+export ANTHROPIC_API_KEY="tc-example"
+"#,
+        );
+        assert_eq!(
+            parsed,
+            Some((
+                "http://localhost:3456".to_string(),
+                "tc-example".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn teamclaude_env_parser_rejects_remote_base_url() {
+        assert_eq!(
+            parse_teamclaude_env_output(
+                "export ANTHROPIC_BASE_URL=https://api.anthropic.com\nexport ANTHROPIC_API_KEY=tc-example"
+            ),
+            None
+        );
     }
 
     #[test]
@@ -6357,23 +6606,30 @@ mod tests {
             normalize_claude_model(Some("Opus 4.7".into())),
             "claude-opus-4-8"
         );
+        assert_eq!(
+            normalize_claude_model(Some("Fable 5.5".into())),
+            "claude-fable-5"
+        );
     }
 
     #[test]
     fn claude_docs_parser_prefers_current_app_model_order() {
         let raw = r#"
             Claude Fable 5 (`claude-fable-5`)
+            Claude Fable 5 and Claude Mythos 5 (`claude-fable-5-and-claude-mythos-5`)
             Claude Opus 47 (`claude-opus-47`)
             Claude Opus 4.7 (`claude-opus-4-7`)
+            Claude Opus 4 (`claude-opus-4-20250514`)
             Claude Opus 4.8 (`claude-opus-4-8`)
             Claude Sonnet 4.6 (`claude-sonnet-4-6`)
             Claude Haiku 4.5 (`claude-haiku-4-5` / `claude-haiku-4-5-20251001`)
         "#;
         let ids = extract_claude_model_ids(raw);
+        assert!(!ids.contains("claude-fable-5-and-claude-mythos-5"));
         let mut models = Vec::new();
         for family in ["opus", "fable", "sonnet", "haiku"] {
             let id = latest_claude_model_for_family(&ids, family).unwrap();
-            let disabled = family == "fable";
+            let disabled = false;
             models.push((
                 id.clone(),
                 claude_label_from_model_id(&id, disabled),
@@ -6382,11 +6638,29 @@ mod tests {
         }
         assert_eq!(models[0].0, "claude-opus-4-8");
         assert_eq!(models[0].1, "Opus 4.8");
-        assert_eq!(models[1].1, "Fable 5 Currently unavailable");
-        assert!(models[1].2);
+        assert_eq!(models[1].0, "claude-fable-5");
+        assert_eq!(models[1].1, "Fable 5");
+        assert!(!models[1].2);
         assert_eq!(models[2].1, "Sonnet 4.6");
         assert_eq!(models[3].0, "claude-haiku-4-5-20251001");
         assert_eq!(models[3].1, "Haiku 4.5");
+    }
+
+    #[test]
+    fn claude_docs_parser_rejects_sentence_slugs_and_falls_back_for_missing_fable() {
+        let raw = r#"
+            Claude Fable 5 and Claude Mythos 5 (`claude-fable-5-and-claude-mythos-5`)
+            Claude Opus 4.8 (`claude-opus-4-8`)
+            Claude Sonnet 4.6 (`claude-sonnet-4-6`)
+            Claude Haiku 4.5 (`claude-haiku-4-5-20251001`)
+        "#;
+        let ids = extract_claude_model_ids(raw);
+        assert!(!ids.contains("claude-fable-5-and-claude-mythos-5"));
+        assert!(latest_claude_model_for_family(&ids, "fable").is_none());
+        let fallback = claude_fallback_model_for_family("fable").unwrap();
+        assert_eq!(fallback.0, "claude-fable-5");
+        assert_eq!(fallback.1, "Fable 5");
+        assert!(!fallback.2);
     }
 
     #[test]
@@ -6529,22 +6803,13 @@ mod tests {
             normalize_agent_permission_mode(Some("bypass".into())),
             "full"
         );
+        assert_eq!(normalize_agent_permission_mode(None), "auto");
+        assert_eq!(
+            normalize_agent_permission_mode(Some("unexpected".into())),
+            "auto"
+        );
         assert_eq!(claude_permission_mode("full"), "bypassPermissions");
-    }
-
-    #[test]
-    fn gajecode_auth_errors_trigger_repair() {
-        let result = AgentRunResult {
-            text: String::new(),
-            provider_session_id: None,
-            raw_events: vec![
-                "Error: No API key for anthropic/claude-opus-4-8".into(),
-                "oauth refresh failed: invalid_grant".into(),
-            ],
-            is_error: true,
-            error: Some("gajecode failed".into()),
-        };
-        assert!(gajecode_auth_error_needs_repair(&result));
+        assert_eq!(claude_permission_mode("unexpected"), "auto");
     }
 
     #[test]
@@ -6585,6 +6850,26 @@ mod tests {
         assert!(message.contains("Claude 인증 실패"));
         assert!(message.contains("401"));
         assert!(message.contains("authentication_failed"));
+    }
+
+    #[test]
+    fn provider_cooldown_retry_seconds_are_detected() {
+        let message = "API Error: Server is temporarily limiting requests (not your usage limit) · All 2 accounts exhausted. Retry in 300s.";
+        assert_eq!(provider_cooldown_seconds(message), Some(300));
+        let friendly = provider_cooldown_message("Claude/TeamClaude", message).unwrap();
+        assert!(friendly.contains("일시 제한"));
+        assert!(friendly.contains("300초"));
+    }
+
+    #[test]
+    fn claude_provider_cooldown_is_promoted_from_raw_events() {
+        let raw = vec![
+            r#"{"type":"error","message":"API Error: Server is temporarily limiting requests (not your usage limit) · All 2 accounts exhausted. Retry in 300s."}"#.to_string(),
+        ];
+        let message = extract_claude_error_from_raw_events(&raw).unwrap();
+        assert!(message.contains("Claude/TeamClaude"));
+        assert!(message.contains("일시 제한"));
+        assert!(message.contains("300초"));
     }
 
     #[test]

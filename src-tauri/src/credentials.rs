@@ -15,8 +15,13 @@ use std::process::{ChildStdin, Command, Output, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+use tauri::Url;
 
 const SERVICE: &str = "com.atelier.app";
+// OAuth authorize URLs can exceed several hundred characters. A normal
+// 80/120-column PTY may hard-wrap the query string and truncate redirect_uri,
+// state, or PKCE parameters before Atelier can open the URL.
+const OAUTH_LOGIN_PTY_COLS: u16 = 2048;
 const HERMES_INSTALL_SH: &str =
     "curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- --skip-setup";
 const GAJAE_CODE_PACKAGE_NAME: &str = "gajae-code";
@@ -32,8 +37,10 @@ static OAUTH_LOGIN_STDIN: Lazy<Mutex<HashMap<String, OAuthLoginInput>>> =
 #[derive(Clone, Default)]
 struct OAuthLoginRuntimeState {
     active: bool,
+    browser_opened: bool,
     login_url: Option<String>,
     output: String,
+    error: Option<String>,
     updated_at_ms: i64,
 }
 
@@ -184,22 +191,17 @@ fn provider_meta(provider: &str) -> Option<ProviderMeta> {
 fn oauth_login_attempts(provider: &str, fallback_cmd: &'static str) -> Vec<Vec<&'static str>> {
     match provider {
         "claude" => claude_oauth_login_attempts(),
+        // Device authorization is deterministic across packaged Windows apps:
+        // the CLI prints a stable HTTPS URL and one-time code that Atelier can
+        // surface even when the default browser handoff is restricted.
+        "codex" => vec![vec!["login", "--device-auth"], vec![fallback_cmd]],
         _ => vec![vec![fallback_cmd]],
     }
 }
 
-#[cfg(target_os = "windows")]
 fn claude_oauth_login_attempts() -> Vec<Vec<&'static str>> {
-    // Windows Claude Code builds repeatedly fail or produce mojibake stderr
-    // from `auth login --claudeai`. Prefer the code-paste flow first there.
-    vec![vec!["setup-token"], vec!["auth", "login", "--claudeai"]]
-}
-
-#[cfg(not(target_os = "windows"))]
-fn claude_oauth_login_attempts() -> Vec<Vec<&'static str>> {
-    // On macOS/Linux, `auth login --claudeai` emits a full OAuth authorize URL
-    // with redirect_uri/code_challenge. `setup-token` can open Claude's code
-    // page directly and hit "missing redirect_uri" in a desktop OAuth handoff.
+    // The native subscription flow emits a complete authorize URL on every
+    // supported platform. setup-token is retained only as a legacy fallback.
     vec![vec!["auth", "login", "--claudeai"], vec!["setup-token"]]
 }
 
@@ -270,6 +272,31 @@ fn finish_oauth_login_runtime(provider: &str) {
     }
 }
 
+fn fail_oauth_login_runtime(provider: &str, error: String) {
+    if let Ok(mut map) = OAUTH_LOGIN_RUNTIME.lock() {
+        let entry = map.entry(provider.to_string()).or_default();
+        entry.active = false;
+        entry.error = Some(error);
+        entry.updated_at_ms = oauth_runtime_now_ms();
+    }
+}
+
+fn oauth_login_error(provider: &str, error: String) -> String {
+    fail_oauth_login_runtime(provider, error.clone());
+    error
+}
+
+fn remember_oauth_browser_opened(provider: &str, opened: bool) {
+    if !opened {
+        return;
+    }
+    if let Ok(mut map) = OAUTH_LOGIN_RUNTIME.lock() {
+        let entry = map.entry(provider.to_string()).or_default();
+        entry.browser_opened = true;
+        entry.updated_at_ms = oauth_runtime_now_ms();
+    }
+}
+
 fn remember_oauth_login_url(provider: &str, url: &str) {
     if let Ok(mut map) = OAUTH_LOGIN_RUNTIME.lock() {
         let entry = map.entry(provider.to_string()).or_default();
@@ -280,7 +307,7 @@ fn remember_oauth_login_url(provider: &str, url: &str) {
 
 fn refresh_oauth_login_runtime(provider: &str, captured: &Arc<Mutex<String>>) {
     let raw = captured_login_output(captured);
-    let login_url = extract_login_url(&raw);
+    let login_url = extract_provider_login_url(provider, &raw);
     let output = login_failure_detail_text(&raw).trim().to_string();
     if let Ok(mut map) = OAUTH_LOGIN_RUNTIME.lock() {
         let entry = map.entry(provider.to_string()).or_default();
@@ -415,6 +442,7 @@ fn extract_login_url_candidate(text: &str) -> Option<String> {
     None
 }
 
+#[cfg(test)]
 fn extract_login_url(text: &str) -> Option<String> {
     // Terminal CLIs often emit clickable OSC-8 hyperlinks. The ANSI stripper
     // discards OSC payloads, so first scan the raw stream and only then scan a
@@ -423,6 +451,52 @@ fn extract_login_url(text: &str) -> Option<String> {
         let text = strip_ansi_sequences(text);
         extract_login_url_candidate(&text)
     })
+}
+
+fn is_provider_login_url(provider: &str, url: &str) -> bool {
+    let Ok(parsed) = Url::parse(url) else {
+        return false;
+    };
+    if parsed.scheme() != "https" {
+        return false;
+    }
+    let Some(host) = parsed.host_str().map(str::to_ascii_lowercase) else {
+        return false;
+    };
+    let allowed_roots: &[&str] = match provider {
+        "claude" => &["claude.ai", "claude.com", "anthropic.com"],
+        "codex" => &["openai.com", "chatgpt.com"],
+        _ => return false,
+    };
+    allowed_roots
+        .iter()
+        .any(|root| host == *root || host.ends_with(&format!(".{root}")))
+}
+
+fn extract_provider_login_url(provider: &str, text: &str) -> Option<String> {
+    let mut remaining = text;
+    while let Some(url) = extract_login_url_candidate(remaining) {
+        if is_provider_login_url(provider, &url) {
+            return Some(url);
+        }
+        let Some(position) = remaining.find(&url) else {
+            break;
+        };
+        remaining = &remaining[position + url.len()..];
+    }
+
+    let stripped = strip_ansi_sequences(text);
+    let mut remaining = stripped.as_str();
+    while let Some(url) = extract_login_url_candidate(remaining) {
+        if is_provider_login_url(provider, &url) {
+            return Some(url);
+        }
+        let Some(position) = remaining.find(&url) else {
+            break;
+        };
+        remaining = &remaining[position + url.len()..];
+    }
+    None
 }
 
 fn captured_login_output(captured: &Arc<Mutex<String>>) -> String {
@@ -597,7 +671,7 @@ fn open_login_url_in_browser(url: &str) -> bool {
     {
         let mut command = Command::new("open");
         command.arg(url);
-        return spawn_background_null(command);
+        spawn_background_null(command)
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -613,9 +687,10 @@ fn watch_and_open_login_url(provider: String, captured: Arc<Mutex<String>>) {
         let started = Instant::now();
         while started.elapsed() < Duration::from_secs(90) {
             let output = captured_login_output(&captured);
-            if let Some(url) = extract_login_url(&output) {
+            if let Some(url) = extract_provider_login_url(&provider, &output) {
                 remember_oauth_login_url(&provider, &url);
-                let _ = open_login_url_in_browser(&url);
+                let opened = open_login_url_in_browser(&url);
+                remember_oauth_browser_opened(&provider, opened);
                 break;
             }
             thread::sleep(Duration::from_millis(250));
@@ -626,12 +701,19 @@ fn watch_and_open_login_url(provider: String, captured: Arc<Mutex<String>>) {
 fn oauth_pty_login_command(cli: &str, login_args: &[&str]) -> CommandBuilder {
     #[cfg(target_os = "windows")]
     {
-        // npm-installed CLIs are commonly .cmd shims on Windows. Running through
-        // cmd.exe inside the PTY avoids Win32 executable errors while still
-        // keeping the console hidden from the user.
-        let mut cmd = CommandBuilder::new("cmd.exe");
-        cmd.args(["/D", "/C", cli]);
+        // Use the same native-executable/npm-shim resolver as normal agent
+        // execution. The old raw `cmd.exe /C <name>` path caused Win32 error
+        // 193 and could stall before an OAuth URL was emitted.
+        let (program, prefix_args) = crate::agent::windows_cli_command_parts(cli);
+        let mut cmd = CommandBuilder::new(program);
+        cmd.args(prefix_args);
         cmd.args(login_args);
+        if let Some(git_bash) = crate::agent::windows_git_bash_path() {
+            cmd.env(
+                "CLAUDE_CODE_GIT_BASH_PATH",
+                git_bash.to_string_lossy().into_owned(),
+            );
+        }
         configure_login_pty_env(&mut cmd);
         cmd
     }
@@ -699,58 +781,21 @@ fn cache_claude_oauth_token(token: &str) {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn macos_keychain_service_password(service: &str) -> Option<String> {
-    let output = Command::new("/usr/bin/security")
-        .args(["find-generic-password", "-s", service, "-w"])
-        .stdin(Stdio::null())
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let secret = String::from_utf8_lossy(&output.stdout)
-        .trim_end_matches(['\r', '\n'])
-        .trim()
-        .to_string();
-    (!secret.is_empty()).then_some(secret)
-}
-
-fn sync_claude_code_oauth_keychain_to_app_cache() -> bool {
-    #[cfg(target_os = "macos")]
-    {
-        let Some(secret) = macos_keychain_service_password("Claude Code-credentials") else {
-            return false;
-        };
-        let Some(credential) = read_claude_oauth_credential_from_json_text(&secret) else {
-            return false;
-        };
-        if credential.refresh.is_none() {
-            return false;
-        }
-        if let Ok(entry) = keychain_entry("claude", "oauth_token") {
-            if entry.set_password(secret.trim()).is_ok() {
-                set_oauth_state("claude", true);
-                return true;
-            }
-        }
-        false
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        false
-    }
+fn sync_claude_credentials_file_to_app_cache() -> bool {
+    let Some(credential) = read_claude_oauth_credential_from_credentials_file() else {
+        return false;
+    };
+    cache_claude_subscription_oauth_credential(&credential).is_ok()
 }
 
 fn mark_oauth_login_success(provider: &str) {
     set_oauth_state(provider, true);
-    if provider == "claude" {
-        if sync_claude_code_oauth_keychain_to_app_cache() {
-            let _ = sync_gajecode_claude_subscription_credential();
-        } else {
-            cache_claude_setup_token_if_available();
-        }
+    // Never read Claude Code's own macOS Keychain item. Doing so attributes the
+    // access to Atelier and produces a password prompt after app updates. Use
+    // the CLI-managed credentials file when present, otherwise ask the already
+    // authenticated CLI for a setup token and store only that app-owned value.
+    if provider == "claude" && !sync_claude_credentials_file_to_app_cache() {
+        cache_claude_setup_token_if_available();
     }
 }
 
@@ -864,8 +909,10 @@ pub struct ProviderLoginOauthResult {
 pub struct ProviderOauthLoginState {
     pub provider: String,
     pub active: bool,
+    pub browser_opened: bool,
     pub login_url: Option<String>,
     pub output: String,
+    pub error: Option<String>,
     pub updated_at_ms: i64,
 }
 
@@ -882,14 +929,14 @@ fn keychain_item_exists(provider: &str, slot: &str) -> bool {
     #[cfg(target_os = "macos")]
     {
         let username = keychain_username(provider, slot);
-        return Command::new("/usr/bin/security")
+        Command::new("/usr/bin/security")
             .args(["find-generic-password", "-s", SERVICE, "-a", &username])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
             .map(|status| status.success())
-            .unwrap_or(false);
+            .unwrap_or(false)
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -965,9 +1012,8 @@ fn gajecode_agent_dir() -> Option<PathBuf> {
 fn ensure_gajecode_models_config(agent_dir: &Path) -> Result<(), String> {
     let path = agent_dir.join("models.yml");
     let content = r#"# Atelier managed default for the isolated Gajae Code runtime.
-# Claude subscription OAuth is synchronized into agent.db auth_credentials
-# before each Gajae Code run. Keep models.yml free of apiKeyEnv so stored
-# OAuth can refresh expired access tokens instead of being shadowed by config.
+# Claude subscription OAuth is passed only to the child process through
+# ANTHROPIC_OAUTH_TOKEN. Long-lived refresh tokens stay in the OS keychain.
 providers: {}
 "#;
     if path.exists() {
@@ -1288,35 +1334,6 @@ fn command_output_timeout(mut command: Command, timeout: Duration) -> io::Result
     }
 }
 
-fn command_output_with_stdin_timeout(
-    mut command: Command,
-    input: &[u8],
-    timeout: Duration,
-) -> io::Result<Option<Output>> {
-    configure_background_command(&mut command);
-    command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = command.spawn()?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(input)?;
-        stdin.flush()?;
-    }
-    let start = Instant::now();
-    loop {
-        if child.try_wait()?.is_some() {
-            return child.wait_with_output().map(Some);
-        }
-        if start.elapsed() >= timeout {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Ok(None);
-        }
-        thread::sleep(Duration::from_millis(40));
-    }
-}
-
 fn detect_oauth(provider: &str) -> bool {
     if provider == "codex" && cli_runs_for_provider(provider, "codex") {
         let mut command = cli_command("codex");
@@ -1335,9 +1352,6 @@ fn detect_oauth(provider: &str) -> bool {
                 output.status.success() && combined.to_ascii_lowercase().contains("logged in")
             };
             set_oauth_state(provider, logged_in);
-            if logged_in {
-                let _ = sync_codex_auth_to_hermes();
-            }
             return logged_in;
         }
     }
@@ -1512,7 +1526,7 @@ fn read_app_keychain_password(provider: &str, slot: &str) -> Option<String> {
     #[cfg(target_os = "macos")]
     {
         let username = keychain_username(provider, slot);
-        return macos_keychain_password(SERVICE, &username);
+        macos_keychain_password(SERVICE, &username)
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -1618,197 +1632,139 @@ pub fn read_claude_subscription_oauth_credential() -> Option<ClaudeSubscriptionO
     env_credential
 }
 
-fn sync_gajecode_claude_subscription_credential_value(
-    credential: ClaudeSubscriptionOauthCredential,
-) -> Result<bool, String> {
-    let Some(refresh) = credential
+fn cache_claude_subscription_oauth_credential(
+    credential: &ClaudeSubscriptionOauthCredential,
+) -> Result<(), String> {
+    let secret = serde_json::json!({
+        "claudeAiOauth": {
+            "accessToken": credential.access,
+            "refreshToken": credential.refresh,
+            "expiresAt": credential.expires,
+            "scopes": credential.scopes,
+            "subscriptionType": credential.subscription_type,
+        }
+    });
+    let serialized = serde_json::to_string(&secret)
+        .map_err(|e| format!("serialize Claude OAuth credential: {e}"))?;
+    let entry = keychain_entry("claude", "oauth_token")
+        .map_err(|e| format!("open Atelier Claude credential store: {e}"))?;
+    entry
+        .set_password(&serialized)
+        .map_err(|e| format!("update Atelier Claude credential store: {e}"))?;
+    set_oauth_state("claude", true);
+    Ok(())
+}
+
+fn refresh_claude_subscription_oauth_credential(
+    credential: &ClaudeSubscriptionOauthCredential,
+) -> Result<ClaudeSubscriptionOauthCredential, String> {
+    const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+    const TOKEN_URL: &str = "https://api.anthropic.com/v1/oauth/token";
+
+    let refresh = credential
         .refresh
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-    else {
-        return Ok(false);
+        .ok_or_else(|| {
+            "Claude 구독 토큰이 만료되었습니다. 설정 > 연결에서 Claude 구독 로그인을 다시 진행해 주세요."
+                .to_string()
+        })?;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("Claude OAuth refresh client: {e}"))?;
+    let response = client
+        .post(TOKEN_URL)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .json(&serde_json::json!({
+            "grant_type": "refresh_token",
+            "client_id": CLIENT_ID,
+            "refresh_token": refresh,
+        }))
+        .send()
+        .map_err(|e| format!("Claude OAuth token refresh failed: {e}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!(
+            "Claude 구독 토큰 갱신이 거부되었습니다 (HTTP {}). 설정 > 연결에서 다시 로그인해 주세요.",
+            status.as_u16()
+        ));
+    }
+    let payload: Value = response
+        .json()
+        .map_err(|e| format!("parse Claude OAuth refresh response: {e}"))?;
+    let access = value_string(payload.get("access_token"))
+        .filter(|token| token.contains("sk-ant-oat"))
+        .ok_or_else(|| {
+            "Claude OAuth refresh response did not contain an access token.".to_string()
+        })?;
+    let expires_in = value_i64(payload.get("expires_in")).unwrap_or(3600).max(60);
+    let refreshed = ClaudeSubscriptionOauthCredential {
+        access,
+        refresh: value_string(payload.get("refresh_token")).or_else(|| credential.refresh.clone()),
+        expires: Some(chrono::Utc::now().timestamp_millis() + expires_in * 1000 - 300_000),
+        scopes: credential.scopes.clone(),
+        subscription_type: credential.subscription_type.clone(),
     };
+    cache_claude_subscription_oauth_credential(&refreshed)?;
+    Ok(refreshed)
+}
+
+fn scrub_gajecode_managed_claude_credential() -> Result<(), String> {
     let Some(agent_dir) = gajecode_agent_dir() else {
-        return Ok(false);
+        return Ok(());
     };
     let Some(bun) = gajecode_bun_executable_path() else {
-        return Ok(false);
-    };
-
-    std::fs::create_dir_all(&agent_dir)
-        .map_err(|e| format!("create {}: {e}", agent_dir.display()))?;
-    ensure_gajecode_models_config(&agent_dir)?;
-
-    let agent_db = agent_dir.join("agent.db");
-    let expires = credential
-        .expires
-        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
-    let payload = serde_json::json!({
-        "agentDb": agent_db.to_string_lossy(),
-        "access": credential.access,
-        "refresh": refresh,
-        "expires": expires,
-        "scopes": credential.scopes,
-        "subscriptionType": credential.subscription_type,
-    })
-    .to_string();
-    let script = r#"
-import { Database } from "bun:sqlite";
-
-const chunks = [];
-for await (const chunk of Bun.stdin.stream()) {
-  chunks.push(Buffer.from(chunk));
-}
-const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-const db = new Database(input.agentDb);
-db.exec(`
-CREATE TABLE IF NOT EXISTS auth_credentials (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  provider TEXT NOT NULL,
-  credential_type TEXT NOT NULL,
-  data TEXT NOT NULL,
-  disabled_cause TEXT,
-  identity_key TEXT,
-  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-  updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
-);
-`);
-const now = Math.floor(Date.now() / 1000);
-const identityKey = "atelier-claude-subscription";
-const data = JSON.stringify({
-  access: input.access,
-  refresh: input.refresh,
-  expires: Number(input.expires) || Date.now(),
-  ...(input.scopes ? { scopes: input.scopes } : {}),
-  ...(input.subscriptionType ? { subscriptionType: input.subscriptionType } : {}),
-});
-const existing = db
-  .query(`
-    SELECT id
-    FROM auth_credentials
-    WHERE provider = 'anthropic'
-      AND credential_type = 'oauth'
-      AND (identity_key = ? OR identity_key IS NULL)
-    ORDER BY CASE WHEN identity_key = ? THEN 0 ELSE 1 END, id ASC
-    LIMIT 1
-  `)
-  .get(identityKey, identityKey);
-if (existing?.id) {
-  db.query(`
-    UPDATE auth_credentials
-    SET data = ?, identity_key = ?, disabled_cause = NULL, updated_at = ?
-    WHERE id = ?
-  `).run(data, identityKey, now, existing.id);
-  console.log(JSON.stringify({ ok: true, action: "updated" }));
-} else {
-  db.query(`
-    INSERT INTO auth_credentials
-      (provider, credential_type, data, disabled_cause, identity_key, created_at, updated_at)
-    VALUES ('anthropic', 'oauth', ?, NULL, ?, ?, ?)
-  `).run(data, identityKey, now, now);
-  console.log(JSON.stringify({ ok: true, action: "inserted" }));
-}
-db.close();
-"#;
-
-    let mut command = Command::new(bun);
-    command.arg("--eval").arg(script);
-    let output =
-        command_output_with_stdin_timeout(command, payload.as_bytes(), Duration::from_secs(8))
-            .map_err(|e| format!("가재코드 Claude 자격증명 동기화 실행 실패: {e}"))?;
-    let Some(output) = output else {
-        return Err("가재코드 Claude 자격증명 동기화 시간이 초과되었습니다.".to_string());
-    };
-    if !output.status.success() {
-        return Err("가재코드 Claude 자격증명 동기화가 실패했습니다.".to_string());
-    }
-    Ok(true)
-}
-
-pub fn sync_gajecode_claude_subscription_credential() -> Result<bool, String> {
-    let Some(credential) = read_claude_subscription_oauth_credential() else {
-        return Ok(false);
-    };
-    sync_gajecode_claude_subscription_credential_value(credential)
-}
-
-pub fn repair_gajecode_claude_subscription_credential() -> Result<bool, String> {
-    #[cfg(target_os = "macos")]
-    {
-        if let Some(secret) = macos_keychain_service_password("Claude Code-credentials") {
-            if let Some(credential) = read_claude_oauth_credential_from_json_text(&secret) {
-                if credential.refresh.is_some() {
-                    if let Ok(entry) = keychain_entry("claude", "oauth_token") {
-                        if entry.set_password(secret.trim()).is_ok() {
-                            set_oauth_state("claude", true);
-                        }
-                    }
-                    return sync_gajecode_claude_subscription_credential_value(credential);
-                }
-            }
-        }
-    }
-
-    sync_gajecode_claude_subscription_credential()
-}
-
-pub fn gajecode_has_claude_subscription_credential() -> bool {
-    let Some(agent_dir) = gajecode_agent_dir() else {
-        return false;
-    };
-    let Some(bun) = gajecode_bun_executable_path() else {
-        return false;
+        return Ok(());
     };
     let agent_db = agent_dir.join("agent.db");
     if !agent_db.exists() {
-        return false;
+        return Ok(());
     }
-    if std::fs::create_dir_all(&agent_dir).is_err() {
-        return false;
-    }
-    if ensure_gajecode_models_config(&agent_dir).is_err() {
-        return false;
-    }
-
     let script = r#"
 import { Database } from "bun:sqlite";
-
-try {
-  const db = new Database(process.env.ATELIER_GAJAECODE_AGENT_DB, { readonly: true });
-  const row = db
-    .query(`
-      SELECT data, disabled_cause
-      FROM auth_credentials
-      WHERE provider = 'anthropic'
-        AND credential_type = 'oauth'
-      ORDER BY CASE WHEN disabled_cause IS NULL THEN 0 ELSE 1 END, updated_at DESC, id DESC
-      LIMIT 1
-    `)
-    .get();
-  db.close();
-  if (!row || row.disabled_cause) {
-    console.log("missing");
-    process.exit(0);
-  }
-  const data = JSON.parse(row.data || "{}");
-  const access = typeof data.access === "string" && data.access.trim();
-  const refresh = typeof data.refresh === "string" && data.refresh.trim();
-  console.log(access && refresh ? "ok" : "missing");
-} catch {
-  console.log("missing");
+const db = new Database(process.env.ATELIER_GAJAECODE_AGENT_DB);
+const rows = db.query(`
+  SELECT id, data FROM auth_credentials
+  WHERE identity_key = 'atelier-claude-subscription'
+`).all();
+for (const row of rows) {
+  let data = {};
+  try { data = JSON.parse(row.data || "{}"); } catch {}
+  delete data.refresh;
+  delete data.refreshToken;
+  delete data.refresh_token;
+  db.query(`
+    UPDATE auth_credentials
+    SET data = ?, disabled_cause = 'atelier-keychain-env-migration', updated_at = ?
+    WHERE id = ?
+  `).run(JSON.stringify(data), Math.floor(Date.now() / 1000), row.id);
 }
+db.close();
 "#;
-
     let mut command = Command::new(bun);
     command
         .arg("--eval")
         .arg(script)
         .env("ATELIER_GAJAECODE_AGENT_DB", &agent_db);
-    let Ok(Some(output)) = command_output_timeout(command, Duration::from_secs(4)) else {
-        return false;
+    let output = command_output_timeout(command, Duration::from_secs(4))
+        .map_err(|e| format!("scrub Gajae managed OAuth credential: {e}"))?;
+    if output.is_some_and(|output| !output.status.success()) {
+        return Err("Gajae managed OAuth credential migration failed.".to_string());
+    }
+    Ok(())
+}
+
+pub fn prepare_gajecode_claude_subscription_token() -> Result<Option<String>, String> {
+    scrub_gajecode_managed_claude_credential()?;
+    let Some(credential) = read_claude_subscription_oauth_credential() else {
+        return Ok(None);
     };
-    output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "ok"
+    if credential.access_is_fresh() || credential.refresh.is_none() {
+        return Ok(Some(credential.access));
+    }
+    refresh_claude_subscription_oauth_credential(&credential).map(|value| Some(value.access))
 }
 
 fn json_string(value: &Value, key: &str) -> String {
@@ -1819,7 +1775,7 @@ fn json_string(value: &Value, key: &str) -> String {
         .to_string()
 }
 
-pub fn sync_codex_auth_to_hermes() -> Result<bool, String> {
+pub fn stage_codex_access_for_hermes() -> Result<bool, String> {
     let Some(codex_path) = home_file(&[".codex", "auth.json"]) else {
         return Ok(false);
     };
@@ -1837,8 +1793,8 @@ pub fn sync_codex_auth_to_hermes() -> Result<bool, String> {
         return Ok(false);
     };
     let access_token = json_string(codex_tokens, "access_token");
-    let refresh_token = json_string(codex_tokens, "refresh_token");
-    if access_token.is_empty() || refresh_token.is_empty() {
+    let codex_refresh_token = json_string(codex_tokens, "refresh_token");
+    if access_token.is_empty() {
         return Ok(false);
     }
 
@@ -1850,7 +1806,6 @@ pub fn sync_codex_auth_to_hermes() -> Result<bool, String> {
     let tokens_json = serde_json::json!({
         "id_token": json_string(codex_tokens, "id_token"),
         "access_token": access_token,
-        "refresh_token": refresh_token,
         "account_id": json_string(codex_tokens, "account_id"),
     });
 
@@ -1871,6 +1826,30 @@ pub fn sync_codex_auth_to_hermes() -> Result<bool, String> {
         .get_mut("providers")
         .and_then(Value::as_object_mut)
         .expect("providers object checked");
+    let mut hermes_owns_refresh = false;
+    if let Some(provider_obj) = providers
+        .get_mut("openai-codex")
+        .and_then(Value::as_object_mut)
+    {
+        if let Some(tokens) = provider_obj
+            .get_mut("tokens")
+            .and_then(Value::as_object_mut)
+        {
+            let stored_refresh = tokens
+                .get("refresh_token")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            hermes_owns_refresh = !stored_refresh.is_empty()
+                && (codex_refresh_token.is_empty() || stored_refresh != codex_refresh_token);
+            if !stored_refresh.is_empty() && stored_refresh == codex_refresh_token {
+                tokens.remove("refresh_token");
+            }
+        }
+    }
+    if hermes_owns_refresh {
+        return Ok(false);
+    }
     let provider = providers
         .entry("openai-codex")
         .or_insert_with(|| serde_json::json!({}));
@@ -1880,7 +1859,11 @@ pub fn sync_codex_auth_to_hermes() -> Result<bool, String> {
     if let Some(provider_obj) = provider.as_object_mut() {
         provider_obj.insert("tokens".into(), tokens_json.clone());
         provider_obj.insert("last_refresh".into(), Value::String(last_refresh.clone()));
-        provider_obj.insert("auth_mode".into(), Value::String("device_code".into()));
+        provider_obj.insert(
+            "auth_mode".into(),
+            Value::String("atelier_access_only".into()),
+        );
+        provider_obj.insert("atelier_managed".into(), Value::Bool(true));
     }
 
     if !root.get("credential_pool").is_some_and(Value::is_object) {
@@ -1897,26 +1880,45 @@ pub fn sync_codex_auth_to_hermes() -> Result<bool, String> {
         *pool_value = serde_json::json!([]);
     }
     let pool = pool_value.as_array_mut().expect("pool array checked");
-    if pool.is_empty() {
+    let mut managed_index = pool.iter().position(|entry| {
+        entry.get("id").and_then(Value::as_str) == Some("atelier_codex_cli_access")
+            || entry.get("source").and_then(Value::as_str) == Some("codex_cli")
+    });
+    if managed_index.is_none() {
         pool.push(serde_json::json!({
-            "id": "device_code",
-            "label": "device_code",
+            "id": "atelier_codex_cli_access",
+            "label": "Atelier Codex CLI access",
             "auth_type": "oauth",
             "priority": 100,
-            "source": "codex_cli"
+            "source": "atelier_codex_cli_access"
         }));
+        managed_index = Some(pool.len() - 1);
     }
-    for credential in pool.iter_mut() {
-        if let Some(cred) = credential.as_object_mut() {
-            cred.insert("access_token".into(), tokens_json["access_token"].clone());
-            cred.insert("refresh_token".into(), tokens_json["refresh_token"].clone());
-            cred.insert("last_refresh".into(), Value::String(last_refresh.clone()));
-            cred.insert("last_status".into(), Value::Null);
-            cred.insert("last_status_at".into(), Value::Null);
-            cred.insert("last_error_code".into(), Value::Null);
-            cred.insert("last_error_reason".into(), Value::Null);
-            cred.insert("last_error_message".into(), Value::Null);
-        }
+    if let Some(cred) = managed_index
+        .and_then(|index| pool.get_mut(index))
+        .and_then(Value::as_object_mut)
+    {
+        cred.insert(
+            "id".into(),
+            Value::String("atelier_codex_cli_access".into()),
+        );
+        cred.insert(
+            "label".into(),
+            Value::String("Atelier Codex CLI access".into()),
+        );
+        cred.insert(
+            "source".into(),
+            Value::String("atelier_codex_cli_access".into()),
+        );
+        cred.insert("auth_type".into(), Value::String("oauth".into()));
+        cred.insert("access_token".into(), tokens_json["access_token"].clone());
+        cred.remove("refresh_token");
+        cred.insert("last_refresh".into(), Value::String(last_refresh.clone()));
+        cred.insert("last_status".into(), Value::Null);
+        cred.insert("last_status_at".into(), Value::Null);
+        cred.insert("last_error_code".into(), Value::Null);
+        cred.insert("last_error_reason".into(), Value::Null);
+        cred.insert("last_error_message".into(), Value::Null);
     }
 
     root.insert(
@@ -1942,6 +1944,50 @@ pub fn sync_codex_auth_to_hermes() -> Result<bool, String> {
     }
     set_oauth_state("codex", true);
     Ok(true)
+}
+
+pub fn scrub_staged_codex_access_from_hermes() -> Result<(), String> {
+    let Some(hermes_path) = home_file(&[".hermes", "auth.json"]) else {
+        return Ok(());
+    };
+    let Ok(text) = std::fs::read_to_string(&hermes_path) else {
+        return Ok(());
+    };
+    let mut auth: Value =
+        serde_json::from_str(&text).map_err(|e| format!("parse hermes auth: {e}"))?;
+    let Some(root) = auth.as_object_mut() else {
+        return Ok(());
+    };
+    if let Some(providers) = root.get_mut("providers").and_then(Value::as_object_mut) {
+        let remove_provider = providers
+            .get("openai-codex")
+            .and_then(Value::as_object)
+            .and_then(|provider| provider.get("atelier_managed"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if remove_provider {
+            providers.remove("openai-codex");
+        }
+    }
+    if let Some(pool_root) = root
+        .get_mut("credential_pool")
+        .and_then(Value::as_object_mut)
+    {
+        if let Some(pool) = pool_root
+            .get_mut("openai-codex")
+            .and_then(Value::as_array_mut)
+        {
+            pool.retain(|entry| {
+                entry.get("id").and_then(Value::as_str) != Some("atelier_codex_cli_access")
+                    && entry.get("source").and_then(Value::as_str)
+                        != Some("atelier_codex_cli_access")
+            });
+        }
+    }
+    let serialized =
+        serde_json::to_string_pretty(&auth).map_err(|e| format!("serialize hermes auth: {e}"))?;
+    std::fs::write(&hermes_path, serialized).map_err(|e| format!("write hermes auth: {e}"))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -2090,27 +2136,38 @@ pub async fn provider_login_oauth(
             let pair = pty_system
                 .openpty(PtySize {
                     rows: 24,
-                    cols: 120,
+                    cols: OAUTH_LOGIN_PTY_COLS,
                     pixel_width: 0,
                     pixel_height: 0,
                 })
-                .map_err(|e| format!("oauth openpty {cli_owned} {cmd_owned}: {e}"))?;
+                .map_err(|e| {
+                    oauth_login_error(
+                        &provider_clone,
+                        format!("oauth openpty {cli_owned} {cmd_owned}: {e}"),
+                    )
+                })?;
             let cmd = oauth_pty_login_command(&cli_owned, &login_args);
-            let mut child = pair
-                .slave
-                .spawn_command(cmd)
-                .map_err(|e| format!("oauth spawn {cli_owned} {cmd_owned}: {e}"))?;
+            let mut child = pair.slave.spawn_command(cmd).map_err(|e| {
+                oauth_login_error(
+                    &provider_clone,
+                    format!("oauth spawn {cli_owned} {cmd_owned}: {e}"),
+                )
+            })?;
             drop(pair.slave);
 
             let captured = Arc::new(Mutex::new(String::new()));
-            let reader = pair
-                .master
-                .try_clone_reader()
-                .map_err(|e| format!("oauth clone reader {cli_owned} {cmd_owned}: {e}"))?;
-            let writer = pair
-                .master
-                .take_writer()
-                .map_err(|e| format!("oauth take writer {cli_owned} {cmd_owned}: {e}"))?;
+            let reader = pair.master.try_clone_reader().map_err(|e| {
+                oauth_login_error(
+                    &provider_clone,
+                    format!("oauth clone reader {cli_owned} {cmd_owned}: {e}"),
+                )
+            })?;
+            let writer = pair.master.take_writer().map_err(|e| {
+                oauth_login_error(
+                    &provider_clone,
+                    format!("oauth take writer {cli_owned} {cmd_owned}: {e}"),
+                )
+            })?;
             store_oauth_login_pty_writer(&provider_clone, writer);
             capture_login_pipe(reader, captured.clone());
             spawn_oauth_login_runtime_watcher(provider_clone.clone(), captured.clone());
@@ -2121,17 +2178,20 @@ pub async fn provider_login_oauth(
             loop {
                 if !login_url_detected {
                     let output = captured_login_output(&captured);
-                    if let Some(url) = extract_login_url(&output) {
+                    if let Some(url) = extract_provider_login_url(&provider_clone, &output) {
                         remember_oauth_login_url(&provider_clone, &url);
                         login_url_detected = true;
                         browser_opened = open_login_url_in_browser(&url);
+                        remember_oauth_browser_opened(&provider_clone, browser_opened);
                     }
                 }
 
-                match child
-                    .try_wait()
-                    .map_err(|e| format!("{cli_owned} {cmd_owned} poll: {e}"))?
-                {
+                match child.try_wait().map_err(|e| {
+                    oauth_login_error(
+                        &provider_clone,
+                        format!("{cli_owned} {cmd_owned} poll: {e}"),
+                    )
+                })? {
                     Some(status) if status.success() => {
                         let _ = child.wait();
                         forget_oauth_login_stdin(&provider_clone);
@@ -2155,7 +2215,6 @@ pub async fn provider_login_oauth(
                     Some(status) => {
                         let _ = child.wait();
                         forget_oauth_login_stdin(&provider_clone);
-                        finish_oauth_login_runtime(&provider_clone);
                         thread::sleep(Duration::from_millis(80));
                         let detail = login_failure_detail_text(&captured_login_output(&captured))
                             .trim()
@@ -2166,6 +2225,7 @@ pub async fn provider_login_oauth(
                             }
                             _ => format!("{cli_owned} {cmd_owned} exited with {status:?}"),
                         };
+                        fail_oauth_login_runtime(&provider_clone, failure.clone());
                         if attempt_index + 1 < attempt_count {
                             log::warn!(
                                 "oauth login attempt failed for {provider} ({cmd_owned}); trying fallback: {failure}"
@@ -2196,21 +2256,21 @@ pub async fn provider_login_oauth(
                                     let detail = login_failure_detail_text(&captured_login_output(
                                         &captured,
                                     ));
-                                    if detail.trim().is_empty() {
-                                        log::warn!(
-                                            "{cli_owned} {cmd_owned} exited with {status:?}"
-                                        );
+                                    let failure = if detail.trim().is_empty() {
+                                        format!("{cli_owned} {cmd_owned} exited with {status:?}")
                                     } else {
-                                        log::warn!(
+                                        format!(
                                             "{cli_owned} {cmd_owned} exited with {status:?}: {detail}"
-                                        );
-                                    }
-                                    finish_oauth_login_runtime(&provider_clone);
+                                        )
+                                    };
+                                    log::warn!("{failure}");
+                                    fail_oauth_login_runtime(&provider_clone, failure);
                                 }
                                 Err(e) => {
                                     forget_oauth_login_stdin(&provider_clone);
-                                    log::warn!("{cli_owned} wait: {e}");
-                                    finish_oauth_login_runtime(&provider_clone);
+                                    let failure = format!("{cli_owned} wait: {e}");
+                                    log::warn!("{failure}");
+                                    fail_oauth_login_runtime(&provider_clone, failure);
                                 }
                             }
                         });
@@ -2259,9 +2319,12 @@ pub async fn provider_login_oauth(
             });
         configure_login_browser_env_for_command(&mut command);
         configure_background_command(&mut command);
-        let mut child = command
-            .spawn()
-            .map_err(|e| format!("oauth spawn {cli_owned} {cmd_owned}: {e}"))?;
+        let mut child = command.spawn().map_err(|e| {
+            oauth_login_error(
+                &provider_clone,
+                format!("oauth spawn {cli_owned} {cmd_owned}: {e}"),
+            )
+        })?;
         let captured = Arc::new(Mutex::new(String::new()));
         if provider == "claude" {
             if let Some(stdin) = child.stdin.take() {
@@ -2285,16 +2348,19 @@ pub async fn provider_login_oauth(
         loop {
             if !login_url_detected {
                 let output = captured_login_output(&captured);
-                if let Some(url) = extract_login_url(&output) {
+                if let Some(url) = extract_provider_login_url(&provider_clone, &output) {
                     remember_oauth_login_url(&provider_clone, &url);
                     login_url_detected = true;
                     browser_opened = open_login_url_in_browser(&url);
+                    remember_oauth_browser_opened(&provider_clone, browser_opened);
                 }
             }
-            match child
-                .try_wait()
-                .map_err(|e| format!("{cli_owned} {cmd_owned} poll: {e}"))?
-            {
+            match child.try_wait().map_err(|e| {
+                oauth_login_error(
+                    &provider_clone,
+                    format!("{cli_owned} {cmd_owned} poll: {e}"),
+                )
+            })? {
                 Some(status) if status.success() => {
                     let _ = child.wait();
                     forget_oauth_login_stdin(&provider_clone);
@@ -2318,7 +2384,6 @@ pub async fn provider_login_oauth(
                 Some(status) => {
                     let _ = child.wait();
                     forget_oauth_login_stdin(&provider_clone);
-                    finish_oauth_login_runtime(&provider_clone);
                     thread::sleep(Duration::from_millis(80));
                     let detail = login_failure_detail_text(&captured_login_output(&captured))
                         .trim()
@@ -2329,6 +2394,7 @@ pub async fn provider_login_oauth(
                         }
                         _ => format!("{cli_owned} {cmd_owned} exited with {status}"),
                     };
+                    fail_oauth_login_runtime(&provider_clone, failure.clone());
                     if attempt_index + 1 < attempt_count {
                         log::warn!(
                             "oauth login attempt failed for {provider} ({cmd_owned}); trying fallback: {failure}"
@@ -2355,19 +2421,19 @@ pub async fn provider_login_oauth(
                             forget_oauth_login_stdin(&provider_clone);
                             let detail =
                                 login_failure_detail_text(&captured_login_output(&captured));
-                            if detail.trim().is_empty() {
-                                log::warn!("{cli_owned} {cmd_owned} exited with {status}");
+                            let failure = if detail.trim().is_empty() {
+                                format!("{cli_owned} {cmd_owned} exited with {status}")
                             } else {
-                                log::warn!(
-                                    "{cli_owned} {cmd_owned} exited with {status}: {detail}"
-                                );
-                            }
-                            finish_oauth_login_runtime(&provider_clone);
+                                format!("{cli_owned} {cmd_owned} exited with {status}: {detail}")
+                            };
+                            log::warn!("{failure}");
+                            fail_oauth_login_runtime(&provider_clone, failure);
                         }
                         Err(e) => {
                             forget_oauth_login_stdin(&provider_clone);
-                            log::warn!("{cli_owned} wait: {e}");
-                            finish_oauth_login_runtime(&provider_clone);
+                            let failure = format!("{cli_owned} wait: {e}");
+                            log::warn!("{failure}");
+                            fail_oauth_login_runtime(&provider_clone, failure);
                         }
                     });
                     return Ok(ProviderLoginOauthResult {
@@ -2406,17 +2472,19 @@ pub async fn provider_oauth_login_state(
     Ok(ProviderOauthLoginState {
         provider,
         active: snapshot.active,
+        browser_opened: snapshot.browser_opened,
         login_url: snapshot.login_url,
         output: snapshot.output,
+        error: snapshot.error,
         updated_at_ms: snapshot.updated_at_ms,
     })
 }
 
 #[tauri::command]
-pub async fn provider_open_oauth_login_url(url: String) -> Result<(), String> {
+pub async fn provider_open_oauth_login_url(provider: String, url: String) -> Result<(), String> {
     let url = url.trim();
-    if !(url.starts_with("https://") || url.starts_with("http://")) {
-        return Err("Only http/https login URLs can be opened.".into());
+    if !is_provider_login_url(&provider, url) {
+        return Err("The login URL is not an approved HTTPS endpoint for this provider.".into());
     }
     if open_login_url_in_browser(url) {
         Ok(())
@@ -2637,7 +2705,7 @@ fn first_semver_token(text: &str) -> Option<String> {
 
 fn semver_parts(version: &str) -> Vec<u64> {
     version
-        .split(|c: char| c == '.' || c == '-' || c == '_')
+        .split(['.', '-', '_'])
         .filter_map(|part| part.parse::<u64>().ok())
         .collect()
 }
@@ -2853,10 +2921,12 @@ pub fn read_api_key(provider: &str) -> Option<String> {
 /// 일부러 주입하지 않는다. Hermes 같은 API backend 경로는 read_api_key를 직접 쓴다.
 pub fn read_agent_api_key(provider: &str) -> Option<String> {
     let state = credential_state(provider);
-    if matches!(provider, "claude" | "codex") && !state.oauth_logged_in && state.api_key_present {
-        if detect_oauth(provider) {
-            return None;
-        }
+    if matches!(provider, "claude" | "codex")
+        && !state.oauth_logged_in
+        && state.api_key_present
+        && detect_oauth(provider)
+    {
+        return None;
     }
     if !should_inject_agent_api_key(provider, &state) {
         return None;
@@ -2896,18 +2966,15 @@ mod tests {
     }
 
     #[test]
-    fn claude_subscription_login_uses_platform_specific_attempt_order() {
-        #[cfg(target_os = "windows")]
-        assert_eq!(
-            oauth_login_attempts("claude", "login"),
-            vec![vec!["setup-token"], vec!["auth", "login", "--claudeai"]]
-        );
-        #[cfg(not(target_os = "windows"))]
+    fn subscription_logins_prefer_cross_platform_oauth_flows() {
         assert_eq!(
             oauth_login_attempts("claude", "login"),
             vec![vec!["auth", "login", "--claudeai"], vec!["setup-token"]]
         );
-        assert_eq!(oauth_login_attempts("codex", "login"), vec![vec!["login"]]);
+        assert_eq!(
+            oauth_login_attempts("codex", "login"),
+            vec![vec!["login", "--device-auth"], vec!["login"]]
+        );
     }
 
     #[test]
@@ -2963,6 +3030,48 @@ mod tests {
         assert!(url.contains("redirect_uri="));
         assert!(url.contains("code_challenge=secret"));
         assert!(url.ends_with("state=xyz"));
+    }
+
+    #[test]
+    fn provider_login_url_allowlist_rejects_insecure_and_unrelated_hosts() {
+        assert!(is_provider_login_url(
+            "claude",
+            "https://claude.ai/oauth/authorize?state=abc"
+        ));
+        assert!(is_provider_login_url(
+            "codex",
+            "https://auth.openai.com/authorize?state=abc"
+        ));
+        assert!(!is_provider_login_url(
+            "claude",
+            "http://claude.ai/oauth/authorize"
+        ));
+        assert!(!is_provider_login_url(
+            "codex",
+            "https://chatgpt.com.attacker.example/authorize"
+        ));
+        assert!(!is_provider_login_url(
+            "claude",
+            "https://example.com/claude-login"
+        ));
+    }
+
+    #[test]
+    fn provider_login_url_extraction_skips_unrelated_links() {
+        let text = "Docs: https://example.com/help\nLogin: https://chatgpt.com/backend-api/codex/auth?state=abc";
+        assert_eq!(
+            extract_provider_login_url("codex", text).as_deref(),
+            Some("https://chatgpt.com/backend-api/codex/auth?state=abc")
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_oauth_browser_helper_uses_trusted_system_binary() {
+        assert_eq!(
+            oauth_browser_helper_path().as_deref(),
+            Some(Path::new("explorer.exe"))
+        );
     }
 
     #[test]

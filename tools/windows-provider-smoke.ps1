@@ -1,6 +1,7 @@
 param(
   [switch]$Install,
   [switch]$Login,
+  [switch]$Strict,
   [int]$InstallTimeoutSec = 1800,
   [string]$LogDir = "$env:LOCALAPPDATA\Atelier\diagnostics"
 )
@@ -262,6 +263,13 @@ try {
   }
   $summary | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $jsonPath -Encoding UTF8
   Write-Host "JSON: $jsonPath"
+  if ($Strict) {
+    $failed = @($summary.providers | Where-Object { -not $_.exists -or -not $_.versionOk })
+    if ($failed.Count -gt 0) {
+      $names = ($failed | ForEach-Object { $_.provider }) -join ", "
+      throw "Windows provider smoke failed for: $names"
+    }
+  }
 } finally {
   Stop-Transcript | Out-Null
 }

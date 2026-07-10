@@ -21,7 +21,7 @@ Use these project values when applying:
 - Project name: `Atelier`
 - Repository URL: `https://github.com/BYKAYLE/atelier`
 - License: MIT
-- Download/release page: `https://github.com/BYKAYLE/atelier-releases/releases`
+- Download/release page: `https://github.com/BYKAYLE/atelier/releases`
 - Code signing policy: `docs/code-signing-policy.md`
 
 SignPath's free Foundation certificate is not automatic. The project must be
@@ -43,15 +43,9 @@ Add these repository variables:
   specific artifact configuration for Tauri Windows installers
 - `SIGNPATH_WAIT_TIMEOUT_SECONDS` optional, defaults to `3600`
 
-If releases should continue to be published to `BYKAYLE/atelier-releases`
-instead of the source repository, also add:
-
-- `RELEASE_OWNER=BYKAYLE`
-- `RELEASE_REPO=atelier-releases`
-- `RELEASE_GITHUB_TOKEN` secret with release write access to that repository
-
-Without `RELEASE_OWNER` and `RELEASE_REPO`, the workflow publishes to the source
-repository that runs the workflow.
+The production updater and release workflow both publish to
+`BYKAYLE/atelier`. Keep `RELEASE_OWNER` and `RELEASE_REPO` unset unless the
+updater endpoint in `src-tauri/tauri.conf.json` is migrated at the same time.
 
 ## Workflow
 
@@ -76,3 +70,8 @@ For the SignPath project configuration:
 - Enforce file metadata restrictions with product name `Atelier`.
 
 The release workflow intentionally does not use Azure Artifact Signing anymore.
+
+The workflow also has no unsigned fallback. If the SignPath secret or project
+configuration is missing, the release fails before any Windows installer is
+published. Tauri updater signatures verify update integrity, but they do not
+replace Windows Authenticode trust for Smart App Control.

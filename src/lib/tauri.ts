@@ -585,8 +585,10 @@ export interface ProviderLoginOauthResult {
 export interface ProviderOauthLoginState {
   provider: string;
   active: boolean;
+  browser_opened: boolean;
   login_url?: string | null;
   output: string;
+  error?: string | null;
   updated_at_ms: number;
 }
 
@@ -602,8 +604,8 @@ export async function providerOauthLoginState(provider: string): Promise<Provide
   return invoke("provider_oauth_login_state", { provider });
 }
 
-export async function providerOpenOauthLoginUrl(url: string): Promise<void> {
-  return invoke("provider_open_oauth_login_url", { url });
+export async function providerOpenOauthLoginUrl(provider: string, url: string): Promise<void> {
+  return invoke("provider_open_oauth_login_url", { provider, url });
 }
 
 export async function providerSubmitOauthCode(provider: string, code: string): Promise<void> {

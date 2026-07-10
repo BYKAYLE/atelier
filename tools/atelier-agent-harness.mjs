@@ -15,7 +15,7 @@ function parseArgs(argv) {
     cwd: process.cwd(),
     model: "",
     hermesProvider: "openai-codex",
-    permission: "full",
+    permission: "auto",
     timeoutMs: DEFAULT_TIMEOUT_MS,
     fixture: "",
     json: false,
@@ -87,7 +87,7 @@ Options:
   --cwd PATH                           Working directory. Default: current repo
   --model NAME                         Provider model override
   --hermes-provider NAME               Hermes backend. Default: openai-codex
-  --permission basic|auto|full         Matches Atelier permission mode. Default: full
+  --permission basic|auto|full         Matches Atelier permission mode. Default: auto
   --timeout SECONDS                    Per-provider timeout. Default: 120
   --fixture NAME|all                   Run parser fixture instead of a live CLI
   --json                               Print JSON only
@@ -133,10 +133,11 @@ function augmentedPath() {
 }
 
 function normalizePermission(permission) {
-  const p = String(permission || "full").trim().toLowerCase();
+  const p = String(permission || "auto").trim().toLowerCase();
   if (p === "basic" || p === "default") return "basic";
   if (p === "auto" || p === "autoreview" || p === "auto-review") return "auto";
-  return "full";
+  if (p === "full" || p === "bypass" || p === "danger") return "full";
+  return "auto";
 }
 
 function claudePermission(permission) {
@@ -153,9 +154,9 @@ function claudePermission(permission) {
 function codexPermissionArgs(permission) {
   switch (normalizePermission(permission)) {
     case "basic":
-      return ["--sandbox", "workspace-write"];
+      return ["--sandbox", "workspace-write", "--ask-for-approval", "on-request"];
     case "auto":
-      return ["--full-auto"];
+      return ["--sandbox", "workspace-write", "--ask-for-approval", "never"];
     default:
       return ["--dangerously-bypass-approvals-and-sandbox"];
   }
@@ -323,11 +324,11 @@ function commandForProvider(options) {
       command: cli.command,
       args: [
         ...cli.args,
+        ...codexPermissionArgs(options.permission),
         "exec",
         "--cd",
         options.cwd,
         ...(options.model ? ["--model", options.model] : []),
-        ...codexPermissionArgs(options.permission),
         "--json",
         "--skip-git-repo-check",
         options.prompt,

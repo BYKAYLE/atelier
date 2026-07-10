@@ -40,8 +40,8 @@ const PLUGINS: CatalogPlugin[] = [
     color: "#e26f4f",
     titleKo: "Atelier Skill",
     titleEn: "Atelier Skill",
-    detailKo: "Stella, Stella Factory, Probe, 에이전트 오케스트레이터 공개 스킬 묶음",
-    detailEn: "Public Stella, Stella Factory, Probe, and agent orchestration skill bundle",
+    detailKo: "Stella, 스텔라 모드, Probe, 에이전트 오케스트레이터 공개 스킬 묶음",
+    detailEn: "Public Stella, Stella Mode, Probe, and agent orchestration skill bundle",
   },
   {
     id: "academic-research-claude",
@@ -82,8 +82,8 @@ function isCatalogPluginId(id: string): id is CatalogPlugin["id"] {
 const BUILT_IN_SKILLS: BuiltInSkill[] = [
   {
     id: "stella-factory",
-    titleKo: "Stella Factory",
-    titleEn: "Stella Factory",
+    titleKo: "스텔라 모드",
+    titleEn: "Stella Mode",
     detailKo: "목표 변환, Probe 검증, SOT 기록",
     detailEn: "Goal packets, Probe checks, SOT evidence",
     icon: I.shieldCheck,

@@ -1,5 +1,63 @@
 # Evidence Log
 
+## 2026-07-10 Release Stability and OAuth Hardening
+
+Observed failure classes:
+
+- Windows provider subscription buttons could leave the app waiting without a
+  browser round trip.
+- Long provider OAuth URLs could wrap in a narrow pseudo-terminal and lose
+  query parameters such as `redirect_uri`, `state`, or PKCE values.
+- Provider credentials had spread across Atelier, Claude Code, Gajae, and
+  Hermes ownership boundaries.
+- Missing permission state inherited a full-access default.
+- Windows release publication did not have enough package-content and signed
+  artifact proof.
+
+Implemented:
+
+- Wide OAuth PTY, provider-scoped HTTPS URL extraction, native Windows browser
+  fallback, shared Windows CLI resolver, and visible login failure/timeout
+  states.
+- Atelier-owned Claude subscription cache/refresh; no direct external Claude
+  Code keychain read.
+- Per-process Gajae Claude OAuth and temporary Hermes Codex access staging with
+  post-run scrub.
+- Automatic workspace permission as the safe default and current Codex global
+  sandbox/approval arguments.
+- Windows MSI/NSIS/MSIX package smoke, optional Authenticode enforcement,
+  strict provider-install smoke, and no unsigned publication fallback.
+- Release dependency audit and Tauri release build without devtools.
+
+Validation evidence:
+
+- Build, fixture harness, production npm audit, Rust fmt/clippy/test (50 tests),
+  release audit, actionlint, and diff hygiene passed.
+- Real Claude subscription and Codex ChatGPT provider smokes passed with
+  explicit supported models.
+- Version metadata is consistent at 0.1.79.
+- `/Applications/Atelier.app` reports 0.1.79, passes local code-signature
+  verification, and is running from the installed bundle.
+- `Atelier_0.1.79_aarch64.dmg` was produced.
+- The installed app was reduced to a 560 px-wide workspace and the Codex model
+  menu remained inside the viewport. Its model panel displayed GPT-5.5,
+  GPT-5.6 Sol/Terra/Luna, GPT-5.4, GPT-5.4 Mini, and GPT-5.3 Codex Spark.
+- Switching between reasoning/model/speed panels now resets the independent
+  menu scroll position so a previously scrolled panel cannot hide model rows.
+- Removed the composer's own scroll container while preserving long-text
+  scrolling inside the textarea. Slash commands now render in a viewport-level
+  portal so removing composer overflow does not clip the command list.
+- Removed the code/terminal navigation item and migrated saved `main` or
+  `terminal` navigation state back to Sessions. The installed app was visually
+  checked with the terminal icon absent and the slash menu visible.
+
+Honest boundary:
+
+- Gatekeeper rejects the locally signed app because it is not Developer ID
+  signed/notarized.
+- Physical Windows OAuth and Smart App Control behavior were not executed on
+  this macOS host and remain validation-required.
+
 ## 2026-05-28 Stella Factory Baseline
 
 Observed repository state:

@@ -1,25 +1,26 @@
-# Stella Factory
+# Stella Mode
 
-Stella Factory is Atelier's autonomous-development layer. It upgrades the
+Stella Mode is Atelier's autonomous-development layer. It upgrades the
 existing terminal and structured agent workspace without replacing them.
 
 ## What It Adds
 
 - Goal normalization for natural-language development requests.
-- One primary user-facing Factory launcher through `스텔라 팩토리` /
-  `Stella Factory`, with `/goal` kept as a compatibility path.
+- One primary user-facing Stella Mode launcher through `스텔라 모드` /
+  `Stella Mode`, with `스텔라 팩토리` / `Stella Factory` and `/goal` kept as
+  compatibility paths.
 - Rust-side project analysis before edits.
 - Provider-independent workspace probes for build/test/harness evidence.
-- SOT evidence recording after Factory runs.
+- SOT evidence recording after Stella Mode runs.
 - Backend safety guard before Claude/Codex/Hermes process launch.
 - Role delegation across Stella, Worker, Probe, Security, Release, and Auditor.
 - SOT recording for durable project state.
-- Durable Service Factory artifacts for product-wide goals:
+- Durable Stella Mode artifacts for product-wide goals:
   `SOT/service-factory-state.json` and `SOT/service-factory/`.
 - A fixed development operating loop:
   current state discovery -> goal-to-plan strategy -> execution and
   verification.
-- Managed Service Factory autopilot when the local Stella bridge is available:
+- Managed Stella Mode autopilot when the local Stella bridge is available:
   plan agent requests, execute command-backed worker cycles, collect
   `result.json`, write recovery proof, and assess readiness before the provider
   claims completion.
@@ -31,10 +32,10 @@ separate always-on agent. The global shell should expose the major work areas:
 
 - Chat and Sessions for agent work.
 - Workbench and Preview for code/runtime inspection.
-- Models, Factory, Skills, Providers, and Profiles for agent control.
+- Models, Stella Mode, Skills, Providers, and Profiles for agent control.
 - Updates and Settings for packaging, release, and app-level configuration.
 
-Factory remains on demand at the entry point, but a Factory run is not a
+Stella Mode remains on demand at the entry point, but a mode run is not a
 single-turn feature wrapper. When the goal is product-wide, long-running, or
 Antigravity-style autonomous delivery, Stella must treat it as a durable Service
 Factory run: inspect the current state, write the goal-to-plan strategy, define
@@ -42,17 +43,17 @@ the mission, map agents, create a milestone queue, run the current milestone,
 verify, record evidence, and leave an explicit continuation state if the product
 is not yet `pilot_ready` or `full_ready`.
 
-Direct Claude, Hermes, and Codex sessions remain available without Factory
+Direct Claude, Hermes, and Codex sessions remain available without Stella Mode
 wrapping.
 
 ## Workspace Launcher
 
-Use the single `Stella Factory` button or type one of these natural-language
+Use the single `Stella Mode` button or type one of these natural-language
 launchers in the Agent Workspace input:
 
 ```text
-스텔라 팩토리 <objective>
-Stella Factory <objective>
+스텔라 모드 <objective>
+Stella Mode <objective>
 ```
 
 The launcher keeps the selected provider in the loop and runs the managed
@@ -63,15 +64,15 @@ full contract and evidence.
 
 `/goal`, `/analyze`, `/probe`, and `/audit` remain accepted for compatibility and
 internal review workflows. They should not be presented as separate user steps;
-analysis, Probe, security review, and final audit are part of the single Factory
+analysis, Probe, security review, and final audit are part of the single Stella Mode
 session.
 
 After provider execution, Atelier appends a compact evidence entry to
 `SOT/evidence-log.md`.
 
-## Product-Scale Factory Runs
+## Product-Scale Stella Mode Runs
 
-For broad service goals, Stella Factory must maintain these artifacts before it
+For broad service goals, Stella Mode must maintain these artifacts before it
 claims completion:
 
 - `SOT/service-factory-state.json`: active phase, readiness, open queue, gates,
@@ -97,13 +98,13 @@ claims completion:
 - `SOT/service-factory/readiness-report.md`: why the run is `running`,
   `validation_required`, `blocked`, `pilot_ready`, or `full_ready`.
 
-One finished feature is only a milestone result. It is not a Factory completion
+One finished feature is only a milestone result. It is not a Stella Mode completion
 unless the readiness report proves that the declared product goal has no
 remaining required queue.
 
 ## Operating Loop
 
-Every Factory development goal follows this order:
+Every Stella Mode development goal follows this order:
 
 1. Current state discovery: inspect the real code, runtime, installed app,
    package state, SOT, dirty paths, capability baseline, and available checks.
@@ -134,7 +135,7 @@ implementation agents.
 
 ## Safety
 
-The factory contract forbids the following without explicit user approval:
+The Stella Mode contract forbids the following without explicit user approval:
 
 - database deletion
 - user-data deletion

@@ -48,6 +48,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -56,6 +58,21 @@ jobs:
 
       - name: Install npm deps
         run: npm install --legacy-peer-deps
+
+      - name: Install Rust security audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run Store release quality gates
+        shell: pwsh
+        run: |
+          npm run build
+          npm run harness:fixture
+          npm audit --omit=dev --audit-level=high
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture
+          npm run audit:release
+          powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1 -Install -Strict
 
       - name: Install winapp CLI
         run: npm install -g @microsoft/winappcli@0.3.1
@@ -69,6 +86,10 @@ jobs:
           ATELIER_STORE_APP_DISPLAY_NAME: ${{ inputs.app_display_name }}
           ATELIER_STORE_PACKAGE_VERSION: ${{ inputs.package_version }}
         run: npm run store:msix
+
+      - name: Verify Store package payload
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File tools/windows-package-smoke.ps1
 
       - name: Upload Store MSIX package
         uses: actions/upload-artifact@v4

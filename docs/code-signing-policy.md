@@ -11,7 +11,7 @@ workflows.
 
 Repository: <https://github.com/BYKAYLE/atelier>
 
-Release downloads: <https://github.com/BYKAYLE/atelier-releases/releases>
+Release downloads: <https://github.com/BYKAYLE/atelier/releases>
 
 ## Team Roles
 

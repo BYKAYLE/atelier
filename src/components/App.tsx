@@ -151,26 +151,27 @@ const App: React.FC = () => {
       safeLocalStorageSet("atelier.agentDefaultMigrated", "1");
       return "agent";
     }
-    if (saved === "main" || saved === "design") return "agent";
+    if (saved === "design" || saved === "main") return "agent";
     return isScreen(saved) ? saved : "agent";
   });
   const [activeNav, setActiveNav] = useState<string>(() => {
     const savedNav = safeLocalStorageGet("atelier.nav");
     if (savedNav === "settings") return "appearance";
-    if (savedNav === "terminal") return "appearance";
+    if (savedNav === "terminal") return "sessions";
     if (savedNav === "gateway") return "providers";
     if (
       savedNav === "agent" ||
       savedNav === "chat" ||
       savedNav === "models" ||
       savedNav === "factory" ||
-      savedNav === "main" ||
       savedNav === "design"
     ) return "sessions";
+    if (savedNav === "main") return "sessions";
     if (savedNav === "skills") return "plugins";
     if (savedNav) return savedNav;
     if (screen === "settings") return "appearance";
     if (screen === "agent") return "sessions";
+    if (screen === "main") return "sessions";
     return screen;
   });
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(() => {
@@ -425,7 +426,10 @@ const App: React.FC = () => {
           </Suspense>
         )}
         {screen === "welcome" && (
-          <Welcome tw={tw} setScreen={(next) => setScreen(isScreen(next) ? next : "agent")} />
+          <Welcome
+            tw={tw}
+            setScreen={(next) => setScreen(isScreen(next) && next !== "main" ? next : "agent")}
+          />
         )}
       </div>
     </div>

@@ -127,7 +127,7 @@ pub struct StellaFactoryStatusResult {
 pub(crate) fn guard_agent_prompt(prompt: &str) -> Result<(), String> {
     if let Some(reason) = detect_forbidden_intent(prompt) {
         return Err(format!(
-            "Stella Factory safety gate blocked agent execution: {reason}"
+            "Stella Mode safety gate blocked agent execution: {reason}"
         ));
     }
     Ok(())
@@ -411,43 +411,41 @@ fn bootstrap_service_factory(
         refresh_existing_factory_state(&state_path, &goal, now)?;
     }
 
-    let mut artifacts = Vec::new();
-    artifacts.push(write_artifact_if_missing(
-        &factory_dir.join("current-state.md"),
-        &render_current_state_snapshot(&goal, &analysis),
-    )?);
-    artifacts.push(write_artifact_if_missing(
-        &factory_dir.join("development-plan.md"),
-        &render_development_plan_snapshot(&goal, &analysis),
-    )?);
-    artifacts.push(write_artifact_if_missing(
-        &factory_dir.join("mission-charter.md"),
-        &render_mission_charter(&goal, &analysis),
-    )?);
-    artifacts.push(write_artifact_if_missing(
-        &factory_dir.join("research-dossier.md"),
-        &render_research_dossier(&goal),
-    )?);
-    artifacts.push(write_artifact_if_missing(
-        &factory_dir.join("capability-map.md"),
-        &render_capability_map(&goal, &analysis),
-    )?);
-    artifacts.push(write_artifact_if_missing(
-        &factory_dir.join("agent-topology.md"),
-        &render_agent_topology(),
-    )?);
-    artifacts.push(write_artifact_if_missing(
-        &factory_dir.join("roadmap.md"),
-        &render_roadmap(&goal),
-    )?);
-    artifacts.push(write_artifact_if_missing(
-        &factory_dir.join("qc-matrix.md"),
-        &render_qc_matrix(&analysis),
-    )?);
-    artifacts.push(write_artifact_if_missing(
-        &factory_dir.join("readiness-report.md"),
-        &render_readiness_report(&goal, created_state),
-    )?);
+    let artifacts = vec![
+        write_artifact_if_missing(
+            &factory_dir.join("current-state.md"),
+            &render_current_state_snapshot(&goal, &analysis),
+        )?,
+        write_artifact_if_missing(
+            &factory_dir.join("development-plan.md"),
+            &render_development_plan_snapshot(&goal, &analysis),
+        )?,
+        write_artifact_if_missing(
+            &factory_dir.join("mission-charter.md"),
+            &render_mission_charter(&goal, &analysis),
+        )?,
+        write_artifact_if_missing(
+            &factory_dir.join("research-dossier.md"),
+            &render_research_dossier(&goal),
+        )?,
+        write_artifact_if_missing(
+            &factory_dir.join("capability-map.md"),
+            &render_capability_map(&goal, &analysis),
+        )?,
+        write_artifact_if_missing(
+            &factory_dir.join("agent-topology.md"),
+            &render_agent_topology(),
+        )?,
+        write_artifact_if_missing(&factory_dir.join("roadmap.md"), &render_roadmap(&goal))?,
+        write_artifact_if_missing(
+            &factory_dir.join("qc-matrix.md"),
+            &render_qc_matrix(&analysis),
+        )?,
+        write_artifact_if_missing(
+            &factory_dir.join("readiness-report.md"),
+            &render_readiness_report(&goal, created_state),
+        )?,
+    ];
     append_factory_progress(
         &factory_dir.join("progress.jsonl"),
         &serde_json::json!({
@@ -503,11 +501,14 @@ fn run_stella_factory_autopilot(
             timed_out: false,
             duration_ms: 0,
             stdout: String::new(),
-            stderr: "Stella service-factory bridge not found under ~/.claude/skills/stella/scripts".to_string(),
+            stderr: "Stella service-factory bridge not found under ~/.claude/skills/stella/scripts"
+                .to_string(),
             summary: None,
             next_actions: vec![
-                "install or restore ~/.claude/skills/stella/scripts/stella_service_factory.py".to_string(),
-                "continue with provider-driven Stella Factory workflow if the bridge is unavailable".to_string(),
+                "install or restore ~/.claude/skills/stella/scripts/stella_service_factory.py"
+                    .to_string(),
+                "continue with provider-driven Stella Mode workflow if the bridge is unavailable"
+                    .to_string(),
             ],
             generated_at: unix_now(),
         });
@@ -555,7 +556,7 @@ fn run_stella_factory_autopilot(
             stderr: "failed to spawn Stella service-factory bridge".to_string(),
             summary: None,
             next_actions: vec![
-                "run the Stella Factory provider turn with the generated SOT state".to_string(),
+                "run the Stella Mode provider turn with the generated SOT state".to_string(),
             ],
             generated_at: unix_now(),
         });
@@ -584,14 +585,14 @@ fn run_stella_factory_autopilot(
         });
     let mut next_actions = Vec::new();
     if success {
-        next_actions.push("managed Service Factory autopilot completed; inspect antigravity-readiness.md for the pilot readiness verdict".to_string());
+        next_actions.push("managed Stella Mode autopilot completed; inspect antigravity-readiness.md for the pilot readiness verdict".to_string());
     } else if timed_out {
-        next_actions.push("managed Service Factory autopilot timed out; resume from SOT/service-factory/handoff-latest.md".to_string());
+        next_actions.push("managed Stella Mode autopilot timed out; resume from SOT/service-factory/handoff-latest.md".to_string());
     } else {
-        next_actions.push("managed Service Factory autopilot returned a non-zero status; inspect generated run artifacts and handoff".to_string());
+        next_actions.push("managed Stella Mode autopilot returned a non-zero status; inspect generated run artifacts and handoff".to_string());
     }
     if verdict != Some("pilot_ready") {
-        next_actions.push("provider must continue the Service Factory run until pilot_ready or a concrete blocker is recorded".to_string());
+        next_actions.push("provider must continue the Stella Mode run until pilot_ready or a concrete blocker is recorded".to_string());
     }
 
     Ok(StellaFactoryAutopilotResult {
@@ -874,17 +875,17 @@ fn apply_stella_control_plane_state(state: &mut Value) {
         "source": "SOT/service-factory-state.json",
         "truth_rule": "Kanban cards visualize queues only; Stella command_owner and AgentTopology remain the source of truth."
     });
-    if !state
+    if state
         .get("agent_blueprints")
         .and_then(Value::as_array)
-        .is_some()
+        .is_none()
     {
         state["agent_blueprints"] = serde_json::json!([]);
     }
-    if !state
+    if state
         .get("agent_instances")
         .and_then(Value::as_array)
-        .is_some()
+        .is_none()
     {
         state["agent_instances"] = serde_json::json!([]);
     }
@@ -921,7 +922,7 @@ fn apply_stella_control_plane_state(state: &mut Value) {
             {"from": "stella", "to": "release", "relationship": "commands_runtime_adapter"}
         ]
     });
-    if !state.get("run_log").and_then(Value::as_object).is_some() {
+    if state.get("run_log").and_then(Value::as_object).is_none() {
         state["run_log"] = serde_json::json!({});
     }
     state["run_log"]["command_owner"] = serde_json::json!("Stella");
@@ -945,7 +946,7 @@ fn refresh_existing_factory_state(path: &Path, goal: &str, now: u64) -> Result<(
     if state.get("status").and_then(Value::as_str) != Some("done") {
         state["status"] = serde_json::json!("running");
     }
-    if !state.get("run_log").and_then(Value::as_object).is_some() {
+    if state.get("run_log").and_then(Value::as_object).is_none() {
         state["run_log"] = serde_json::json!({});
     }
     state["run_log"]["last_command"] = serde_json::json!("stella_factory_bootstrap");
@@ -1041,7 +1042,7 @@ fn default_factory_milestones() -> Value {
 
 fn render_current_state_snapshot(goal: &str, analysis: &StellaProjectAnalysis) -> String {
     format!(
-        "# Stella Factory Current State\n\n\
+        "# Stella Mode Current State\n\n\
 Generated: {}\n\n\
 ## Goal\n\n{}\n\n\
 ## Baseline\n\n\
@@ -1075,7 +1076,7 @@ Do not begin broad implementation until this baseline is read and the goal-to-pl
 
 fn render_development_plan_snapshot(goal: &str, analysis: &StellaProjectAnalysis) -> String {
     format!(
-        "# Stella Factory Development Plan\n\n\
+        "# Stella Mode Development Plan\n\n\
 Generated: {}\n\n\
 ## Goal\n\n{}\n\n\
 ## Required Operating Loop\n\n\
@@ -1085,7 +1086,7 @@ Generated: {}\n\n\
 ## Initial Strategy\n\n\
 - Use existing stack and patterns: {}.\n\
 - Run the narrowest meaningful verification first: {}.\n\
-- Treat a single feature patch as a milestone, not final Factory completion.\n\
+- Treat a single feature patch as a milestone, not final Stella Mode completion.\n\
 - Promote readiness only with evidence or record a concrete blocker.\n\n\
 ## First Task Packet Shape\n\n\
 - owner: Stella/Worker/Specialist role\n\
@@ -1102,7 +1103,7 @@ Generated: {}\n\n\
 
 fn render_mission_charter(goal: &str, analysis: &StellaProjectAnalysis) -> String {
     format!(
-        "# Stella Factory Mission Charter\n\n\
+        "# Stella Mode Mission Charter\n\n\
 Generated: {}\n\n\
 ## Goal\n\n{}\n\n\
 ## Project\n\n- Root: `{}`\n- Stack: {}\n- Verification candidates: {}\n\n\
@@ -1204,7 +1205,7 @@ Missing roles must be recorded as `missing_capabilities`; prompt files, worktree
 
 fn render_roadmap(goal: &str) -> String {
     format!(
-        "# Stella Factory Roadmap\n\n\
+        "# Stella Mode Roadmap\n\n\
 ## Goal\n\n{}\n\n\
 ## Milestones\n\n\
 1. Capture the current state baseline: repo, runtime, installed app, SOT, dirty paths, and verification candidates.\n\
@@ -1215,7 +1216,7 @@ fn render_roadmap(goal: &str) -> String {
 6. Run Probe/security/release checks according to touched surfaces.\n\
 7. Promote readiness or leave the next executable queue.\n\n\
 ## Completion Rule\n\n\
-One feature implementation is a milestone result, not final Factory completion.\n",
+One feature implementation is a milestone result, not final Stella Mode completion.\n",
         goal
     )
 }
@@ -1344,9 +1345,7 @@ fn detect_package_manager(root: &Path) -> Option<String> {
         Some("pnpm".to_string())
     } else if root.join("yarn.lock").exists() {
         Some("yarn".to_string())
-    } else if root.join("package-lock.json").exists() {
-        Some("npm".to_string())
-    } else if root.join("package.json").exists() {
+    } else if root.join("package-lock.json").exists() || root.join("package.json").exists() {
         Some("npm".to_string())
     } else {
         None
@@ -1637,7 +1636,7 @@ fn unix_now() -> u64 {
 }
 
 fn sanitize_markdown_line(text: &str) -> String {
-    let clean = text.replace('\n', " ").replace('\r', " ");
+    let clean = text.replace(['\n', '\r'], " ");
     if clean.chars().count() > 160 {
         format!("{}...", clean.chars().take(157).collect::<String>())
     } else {
@@ -1778,7 +1777,7 @@ mod tests {
 
     #[test]
     fn safety_guard_ignores_policy_text() {
-        let prompt = "Stella Factory 자율 개발 계약:\n- 명시 승인 없이 금지: DB 삭제, 사용자 데이터 삭제.\n\n---\n대표님 요청:\n목표: 안전 게이트를 구현해\n\n필수 workflow:\n- DB 삭제 금지";
+        let prompt = "스텔라 모드 자율 개발 계약:\n- 명시 승인 없이 금지: DB 삭제, 사용자 데이터 삭제.\n\n---\n대표님 요청:\n목표: 안전 게이트를 구현해\n\n필수 workflow:\n- DB 삭제 금지";
         assert!(guard_agent_prompt(prompt).is_ok());
     }
 

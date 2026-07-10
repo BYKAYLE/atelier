@@ -1,6 +1,6 @@
 # Stella Factory Task Ledger
 
-Last updated: 2026-06-14
+Last updated: 2026-07-10
 
 ## Completed
 
@@ -86,30 +86,65 @@ Last updated: 2026-06-14
   controls remain compatible internal/legacy commands, but the main UI now
   treats planning, implementation, verification, security, and final audit as a
   single autonomous Factory session behind one goal entry point.
+- Completed the 0.1.79 release-stability pass across provider execution,
+  subscription login, credential boundaries, retry handling, packaging, and
+  release gates.
+- Fixed OAuth URL truncation by allocating a wide login PTY and keeping URL
+  parsing/provider validation in the Rust backend.
+- Added a native Windows browser-open fallback chain and removed temporary
+  browser helper scripts that can be blocked by Smart App Control.
+- Unified Windows CLI resolution for regular sessions and login sessions,
+  including npm command shims and Claude's Git Bash requirement.
+- Removed direct reads from Claude Code's external macOS keychain item. Atelier
+  now owns its cached login state and refreshes its Claude subscription token
+  inside the Atelier credential boundary.
+- Stopped persistent credential fan-out to Gajae Code and Hermes. Gajae gets a
+  per-process Claude OAuth token; Hermes receives a staged Codex access token
+  that is scrubbed after the run.
+- Changed the default permission policy from full access to automatic
+  workspace access. Explicit full access remains an opt-in mode.
+- Updated Codex invocation to current global sandbox/approval flags and removed
+  the deprecated `--full-auto` argument.
+- Added Windows installer/MSIX payload smoke tests, optional Authenticode
+  verification, and release-workflow gates that refuse unsigned publication.
+- Added a release security audit and closed the RustSec vulnerability in the
+  locked QUIC dependency.
+- Changed Codex subscription sign-in to device authorization so the app can
+  open a stable login page and display the one-time code even when a packaged
+  Windows app cannot complete a localhost browser handoff.
+- Moved the Codex model menu to a viewport-level portal with bounded height and
+  independent scrolling so small/resized windows cannot clip models or effort
+  controls inside the composer.
+- Reset the menu scroll position on reasoning/model/speed panel changes and
+  verified the installed app's complete Codex model list at 560 px width.
+- Removed the composer-level vertical scroll and moved slash suggestions to a
+  viewport portal so textarea resizing and slash commands remain compatible.
+- Hid the code/terminal navigation tab and migrated stale saved terminal routes
+  back to Sessions without deleting the underlying terminal implementation.
+- Built and installed `/Applications/Atelier.app` 0.1.79, verified its code
+  signature and confirmed the installed process is running from that bundle.
 
-## Next Upgrades
+## Release Validation Remaining
 
-- Replace the local no-cost worker with true specialist LLM subagent spawning
-  for implementation-heavy product goals while keeping the same
-  dispatch/collect/result contract.
-- Add a visible task packet/status panel so the user can see objective,
-  done_when, checks, and evidence per run.
-- Add preview/dev-screen Probe integration so UI/runtime failures are captured
-  alongside build/test evidence.
-- Add a controlled command proxy for provider tool calls when full permission is
-  selected, so destructive shell commands can be blocked below the prompt layer.
-- Add release readiness checklist integration for updater, GitHub release, MSIX,
-  signing, and Store packaging.
-- Expand the Factory status strip into a per-run task packet view with
-  objective, constraints, done_when, checks, evidence, and final audit state.
-- Add installed-state probing to the `Plugins & Skills` screen so plugins can
-  show installed/disabled status before the user clicks install.
+- Run the strict Windows provider smoke and interactive Claude/Codex browser
+  sign-in on a physical Windows machine. The macOS host cannot prove Windows
+  default-browser behavior or Smart App Control acceptance.
+- Run the signed Windows package smoke after SignPath returns the installer.
+- Produce the public macOS release with a Developer ID Application certificate
+  and Apple notarization credentials. The local 0.1.79 build uses a local
+  hardened-runtime certificate and is intentionally rejected by Gatekeeper.
+- Keep the compatibility bundle identifier `com.atelier.app` until an explicit
+  updater/keychain/store identity migration is designed and tested.
 
 ## Known Constraints
 
 - Agent CLIs can still execute their own internal tool calls when the user
-  selects full permission. Atelier now blocks known forbidden intent before
-  provider launch, but provider-level shell enforcement still needs a controlled
-  execution proxy or provider tool policy integration.
+  explicitly selects full permission. The default is now automatic workspace
+  access, and full access remains a deliberate bypass choice.
+- Windows source, packaging scripts, and CI gates are release-candidate ready,
+  but interactive Windows OAuth remains `validation_required` until exercised
+  on a physical Windows host.
+- Public macOS distribution remains blocked by external Developer ID and
+  notarization credentials even though the local installed app is reflected.
 - `src/components/AgentWorkspace.tsx.bak` exists as an untracked backup and is
   intentionally not part of the working patch.

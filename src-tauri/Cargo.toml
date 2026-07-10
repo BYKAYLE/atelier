@@ -1,6 +1,6 @@
 [package]
 name = "atelier"
-version = "0.1.66"
+version = "0.1.79"
 description = "Atelier — 이미지 붙여넣기가 되는 GUI 터미널"
 authors = ["BYKAYLE <indra850@gmail.com>"]
 edition = "2021"
@@ -18,7 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["devtools", "protocol-asset"] }
+tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
@@ -40,6 +40,7 @@ dashmap = "6"
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

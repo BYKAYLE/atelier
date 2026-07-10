@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -96,7 +97,8 @@ type ModelOption = {
   disabled?: boolean;
 };
 
-type CodexEffort = "low" | "medium" | "high" | "xhigh";
+type WorkloadLevel = "low" | "medium" | "high" | "xhigh" | "ultra";
+type CodexEffort = WorkloadLevel;
 type CodexSpeed = "default" | "fast";
 type CodexMenuPanel = "root" | "model" | "speed";
 type HermesInferenceProvider = "openai-codex" | "openrouter";
@@ -379,7 +381,7 @@ function activeFactoryCommandFromText(rawText: string): StellaFactoryCommand | n
   const trimmed = rawText.trimStart();
   const slash = trimmed.match(/^\/(goal|analyze|probe|audit)(?:\s|$)/i);
   if (slash) return slash[1].toLowerCase() as StellaFactoryCommand;
-  return /^(?:\/\s*)?(?:스텔라\s*팩토리|stella\s+factory)(?:\s*(?:로|으로|를|을|는|은|:|：|\.|-|—)\s*)?/i.test(trimmed)
+  return /^(?:\/\s*)?(?:스텔라\s*(?:모드|팩토리)|stella\s+(?:mode|factory))(?:\s*(?:로|으로|를|을|는|은|:|：|\.|-|—)\s*)?/i.test(trimmed)
     ? "goal"
     : null;
 }
@@ -388,7 +390,7 @@ function stripFactoryCommandPrefix(rawText: string): string {
   return rawText
     .trimStart()
     .replace(/^\/(?:goal|analyze|probe|audit)(?:\s+)?/i, "")
-    .replace(/^(?:\/\s*)?(?:스텔라\s*팩토리|stella\s+factory)(?:\s*(?:로|으로|를|을|는|은|:|：|\.|-|—)\s*)?/i, "")
+    .replace(/^(?:\/\s*)?(?:스텔라\s*(?:모드|팩토리)|stella\s+(?:mode|factory))(?:\s*(?:로|으로|를|을|는|은|:|：|\.|-|—)\s*)?/i, "")
     .trimStart();
 }
 
@@ -487,6 +489,8 @@ type QueuedAgentTurn = {
   attachments: ChatAttachment[];
   cwd: string;
   createdAt: number;
+  autoRetryCount?: number;
+  notBefore?: number;
 };
 
 type SmoothRevealState = {
@@ -554,9 +558,10 @@ const COMPOSER_HEIGHT_KEY = "atelier.agent.composer.height.v1";
 const FACTORY_DEFAULT_OFF_MIGRATION_KEY = "atelier.agent.factory.defaultOff.v1";
 const DEFAULT_PROVIDER: AgentProvider = "claude";
 const DEFAULT_HERMES_PROVIDER: HermesInferenceProvider = "openai-codex";
-const DEFAULT_CODEX_EFFORT: CodexEffort = "xhigh";
+const DEFAULT_WORKLOAD: WorkloadLevel = "xhigh";
+const DEFAULT_CODEX_EFFORT: CodexEffort = DEFAULT_WORKLOAD;
 const DEFAULT_CODEX_SPEED: CodexSpeed = "default";
-const DEFAULT_PERMISSION_MODE: AgentPermissionMode = "full";
+const DEFAULT_PERMISSION_MODE: AgentPermissionMode = "auto";
 const MAX_RAW_EVENTS = 120;
 const MAX_RAW_EVENT_CHARS = 12000;
 const MAX_PERSISTED_SESSIONS = 24;
@@ -810,6 +815,7 @@ function isProviderDiagnosticLine(line: string): boolean {
   if (!t) return false;
   if (/\bNo response from provider for \d+s\b/i.test(t)) return true;
   if (/\bAPI call failed\s*\(attempt\s+\d+\/\d+\):\s*TimeoutError\b/i.test(t)) return true;
+  if (/\btemporarily limiting requests\b/i.test(t) || /\baccounts exhausted\b/i.test(t)) return true;
   if (/\bNon-streaming API call timed out\b/i.test(t)) return true;
   if (/\bAborting call\b/i.test(t) && /\bprovider\b/i.test(t)) return true;
   if (/^⚠️?\s*(?:No response from provider|API call failed)\b/i.test(t)) return true;
@@ -1152,7 +1158,7 @@ const PROVIDERS: ProviderMeta[] = [
 
 const CLAUDE_MODELS: ModelOption[] = [
   { value: "claude-opus-4-8", label: "Opus 4.8" },
-  { value: "claude-fable-5", label: "Fable 5 Currently unavailable", disabled: true },
+  { value: "claude-fable-5", label: "Fable 5" },
   { value: "claude-sonnet-4-6", label: "Sonnet 4.6" },
   { value: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
 ];
@@ -1175,7 +1181,7 @@ const CODEX_MODELS: ModelOption[] = [
 
 const GAJECODE_MODELS: ModelOption[] = [
   { value: "claude-opus-4-8", label: "Opus 4.8" },
-  { value: "claude-fable-5", label: "Fable 5 Currently unavailable", disabled: true },
+  { value: "claude-fable-5", label: "Fable 5" },
   { value: "claude-sonnet-4-6", label: "Sonnet 4.6" },
   { value: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
 ];
@@ -1202,6 +1208,7 @@ const CODEX_EFFORTS: Array<{ value: CodexEffort; ko: string; en: string }> = [
   { value: "medium", ko: "중간", en: "Medium" },
   { value: "high", ko: "높음", en: "High" },
   { value: "xhigh", ko: "매우 높음", en: "Very high" },
+  { value: "ultra", ko: "울트라 코드", en: "Ultra Code" },
 ];
 
 const CODEX_SPEEDS: Array<{ value: CodexSpeed; ko: string; en: string }> = [
@@ -1250,7 +1257,7 @@ const isHermesProvider = (value: unknown): value is HermesInferenceProvider =>
   value === "openai-codex" || value === "openrouter";
 
 const isCodexEffort = (value: unknown): value is CodexEffort =>
-  value === "low" || value === "medium" || value === "high" || value === "xhigh";
+  value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "ultra";
 
 const isCodexSpeed = (value: unknown): value is CodexSpeed =>
   value === "default" || value === "fast";
@@ -1364,6 +1371,21 @@ function normalizeCodexEffort(value?: unknown): CodexEffort {
   return isCodexEffort(value) ? value : DEFAULT_CODEX_EFFORT;
 }
 
+function normalizeWorkloadInput(value: string): WorkloadLevel | null {
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, "");
+  if (isCodexEffort(normalized)) return normalized;
+  if (["low", "light", "basic", "낮음", "가벼움", "작게"].includes(normalized)) return "low";
+  if (["medium", "normal", "balanced", "중간", "보통", "기본"].includes(normalized)) return "medium";
+  if (["high", "deep", "높음", "깊게"].includes(normalized)) return "high";
+  if (["xhigh", "veryhigh", "매우높음", "아주높음"].includes(normalized)) return "xhigh";
+  if (["ultra", "ultracode", "max", "maximum", "울트라", "울트라코드", "최대"].includes(normalized)) return "ultra";
+  return null;
+}
+
+function nativeCodexEffort(workload: WorkloadLevel): "low" | "medium" | "high" | "xhigh" {
+  return workload === "ultra" ? "xhigh" : workload;
+}
+
 function normalizeCodexSpeed(value?: unknown): CodexSpeed {
   return isCodexSpeed(value) ? value : DEFAULT_CODEX_SPEED;
 }
@@ -1395,8 +1417,38 @@ function compactCodexModelLabel(label: string, value: string) {
     .trim() || value;
 }
 
-function codexToolbarLabel(modelLabel: string, modelValue: string, effort: CodexEffort, language: Tweaks["language"]) {
-  return `${compactCodexModelLabel(modelLabel, modelValue)} ${labelForCodexEffort(effort, language)}`;
+function codexToolbarLabel(modelLabel: string, modelValue: string) {
+  return compactCodexModelLabel(modelLabel, modelValue);
+}
+
+function workloadDirectiveForPrompt(workload: WorkloadLevel, language: Tweaks["language"]) {
+  const label = labelForCodexEffort(workload, language);
+  const detail = {
+    low: language === "en"
+      ? "Keep the pass light and concise. Prefer the smallest safe change."
+      : "가볍고 빠르게 처리하세요. 안전한 최소 변경을 우선하세요.",
+    medium: language === "en"
+      ? "Use a balanced pass. Inspect enough context, implement, and verify the result."
+      : "균형 있게 진행하세요. 필요한 맥락을 확인하고 구현과 검증을 함께 수행하세요.",
+    high: language === "en"
+      ? "Use a deeper pass. Check edge cases, preserve existing behavior, and verify carefully."
+      : "더 깊게 진행하세요. 경계 사례와 기존 동작 보존을 확인하고 꼼꼼히 검증하세요.",
+    xhigh: language === "en"
+      ? "Use the deepest practical pass. Plan, inspect, implement, recover from failures, and verify evidence before finishing."
+      : "가능한 가장 깊게 진행하세요. 계획, 조사, 구현, 실패 복구, 증거 검증까지 마친 뒤 종료하세요.",
+    ultra: language === "en"
+      ? "Use Ultra Code mode. Treat this as a full autonomous coding pass: decompose the goal, inspect the codebase, make coordinated edits, run focused verification, recover from failures, and summarize evidence."
+      : "울트라 코드 모드로 진행하세요. 목표를 개발 작업으로 분해하고, 코드베이스를 조사하고, 필요한 수정을 통합적으로 수행하고, 집중 검증과 실패 복구를 거쳐 증거 중심으로 마무리하세요.",
+  }[workload];
+  return language === "en"
+    ? `Workload: ${label} (${workload}). ${detail}`
+    : `작업량: ${label}(${workload}). ${detail}`;
+}
+
+function formatWorkloadAgentPrompt(prompt: string, workload: WorkloadLevel, language: Tweaks["language"], provider: AgentProvider) {
+  // Codex receives normal levels through native model_reasoning_effort. Ultra Code needs an explicit app-level directive too.
+  if (provider === "codex" && workload !== "ultra") return prompt;
+  return `${workloadDirectiveForPrompt(workload, language)}\n\n${prompt}`;
 }
 
 function labelForPermissionMode(value: AgentPermissionMode, language: Tweaks["language"]) {
@@ -1430,8 +1482,8 @@ function slashCommandsFor(
       command: "/goal <objective>",
       insert: "/goal ",
       scope: "atelier",
-      detailKo: "Stella Factory 호환 Goal 호출. 기본 사용은 버튼의 자연어 런처를 권장",
-      detailEn: "Stella Factory-compatible Goal call. Prefer the button's natural-language launcher",
+      detailKo: "스텔라 모드 호환 Goal 호출. 기본 사용은 버튼의 자연어 런처를 권장",
+      detailEn: "Stella Mode-compatible Goal call. Prefer the button's natural-language launcher",
     },
     ...ACADEMIC_RESEARCH_SLASH_COMMANDS.map((item) => ({
       ...item,
@@ -1513,6 +1565,13 @@ function slashCommandsFor(
       scope: provider,
       detailKo: `모델 변경: ${modelValues}`,
       detailEn: `Change model: ${modelValues}`,
+    },
+    {
+      command: "/workload low|medium|high|xhigh|ultra",
+      insert: "/workload ",
+      scope: provider,
+      detailKo: "작업량 변경",
+      detailEn: "Change workload",
     },
   ];
 
@@ -1770,6 +1829,14 @@ function normalizeModel(provider: AgentProvider, model?: string | null) {
 	      opusplan: "claude-opus-4-8",
 	      "sonnet[1m]": "claude-sonnet-4-6",
 	      "opus[1m]": "claude-opus-4-8",
+      fable: "claude-fable-5",
+      "fable 55": "claude-fable-5",
+      "fable 5": "claude-fable-5",
+      "fable 5.5": "claude-fable-5",
+      "claude-fable-55": "claude-fable-5",
+      "claude-fable-5": "claude-fable-5",
+      "claude-fable-5.5": "claude-fable-5",
+      "claude-fable-5-5": "claude-fable-5",
         "claude-opus-48": "claude-opus-4-8",
         "claude-opus-4.8": "claude-opus-4-8",
         "claude-opus-47": "claude-opus-4-8",
@@ -1808,6 +1875,10 @@ function normalizeModel(provider: AgentProvider, model?: string | null) {
       "opus 47": "claude-opus-4-8",
       "opus 4.7": "claude-opus-4-8",
       best: "claude-opus-4-8",
+      fable: "claude-fable-5",
+      "fable 55": "claude-fable-5",
+      "fable 5": "claude-fable-5",
+      "fable 5.5": "claude-fable-5",
       sonnet: "claude-sonnet-4-6",
       haiku: "claude-haiku-4-5-20251001",
       "deepseek/deepseek-v4-flash": "claude-opus-4-8",
@@ -1822,6 +1893,10 @@ function normalizeModel(provider: AgentProvider, model?: string | null) {
       "claude-opus-4-1": "claude-opus-4-8",
       "claude-opus-4-1-20250805": "claude-opus-4-8",
       "claude-opus-4-20250514": "claude-opus-4-8",
+      "claude-fable-55": "claude-fable-5",
+      "claude-fable-5": "claude-fable-5",
+      "claude-fable-5.5": "claude-fable-5",
+      "claude-fable-5-5": "claude-fable-5",
       "sonnet 46": "claude-sonnet-4-6",
       "sonnet 4.6": "claude-sonnet-4-6",
       "claude-sonnet-46": "claude-sonnet-4-6",
@@ -1867,6 +1942,28 @@ function normalizeHermesModel(hermesProvider: HermesInferenceProvider, model?: s
 
 const nowId = (prefix: string) =>
   `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+function providerCooldownSecondsFromText(text?: string | null): number | null {
+  if (!text) return null;
+  const lower = text.toLowerCase();
+  const looksLikeCooldown =
+    lower.includes("temporarily limiting requests") ||
+    lower.includes("accounts exhausted") ||
+    lower.includes("server is temporarily limiting") ||
+    (lower.includes("retry in") && lower.includes("not your usage limit")) ||
+    text.includes("공급자 계정 풀이 일시 제한") ||
+    text.includes("서버 쪽 요청 제한");
+  if (!looksLikeCooldown) return null;
+  const retryMatch = lower.match(/retry\s+in\s+(\d+)\s*s\b/);
+  const koreanMatch = text.match(/(?:약\s*)?(\d+)\s*초/);
+  const seconds = retryMatch
+    ? Number.parseInt(retryMatch[1], 10)
+    : koreanMatch
+      ? Number.parseInt(koreanMatch[1], 10)
+      : 300;
+  if (!Number.isFinite(seconds) || seconds <= 0) return 300;
+  return Math.min(Math.max(seconds, 5), 900);
+}
 
 function compactTextForPersistence(text: string | undefined, maxChars: number) {
   if (!text) return "";
@@ -1994,7 +2091,7 @@ function loadSessions(): AgentSession[] {
             : normalizeModel(provider, session.model || meta.defaultModel),
           hermesProvider,
           stellaOntologyMode,
-          codexEffort: provider === "codex" ? normalizeCodexEffort(session.codexEffort) : undefined,
+          codexEffort: normalizeCodexEffort(session.codexEffort),
           codexSpeed: provider === "codex" ? normalizeCodexSpeed(session.codexSpeed) : undefined,
           permissionMode: normalizePermissionMode(session.permissionMode),
           queueMode: Boolean(session.queueMode),
@@ -2022,6 +2119,7 @@ function loadSessions(): AgentSession[] {
                   attachments: Array.isArray(turn.attachments) ? turn.attachments : [],
                   cwd: typeof turn.cwd === "string" ? turn.cwd : "",
                   createdAt: typeof turn.createdAt === "number" ? turn.createdAt : Date.now(),
+                  notBefore: typeof turn.notBefore === "number" ? turn.notBefore : undefined,
                 }))
             : [],
           rawEvents: Array.isArray(session.rawEvents) ? session.rawEvents : [],
@@ -2690,6 +2788,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const [composerHeight, setComposerHeight] = useState(() => initialComposerHeight());
   const [resizingComposer, setResizingComposer] = useState(false);
   const [showModelMenu, setShowModelMenu] = useState(false);
+  const [modelMenuPosition, setModelMenuPosition] = useState<React.CSSProperties | null>(null);
+  const [slashMenuPosition, setSlashMenuPosition] = useState<React.CSSProperties | null>(null);
   const [showPermissionMenu, setShowPermissionMenu] = useState(false);
   const [codexMenuPanel, setCodexMenuPanel] = useState<CodexMenuPanel>("root");
   const [claudeRuntimeModels, setClaudeRuntimeModels] = useState<ModelOption[]>(CLAUDE_MODELS);
@@ -2790,10 +2890,14 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const inputDraftRef = useRef(input);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const modelMenuRef = useRef<HTMLDivElement | null>(null);
+  const modelMenuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const modelMenuPopoverRef = useRef<HTMLDivElement | null>(null);
+  const slashMenuPopoverRef = useRef<HTMLDivElement | null>(null);
   const permissionMenuRef = useRef<HTMLDivElement | null>(null);
   const skipRenameCommitRef = useRef(false);
   const previewHydratingSessionRef = useRef<string | null>(null);
   const pendingStreamRef = useRef<Record<string, PendingAgentStream>>({});
+  const providerCooldownRetryTimersRef = useRef<Record<string, number>>({});
   const interruptedTurnIdsRef = useRef<Set<string>>(new Set());
   const stoppedTurnIdsRef = useRef<Set<string>>(new Set());
   const animatedAssistantIdsRef = useRef<Set<string>>(new Set());
@@ -2902,8 +3006,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         devScreenActionFailed: (message: string) => `Screen action failed: ${message}`,
         cwd: "Working folder",
         noAgentProfiles: "No Claude/Hermes/Codex/Gajae Code profiles in Settings.",
-        factoryLabel: "Stella Factory",
-        factoryLauncherTitle: "Start or resume a Stella Factory autonomous development session",
+        factoryLabel: "Stella Mode",
+        factoryLauncherTitle: "Start or resume a Stella Mode autonomous development session",
         placeholder: "Ask the selected agent to change, inspect, or explain this workspace...",
         send: "Send",
         stop: "Stop",
@@ -2918,6 +3022,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         renameHint: "Double-click to rename",
         providerLabel: "Provider",
         modelLabel: "Model",
+        workloadLabel: "Workload",
         permissionLabel: "Permission",
         ontologyLabel: "Mode",
         intelligence: "Intelligence",
@@ -2936,6 +3041,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         queueModeOff: "Queue mode is off. New messages during a run will switch the active turn.",
         interrupting: "Switching to the new request.",
         interruptedResponse: "Previous run was switched to your new request.",
+        providerCooldownRetry: (provider: string, seconds: number, scheduled: boolean) =>
+          scheduled
+            ? `${provider} is temporarily limiting requests. This is a provider/account-pool cooldown, not your usage limit. Atelier kept this turn and will retry it once in about ${seconds}s.`
+            : `${provider} is temporarily limiting requests. This is a provider/account-pool cooldown, not your usage limit. Retry this turn after about ${seconds}s.`,
         queueEmpty: "Queue is empty.",
         queueCleared: "Queue cleared.",
         queueRunStarted: "Queued turn started.",
@@ -2945,9 +3054,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         slashUnknown: (command: string) => `Unknown slash command: ${command}`,
         slashHelp: [
           "Slash commands:",
-          "Stella Factory <goal> - run planning, execution, verification, security, and final audit automatically",
+          "Stella Mode <goal> - run planning, execution, verification, security, and final audit automatically",
           "/goal <objective> - legacy Goal call",
-          "/analyze · /probe · /audit - internal Factory review commands",
+          "/analyze · /probe · /audit - internal Stella Mode review commands",
           "/stella - turn on Stella/Atelier ontology mode",
           "/mode direct|stella|evidence - change Atelier ontology mode",
           "/que - toggle queue mode",
@@ -2958,6 +3067,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           "/preview <url> - open preview URL",
           "/cwd <path> - change working folder",
           "/model <model> - change the current CLI model",
+          "/workload low|medium|high|xhigh|ultra - change workload",
           "/permission basic|auto|full - change CLI permission mode",
           "/provider openai-codex|openrouter - change Hermes provider",
           "/effort low|medium|high|xhigh - change Codex reasoning effort",
@@ -3048,8 +3158,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         devScreenActionFailed: (message: string) => `화면 작업 실패: ${message}`,
         cwd: "작업 폴더",
         noAgentProfiles: "설정 프로필에 Claude/Hermes/Codex/가재코드가 없습니다.",
-        factoryLabel: "Stella Factory",
-        factoryLauncherTitle: "Stella Factory 자율 개발 세션 시작 또는 재개",
+        factoryLabel: "스텔라 모드",
+        factoryLauncherTitle: "스텔라 모드 자율 개발 세션 시작 또는 재개",
         placeholder: "선택한 에이전트에게 이 작업공간의 수정, 분석, 설명을 요청하세요...",
         send: "보내기",
         stop: "중지",
@@ -3064,6 +3174,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         renameHint: "더블클릭해 이름 변경",
         providerLabel: "제공자",
         modelLabel: "모델",
+        workloadLabel: "작업량",
         permissionLabel: "권한",
         ontologyLabel: "모드",
         intelligence: "인텔리전스",
@@ -3082,6 +3193,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         queueModeOff: "대기열 모드가 꺼졌습니다. 실행 중 새 메시지는 현재 실행을 새 요청으로 전환합니다.",
         interrupting: "새 요청으로 전환합니다.",
         interruptedResponse: "이전 실행을 새 요청으로 전환했습니다.",
+        providerCooldownRetry: (provider: string, seconds: number, scheduled: boolean) =>
+          scheduled
+            ? `${provider} 공급자 계정 풀이 일시 제한에 걸렸습니다. 사용량 초과가 아니라 서버 쪽 요청 제한입니다. Atelier가 이 작업을 보존했고 약 ${seconds}초 뒤 한 번 자동으로 다시 시도합니다.`
+            : `${provider} 공급자 계정 풀이 일시 제한에 걸렸습니다. 사용량 초과가 아니라 서버 쪽 요청 제한입니다. 약 ${seconds}초 뒤 같은 작업을 다시 시도하세요.`,
         queueEmpty: "대기열이 비어 있습니다.",
         queueCleared: "대기열을 비웠습니다.",
         queueRunStarted: "대기 중인 명령을 실행했습니다.",
@@ -3091,9 +3206,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         slashUnknown: (command: string) => `알 수 없는 슬래시 명령어입니다: ${command}`,
         slashHelp: [
           "슬래시 명령어:",
-          "스텔라 팩토리 <목표> - 목표 달성까지 계획-실행-검증-감사를 자동 진행",
+          "스텔라 모드 <목표> - 목표 달성까지 계획-실행-검증-감사를 자동 진행",
           "/goal <objective> - 레거시 Goal 호출",
-          "/analyze · /probe · /audit - Factory 내부 검토 명령",
+          "/analyze · /probe · /audit - 스텔라 모드 내부 검토 명령",
           "/stella - Stella/Atelier 온톨로지 모드 켜기",
           "/mode direct|stella|evidence - Atelier 온톨로지 실행 모드 변경",
           "/que - 대기열 모드 켜기/끄기",
@@ -3104,6 +3219,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           "/preview <url> - 프리뷰 URL 열기",
           "/cwd <path> - 작업 폴더 변경",
           "/model <model> - 현재 CLI 모델 변경",
+          "/workload low|medium|high|xhigh|ultra - 작업량 변경",
           "/permission basic|auto|full - CLI 실행 권한 변경",
           "/provider openai-codex|openrouter - Hermes provider 변경",
           "/effort low|medium|high|xhigh - Codex 추론 강도 변경",
@@ -3329,29 +3445,29 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const activeCodexEffort = normalizeCodexEffort(active?.codexEffort);
   const activeCodexSpeed = normalizeCodexSpeed(active?.codexSpeed);
   const activeCodexModelSurface = activeProvider === "codex" || (activeProvider === "hermes" && activeHermesProvider === "openai-codex");
-  const activeCodexToolbarLabel = codexToolbarLabel(activeModelLabel, activeModel, activeCodexEffort, tw.language);
+  const activeCodexToolbarLabel = codexToolbarLabel(activeModelLabel, activeModel);
   const activePermissionMode = normalizePermissionMode(active?.permissionMode);
   const activePermissionOption = PERMISSION_MODES.find((option) => option.value === activePermissionMode) || PERMISSION_MODES[0];
   const activePermissionLabel = labelForPermissionMode(activePermissionMode, tw.language);
   const localPreview = isLocalPreviewUrl(previewUrl);
-  const previewBadgeTone = !previewUrl
-    ? "idle"
-    : previewChecking
+  const previewBadgeTone = previewChecking
       ? "checking"
       : previewCheck?.ok
         ? "ok"
         : previewCheck
           ? "error"
-          : "linked";
-  const previewBadgeText = !previewUrl
-    ? copy.preview
-    : previewChecking
+          : previewUrl
+            ? "linked"
+            : "idle";
+  const previewBadgeText = previewChecking
       ? copy.previewChecking
       : previewCheck?.ok
         ? copy.previewOk
         : previewCheck
           ? copy.previewIssue
-          : copy.previewLinked;
+          : previewUrl
+            ? copy.previewLinked
+            : "";
   const visiblePreviewDiagnostics = previewDiagnostics.slice(-3);
   const previewServiceLabel = previewService?.running
     ? `${copy.previewServiceManaged}${previewService.pid ? ` · ${previewService.pid}` : ""}`
@@ -3436,7 +3552,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   };
 
   const isSessionRunning = (session: AgentSession) =>
-    Boolean(busyTurnIdsBySession[session.id]) || lastAssistantStatus(session) === "streaming";
+    Boolean(busyTurnIdsBySession[session.id])
+    || lastAssistantStatus(session) === "streaming"
+    || Boolean(session.queuedTurns?.length);
   const isSessionDone = (session: AgentSession) =>
     !isSessionRunning(session) && lastAssistantStatus(session) === "done";
 
@@ -3639,7 +3757,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     if (!showModelMenu) return;
     const onPointerDown = (event: MouseEvent) => {
       const target = event.target as Node | null;
-      if (target && modelMenuRef.current?.contains(target)) return;
+      if (
+        target
+        && (modelMenuRef.current?.contains(target) || modelMenuPopoverRef.current?.contains(target))
+      ) return;
       setShowModelMenu(false);
       setCodexMenuPanel("root");
     };
@@ -3655,6 +3776,101 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [showModelMenu]);
+
+  useEffect(() => {
+    if (!showModelMenu) {
+      setModelMenuPosition(null);
+      return;
+    }
+
+    const updatePosition = () => {
+      const button = modelMenuButtonRef.current;
+      if (!button) return;
+      const rect = button.getBoundingClientRect();
+      const viewportPadding = 12;
+      const gap = 8;
+      const width = Math.min(292, Math.max(220, window.innerWidth - viewportPadding * 2));
+      const left = Math.min(
+        Math.max(viewportPadding, rect.right - width),
+        Math.max(viewportPadding, window.innerWidth - width - viewportPadding),
+      );
+      const availableAbove = Math.max(0, rect.top - gap - viewportPadding);
+      const availableBelow = Math.max(0, window.innerHeight - rect.bottom - gap - viewportPadding);
+      const openAbove = availableAbove >= 220 || availableAbove >= availableBelow;
+      const available = openAbove ? availableAbove : availableBelow;
+      const maxHeight = Math.max(140, Math.min(480, available));
+
+      setModelMenuPosition({
+        left,
+        width,
+        maxHeight,
+        ...(openAbove
+          ? { bottom: window.innerHeight - rect.top + gap }
+          : { top: rect.bottom + gap }),
+      });
+    };
+
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [showModelMenu]);
+
+  useEffect(() => {
+    if (!showModelMenu) return;
+    const frame = window.requestAnimationFrame(() => {
+      modelMenuPopoverRef.current?.scrollTo({ top: 0, behavior: "auto" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [codexMenuPanel, showModelMenu]);
+
+  useEffect(() => {
+    if (!showSlashMenu) {
+      setSlashMenuPosition(null);
+      return;
+    }
+
+    const updatePosition = () => {
+      const input = inputRef.current;
+      if (!input) return;
+      const rect = input.getBoundingClientRect();
+      const viewportPadding = 12;
+      const gap = 8;
+      const width = Math.min(
+        Math.max(280, rect.width),
+        Math.max(280, window.innerWidth - viewportPadding * 2),
+      );
+      const left = Math.min(
+        Math.max(viewportPadding, rect.left),
+        Math.max(viewportPadding, window.innerWidth - width - viewportPadding),
+      );
+      const availableAbove = Math.max(0, rect.top - gap - viewportPadding);
+      const availableBelow = Math.max(0, window.innerHeight - rect.bottom - gap - viewportPadding);
+      const openAbove = availableAbove >= 180 || availableAbove >= availableBelow;
+      const available = openAbove ? availableAbove : availableBelow;
+      const maxHeight = Math.max(120, Math.min(286, available));
+
+      setSlashMenuPosition({
+        left,
+        width,
+        maxHeight,
+        ...(openAbove
+          ? { bottom: window.innerHeight - rect.top + gap }
+          : { top: rect.bottom + gap }),
+      });
+    };
+
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+    };
+  }, [composerHeight, showSlashMenu, visibleSlashCommands.length]);
 
   useEffect(() => {
     if (!showPermissionMenu) return;
@@ -3771,6 +3987,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       Object.values(pendingStreamRef.current).forEach((pending) => {
         if (pending.timer) window.clearTimeout(pending.timer);
       });
+      Object.values(providerCooldownRetryTimersRef.current).forEach((timer) => window.clearTimeout(timer));
       if (smoothFrameRef.current !== null) {
         window.cancelAnimationFrame(smoothFrameRef.current);
       }
@@ -3779,6 +3996,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       }
       persistSessionsNow(sessionsRef.current);
       pendingStreamRef.current = {};
+      providerCooldownRetryTimersRef.current = {};
       smoothTargetsRef.current = {};
       smoothRevealStateRef.current = {};
       backgroundedAssistantIdsRef.current.clear();
@@ -4046,7 +4264,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       model: initialModel,
       hermesProvider,
       stellaOntologyMode: normalizeStellaOntologyMode(undefined, provider),
-      codexEffort: provider === "codex" ? DEFAULT_CODEX_EFFORT : undefined,
+      codexEffort: DEFAULT_WORKLOAD,
       codexSpeed: provider === "codex" ? DEFAULT_CODEX_SPEED : undefined,
       permissionMode: DEFAULT_PERMISSION_MODE,
       queueMode: false,
@@ -4299,6 +4517,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const updateActiveCodexEffort = (effort: CodexEffort) => {
     if (!active) return;
     patchSession(active.id, (session) => ({ ...session, codexEffort: effort, updatedAt: Date.now() }));
+  };
+
+  const updateActiveWorkload = (workload: WorkloadLevel) => {
+    if (!active) return;
+    patchSession(active.id, (session) => ({ ...session, codexEffort: workload, updatedAt: Date.now() }));
   };
 
   const updateActiveCodexSpeed = (speed: CodexSpeed) => {
@@ -5092,7 +5315,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const applyFactoryLauncher = () => {
     const current = inputDraftRef.current.trim();
     const body = stripFactoryCommandPrefix(current);
-    const prefix = tw.language === "en" ? "Stella Factory " : "스텔라 팩토리 ";
+    const prefix = tw.language === "en" ? "Stella Mode " : "스텔라 모드 ";
     const next = body ? `${prefix}${body}` : prefix;
     setComposerInput(next);
     window.requestAnimationFrame(() => {
@@ -5110,6 +5333,18 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       const session = sessionsRef.current.find((item) => item.id === sessionId);
       const nextTurn = session?.queuedTurns?.[0];
       if (!session || !nextTurn) return;
+      const waitMs = Math.max(0, (nextTurn.notBefore || 0) - Date.now());
+      if (waitMs > 0) {
+        const timerKey = `queue:${sessionId}`;
+        if (providerCooldownRetryTimersRef.current[timerKey]) {
+          window.clearTimeout(providerCooldownRetryTimersRef.current[timerKey]);
+        }
+        providerCooldownRetryTimersRef.current[timerKey] = window.setTimeout(() => {
+          delete providerCooldownRetryTimersRef.current[timerKey];
+          startNextQueuedTurn(sessionId);
+        }, waitMs);
+        return;
+      }
       patchSession(sessionId, (current) => ({
         ...current,
         queuedTurns: (current.queuedTurns || []).filter((turn) => turn.id !== nextTurn.id),
@@ -5118,6 +5353,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       runAgentTurn(sessionId, nextTurn).catch(console.error);
     }, 0);
   };
+
+  useEffect(() => {
+    sessionsRef.current.forEach((session) => {
+      if (session.queuedTurns?.length) startNextQueuedTurn(session.id);
+    });
+  }, []);
 
   const handleSlashCommand = async (session: AgentSession, rawText: string) => {
     const trimmed = rawText.trim();
@@ -5226,6 +5467,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         return true;
       }
       if (arg === "clear") {
+        for (const [timerKey, timer] of Object.entries(providerCooldownRetryTimersRef.current)) {
+          if (timerKey === `queue:${session.id}` || timerKey.startsWith(`${session.id}:`)) {
+            window.clearTimeout(timer);
+            delete providerCooldownRetryTimersRef.current[timerKey];
+          }
+        }
         patchSession(session.id, (current) => ({
           ...current,
           queuedTurns: [],
@@ -5529,28 +5776,25 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       return true;
     }
 
-    if (command === "/effort") {
-      if (session.provider !== "codex") {
+    if (command === "/effort" || command === "/workload") {
+      const workload = arg ? normalizeWorkloadInput(arg) : null;
+      if (!workload) {
         localAssistantMessage(
           session.id,
           rawText,
-          tw.language === "en" ? "/effort is available in Codex CLI sessions." : "/effort는 Codex CLI 작업에서 사용할 수 있습니다.",
+          tw.language === "en"
+            ? "Usage: /workload low|medium|high|xhigh|ultra"
+            : "사용법: /workload low|medium|high|xhigh|ultra 또는 /workload 낮음|중간|높음|매우높음|울트라코드",
         );
         return true;
       }
-      if (!arg || !isCodexEffort(arg)) {
-        localAssistantMessage(
-          session.id,
-          rawText,
-          tw.language === "en" ? "Usage: /effort low|medium|high|xhigh" : "사용법: /effort low|medium|high|xhigh",
-        );
-        return true;
-      }
-      patchSession(session.id, (current) => ({ ...current, codexEffort: arg, updatedAt: Date.now() }));
+      patchSession(session.id, (current) => ({ ...current, codexEffort: workload, updatedAt: Date.now() }));
       localAssistantMessage(
         session.id,
         rawText,
-        tw.language === "en" ? `Codex effort changed: ${arg}` : `Codex 추론 강도를 변경했습니다: ${arg}`,
+        tw.language === "en"
+          ? `Workload changed: ${labelForCodexEffort(workload, "en")}`
+          : `작업량을 변경했습니다: ${labelForCodexEffort(workload, "ko")}`,
       );
       return true;
     }
@@ -5665,9 +5909,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       && Boolean(session.providerSessionId)
       && session.providerSessionModel === runModel
       && session.providerSessionHermesProvider === hermesProvider;
+    const modelChangedForRun = runModel !== session.model;
     const resumeSessionId = session.provider === "hermes"
       ? (useHermesCodexFastPath || !hermesResumeMatches ? null : session.providerSessionId || null)
-      : session.providerSessionId || null;
+      : (!modelChangedForRun && (!session.providerSessionModel || session.providerSessionModel === runModel)
+          ? session.providerSessionId || null
+          : null);
     const previewContext = sessionId === activeIdRef.current
       ? formatPreviewPromptContext(tw.language, previewUrl, previewCheck, previewDiagnostics, previewService)
       : null;
@@ -5689,12 +5936,16 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     backgroundedAssistantIdsRef.current.delete(assistantId);
     autoScrollRef.current = true;
     setBusyForSession(sessionId, turnId);
-    patchSession(sessionId, (s) => ({
-      ...s,
-      cwd: runCwd,
-      messages: finalizeOrphanedStreamingMessages(s.messages)
-        .map((message) =>
-          message.id === payload.userMessageId ? { ...message, status: "done" as const } : message,
+	    patchSession(sessionId, (s) => ({
+	      ...s,
+	      cwd: runCwd,
+	      model: runModel,
+	      providerSessionId: modelChangedForRun ? undefined : s.providerSessionId,
+	      providerSessionModel: modelChangedForRun ? undefined : s.providerSessionModel,
+	      providerSessionHermesProvider: modelChangedForRun ? undefined : s.providerSessionHermesProvider,
+	      messages: finalizeOrphanedStreamingMessages(s.messages)
+	        .map((message) =>
+	          message.id === payload.userMessageId ? { ...message, status: "done" as const } : message,
         )
         .concat({ id: assistantId, role: "assistant", text: "", createdAt: Date.now(), status: "streaming" }),
       updatedAt: Date.now(),
@@ -5707,36 +5958,58 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           ? null
           : await captureChangeBaselineForTurn(runCwd || null, CHANGE_BASELINE_TIMEOUT_MS);
         unlisten = await onAgentEvent(turnId, (event) => handleAgentEvent(sessionId, assistantId, event));
+        const runWorkload = fastPatchTask ? "low" : normalizeCodexEffort(session.codexEffort);
+        const basePrompt = formatOntologyAgentPrompt(
+          payload.text,
+          tw.language,
+          visualContext,
+          payload.attachments,
+          normalizeStellaOntologyMode(session.stellaOntologyMode, session.provider),
+          session.provider,
+          Boolean(payload.factoryCommand),
+          runCwd,
+        );
         const result = await agentSend({
           provider: session.provider,
           turnId,
-          prompt: formatOntologyAgentPrompt(
-            payload.text,
-            tw.language,
-            visualContext,
-            payload.attachments,
-            normalizeStellaOntologyMode(session.stellaOntologyMode, session.provider),
-            session.provider,
-            Boolean(payload.factoryCommand),
-            runCwd,
-          ),
+          prompt: formatWorkloadAgentPrompt(basePrompt, runWorkload, tw.language, session.provider),
           resumeSessionId,
           cwd: runCwd || null,
           model: runModel,
           hermesProvider,
-          effort: session.provider === "codex" ? (fastPatchTask ? "low" : normalizeCodexEffort(session.codexEffort)) : null,
+          effort: session.provider === "codex" ? nativeCodexEffort(runWorkload) : null,
           speed: session.provider === "codex" ? (fastPatchTask ? "fast" : normalizeCodexSpeed(session.codexSpeed)) : null,
           permissionMode: normalizePermissionMode(session.permissionMode),
         });
-        flushAgentStream(assistantId);
-        delete pendingStreamRef.current[assistantId];
-        const wasInterrupted = interruptedTurnIdsRef.current.has(turnId);
-        const wasStopped = stoppedTurnIdsRef.current.has(turnId);
-        let finalTextForReveal = "";
-        const fallbackRawEvents = result.raw_events.slice(-MAX_RAW_EVENTS).map(clipRawEvent);
+	        flushAgentStream(assistantId);
+	        delete pendingStreamRef.current[assistantId];
+	        const wasInterrupted = interruptedTurnIdsRef.current.has(turnId);
+	        const wasStopped = stoppedTurnIdsRef.current.has(turnId);
+	        let finalTextForReveal = "";
+	        const fallbackRawEvents = result.raw_events.slice(-MAX_RAW_EVENTS).map(clipRawEvent);
+        const cooldownSeconds = result.is_error && !wasInterrupted && !wasStopped
+          ? providerCooldownSecondsFromText([
+              result.error || "",
+              result.text || "",
+              ...fallbackRawEvents,
+            ].join("\n"))
+          : null;
+        const shouldScheduleCooldownRetry = cooldownSeconds !== null && (payload.autoRetryCount || 0) < 1;
+        const retryPayload: QueuedAgentTurn | null = shouldScheduleCooldownRetry && cooldownSeconds !== null
+          ? {
+              ...payload,
+              id: nowId("queued-turn"),
+              autoRetryCount: (payload.autoRetryCount || 0) + 1,
+              createdAt: Date.now(),
+              notBefore: Date.now() + cooldownSeconds * 1000,
+            }
+          : null;
         patchSession(sessionId, (s) => ({
           ...s,
           providerSessionId: result.provider_session_id || (resumeSessionId ? s.providerSessionId : undefined),
+          queuedTurns: retryPayload
+            ? [retryPayload, ...(s.queuedTurns || [])]
+            : s.queuedTurns,
           providerSessionModel: result.provider_session_id
             ? runModel
             : (resumeSessionId ? s.providerSessionModel : undefined),
@@ -5753,14 +6026,16 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
               return {
                   ...m,
                   text: (() => {
-                    finalTextForReveal = cleanAgentText(result.text)
-                    || cleanAgentText(m.text)
-                    || (wasStopped ? copy.stoppedResponse : wasInterrupted ? copy.interruptedResponse : "")
-                    || cleanAgentText(result.error)
-                    || (result.is_error ? `실행 실패: ${result.error || "Agent error"}` : copy.noResponse);
+                    finalTextForReveal = cooldownSeconds !== null
+                      ? copy.providerCooldownRetry(meta.label, cooldownSeconds, shouldScheduleCooldownRetry)
+                      : cleanAgentText(result.text)
+                      || cleanAgentText(m.text)
+                      || (wasStopped ? copy.stoppedResponse : wasInterrupted ? copy.interruptedResponse : "")
+                      || cleanAgentText(result.error)
+                      || (result.is_error ? `실행 실패: ${result.error || "Agent error"}` : copy.noResponse);
                     return finalTextForReveal;
                   })(),
-                  status: wasStopped || wasInterrupted ? "done" : result.is_error ? "error" : "done",
+                  status: wasStopped || wasInterrupted || shouldScheduleCooldownRetry ? "done" : result.is_error ? "error" : "done",
                   rawEvents: messageRawEvents.length ? messageRawEvents.slice(-MAX_RAW_EVENTS) : m.rawEvents,
                   changeBaselineId: !result.is_error && !wasInterrupted && !wasStopped ? changeBaseline?.id || null : null,
                   changeCwd: !result.is_error && !wasInterrupted && !wasStopped ? runCwd : m.changeCwd,
@@ -5780,7 +6055,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         if (payload.factoryCommand) {
           stellaRecordEvidence({
             cwd: runCwd || null,
-            title: `Stella Factory ${payload.factoryCommand}: ${payload.displayText || payload.text}`,
+            title: `Stella Mode ${payload.factoryCommand}: ${payload.displayText || payload.text}`,
             body: [
               `Provider: ${session.provider}`,
               `Model: ${runModel}`,
@@ -5831,7 +6106,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       if (payload.factoryCommand && isTauri()) {
         stellaRecordEvidence({
           cwd: runCwd || null,
-          title: `Stella Factory ${payload.factoryCommand}: ${payload.displayText || payload.text}`,
+          title: `Stella Mode ${payload.factoryCommand}: ${payload.displayText || payload.text}`,
           body: [
             `Provider: ${session.provider}`,
             `Model: ${runModel}`,
@@ -6306,7 +6581,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         </aside>
       )}
 
-      <main className="atelier-workspace-main flex-1 min-w-0 flex flex-col">
+      <main className="atelier-workspace-main relative flex-1 min-w-0 flex flex-col">
         <div className={cls("atelier-workspace-header border-b flex items-center gap-3", dark ? "border-dline" : "border-line")}>
           <div className="min-w-0 flex-1">
             <div className="text-[13px] font-medium truncate">{active?.title || active?.profileName || activeProviderMeta.label}</div>
@@ -6339,7 +6614,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           </button>
         </div>
 
-        <div className="flex-1 min-h-0 flex">
+        <div className="relative flex-1 min-h-0 flex">
           <div className="flex-1 min-w-0 flex flex-col">
             <div
               ref={scrollRef}
@@ -6497,7 +6772,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                                   ? "bg-[#d79b3d]"
                                   : dark ? "bg-dsub" : "bg-sub",
                           )} />
-                          <span className="truncate">Factory</span>
+                          <span className="truncate">{tw.language === "en" ? "Stella Mode" : "스텔라 모드"}</span>
                           <span className="shrink-0 font-mono">{factoryStatusLabel}</span>
                         </span>
                         {factoryStatus?.exists && (
@@ -6539,22 +6814,25 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                             ? "border-[#4b4b48] bg-[#2d2d2a] text-dsub hover:text-dink disabled:opacity-60"
                             : "border-[#d6d0c7] bg-surface text-sub hover:text-ink disabled:opacity-60",
                         )}
-                        title={tw.language === "en" ? "Refresh Factory status" : "Factory 상태 새로고침"}
-                        aria-label={tw.language === "en" ? "Refresh Factory status" : "Factory 상태 새로고침"}
+                        title={tw.language === "en" ? "Refresh Stella Mode status" : "스텔라 모드 상태 새로고침"}
+                        aria-label={tw.language === "en" ? "Refresh Stella Mode status" : "스텔라 모드 상태 새로고침"}
                       >
                         {I.eye}
                       </button>
                     </div>
                   </>
                 )}
-	                {showSlashMenu && (
+	                {showSlashMenu && slashMenuPosition && createPortal(
 	                  <div
+	                    ref={slashMenuPopoverRef}
+	                    style={slashMenuPosition}
 	                    className={cls(
-	                      "atelier-slash-menu absolute left-0 right-0 bottom-full z-50 mb-2 max-h-[286px] overflow-auto rounded-[10px] border p-1.5",
+	                      "atelier-slash-menu fixed z-[210] overflow-y-auto overscroll-contain rounded-[10px] border p-1.5 shadow-[0_16px_44px_rgba(0,0,0,0.34)]",
 	                      dark ? "atelier-slash-menu-dark text-dink" : "atelier-slash-menu-light text-ink",
 	                    )}
 	                    role="listbox"
 	                    aria-label="Slash commands"
+                      data-testid="slash-command-menu"
                   >
                     {visibleSlashCommands.map((item, index) => {
                       const selected = index === activeSlashSelection;
@@ -6587,7 +6865,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                         </button>
                       );
                     })}
-                  </div>
+                  </div>,
+                  document.body,
                 )}
                 <textarea
                   ref={inputRef}
@@ -6727,6 +7006,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                     {activeCodexModelSurface ? (
                       <div ref={modelMenuRef} className="relative">
                         <button
+                          ref={modelMenuButtonRef}
                           type="button"
                           onClick={() => {
                             if (!active || busyTurnId) return;
@@ -6751,10 +7031,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                             {I.chevron}
                           </span>
                         </button>
-                        {showModelMenu && (
+                        {showModelMenu && modelMenuPosition && createPortal(
                           <div
+                            ref={modelMenuPopoverRef}
+                            style={modelMenuPosition}
                             className={cls(
-                              "absolute bottom-10 right-0 z-50 w-[292px] rounded-[16px] border p-2 shadow-[0_16px_44px_rgba(0,0,0,0.34)]",
+                              "fixed z-[200] overflow-y-auto overscroll-contain rounded-[16px] border p-2 shadow-[0_16px_44px_rgba(0,0,0,0.34)]",
                               dark
                                 ? "bg-[#2c2c2b]/95 border-[#444442] text-dink backdrop-blur"
                                 : "bg-[#f1efea]/95 border-[#d4d0c7] text-ink backdrop-blur",
@@ -6903,7 +7185,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                                 })}
                               </>
                             )}
-                          </div>
+                          </div>,
+                          document.body,
                         )}
                       </div>
                     ) : (
@@ -6949,6 +7232,27 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                         ))}
                       </select>
                     )}
+                    <span className={cls("text-[11px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
+                      {copy.workloadLabel}
+                    </span>
+                    <select
+                      value={activeCodexEffort}
+                      onChange={(e) => updateActiveWorkload(e.target.value as WorkloadLevel)}
+                      disabled={!active || !!busyTurnId}
+                      className={cls(
+                        "h-8 min-w-[94px] max-w-[132px] rounded-[7px] border px-2 text-[11px] font-mono outline-none",
+                        dark
+                          ? "bg-dsurf border-dline text-dink disabled:text-dsub"
+                          : "bg-surface border-line text-ink disabled:text-sub",
+                      )}
+                      aria-label={copy.workloadLabel}
+                    >
+                      {CODEX_EFFORTS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {tw.language === "en" ? option.en : option.ko}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   {busyTurnId && (
                     <button
@@ -6997,9 +7301,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                 <span className={cls("text-[12px] font-mono uppercase tracking-wider shrink-0", dark ? "text-dsub" : "text-sub")}>
                   {copy.preview}
                 </span>
-                <span className={cls("atelier-preview-badge", `atelier-preview-badge-${previewBadgeTone}`)}>
-                  {previewBadgeText}
-                </span>
+                {previewBadgeText && (
+                  <span className={cls("atelier-preview-badge", `atelier-preview-badge-${previewBadgeTone}`)}>
+                    {previewBadgeText}
+                  </span>
+                )}
                 <form
                   onSubmit={(e) => {
                     e.preventDefault();

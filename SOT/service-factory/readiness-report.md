@@ -1,18 +1,28 @@
 # Readiness Report
 
+generated_at: 2026-07-10T18:28:00+09:00
+
 ## Goal
 
-스텔라팩토리 장기 실행 상태를 만든다
+Stabilize Atelier as a distributable local agent workspace without hiding the
+difference between source readiness, installed state, and public release state.
 
 ## Current Readiness
 
-`running`
+`release_candidate_with_external_gates`
 
-## Why Not Complete Yet
+## Truth Surfaces
 
-- Factory state was resumed in this run.
-- Research, capability map, agent topology, roadmap, QC matrix, dispatch evidence, Probe, security, release, and final audit must be completed before final readiness.
+- Source and automated checks: ready.
+- Installed macOS app: reflected at 0.1.79 and running from
+  `/Applications/Atelier.app`.
+- Public macOS release: blocked on Developer ID signing and notarization.
+- Windows source and package gates: ready for CI execution.
+- Windows interactive Claude/Codex subscription login: validation required on a
+  physical Windows machine.
+- Signed direct Windows installer: blocked until SignPath signs the artifact.
 
 ## Next Executable Action
 
-Complete research and capability mapping, then dispatch the first bounded milestone.
+Run the release workflow with production signing secrets, then execute the
+physical-Windows OAuth and signed-installer checklist before publication.

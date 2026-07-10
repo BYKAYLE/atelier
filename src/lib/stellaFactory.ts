@@ -45,15 +45,15 @@ export function formatStellaFactoryInstruction(args: {
   const workspace = cwd?.trim() || "(not set)";
   if (language === "en") {
     return [
-      "Stella Factory autonomous development contract:",
+      "Stella Mode autonomous development contract:",
       `- Runtime provider: ${providerLabel} (${provider}). Workspace: ${workspace}.`,
       "- Preserve the existing terminal/service behavior. Upgrade in place; do not rebuild from scratch unless explicitly requested.",
       "- Convert natural-language goals into development tasks: objective, constraints, target files, execution plan, verification plan, done_when, and rollback path.",
       "- Mandatory development order: first capture the current state, then write the goal-to-plan strategy, then execute and verify. Do not jump straight into implementation for broad goals.",
-      "- If the goal is broad product delivery, service evolution, or an Antigravity-style autonomous build, treat it as a durable Service Factory run, not a single feature ticket.",
-      "- For Service Factory runs, maintain state under SOT/service-factory-state.json plus current-state, development-plan, mission, research, capability map, agent topology, roadmap, QC matrix, and readiness artifacts under SOT/service-factory/.",
-      "- For Factory goal runs, if the local Stella bridge exists, immediately run the managed cycle before any completion claim: python3 ~/.claude/skills/stella/scripts/stella_service_factory.py autopilot --project <workspace> --goal <objective> --max-cycles 12 --pretty.",
-      "- A single implemented feature is not done unless it closes the declared milestone and the readiness report proves no remaining factory queue is required.",
+      "- If the goal is broad product delivery, service evolution, or an Antigravity-style autonomous build, treat it as a durable Stella Mode run, not a single feature ticket.",
+      "- For Stella Mode runs, maintain state under SOT/service-factory-state.json plus current-state, development-plan, mission, research, capability map, agent topology, roadmap, QC matrix, and readiness artifacts under SOT/service-factory/.",
+      "- For Stella Mode goal runs, if the local Stella bridge exists, immediately run the managed cycle before any completion claim: python3 ~/.claude/skills/stella/scripts/stella_service_factory.py autopilot --project <workspace> --goal <objective> --max-cycles 12 --pretty.",
+      "- A single implemented feature is not done unless it closes the declared milestone and the readiness report proves no remaining Stella Mode queue is required.",
       "- Before broad edits, inspect the real code, run surfaces, docs, tests, and SOT status. Prefer existing patterns over new architecture.",
       "- Execute safely: small commands first, capture evidence, avoid destructive or irreversible operations.",
       "- Forbidden without explicit approval: database deletion, user-data deletion, production deploy/submission, credential exposure, paid purchases, and external publication. External network calls are allowed only when required by the user task or dependency verification; state why when used.",
@@ -64,15 +64,15 @@ export function formatStellaFactoryInstruction(args: {
     ].join("\n");
   }
   return [
-    "Stella Factory 자율 개발 계약:",
+    "스텔라 모드 자율 개발 계약:",
     `- 실행 provider: ${providerLabel} (${provider}). 작업공간: ${workspace}.`,
     "- 기존 터미널/서비스 동작을 보존하세요. 명시 요청이 없는 한 처음부터 다시 만들지 말고 현재 구조 위에서 고도화하세요.",
     "- 자연어 목표를 개발 작업으로 변환하세요: objective, constraints, target files, execution plan, verification plan, done_when, rollback path.",
     "- 필수 개발 순서: 먼저 현재 상태를 파악하고, 그다음 목표 달성 계획을 정리한 뒤, 실행/검증으로 들어갑니다. 넓은 목표에서 바로 구현부터 시작하지 마세요.",
-    "- 목표가 제품 단위 개발, 기존 서비스 고도화, Antigravity급 자율 빌드라면 단일 기능 티켓이 아니라 지속되는 Service Factory run으로 취급하세요.",
-    "- Service Factory run에서는 SOT/service-factory-state.json과 SOT/service-factory/ 아래 current-state, development-plan, mission, research, capability map, agent topology, roadmap, QC matrix, readiness 산출물을 유지하세요.",
-    "- Factory goal run에서는 로컬 Stella bridge가 있으면 완료를 말하기 전에 반드시 managed cycle을 실행하세요: python3 ~/.claude/skills/stella/scripts/stella_service_factory.py autopilot --project <workspace> --goal <objective> --max-cycles 12 --pretty.",
-    "- 단일 기능 구현은 완료가 아닙니다. 선언한 milestone이 닫히고 readiness report가 남은 factory queue가 없음을 증명할 때만 완료입니다.",
+    "- 목표가 제품 단위 개발, 기존 서비스 고도화, Antigravity급 자율 빌드라면 단일 기능 티켓이 아니라 지속되는 스텔라 모드 run으로 취급하세요.",
+    "- 스텔라 모드 run에서는 SOT/service-factory-state.json과 SOT/service-factory/ 아래 current-state, development-plan, mission, research, capability map, agent topology, roadmap, QC matrix, readiness 산출물을 유지하세요.",
+    "- 스텔라 모드 goal run에서는 로컬 Stella bridge가 있으면 완료를 말하기 전에 반드시 managed cycle을 실행하세요: python3 ~/.claude/skills/stella/scripts/stella_service_factory.py autopilot --project <workspace> --goal <objective> --max-cycles 12 --pretty.",
+    "- 단일 기능 구현은 완료가 아닙니다. 선언한 milestone이 닫히고 readiness report가 남은 스텔라 모드 queue가 없음을 증명할 때만 완료입니다.",
     "- 넓은 수정 전에는 실제 코드, 실행 표면, 문서, 테스트, SOT 상태를 먼저 확인하세요. 새 구조보다 기존 패턴을 우선합니다.",
     "- 안전하게 실행하세요: 작은 명령부터 수행하고, 증거를 수집하며, 파괴적/되돌리기 어려운 작업은 피합니다.",
     "- 명시 승인 없이 금지: DB 삭제, 사용자 데이터 삭제, 프로덕션 배포/제출, 자격증명 노출, 유료 결제, 외부 게시. 외부 네트워크 호출은 사용자 작업 또는 의존성 검증에 필요할 때만 사용하고 이유를 남기세요.",
@@ -163,8 +163,8 @@ export function detectStellaFactorySafetyBlock(rawText: string, language: Langua
       return {
         label,
         message: language === "en"
-          ? `Stella Factory safety gate stopped this request before agent execution because it appears to request ${label}. Send a narrower request with explicit approval if this action is truly intended.`
-          : `Stella Factory 안전 게이트가 에이전트 실행 전에 이 요청을 멈췄습니다. 요청에 ${label} 작업이 포함된 것으로 보입니다. 정말 필요한 작업이면 별도 명시 승인을 포함해 더 좁은 범위로 다시 요청해주세요.`,
+          ? `Stella Mode safety gate stopped this request before agent execution because it appears to request ${label}. Send a narrower request with explicit approval if this action is truly intended.`
+          : `스텔라 모드 안전 게이트가 에이전트 실행 전에 이 요청을 멈췄습니다. 요청에 ${label} 작업이 포함된 것으로 보입니다. 정말 필요한 작업이면 별도 명시 승인을 포함해 더 좁은 범위로 다시 요청해주세요.`,
       };
     }
   }
@@ -173,7 +173,7 @@ export function detectStellaFactorySafetyBlock(rawText: string, language: Langua
 }
 
 function parseStellaFactoryAlias(trimmed: string): { command: StellaFactoryCommand; body: string } | null {
-  const match = trimmed.match(/^(?:\/\s*)?(?:스텔라\s*팩토리|stella\s+factory)(?:\s*(?:로|으로|를|을|는|은|:|：|\.|-|—)\s*)?([\s\S]*)$/i);
+  const match = trimmed.match(/^(?:\/\s*)?(?:스텔라\s*(?:모드|팩토리)|stella\s+(?:mode|factory))(?:\s*(?:로|으로|를|을|는|은|:|：|\.|-|—)\s*)?([\s\S]*)$/i);
   if (!match) return null;
   return { command: "goal", body: match[1] || "" };
 }
@@ -199,11 +199,11 @@ export function buildStellaFactoryPrompt(
       "1. Current state discovery: inspect the actual code, runtime, installed app/package state, SOT, dirty paths, existing capabilities, risks, and verification baseline.",
       "2. Goal-to-plan strategy: explain the gap between current state and the target, then define task packets with role, owned paths, done_when, verification, and rollback/retry criteria.",
       "3. Execution and verification: implement scoped task packets, integrate, run checks, and loop back to planning if evidence fails.",
-      "4. Decide whether this is a feature ticket or a Service Factory run. Product-wide, long-horizon, autonomous, or existing-service evolution goals are Service Factory runs.",
-      "5. For Service Factory runs, create or update SOT/service-factory-state.json and SOT/service-factory artifacts: current-state.md, development-plan.md, mission-charter.md, research-dossier.md, capability-map.md, agent-topology.md, roadmap.md, qc-matrix.md, readiness-report.md.",
+      "4. Decide whether this is a feature ticket or a Stella Mode run. Product-wide, long-horizon, autonomous, or existing-service evolution goals are Stella Mode runs.",
+      "5. For Stella Mode runs, create or update SOT/service-factory-state.json and SOT/service-factory artifacts: current-state.md, development-plan.md, mission-charter.md, research-dossier.md, capability-map.md, agent-topology.md, roadmap.md, qc-matrix.md, readiness-report.md.",
       command === "goal"
         ? "6. If available, run the managed bridge cycle now: python3 ~/.claude/skills/stella/scripts/stella_service_factory.py autopilot --project <workspace> --goal <objective> --max-cycles 12 --pretty."
-        : "6. This is not goal mode. Do not run managed autopilot from analysis/probe/audit mode unless the user explicitly asks to start a Factory goal run.",
+        : "6. This is not goal mode. Do not run managed autopilot from analysis/probe/audit mode unless the user explicitly asks to start a Stella Mode goal run.",
       "7. Map required roles before implementation: product/research, architect, worker, reviewer, critic, Probe, security, release, final-audit. Record missing capabilities instead of pretending they exist.",
       "8. Preserve existing working features and patch only the surfaces needed for the current milestone.",
       "9. Execute commands safely, summarize evidence, and avoid destructive operations.",
@@ -229,11 +229,11 @@ export function buildStellaFactoryPrompt(
     "1. 현재 상태 파악: 실제 코드, 실행 방식, 설치본/패키지 상태, SOT, 변경 파일, 현재 기능, 위험, 검증 기준선을 확인합니다.",
     "2. 목표 달성 계획: 현재 상태와 목표 사이의 gap을 설명하고 role, owned paths, done_when, verification, rollback/retry 기준이 있는 task packet으로 분해합니다.",
     "3. 실행/검증: 좁게 나눈 task packet을 구현하고 통합, 검증을 실행하며 증거가 실패하면 다시 계획으로 돌아갑니다.",
-    "4. 이것이 단일 기능 티켓인지 Service Factory run인지 판정합니다. 제품 단위, 장기 목표, 자율 개발, 기존 서비스 고도화 목표는 Service Factory run입니다.",
-    "5. Service Factory run이면 SOT/service-factory-state.json과 SOT/service-factory 산출물을 생성/갱신합니다: current-state.md, development-plan.md, mission-charter.md, research-dossier.md, capability-map.md, agent-topology.md, roadmap.md, qc-matrix.md, readiness-report.md.",
+    "4. 이것이 단일 기능 티켓인지 스텔라 모드 run인지 판정합니다. 제품 단위, 장기 목표, 자율 개발, 기존 서비스 고도화 목표는 스텔라 모드 run입니다.",
+    "5. 스텔라 모드 run이면 SOT/service-factory-state.json과 SOT/service-factory 산출물을 생성/갱신합니다: current-state.md, development-plan.md, mission-charter.md, research-dossier.md, capability-map.md, agent-topology.md, roadmap.md, qc-matrix.md, readiness-report.md.",
     command === "goal"
       ? "6. 가능하면 지금 managed bridge cycle을 실행합니다: python3 ~/.claude/skills/stella/scripts/stella_service_factory.py autopilot --project <workspace> --goal <objective> --max-cycles 12 --pretty."
-      : "6. goal 모드가 아니므로 사용자가 Factory goal run 시작을 명시하지 않은 한 managed autopilot을 실행하지 않습니다.",
+      : "6. goal 모드가 아니므로 사용자가 스텔라 모드 goal run 시작을 명시하지 않은 한 managed autopilot을 실행하지 않습니다.",
     "7. 구현 전 필요한 역할을 매핑합니다: product/research, architect, worker, reviewer, critic, Probe, security, release, final-audit. 없는 역량은 있는 척하지 말고 missing_capabilities로 기록합니다.",
     "8. 기존에 동작하는 기능을 보존하고 현재 milestone에 필요한 표면만 좁게 패치합니다.",
     "9. 명령은 안전하게 실행하고 증거를 요약하며 파괴적 작업은 피합니다.",
@@ -256,7 +256,7 @@ export function formatStellaFactoryPreflightBlock(
   const { analysis, probe, error } = preflight;
   const lines: string[] = [];
   if (language === "en") {
-    lines.push("Atelier Stella Factory preflight evidence:");
+    lines.push("Atelier Stella Mode preflight evidence:");
     if (analysis) {
       lines.push(`- Workspace root: ${analysis.root}`);
       lines.push(`- Project: ${analysis.project_name || "(unknown)"}`);
@@ -271,9 +271,9 @@ export function formatStellaFactoryPreflightBlock(
       const bootstrap = preflight.bootstrap;
       const created = bootstrap.artifacts.filter((item) => item.created).length;
       const existing = bootstrap.artifacts.length - created;
-      lines.push(`- Factory state: ${bootstrap.created_state ? "created" : "resumed"} ${bootstrap.state_path}`);
-      lines.push(`- Factory artifacts: ${created} created, ${existing} existing; readiness ${bootstrap.readiness}`);
-      if (bootstrap.next_actions.length) lines.push(`- Factory next: ${bootstrap.next_actions.slice(0, 2).join(" | ")}`);
+      lines.push(`- Stella Mode state: ${bootstrap.created_state ? "created" : "resumed"} ${bootstrap.state_path}`);
+      lines.push(`- Stella Mode artifacts: ${created} created, ${existing} existing; readiness ${bootstrap.readiness}`);
+      if (bootstrap.next_actions.length) lines.push(`- Stella Mode next: ${bootstrap.next_actions.slice(0, 2).join(" | ")}`);
     }
     if (preflight.autopilot) {
       const autopilot = preflight.autopilot;
@@ -290,7 +290,7 @@ export function formatStellaFactoryPreflightBlock(
     }
     if (error) lines.push(`- Preflight error: ${error}`);
   } else {
-    lines.push("Atelier Stella Factory 사전 증거:");
+    lines.push("Atelier 스텔라 모드 사전 증거:");
     if (analysis) {
       lines.push(`- 작업 루트: ${analysis.root}`);
       lines.push(`- 프로젝트: ${analysis.project_name || "(알 수 없음)"}`);
@@ -305,9 +305,9 @@ export function formatStellaFactoryPreflightBlock(
       const bootstrap = preflight.bootstrap;
       const created = bootstrap.artifacts.filter((item) => item.created).length;
       const existing = bootstrap.artifacts.length - created;
-      lines.push(`- Factory 상태: ${bootstrap.created_state ? "생성" : "재개"} ${bootstrap.state_path}`);
-      lines.push(`- Factory 산출물: ${created}개 생성, ${existing}개 기존; readiness ${bootstrap.readiness}`);
-      if (bootstrap.next_actions.length) lines.push(`- Factory 다음 작업: ${bootstrap.next_actions.slice(0, 2).join(" | ")}`);
+      lines.push(`- 스텔라 모드 상태: ${bootstrap.created_state ? "생성" : "재개"} ${bootstrap.state_path}`);
+      lines.push(`- 스텔라 모드 산출물: ${created}개 생성, ${existing}개 기존; readiness ${bootstrap.readiness}`);
+      if (bootstrap.next_actions.length) lines.push(`- 스텔라 모드 다음 작업: ${bootstrap.next_actions.slice(0, 2).join(" | ")}`);
     }
     if (preflight.autopilot) {
       const autopilot = preflight.autopilot;
@@ -352,25 +352,25 @@ function factoryTitle(command: StellaFactoryCommand, body: string, language: Lan
 function commandIntroKo(command: StellaFactoryCommand) {
   switch (command) {
     case "analyze":
-      return "Stella Factory 분석 모드입니다. 현재 앱의 실제 코드, 실행 방식, 기능 완성도, SOT/문서/테스트 상태를 먼저 분석하세요.";
+      return "스텔라 모드 분석 모드입니다. 현재 앱의 실제 코드, 실행 방식, 기능 완성도, SOT/문서/테스트 상태를 먼저 분석하세요.";
     case "probe":
-      return "Stella Factory Probe 모드입니다. 구현 결과가 실제로 동작하는지 증거 중심으로 검증하세요.";
+      return "스텔라 모드 Probe 모드입니다. 구현 결과가 실제로 동작하는지 증거 중심으로 검증하세요.";
     case "audit":
-      return "Stella Factory 최종감사 모드입니다. 보안, 권한, 배포준비, 업데이트, 회귀 위험을 점검하세요.";
+      return "스텔라 모드 최종감사 모드입니다. 보안, 권한, 배포준비, 업데이트, 회귀 위험을 점검하세요.";
     default:
-      return "Stella Factory Goal 모드입니다. 자연어 목표를 개발 작업으로 바꾸고 완료까지 진행하세요.";
+      return "스텔라 모드 Goal 모드입니다. 자연어 목표를 개발 작업으로 바꾸고 완료까지 진행하세요.";
   }
 }
 
 function commandIntroEn(command: StellaFactoryCommand) {
   switch (command) {
     case "analyze":
-      return "Stella Factory analysis mode. Analyze the real code, run method, feature completeness, SOT/docs/tests status first.";
+      return "Stella Mode analysis mode. Analyze the real code, run method, feature completeness, SOT/docs/tests status first.";
     case "probe":
-      return "Stella Factory Probe mode. Verify that the implementation really works with evidence.";
+      return "Stella Mode Probe mode. Verify that the implementation really works with evidence.";
     case "audit":
-      return "Stella Factory final audit mode. Review security, permissions, release readiness, updater, and regression risk.";
+      return "Stella Mode final audit mode. Review security, permissions, release readiness, updater, and regression risk.";
     default:
-      return "Stella Factory Goal mode. Convert the natural-language objective into development work and carry it to completion.";
+      return "Stella Mode Goal mode. Convert the natural-language objective into development work and carry it to completion.";
   }
 }

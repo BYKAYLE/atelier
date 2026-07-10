@@ -32,7 +32,8 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          components: rustfmt,clippy
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -42,9 +43,40 @@ jobs:
       - name: Install npm deps
         run: npm install --legacy-peer-deps
 
+      - name: Install Rust security audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run release quality gates
+        run: |
+          npm run build
+          npm run harness:fixture
+          npm audit --omit=dev --audit-level=high
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture
+          npm run audit:release
+
       - name: Generate release notes
         id: release-notes
         run: node .github/scripts/generate-release-notes.mjs
+
+      - name: Require Developer ID signing and notarization credentials
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=()
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name}" ]; then missing+=("$name"); fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            printf 'Missing required macOS release secret(s): %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
 
       - name: Build and upload macOS bundle
         uses: tauri-apps/tauri-action@v0
@@ -52,6 +84,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN || github.token }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           owner: ${{ env.RELEASE_OWNER }}
           repo: ${{ env.RELEASE_REPO }}
@@ -62,7 +100,7 @@ jobs:
           prerelease: false
           includeUpdaterJson: true
           updaterJsonPreferNsis: true
-          args: "--target aarch64-apple-darwin"
+          args: "--target universal-apple-darwin"
 
   build-windows-unsigned:
     name: Build unsigned Windows bundle
@@ -96,6 +134,7 @@ jobs:
         run: |
           npm run build
           cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture
+          powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1 -Install -Strict
 
       - name: Build unsigned Windows installers
         shell: pwsh
@@ -103,6 +142,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri -- build --ci
+
+      - name: Verify Windows installer payloads
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File tools/windows-package-smoke.ps1
 
       - name: Collect unsigned Windows installers
         shell: pwsh
@@ -157,9 +200,7 @@ jobs:
             }
           }
           if ($missing.Count -gt 0) {
-            "ready=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            "missing=$($missing -join ', ')" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-            Write-Warning "Missing SignPath repository value(s): $($missing -join ', '). Windows assets will be published with Tauri updater signatures only."
+            throw "Missing required SignPath repository value(s): $($missing -join ', '). Unsigned Windows installers must not be published."
           } else {
             "ready=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           }
@@ -197,19 +238,16 @@ jobs:
           parameters: |
             version: ${{ github.ref_name }}
 
-      - name: Use unsigned Windows artifact when SignPath is unavailable
-        if: ${{ steps.signpath-config.outputs.ready != 'true' }}
-        uses: actions/download-artifact@v4
-        with:
-          name: atelier-windows-unsigned-${{ github.ref_name }}
-          path: signed-windows
-
       - name: Create updater signatures for Windows installers
         shell: pwsh
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: .github/scripts/finalize-signpath-windows.ps1
+
+      - name: Verify signed installer payloads
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File tools/windows-package-smoke.ps1 -BundleRoot release-assets/windows -RequireAuthenticode
 
       - name: Download existing updater JSON
         shell: pwsh

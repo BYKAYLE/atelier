@@ -29,7 +29,7 @@
 | 도구 | 비고 |
 |------|------|
 | Xcode Command Line Tools | `xcode-select --install` |
-| Apple Silicon 또는 Intel | 기본값: 호스트 아키텍처 네이티브 빌드 |
+| Apple Silicon 또는 Intel | 공식 릴리스는 Universal macOS 앱으로 빌드 |
 
 ### Windows
 | 도구 | 비고 |

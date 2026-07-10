@@ -106,7 +106,6 @@ pub async fn session_log_clear(id: String) -> std::result::Result<(), String> {
 
 /// 기존 "탭 id"를 새 탭에 연결하기 위한 hint — 새 탭이 이 id의 로그를 재생하도록.
 /// 실제 구현은 JS 측에서 처리 (spawnTab 시 loaded hint).
-
 fn state() -> Arc<PtyState> {
     STATE.get().expect("PtyState uninit").clone()
 }

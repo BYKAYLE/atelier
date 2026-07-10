@@ -996,7 +996,8 @@ body.dark {
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 .atelier-composer-resize-handle {
@@ -1032,16 +1033,23 @@ body.dark {
 
 .atelier-composer-textarea {
   flex: 1 1 auto;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .atelier-composer-controls {
   flex: 0 0 auto;
 }
 
+.atelier-preview-pane {
+  min-width: 320px;
+}
+
 @media (max-width: 1240px) {
   .atelier-preview-pane {
-    display: none !important;
+    width: min(430px, 44vw) !important;
+    min-width: min(320px, 44vw);
   }
 }
 
@@ -1146,6 +1154,15 @@ body.dark {
 }
 
 @media (max-width: 760px) {
+  .atelier-preview-pane {
+    position: absolute;
+    inset: 0 0 0 auto;
+    z-index: 40;
+    width: min(420px, calc(100vw - 92px)) !important;
+    min-width: 0;
+    box-shadow: -22px 0 46px rgba(0, 0, 0, 0.32);
+  }
+
   .atelier-task-sidebar,
   .atelier-task-rail {
     width: 38px;

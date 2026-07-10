@@ -92,6 +92,19 @@ if (Test-Path -LiteralPath $outputMsix) {
 New-Item -ItemType Directory -Force -Path $contentDir | Out-Null
 Copy-Item -LiteralPath $sourceExe -Destination (Join-Path $contentDir "Atelier.exe") -Force
 
+# `tauri build --no-bundle` only emits the executable. Tauri's normal bundles
+# also place the configured resources beside it; mirror that layout so the
+# Store build can resolve `resource_dir()/resources/design-engine` at runtime.
+$sourceResources = Join-Path $repoRoot "src-tauri\resources"
+if (-not (Test-Path -LiteralPath $sourceResources)) {
+  throw "Required Tauri resources were not found at $sourceResources"
+}
+$contentResources = Join-Path $contentDir "resources"
+Copy-Item -LiteralPath $sourceResources -Destination $contentResources -Recurse -Force
+if (-not (Test-Path -LiteralPath (Join-Path $contentResources "design-engine"))) {
+  throw "The Store package is missing resources\design-engine."
+}
+
 $iconPath = Join-Path $repoRoot "src-tauri\icons\icon.png"
 
 Push-Location $contentDir

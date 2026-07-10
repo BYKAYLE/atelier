@@ -44,3 +44,7 @@ src-tauri/keys/
 
 # 런타임 디버그 dump
 /tmp/atelier-*.json
+
+# Local agent session state and editor backups
+.gjc/
+src/components/AgentWorkspace.tsx.bak

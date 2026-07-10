@@ -1,28 +1,26 @@
 # Stella Factory Final Audit
 
-generated_at: 2026-05-31T14:20:00+09:00
+generated_at: 2026-07-10T18:28:00+09:00
 
 ## Judgment
 
-The Stella Factory upgrade is locally usable as a managed Service Factory
-control loop:
+Atelier 0.1.79 is a local release candidate. The stability pass closes the
+observed cross-provider execution, OAuth URL, Windows launcher, credential
+fan-out, retry, permission-default, and unsigned-release weaknesses at the code
+and automated-gate levels.
 
-- Factory goal mode bootstraps durable state.
-- Managed autopilot runs through the Stella bridge.
-- Generated requests use a command-backed worker contract and durable
-  `result.json` collection.
-- Safety checks block destructive or approval-gated operations.
-- False-green completion from local placeholder artifacts was removed.
-- Local build/test/package/install verification passed.
+## Evidence-Based Status
 
-## Remaining Boundary
-
-This is not yet a full Google-style autonomous product factory with true dynamic
-LLM specialist spawning inside the app. It is the local pilot foundation that
-can coordinate those specialists when the execution backend is approved and
-available.
+- `code_test`: ready
+- `mac_installed`: reflected, version 0.1.79
+- `mac_public_release`: blocked by Developer ID/notarization
+- `windows_ci_package`: release candidate
+- `windows_interactive_oauth`: validation required on physical Windows
+- `windows_public_installer`: blocked until SignPath output passes signed smoke
 
 ## Final Status
 
-Ready for local Stella Factory usage with honest readiness reporting and
-mandatory specialist evidence gates.
+`release_candidate_with_external_gates`
+
+The project must not be advertised as a fully public-distribution-ready build
+until the external signing and physical-Windows checks above are evidenced.

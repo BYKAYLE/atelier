@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 
 // Atelier Design Wizard — lazy import. 디자인 탭 클릭 전엔 코드/리소스 미로드.
 // 터미널 모드 무거움 회피 (PRD §5).
@@ -1354,10 +1355,8 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
   useEffect(() => {
     if (!isTauri()) return;
     if (!diagOn()) return;
-    const invoke = async (cmd: string, args: unknown) => {
-      const { invoke: tauriInvoke } = await import("@tauri-apps/api/core");
-      return tauriInvoke(cmd, args as Record<string, unknown>);
-    };
+    const invoke = async (cmd: string, args: unknown) =>
+      tauriInvoke(cmd, args as Record<string, unknown>);
     const timer = window.setInterval(async () => {
       const tab = tabs.find((t) => t.id === activeId);
       if (!tab) return;
