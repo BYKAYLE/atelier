@@ -1147,7 +1147,6 @@ body.dark {
     justify-content: flex-end;
   }
 
-  .atelier-composer-actions select,
   .atelier-composer-actions button[aria-haspopup="menu"] {
     flex: 1 1 132px;
   }

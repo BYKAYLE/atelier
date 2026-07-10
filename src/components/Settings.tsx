@@ -10,6 +10,7 @@ import {
   WELCOME_COPY,
 } from "../lib/tokens";
 import { runtimeInstallInfo, type RuntimeInstallInfo } from "../lib/tauri";
+import ComposerSelectMenu from "./ComposerSelectMenu";
 import ConnectionsPanel from "./ConnectionsPanel";
 
 interface Props {
@@ -877,23 +878,21 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
               )}
             />
           </label>
-          <label>
+          <div>
             <span className={cls("block text-[11px] font-mono uppercase tracking-wider mb-1.5", dark ? "text-dsub" : "text-sub")}>
               {copy.areaLabel}
             </span>
-            <select
+            <ComposerSelectMenu
+              dark={dark}
               value={bugArea}
-              onChange={(e) => setBugArea(e.target.value)}
-              className={cls(
-                "h-9 w-full rounded-[7px] border px-2 text-[13px] outline-none",
-                dark ? "bg-dbg border-dline text-dink" : "bg-cream border-line text-ink",
-              )}
-            >
-              {copy.areas.map((area) => (
-                <option key={area.value} value={area.value}>{area.label}</option>
-              ))}
-            </select>
-          </label>
+              options={copy.areas}
+              onChange={setBugArea}
+              ariaLabel={copy.areaLabel}
+              triggerClassName="h-9 w-full rounded-[7px] border px-3 text-[13px] outline-none flex items-center justify-between gap-2"
+              menuWidth={180}
+              testId="bug-area-menu"
+            />
+          </div>
         </div>
         <label className="block">
           <span className={cls("block text-[11px] font-mono uppercase tracking-wider mb-1.5", dark ? "text-dsub" : "text-sub")}>

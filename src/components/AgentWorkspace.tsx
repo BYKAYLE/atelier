@@ -77,6 +77,7 @@ import type {
   StellaFactoryStatusResult,
 } from "../lib/tauri";
 import { cls, Profile, Tweaks } from "../lib/tokens";
+import ComposerSelectMenu from "./ComposerSelectMenu";
 import { I } from "./Icons";
 
 type Role = "user" | "assistant" | "system";
@@ -2790,7 +2791,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [modelMenuPosition, setModelMenuPosition] = useState<React.CSSProperties | null>(null);
   const [slashMenuPosition, setSlashMenuPosition] = useState<React.CSSProperties | null>(null);
-  const [showPermissionMenu, setShowPermissionMenu] = useState(false);
   const [codexMenuPanel, setCodexMenuPanel] = useState<CodexMenuPanel>("root");
   const [claudeRuntimeModels, setClaudeRuntimeModels] = useState<ModelOption[]>(CLAUDE_MODELS);
   const [codexRuntimeModels, setCodexRuntimeModels] = useState<ModelOption[]>(CODEX_MODELS);
@@ -2893,7 +2893,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const modelMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const modelMenuPopoverRef = useRef<HTMLDivElement | null>(null);
   const slashMenuPopoverRef = useRef<HTMLDivElement | null>(null);
-  const permissionMenuRef = useRef<HTMLDivElement | null>(null);
   const skipRenameCommitRef = useRef(false);
   const previewHydratingSessionRef = useRef<string | null>(null);
   const pendingStreamRef = useRef<Record<string, PendingAgentStream>>({});
@@ -3447,8 +3446,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const activeCodexModelSurface = activeProvider === "codex" || (activeProvider === "hermes" && activeHermesProvider === "openai-codex");
   const activeCodexToolbarLabel = codexToolbarLabel(activeModelLabel, activeModel);
   const activePermissionMode = normalizePermissionMode(active?.permissionMode);
-  const activePermissionOption = PERMISSION_MODES.find((option) => option.value === activePermissionMode) || PERMISSION_MODES[0];
-  const activePermissionLabel = labelForPermissionMode(activePermissionMode, tw.language);
   const localPreview = isLocalPreviewUrl(previewUrl);
   const previewBadgeTone = previewChecking
       ? "checking"
@@ -3871,25 +3868,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       window.removeEventListener("scroll", updatePosition, true);
     };
   }, [composerHeight, showSlashMenu, visibleSlashCommands.length]);
-
-  useEffect(() => {
-    if (!showPermissionMenu) return;
-    const onPointerDown = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-      if (target && permissionMenuRef.current?.contains(target)) return;
-      setShowPermissionMenu(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      setShowPermissionMenu(false);
-    };
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [showPermissionMenu]);
 
   useEffect(() => {
     if (!resizingPreview) return;
@@ -4532,7 +4510,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const updateActivePermissionMode = (permissionMode: AgentPermissionMode) => {
     if (!active) return;
     patchSession(active.id, (session) => ({ ...session, permissionMode, updatedAt: Date.now() }));
-    setShowPermissionMenu(false);
   };
 
   const maybeAutoPreview = (event: AgentStreamEvent) => {
@@ -6936,91 +6913,38 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                         <span className={cls("text-[11px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
                           {copy.providerLabel}
                         </span>
-                        <select
+                        <ComposerSelectMenu
+                          dark={dark}
                           value={activeHermesProvider}
-                          onChange={(e) => {
-                            const nextProvider = e.target.value as HermesInferenceProvider;
-                            runHermesProviderCommandFromPicker(nextProvider).catch(console.error);
+                          options={HERMES_PROVIDERS}
+                          onChange={(value) => {
+                            runHermesProviderCommandFromPicker(value as HermesInferenceProvider).catch(console.error);
                           }}
                           disabled={!active || !!busyTurnId}
-                          className={cls(
-                            "h-8 min-w-0 max-w-[132px] rounded-[7px] border px-2 text-[11px] font-mono outline-none",
-                            dark
-                              ? "bg-dsurf border-dline text-dink disabled:text-dsub"
-                              : "bg-surface border-line text-ink disabled:text-sub",
-                          )}
-                          aria-label={copy.providerLabel}
+                          ariaLabel={copy.providerLabel}
                           title="Hermes provider"
-                        >
-                          {HERMES_PROVIDERS.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
+                          triggerClassName="h-8 min-w-[116px] max-w-[142px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2"
+                          menuWidth={180}
+                          testId="hermes-provider-menu"
+                        />
                       </>
                     )}
-                    <div ref={permissionMenuRef} className="relative">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!active || busyTurnId) return;
-                          setShowPermissionMenu((value) => !value);
-                        }}
-                        disabled={!active || !!busyTurnId}
-                        className={cls(
-                          "h-8 min-w-[112px] max-w-[148px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2",
-                          dark
-                            ? "bg-dsurf border-dline text-dink disabled:text-dsub"
-                            : "bg-surface border-line text-ink disabled:text-sub",
-                        )}
-                        aria-label={copy.permissionLabel}
-                        aria-haspopup="menu"
-                        aria-expanded={showPermissionMenu}
-                        title={copy.permissionLabel}
-                      >
-                        <span className="shrink-0 opacity-80">{activePermissionOption.icon}</span>
-                        <span className="truncate">{activePermissionLabel}</span>
-                        <span className={cls("shrink-0 transition-transform", showPermissionMenu ? "rotate-180" : "")}>
-                          {I.chevron}
-                        </span>
-                      </button>
-                      {showPermissionMenu && (
-                        <div
-                          className={cls(
-                            "absolute bottom-10 right-0 z-50 w-[218px] rounded-[14px] border p-2 shadow-[0_16px_44px_rgba(0,0,0,0.34)]",
-                            dark
-                              ? "bg-[#2c2c2b]/95 border-[#444442] text-dink backdrop-blur"
-                              : "bg-[#f1efea]/95 border-[#d4d0c7] text-ink backdrop-blur",
-                          )}
-                          role="menu"
-                        >
-                          {PERMISSION_MODES.map((option) => {
-                            const selected = activePermissionMode === option.value;
-                            return (
-                              <button
-                                key={option.value}
-                                type="button"
-                                onClick={() => updateActivePermissionMode(option.value)}
-                                className={cls(
-                                  "h-11 w-full rounded-[12px] px-3 flex items-center gap-3 text-[15px] text-left",
-                                  selected
-                                    ? dark ? "bg-[#444442] text-dink" : "bg-[#dedbd3] text-ink"
-                                    : dark ? "hover:bg-[#393937]" : "hover:bg-[#e4e1da]",
-                                )}
-                                role="menuitemradio"
-                                aria-checked={selected}
-                                title={tw.language === "en" ? option.detailEn : option.detailKo}
-                              >
-                                <span className="shrink-0 opacity-85">{option.icon}</span>
-                                <span className="min-w-0 flex-1 truncate">{tw.language === "en" ? option.en : option.ko}</span>
-                                {selected && <span className="text-[20px] leading-none">✓</span>}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
+                    <ComposerSelectMenu
+                      dark={dark}
+                      value={activePermissionMode}
+                      options={PERMISSION_MODES.map((option) => ({
+                        value: option.value,
+                        label: tw.language === "en" ? option.en : option.ko,
+                        icon: option.icon,
+                        title: tw.language === "en" ? option.detailEn : option.detailKo,
+                      }))}
+                      onChange={(value) => updateActivePermissionMode(value as AgentPermissionMode)}
+                      disabled={!active || !!busyTurnId}
+                      ariaLabel={copy.permissionLabel}
+                      triggerClassName="h-8 min-w-[112px] max-w-[148px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2"
+                      menuWidth={218}
+                      testId="permission-menu"
+                    />
                     <span className={cls("text-[11px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
                       {copy.modelLabel}
                     </span>
@@ -7067,7 +6991,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                           >
                             {codexMenuPanel === "root" && (
                               <>
-                                <div className={cls("px-3 pt-1 pb-2 text-[13px]", dark ? "text-dsub" : "text-sub")}>
+                                <div className={cls("px-3 pt-1 pb-2 text-[11px]", dark ? "text-dsub" : "text-sub")}>
                                   {copy.reasoning}
                                 </div>
                                 {CODEX_EFFORTS.map((option) => {
@@ -7078,7 +7002,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                                       type="button"
                                       onClick={() => updateActiveCodexEffort(option.value)}
                                       className={cls(
-                                        "h-10 w-full rounded-[12px] px-3 flex items-center justify-between text-[15px] text-left",
+                                        "h-9 w-full rounded-[10px] px-3 flex items-center justify-between text-[11px] text-left",
                                         selected
                                           ? dark ? "bg-[#444442] text-dink" : "bg-[#dedbd3] text-ink"
                                           : dark ? "hover:bg-[#393937]" : "hover:bg-[#e4e1da]",
@@ -7087,7 +7011,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                                       aria-checked={selected}
                                     >
                                       <span>{tw.language === "en" ? option.en : option.ko}</span>
-                                      {selected && <span className="text-[20px] leading-none">✓</span>}
+                                      {selected && <span className="text-[15px] leading-none">✓</span>}
                                     </button>
                                   );
                                 })}
@@ -7096,25 +7020,25 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                                   type="button"
                                   onClick={() => setCodexMenuPanel("model")}
                                   className={cls(
-                                    "h-10 w-full rounded-[12px] px-3 flex items-center justify-between gap-3 text-[15px] text-left",
+                                    "h-9 w-full rounded-[10px] px-3 flex items-center justify-between gap-3 text-[11px] text-left",
                                     dark ? "hover:bg-[#393937]" : "hover:bg-[#e4e1da]",
                                   )}
                                   role="menuitem"
                                 >
                                   <span className="truncate">{activeModelLabel}</span>
-                                  <span className={cls("text-[22px]", dark ? "text-dsub" : "text-sub")}>›</span>
+                                  <span className={cls("text-[16px]", dark ? "text-dsub" : "text-sub")}>›</span>
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => setCodexMenuPanel("speed")}
                                   className={cls(
-                                    "h-10 w-full rounded-[12px] px-3 flex items-center justify-between gap-3 text-[15px] text-left",
+                                    "h-9 w-full rounded-[10px] px-3 flex items-center justify-between gap-3 text-[11px] text-left",
                                     dark ? "hover:bg-[#393937]" : "hover:bg-[#e4e1da]",
                                   )}
                                   role="menuitem"
                                 >
                                   <span>{copy.speed}</span>
-                                  <span className={cls("text-[22px]", dark ? "text-dsub" : "text-sub")}>›</span>
+                                  <span className={cls("text-[16px]", dark ? "text-dsub" : "text-sub")}>›</span>
                                 </button>
                               </>
                             )}
@@ -7124,11 +7048,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                                   type="button"
                                   onClick={() => setCodexMenuPanel("root")}
                                   className={cls(
-                                    "h-9 w-full rounded-[10px] px-3 flex items-center gap-2 text-[13px]",
+                                    "h-8 w-full rounded-[9px] px-3 flex items-center gap-2 text-[11px]",
                                     dark ? "text-dsub hover:bg-[#393937]" : "text-sub hover:bg-[#e4e1da]",
                                   )}
                                 >
-                                  <span className="text-[18px]">‹</span>
+                                  <span className="text-[14px]">‹</span>
                                   <span>{copy.modelLabel}</span>
                                 </button>
                                 <div className={cls("my-1 border-t", dark ? "border-[#444442]" : "border-[#d8d4cc]")} />
@@ -7148,7 +7072,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                                         setCodexMenuPanel("root");
                                       }}
                                       className={cls(
-                                        "h-10 w-full rounded-[12px] px-3 flex items-center justify-between gap-3 text-[15px] text-left",
+                                        "h-9 w-full rounded-[10px] px-3 flex items-center justify-between gap-3 text-[11px] text-left",
                                         option.disabled
                                           ? dark ? "text-dsub/60 cursor-not-allowed" : "text-sub/60 cursor-not-allowed"
                                           : selected
@@ -7160,7 +7084,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                                       aria-checked={selected}
                                     >
                                       <span className="truncate">{option.label}</span>
-                                      {selected && <span className="text-[20px] leading-none">✓</span>}
+                                      {selected && <span className="text-[15px] leading-none">✓</span>}
                                     </button>
                                   );
                                 })}
@@ -7172,11 +7096,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                                   type="button"
                                   onClick={() => setCodexMenuPanel("root")}
                                   className={cls(
-                                    "h-9 w-full rounded-[10px] px-3 flex items-center gap-2 text-[13px]",
+                                    "h-8 w-full rounded-[9px] px-3 flex items-center gap-2 text-[11px]",
                                     dark ? "text-dsub hover:bg-[#393937]" : "text-sub hover:bg-[#e4e1da]",
                                   )}
                                 >
-                                  <span className="text-[18px]">‹</span>
+                                  <span className="text-[14px]">‹</span>
                                   <span>{copy.speed}</span>
                                 </button>
                                 <div className={cls("my-1 border-t", dark ? "border-[#444442]" : "border-[#d8d4cc]")} />
@@ -7191,7 +7115,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                                         setCodexMenuPanel("root");
                                       }}
                                       className={cls(
-                                        "h-10 w-full rounded-[12px] px-3 flex items-center justify-between text-[15px] text-left",
+                                        "h-9 w-full rounded-[10px] px-3 flex items-center justify-between text-[11px] text-left",
                                         selected
                                           ? dark ? "bg-[#444442] text-dink" : "bg-[#dedbd3] text-ink"
                                           : dark ? "hover:bg-[#393937]" : "hover:bg-[#e4e1da]",
@@ -7200,7 +7124,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                                       aria-checked={selected}
                                     >
                                       <span>{tw.language === "en" ? option.en : option.ko}</span>
-                                      {selected && <span className="text-[20px] leading-none">✓</span>}
+                                      {selected && <span className="text-[15px] leading-none">✓</span>}
                                     </button>
                                   );
                                 })}
@@ -7211,25 +7135,20 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                         )}
                       </div>
                     ) : (
-                      <select
+                      <ComposerSelectMenu
+                        dark={dark}
                         value={activeModel}
-                        onChange={(e) => {
+                        options={activeModelOptions}
+                        onChange={(value) => {
                           if (activeProvider === "hermes") {
-                            runHermesModelCommandFromPicker(e.target.value).catch(console.error);
+                            runHermesModelCommandFromPicker(value).catch(console.error);
                           } else if (activeProvider === "gajecode") {
-                            runGajaeModelCommandFromPicker(e.target.value).catch(console.error);
+                            runGajaeModelCommandFromPicker(value).catch(console.error);
                           } else {
-                            updateActiveModel(e.target.value);
+                            updateActiveModel(value);
                           }
                         }}
-                        onFocus={() => {
-                          if (activeProvider === "claude" || activeProvider === "gajecode") {
-                            refreshClaudeRuntimeModels().catch(console.error);
-                          } else if (activeProvider === "hermes" && activeHermesProvider === "openrouter") {
-                            refreshOpenRouterRuntimeModels().catch(console.error);
-                          }
-                        }}
-                        onMouseDown={() => {
+                        onOpen={() => {
                           if (activeProvider === "claude" || activeProvider === "gajecode") {
                             refreshClaudeRuntimeModels().catch(console.error);
                           } else if (activeProvider === "hermes" && activeHermesProvider === "openrouter") {
@@ -7237,43 +7156,30 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                           }
                         }}
                         disabled={!active || !!busyTurnId}
-                        className={cls(
-                          "h-8 min-w-0 max-w-[180px] rounded-[7px] border px-2 text-[11px] font-mono outline-none",
-                          dark
-                            ? "bg-dsurf border-dline text-dink disabled:text-dsub"
-                            : "bg-surface border-line text-ink disabled:text-sub",
-                        )}
-                        aria-label={copy.modelLabel}
+                        ariaLabel={copy.modelLabel}
                         title={activeProviderMeta.label}
-                      >
-                        {activeModelOptions.map((option) => (
-                          <option key={option.value} value={option.value} disabled={option.disabled}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
+                        triggerClassName="h-8 min-w-[134px] max-w-[190px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2"
+                        menuWidth={292}
+                        testId="agent-model-menu"
+                      />
                     )}
                     <span className={cls("text-[11px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
                       {copy.workloadLabel}
                     </span>
-                    <select
+                    <ComposerSelectMenu
+                      dark={dark}
                       value={activeCodexEffort}
-                      onChange={(e) => updateActiveWorkload(e.target.value as WorkloadLevel)}
+                      options={CODEX_EFFORTS.map((option) => ({
+                        value: option.value,
+                        label: tw.language === "en" ? option.en : option.ko,
+                      }))}
+                      onChange={(value) => updateActiveWorkload(value as WorkloadLevel)}
                       disabled={!active || !!busyTurnId}
-                      className={cls(
-                        "h-8 min-w-[94px] max-w-[132px] rounded-[7px] border px-2 text-[11px] font-mono outline-none",
-                        dark
-                          ? "bg-dsurf border-dline text-dink disabled:text-dsub"
-                          : "bg-surface border-line text-ink disabled:text-sub",
-                      )}
-                      aria-label={copy.workloadLabel}
-                    >
-                      {CODEX_EFFORTS.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {tw.language === "en" ? option.en : option.ko}
-                        </option>
-                      ))}
-                    </select>
+                      ariaLabel={copy.workloadLabel}
+                      triggerClassName="h-8 min-w-[94px] max-w-[132px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2"
+                      menuWidth={164}
+                      testId="workload-menu"
+                    />
                   </div>
                   {busyTurnId && (
                     <button

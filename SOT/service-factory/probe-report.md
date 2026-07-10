@@ -1,6 +1,6 @@
 # Stella Factory Probe Report
 
-generated_at: 2026-07-11T02:27:59+09:00
+generated_at: 2026-07-11T04:24:00+09:00
 
 ## Commands
 
@@ -13,13 +13,15 @@ generated_at: 2026-07-11T02:27:59+09:00
 - `npm run audit:release` -> 0 known vulnerabilities
 - `actionlint` -> 0
 - `git diff --check` -> 0
-- real Claude harness with `opus` and automatic permission -> 0
-- real Codex harness with `gpt-5.5` and automatic permission -> 0
 - `npm run tauri:build` -> 0
 - `codesign --verify --deep --strict --verbose=2 /Applications/Atelier.app` -> 0
-- installed `CFBundleShortVersionString` / `CFBundleVersion` -> 0.1.80
+- installed `CFBundleShortVersionString` / `CFBundleVersion` -> 0.1.81
+- installed provider/permission/model/workload visual checks -> pass
 
 ## Result
 
 Source, provider adapters, local package, and installed macOS reflection pass.
+The UI-only menu patch did not change provider execution; the prior real
+Claude/Codex smoke evidence remains applicable but was not re-consumed for this
+turn.
 Public signing and physical-Windows OAuth remain external validation gates.

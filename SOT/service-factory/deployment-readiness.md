@@ -1,6 +1,6 @@
 # Stella Factory Deployment Readiness
 
-generated_at: 2026-07-11T02:27:59+09:00
+generated_at: 2026-07-11T04:24:00+09:00
 
 ## Verdict
 
@@ -9,11 +9,11 @@ release_candidate_with_external_gates
 ## Local macOS Evidence
 
 - Version metadata is consistent across `package.json`, `Cargo.toml`, and
-  `tauri.conf.json`: `0.1.80`.
+  `tauri.conf.json`: `0.1.81`.
 - `npm run tauri:build` produced:
   - `src-tauri/target/release/bundle/macos/Atelier.app`
-  - `src-tauri/target/release/bundle/dmg/Atelier_0.1.80_aarch64.dmg`
-- `/Applications/Atelier.app` reports short/build version `0.1.80`.
+  - `src-tauri/target/release/bundle/dmg/Atelier_0.1.81_aarch64.dmg`
+- `/Applications/Atelier.app` reports short/build version `0.1.81`.
 - `codesign --verify --deep --strict --verbose=2` passes.
 - The installed app process runs from
   `/Applications/Atelier.app/Contents/MacOS/atelier`.
@@ -26,6 +26,8 @@ release_candidate_with_external_gates
 - Frontend build, fixture harness, npm production audit, Rust formatting,
   warning-free clippy, 51 Rust tests, release security audit, actionlint, and
   diff hygiene pass.
+- Installed-app visual checks pass for the unified provider, permission, model,
+  and workload menus.
 - Claude real-provider smoke passes with the local Claude subscription and
   `claude-opus-4-8`.
 - Codex real-provider smoke passes with the local ChatGPT login and explicit

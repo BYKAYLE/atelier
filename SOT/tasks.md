@@ -128,6 +128,12 @@ Last updated: 2026-07-11
   owns a process group so stopping a turn also terminates its spawned tools.
 - Built and installed `/Applications/Atelier.app` 0.1.80 and verified the
   process-group cancellation regression test, package, signature, and process.
+- Replaced mixed native/custom composer dropdowns with one shared compact menu
+  surface for provider, permission, model, workload, and bug-report area
+  selection. Codex's nested reasoning/model/speed menu now uses the same 11 px
+  typography, row height, selected treatment, and viewport-safe scrolling.
+- Built and installed `/Applications/Atelier.app` 0.1.81, then visually verified
+  the provider, permission, model, and workload menus in the installed app.
 
 ## Release Validation Remaining
 
@@ -136,7 +142,7 @@ Last updated: 2026-07-11
   default-browser behavior or Smart App Control acceptance.
 - Run the signed Windows package smoke after SignPath returns the installer.
 - Produce the public macOS release with a Developer ID Application certificate
-  and Apple notarization credentials. The local 0.1.80 build uses a local
+  and Apple notarization credentials. The local 0.1.81 build uses a local
   hardened-runtime certificate and is intentionally rejected by Gatekeeper.
 - Keep the compatibility bundle identifier `com.atelier.app` until an explicit
   updater/keychain/store identity migration is designed and tested.

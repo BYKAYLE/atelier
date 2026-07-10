@@ -1,5 +1,31 @@
 # Evidence Log
 
+## 2026-07-11 Composer Menu Unification
+
+Implemented:
+
+- Replaced the Hermes provider, non-Codex model, workload, permission, and bug
+  report area native menus with one shared `ComposerSelectMenu` surface.
+- Standardized composer option text at 11 px, rows at 36 px, selected checks,
+  borders, dark/light colors, viewport-aware placement, and bounded scrolling.
+- Matched the existing Codex reasoning/model/speed menu to the same compact
+  typography and row geometry.
+- Bumped the local release candidate metadata to 0.1.81.
+
+Validation evidence:
+
+- Frontend build, fixture harness, Rust fmt/clippy, all 51 Rust tests, npm
+  production audit, release audit, actionlint, and diff hygiene passed.
+- `npm run tauri:build` produced `Atelier_0.1.81_aarch64.dmg`.
+- `/Applications/Atelier.app` reports 0.1.81, passes strict code-signature
+  verification, and is running from the installed bundle.
+- Installed-app visual checks show the same compact menu treatment for Hermes
+  provider, permission, Codex model hierarchy, and workload:
+  - `/tmp/atelier-0.1.81-provider-menu.png`
+  - `/tmp/atelier-0.1.81-permission-menu.png`
+  - `/tmp/atelier-0.1.81-model-menu.png`
+  - `/tmp/atelier-0.1.81-workload-menu.png`
+
 ## 2026-07-11 Agent Turn Cancellation
 
 Implemented:
