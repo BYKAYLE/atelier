@@ -113,14 +113,13 @@ fn write_sync(
     }
 
     let resolved = PathBuf::from(&current.path);
-    let metadata = std::fs::metadata(&resolved).map_err(|error| format!("stat: {error}"))?;
-
     #[cfg(windows)]
     std::fs::write(&resolved, contents.as_bytes())
         .map_err(|error| format!("agent_editor_write: {error}"))?;
 
     #[cfg(not(windows))]
     {
+        let metadata = std::fs::metadata(&resolved).map_err(|error| format!("stat: {error}"))?;
         let parent = resolved
             .parent()
             .ok_or_else(|| "agent_editor_write: target has no parent directory".to_string())?;
