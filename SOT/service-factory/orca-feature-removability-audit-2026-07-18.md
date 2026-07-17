@@ -44,10 +44,11 @@ distribution physically omits unselected implementations.
 | macOS bundle | `npm run tauri:build` | PASS, app and DMG for 0.2.9 |
 | Installed macOS executable | bundle/installed SHA-256 comparison | MATCH, `0b8f2c6b48a2bf1088c7988e2aa8c6f9246631d2ed0b3f4bd3ddfa1bc5ee338a` |
 | Installed macOS renderer | `--atelier-renderer-ready-probe` | PASS, version 0.2.9, live PID, main window, ready |
-| Windows browser helper | GitHub Actions run `29601134377` | PASS, native helper launched Edge processes on hosted Windows; visible window not claimed |
-| Windows installed package | GitHub Actions run `29602990770` | PASS, NSIS 0.2.9 installed at `%LOCALAPPDATA%\\Atelier`, resources present, renderer ready after install |
-| Windows executable identity | `windows-installed-package.json` from run `29602990770` | PASS, only the Tauri bundle marker differs (`unknown` -> `nsis`); normalized SHA-256 matches |
-| Windows native browser handoff | package evidence from run `29602990770` | PASS, installed executable helper launched Edge processes; visible window and completed auth not claimed |
+| Windows browser helper | GitHub Actions run `29604739825`, head `8987a554` | PASS, installed native helper launched three Edge processes on hosted Windows; visible window not claimed |
+| Windows installed package | GitHub Actions run `29604739825`, head `8987a554` | PASS, NSIS 0.2.9 installed at `%LOCALAPPDATA%\\Atelier`, resources present, renderer ready after install |
+| Windows executable identity | `windows-installed-package.json` from run `29604739825` | PASS, only the Tauri bundle marker differs (`unknown` -> `nsis`); normalized SHA-256 matches |
+| Windows native browser handoff | `atelier-provider-smoke-20260717-184903.json` from run `29604739825` | PASS, installed executable helper launched Edge processes; visible window and completed auth not claimed |
+| Windows provider wrappers | GitHub Actions run `29604748251`, head `8987a554` | PASS, Claude `.exe`, Codex `.cmd`, and Hermes venv `.exe` installed and returned versions without Win32 error 193 |
 
 ## Limits
 
