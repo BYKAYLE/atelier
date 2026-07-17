@@ -21,12 +21,21 @@ const features = [
 ];
 
 const registry = read("src/features/featureRegistry.tsx");
+const viteConfig = read("vite.config.ts");
 const cargo = read("src-tauri/Cargo.toml");
 const rustRoot = read("src-tauri/src/lib.rs");
 
 expect(
-  registry.includes('import.meta.glob<FeatureModuleExport>(\n  "../components/**/feature.tsx"'),
-  "frontend feature registry must auto-discover feature.tsx modules",
+  registry.includes('from "virtual:atelier-feature-modules"'),
+  "frontend feature registry must consume the generated feature manifest",
+);
+expect(
+  viteConfig.includes('existsSync(join(componentsRoot, id, "feature.tsx"))'),
+  "Vite must auto-discover feature.tsx modules",
+);
+expect(
+  viteConfig.includes("Excluded Atelier features leaked into the frontend bundle"),
+  "Vite must reject excluded feature code in the frontend bundle",
 );
 
 for (const [id, descriptorPath, cargoFeature, rustModule] of features) {

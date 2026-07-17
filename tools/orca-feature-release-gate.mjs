@@ -63,6 +63,7 @@ for (const script of smokeScripts) {
 runNpm(["run", "build"], {
   env: { VITE_ATELIER_FEATURES: "atelier-cli" },
 });
+runNpm(["run", "smoke:feature-bundle"]);
 
 run(cargo, ["check", "--manifest-path", manifest, "--no-default-features"]);
 for (const feature of cargoFeatures) {
@@ -76,4 +77,4 @@ for (const feature of cargoFeatures) {
   ]);
 }
 
-console.log(`\nOrca feature release gate passed (${smokeScripts.length} contract smokes, ${cargoFeatures.length} removable backend features).`);
+console.log(`\nOrca feature release gate passed (${smokeScripts.length + 1} contract smokes, ${cargoFeatures.length} removable backend features).`);

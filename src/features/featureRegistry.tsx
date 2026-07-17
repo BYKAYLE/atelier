@@ -1,4 +1,5 @@
 import React from "react";
+import discoveredFeatureModules from "virtual:atelier-feature-modules";
 import type { AgentProvider, AtelierControlRequest } from "../lib/tauri";
 import type { Tweaks } from "../lib/tokens";
 
@@ -52,28 +53,7 @@ export interface FeatureModule {
   controlTaskNormalizer?: ControlTaskNormalizer;
 }
 
-type FeatureModuleExport = {
-  default?: FeatureModule;
-  feature?: FeatureModule;
-};
-
-const discovered = import.meta.glob<FeatureModuleExport>(
-  "../components/**/feature.tsx",
-  { eager: true },
-);
-
-const configuredFeatureIds = String(import.meta.env.VITE_ATELIER_FEATURES || "")
-  .split(",")
-  .map((id) => id.trim())
-  .filter(Boolean);
-const enabledFeatureIds = configuredFeatureIds.length > 0
-  ? new Set(configuredFeatureIds)
-  : null;
-
-const featureModules = Object.entries(discovered)
-  .map(([path, exports]) => ({ path, module: exports.default ?? exports.feature }))
-  .filter((entry): entry is { path: string; module: FeatureModule } => Boolean(entry.module))
-  .filter(({ module }) => !enabledFeatureIds || enabledFeatureIds.has(module.id))
+const featureModules = [...discoveredFeatureModules]
   .sort((left, right) => {
     const order = (left.module.order ?? 100) - (right.module.order ?? 100);
     return order || left.module.id.localeCompare(right.module.id);

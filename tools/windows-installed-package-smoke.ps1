@@ -46,6 +46,50 @@ function Invoke-AtelierProbe {
   return $stdout.Trim()
 }
 
+function Get-AtelierExecutableIdentity {
+  param([string]$Path)
+
+  $markers = [ordered]@{
+    unknown = "__TAURI_BUNDLE_TYPE_VAR_UNK"
+    nsis = "__TAURI_BUNDLE_TYPE_VAR_NSS"
+    msi = "__TAURI_BUNDLE_TYPE_VAR_MSI"
+  }
+  $bytes = [IO.File]::ReadAllBytes($Path)
+  $ascii = [Text.Encoding]::ASCII.GetString($bytes)
+  $matches = @()
+
+  foreach ($entry in $markers.GetEnumerator()) {
+    $needle = [Text.Encoding]::ASCII.GetBytes([string]$entry.Value)
+    $offset = $ascii.IndexOf([string]$entry.Value, [StringComparison]::Ordinal)
+    while ($offset -ge 0) {
+      $matches += [pscustomobject]@{ Name = [string]$entry.Key; Offset = $offset; Length = $needle.Length }
+      $offset = $ascii.IndexOf([string]$entry.Value, $offset + 1, [StringComparison]::Ordinal)
+    }
+  }
+
+  if ($matches.Count -ne 1) {
+    throw "Expected exactly one Tauri bundle marker in $Path, found $($matches.Count)."
+  }
+
+  $canonicalMarker = [Text.Encoding]::ASCII.GetBytes([string]$markers.unknown)
+  [Array]::Copy($canonicalMarker, 0, $bytes, $matches[0].Offset, $canonicalMarker.Length)
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $normalizedHash = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace("-", "").ToLowerInvariant()
+  } finally {
+    $sha.Dispose()
+  }
+
+  return [pscustomobject]@{
+    Path = [IO.Path]::GetFullPath($Path)
+    Length = $bytes.Length
+    Marker = $matches[0].Name
+    MarkerOffset = $matches[0].Offset
+    RawSha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    NormalizedSha256 = $normalizedHash
+  }
+}
+
 function ConvertFrom-RegistryPathValue {
   param(
     [string]$Value,
@@ -181,10 +225,19 @@ if ($reportedVersion -ne $ExpectedVersion) {
   throw "Installed version mismatch: expected $ExpectedVersion, found $reportedVersion"
 }
 
-$builtHash = (Get-FileHash -LiteralPath $builtExe -Algorithm SHA256).Hash.ToLowerInvariant()
-$installedHash = (Get-FileHash -LiteralPath $installedExe -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($builtHash -ne $installedHash) {
-  throw "Installed executable does not match the packaged release executable."
+$builtIdentity = Get-AtelierExecutableIdentity $builtExe
+$installedIdentity = Get-AtelierExecutableIdentity $installedExe
+Write-Host "Built executable: marker=$($builtIdentity.Marker) raw=$($builtIdentity.RawSha256) normalized=$($builtIdentity.NormalizedSha256)"
+Write-Host "Installed executable: marker=$($installedIdentity.Marker) raw=$($installedIdentity.RawSha256) normalized=$($installedIdentity.NormalizedSha256)"
+
+if ($builtIdentity.Marker -ne "unknown") {
+  throw "The post-bundle release executable must be restored to the Tauri unknown marker, found $($builtIdentity.Marker)."
+}
+if ($installedIdentity.Marker -ne "nsis") {
+  throw "The installed executable is not the NSIS payload: marker=$($installedIdentity.Marker)."
+}
+if ($builtIdentity.Length -ne $installedIdentity.Length -or $builtIdentity.NormalizedSha256 -ne $installedIdentity.NormalizedSha256) {
+  throw "Installed executable differs from the release executable beyond the required Tauri bundle marker."
 }
 
 $installedRoot = Split-Path -Parent $installedExe
@@ -233,9 +286,12 @@ $summary = [ordered]@{
   installerSha256 = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
   installedExecutable = $installedExe
   installedVersion = $reportedVersion
-  builtExecutableSha256 = $builtHash
-  installedExecutableSha256 = $installedHash
-  exactExecutableMatch = $true
+  builtExecutableSha256 = $builtIdentity.RawSha256
+  installedExecutableSha256 = $installedIdentity.RawSha256
+  builtBundleMarker = $builtIdentity.Marker
+  installedBundleMarker = $installedIdentity.Marker
+  normalizedExecutableSha256 = $installedIdentity.NormalizedSha256
+  bundleMarkerDeltaOnly = $true
   resourcesPresent = $true
   rendererReady = $rendererReady
   rendererReceipt = $rendererReceipt
@@ -245,5 +301,6 @@ Set-Content -LiteralPath (Join-Path $evidencePath "installed-executable-path.txt
 
 Write-Host "Installed Atelier proof passed: $installedExe"
 Write-Host "Version: $reportedVersion"
-Write-Host "SHA-256: $installedHash"
+Write-Host "Installed raw SHA-256: $($installedIdentity.RawSha256)"
+Write-Host "Normalized SHA-256: $($installedIdentity.NormalizedSha256)"
 Write-Host "Renderer PID: $($rendererReceipt.pid)"

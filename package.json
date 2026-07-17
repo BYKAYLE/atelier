@@ -52,6 +52,7 @@
     "smoke:rich-preview": "node --experimental-strip-types tools/rich-preview-smoke.ts",
     "smoke:agent-performance": "node tools/agent-workspace-performance-smoke.mjs",
     "smoke:feature-boundaries": "node tools/feature-boundary-smoke.mjs",
+    "smoke:feature-bundle": "node tools/frontend-feature-bundle-smoke.mjs",
     "smoke:workbench": "node tools/workbench-contract-smoke.mjs",
     "gate:orca-features": "node tools/orca-feature-release-gate.mjs",
     "smoke:renderer-ready:mac": "bash tools/renderer-ready-smoke.sh",
