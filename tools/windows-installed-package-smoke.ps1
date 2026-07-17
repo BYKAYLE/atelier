@@ -46,6 +46,20 @@ function Invoke-AtelierProbe {
   return $stdout.Trim()
 }
 
+function ConvertFrom-RegistryPathValue {
+  param(
+    [string]$Value,
+    [switch]$StripIconIndex
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
+  $normalized = [Environment]::ExpandEnvironmentVariables($Value.Trim())
+  if ($StripIconIndex) {
+    $normalized = $normalized -replace ',\s*-?\d+\s*$', ''
+  }
+  return $normalized.Trim().Trim([char]34)
+}
+
 function Get-RegistryInstallCandidates {
   $roots = @(
     "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
@@ -57,11 +71,14 @@ function Get-RegistryInstallCandidates {
     foreach ($entry in @(Get-ItemProperty -Path $root -ErrorAction SilentlyContinue)) {
       if ([string]$entry.DisplayName -notmatch "(?i)^Atelier(?: Agent)?$") { continue }
       if ($entry.InstallLocation) {
-        $candidates += Join-Path ([string]$entry.InstallLocation) "Atelier.exe"
+        $installLocation = ConvertFrom-RegistryPathValue ([string]$entry.InstallLocation)
+        if ($installLocation) {
+          $candidates += Join-Path -Path $installLocation -ChildPath "Atelier.exe"
+        }
       }
       if ($entry.DisplayIcon) {
-        $iconPath = ([string]$entry.DisplayIcon).Trim('"') -replace ',\d+$', ''
-        $candidates += $iconPath
+        $iconPath = ConvertFrom-RegistryPathValue ([string]$entry.DisplayIcon) -StripIconIndex
+        if ($iconPath) { $candidates += $iconPath }
       }
     }
   }
@@ -120,6 +137,12 @@ function Stop-ExactAtelierProcesses {
   foreach ($process in @(Get-ExactAtelierProcesses $ExePath)) {
     Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
   }
+}
+
+$quotedLocationProbe = ConvertFrom-RegistryPathValue '"C:\Program Files\Atelier"'
+$quotedIconProbe = ConvertFrom-RegistryPathValue '"C:\Program Files\Atelier\Atelier.exe",0' -StripIconIndex
+if ($quotedLocationProbe -ne 'C:\Program Files\Atelier' -or $quotedIconProbe -ne 'C:\Program Files\Atelier\Atelier.exe') {
+  throw "Windows registry path normalization self-test failed."
 }
 
 $installer = Get-ChildItem -LiteralPath $BundleRoot -Recurse -File -Filter "*.exe" -ErrorAction SilentlyContinue |
