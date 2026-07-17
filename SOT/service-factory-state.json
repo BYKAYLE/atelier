@@ -3969,39 +3969,513 @@
     }
   ],
   "agent_topology": {
-    "agent_creation_rule": "AgentBlueprint designs specialists; AgentInstance proves a spawned/run unit; AgentManifest is reusable only after a manifest exists.",
-    "blueprint_count": 15,
+    "version": "stella-factory-agent-topology-v1",
     "command_owner": "Stella",
-    "edges": [
-      {
-        "from": "stella",
-        "relationship": "commands_runtime_adapter",
-        "to": "release"
-      }
-    ],
     "execution_controller": "Release",
-    "instance_count": 23,
+    "source_of_truth": "SOT/service-factory-state.json",
     "kanban_role": "projection_only",
-    "nodes": [
-      {
-        "id": "stella",
-        "owner": "Stella",
-        "type": "CommandOwner"
-      },
-      {
-        "id": "release",
-        "owner": "Release",
-        "type": "ExecutionController"
-      }
-    ],
+    "agent_creation_rule": "AgentBlueprint designs specialists; AgentInstance proves a spawned/run unit; AgentManifest is only reusable after a manifest exists.",
     "not_agent_creation": [
       "prompt file only",
       "worktree path only",
       "result file only without a blueprint/instance link",
       "kanban card only"
     ],
-    "source_of_truth": "SOT/service-factory-state.json",
-    "version": "stella-factory-agent-topology-v1"
+    "layers": [
+      {
+        "id": "command",
+        "owner": "Stella",
+        "responsibility": "goal normalization, AgentTopology, final readiness decision"
+      },
+      {
+        "id": "runtime",
+        "owner": "Release",
+        "responsibility": "state ledger, dispatch, collect, gates, handoff, recovery"
+      },
+      {
+        "id": "specialists",
+        "owner": "AgentBlueprint/AgentInstance",
+        "responsibility": "bounded research, implementation, review, Probe, security, release audit"
+      }
+    ],
+    "blueprint_count": 15,
+    "instance_count": 23,
+    "manifest_candidates": [],
+    "nodes": [
+      {
+        "id": "stella",
+        "type": "CommandOwner",
+        "owner": "Stella"
+      },
+      {
+        "id": "release",
+        "type": "ExecutionController",
+        "owner": "Release"
+      },
+      {
+        "id": "blueprint:current_state::state_mapper",
+        "type": "AgentBlueprint",
+        "agent_type": "code-mapper",
+        "stage": "current_state",
+        "manifest_status": "installed_or_builtin"
+      },
+      {
+        "id": "blueprint:development_plan::strategy_planner",
+        "type": "AgentBlueprint",
+        "agent_type": "project-manager",
+        "stage": "development_plan",
+        "manifest_status": "installed_or_builtin"
+      },
+      {
+        "id": "blueprint:product_brief::product_manager",
+        "type": "AgentBlueprint",
+        "agent_type": "product-manager",
+        "stage": "product_brief",
+        "manifest_status": "installed_or_builtin"
+      },
+      {
+        "id": "blueprint:repo_map::repo_mapper",
+        "type": "AgentBlueprint",
+        "agent_type": "code-mapper",
+        "stage": "repo_map",
+        "manifest_status": "installed_or_builtin"
+      },
+      {
+        "id": "blueprint:architecture::architect",
+        "type": "AgentBlueprint",
+        "agent_type": "architect-reviewer",
+        "stage": "architecture",
+        "manifest_status": "installed_or_builtin"
+      },
+      {
+        "id": "blueprint:decomposition::decomposer",
+        "type": "AgentBlueprint",
+        "agent_type": "project-manager",
+        "stage": "decomposition",
+        "manifest_status": "installed_or_builtin"
+      },
+      {
+        "id": "blueprint:parallel_implementation::builder",
+        "type": "AgentBlueprint",
+        "agent_type": "fullstack-developer",
+        "stage": "parallel_implementation",
+        "manifest_status": "installed_or_builtin"
+      },
+      {
+        "id": "blueprint:integration::integrator",
+        "type": "AgentBlueprint",
+        "agent_type": "fullstack-developer",
+        "stage": "integration",
+        "manifest_status": "installed_or_builtin"
+      },
+      {
+        "id": "blueprint:verification::reviewer",
+        "type": "AgentBlueprint",
+        "agent_type": "reviewer",
+        "stage": "verification",
+        "manifest_status": "installed_or_builtin"
+      },
+      {
+        "id": "blueprint:verification::critic",
+        "type": "AgentBlueprint",
+        "agent_type": "risk-manager",
+        "stage": "verification",
+        "manifest_status": "installed_or_builtin"
+      },
+      {
+        "id": "blueprint:security_review::security_auditor",
+        "type": "AgentBlueprint",
+        "agent_type": "security-auditor",
+        "stage": "security_review",
+        "manifest_status": "installed_or_builtin"
+      },
+      {
+        "id": "blueprint:verification::runtime_probe",
+        "type": "AgentBlueprint",
+        "agent_type": "Probe",
+        "stage": "verification",
+        "manifest_status": "installed_or_builtin"
+      },
+      {
+        "id": "blueprint:deployment_readiness::deployment_readiness",
+        "type": "AgentBlueprint",
+        "agent_type": "deployment-engineer",
+        "stage": "deployment_readiness",
+        "manifest_status": "installed_or_builtin"
+      },
+      {
+        "id": "blueprint:final_audit::final_audit",
+        "type": "AgentBlueprint",
+        "agent_type": "reviewer",
+        "stage": "final_audit",
+        "manifest_status": "installed_or_builtin"
+      },
+      {
+        "id": "blueprint:parallel_implementation::agent_runtime_worker",
+        "type": "AgentBlueprint",
+        "agent_type": "tooling-engineer",
+        "stage": "parallel_implementation",
+        "manifest_status": "installed_or_builtin"
+      },
+      {
+        "id": "instance:sf-run-20260531-133552::product_brief::product_manager",
+        "type": "AgentInstance",
+        "blueprint_id": "product_brief::product_manager",
+        "status": "validation_required",
+        "runtime": "codex_bridge"
+      },
+      {
+        "id": "instance:sf-run-20260531-135614::product_brief::product_manager",
+        "type": "AgentInstance",
+        "blueprint_id": "product_brief::product_manager",
+        "status": "completed",
+        "runtime": "command"
+      },
+      {
+        "id": "instance:sf-run-20260531-135614::repo_map::repo_mapper",
+        "type": "AgentInstance",
+        "blueprint_id": "repo_map::repo_mapper",
+        "status": "completed",
+        "runtime": "command"
+      },
+      {
+        "id": "instance:sf-run-20260531-135615::architecture::architect",
+        "type": "AgentInstance",
+        "blueprint_id": "architecture::architect",
+        "status": "completed",
+        "runtime": "command"
+      },
+      {
+        "id": "instance:sf-run-20260531-135615::decomposition::decomposer",
+        "type": "AgentInstance",
+        "blueprint_id": "decomposition::decomposer",
+        "status": "completed",
+        "runtime": "command"
+      },
+      {
+        "id": "instance:sf-run-20260531-135616::parallel_implementation::agent_runtime_worker",
+        "type": "AgentInstance",
+        "blueprint_id": "parallel_implementation::agent_runtime_worker",
+        "status": "completed",
+        "runtime": "command"
+      },
+      {
+        "id": "instance:sf-run-20260531-135616::integration::integrator",
+        "type": "AgentInstance",
+        "blueprint_id": "integration::integrator",
+        "status": "completed",
+        "runtime": "command"
+      },
+      {
+        "id": "instance:sf-run-20260531-135617::verification::reviewer",
+        "type": "AgentInstance",
+        "blueprint_id": "verification::reviewer",
+        "status": "completed",
+        "runtime": "command"
+      },
+      {
+        "id": "instance:sf-run-20260531-135618::verification::critic",
+        "type": "AgentInstance",
+        "blueprint_id": "verification::critic",
+        "status": "completed",
+        "runtime": "command"
+      },
+      {
+        "id": "instance:sf-run-20260531-135618::verification::runtime_probe",
+        "type": "AgentInstance",
+        "blueprint_id": "verification::runtime_probe",
+        "status": "completed",
+        "runtime": "command"
+      },
+      {
+        "id": "instance:sf-run-20260531-135619::security_review::security_auditor",
+        "type": "AgentInstance",
+        "blueprint_id": "security_review::security_auditor",
+        "status": "completed",
+        "runtime": "command"
+      },
+      {
+        "id": "instance:sf-run-20260531-135619::deployment_readiness::deployment_readiness",
+        "type": "AgentInstance",
+        "blueprint_id": "deployment_readiness::deployment_readiness",
+        "status": "completed",
+        "runtime": "command"
+      },
+      {
+        "id": "instance:sf-run-20260531-135620::final_audit::final_audit",
+        "type": "AgentInstance",
+        "blueprint_id": "final_audit::final_audit",
+        "status": "completed",
+        "runtime": "command"
+      },
+      {
+        "id": "instance:sf-run-20260531-141543::verification::reviewer",
+        "type": "AgentInstance",
+        "blueprint_id": "verification::reviewer",
+        "status": "blocked",
+        "runtime": "command"
+      },
+      {
+        "id": "instance:sf-run-20260531-141543::verification::reviewer",
+        "type": "AgentInstance",
+        "blueprint_id": "verification::reviewer",
+        "status": "completed",
+        "runtime": "validation_resolution"
+      },
+      {
+        "id": "instance:sf-run-20260531-135618::verification::critic",
+        "type": "AgentInstance",
+        "blueprint_id": "verification::critic",
+        "status": "completed",
+        "runtime": "validation_resolution"
+      },
+      {
+        "id": "instance:sf-run-20260531-135618::verification::runtime_probe",
+        "type": "AgentInstance",
+        "blueprint_id": "verification::runtime_probe",
+        "status": "completed",
+        "runtime": "validation_resolution"
+      },
+      {
+        "id": "instance:sf-run-20260531-135619::security_review::security_auditor",
+        "type": "AgentInstance",
+        "blueprint_id": "security_review::security_auditor",
+        "status": "completed",
+        "runtime": "validation_resolution"
+      },
+      {
+        "id": "instance:sf-run-20260531-135619::deployment_readiness::deployment_readiness",
+        "type": "AgentInstance",
+        "blueprint_id": "deployment_readiness::deployment_readiness",
+        "status": "completed",
+        "runtime": "validation_resolution"
+      },
+      {
+        "id": "instance:sf-run-20260531-135620::final_audit::final_audit",
+        "type": "AgentInstance",
+        "blueprint_id": "final_audit::final_audit",
+        "status": "completed",
+        "runtime": "validation_resolution"
+      },
+      {
+        "id": "instance:sf-run-20260531-141543::parallel_implementation::builder",
+        "type": "AgentInstance",
+        "blueprint_id": "parallel_implementation::builder",
+        "status": "completed",
+        "runtime": "validation_resolution"
+      },
+      {
+        "id": "instance:sf-run-20260531-194533::current_state::state_mapper",
+        "type": "AgentInstance",
+        "blueprint_id": "current_state::state_mapper",
+        "status": "completed",
+        "runtime": "command"
+      },
+      {
+        "id": "instance:sf-run-20260531-194555::development_plan::strategy_planner",
+        "type": "AgentInstance",
+        "blueprint_id": "development_plan::strategy_planner",
+        "status": "completed",
+        "runtime": "command"
+      }
+    ],
+    "edges": [
+      {
+        "from": "stella",
+        "to": "release",
+        "relationship": "commands_runtime_adapter"
+      },
+      {
+        "from": "stella",
+        "to": "blueprint:current_state::state_mapper",
+        "relationship": "authorizes_specialist_blueprint"
+      },
+      {
+        "from": "stella",
+        "to": "blueprint:development_plan::strategy_planner",
+        "relationship": "authorizes_specialist_blueprint"
+      },
+      {
+        "from": "stella",
+        "to": "blueprint:product_brief::product_manager",
+        "relationship": "authorizes_specialist_blueprint"
+      },
+      {
+        "from": "stella",
+        "to": "blueprint:repo_map::repo_mapper",
+        "relationship": "authorizes_specialist_blueprint"
+      },
+      {
+        "from": "stella",
+        "to": "blueprint:architecture::architect",
+        "relationship": "authorizes_specialist_blueprint"
+      },
+      {
+        "from": "stella",
+        "to": "blueprint:decomposition::decomposer",
+        "relationship": "authorizes_specialist_blueprint"
+      },
+      {
+        "from": "stella",
+        "to": "blueprint:parallel_implementation::builder",
+        "relationship": "authorizes_specialist_blueprint"
+      },
+      {
+        "from": "stella",
+        "to": "blueprint:integration::integrator",
+        "relationship": "authorizes_specialist_blueprint"
+      },
+      {
+        "from": "stella",
+        "to": "blueprint:verification::reviewer",
+        "relationship": "authorizes_specialist_blueprint"
+      },
+      {
+        "from": "stella",
+        "to": "blueprint:verification::critic",
+        "relationship": "authorizes_specialist_blueprint"
+      },
+      {
+        "from": "stella",
+        "to": "blueprint:security_review::security_auditor",
+        "relationship": "authorizes_specialist_blueprint"
+      },
+      {
+        "from": "stella",
+        "to": "blueprint:verification::runtime_probe",
+        "relationship": "authorizes_specialist_blueprint"
+      },
+      {
+        "from": "stella",
+        "to": "blueprint:deployment_readiness::deployment_readiness",
+        "relationship": "authorizes_specialist_blueprint"
+      },
+      {
+        "from": "stella",
+        "to": "blueprint:final_audit::final_audit",
+        "relationship": "authorizes_specialist_blueprint"
+      },
+      {
+        "from": "stella",
+        "to": "blueprint:parallel_implementation::agent_runtime_worker",
+        "relationship": "authorizes_specialist_blueprint"
+      },
+      {
+        "from": "release",
+        "to": "instance:sf-run-20260531-133552::product_brief::product_manager",
+        "relationship": "dispatches_or_collects_instance"
+      },
+      {
+        "from": "release",
+        "to": "instance:sf-run-20260531-135614::product_brief::product_manager",
+        "relationship": "dispatches_or_collects_instance"
+      },
+      {
+        "from": "release",
+        "to": "instance:sf-run-20260531-135614::repo_map::repo_mapper",
+        "relationship": "dispatches_or_collects_instance"
+      },
+      {
+        "from": "release",
+        "to": "instance:sf-run-20260531-135615::architecture::architect",
+        "relationship": "dispatches_or_collects_instance"
+      },
+      {
+        "from": "release",
+        "to": "instance:sf-run-20260531-135615::decomposition::decomposer",
+        "relationship": "dispatches_or_collects_instance"
+      },
+      {
+        "from": "release",
+        "to": "instance:sf-run-20260531-135616::parallel_implementation::agent_runtime_worker",
+        "relationship": "dispatches_or_collects_instance"
+      },
+      {
+        "from": "release",
+        "to": "instance:sf-run-20260531-135616::integration::integrator",
+        "relationship": "dispatches_or_collects_instance"
+      },
+      {
+        "from": "release",
+        "to": "instance:sf-run-20260531-135617::verification::reviewer",
+        "relationship": "dispatches_or_collects_instance"
+      },
+      {
+        "from": "release",
+        "to": "instance:sf-run-20260531-135618::verification::critic",
+        "relationship": "dispatches_or_collects_instance"
+      },
+      {
+        "from": "release",
+        "to": "instance:sf-run-20260531-135618::verification::runtime_probe",
+        "relationship": "dispatches_or_collects_instance"
+      },
+      {
+        "from": "release",
+        "to": "instance:sf-run-20260531-135619::security_review::security_auditor",
+        "relationship": "dispatches_or_collects_instance"
+      },
+      {
+        "from": "release",
+        "to": "instance:sf-run-20260531-135619::deployment_readiness::deployment_readiness",
+        "relationship": "dispatches_or_collects_instance"
+      },
+      {
+        "from": "release",
+        "to": "instance:sf-run-20260531-135620::final_audit::final_audit",
+        "relationship": "dispatches_or_collects_instance"
+      },
+      {
+        "from": "release",
+        "to": "instance:sf-run-20260531-141543::verification::reviewer",
+        "relationship": "dispatches_or_collects_instance"
+      },
+      {
+        "from": "release",
+        "to": "instance:sf-run-20260531-141543::verification::reviewer",
+        "relationship": "dispatches_or_collects_instance"
+      },
+      {
+        "from": "release",
+        "to": "instance:sf-run-20260531-135618::verification::critic",
+        "relationship": "dispatches_or_collects_instance"
+      },
+      {
+        "from": "release",
+        "to": "instance:sf-run-20260531-135618::verification::runtime_probe",
+        "relationship": "dispatches_or_collects_instance"
+      },
+      {
+        "from": "release",
+        "to": "instance:sf-run-20260531-135619::security_review::security_auditor",
+        "relationship": "dispatches_or_collects_instance"
+      },
+      {
+        "from": "release",
+        "to": "instance:sf-run-20260531-135619::deployment_readiness::deployment_readiness",
+        "relationship": "dispatches_or_collects_instance"
+      },
+      {
+        "from": "release",
+        "to": "instance:sf-run-20260531-135620::final_audit::final_audit",
+        "relationship": "dispatches_or_collects_instance"
+      },
+      {
+        "from": "release",
+        "to": "instance:sf-run-20260531-141543::parallel_implementation::builder",
+        "relationship": "dispatches_or_collects_instance"
+      },
+      {
+        "from": "release",
+        "to": "instance:sf-run-20260531-194533::current_state::state_mapper",
+        "relationship": "dispatches_or_collects_instance"
+      },
+      {
+        "from": "release",
+        "to": "instance:sf-run-20260531-194555::development_plan::strategy_planner",
+        "relationship": "dispatches_or_collects_instance"
+      }
+    ]
   },
   "artifacts": [
     "/Users/kansic/Service/atelier/SOT/service-factory/agent-prompts/architecture--architect.md",
@@ -5958,7 +6432,7 @@
   "kanban_projection": {
     "role": "projection_only",
     "source": "SOT/service-factory-state.json",
-    "truth_rule": "Kanban cards visualize queues only; Stella command_owner and AgentTopology remain the source of truth."
+    "truth_rule": "Kanban cards may visualize queues, but cannot replace Stella command_owner or AgentTopology evidence."
   },
   "known_issues": [],
   "last_invocation_goal": "스텔라팩토리 장기 실행 상태를 만든다",
@@ -5973,11 +6447,50 @@
   "operating_contract": {
     "required_order": [
       "current_state",
+      "research_intelligence",
       "development_plan",
       "execution_verification"
     ],
-    "rule": "현재 상태를 먼저 파악하고, 목표 달성 계획을 정리한 뒤, 실행/검증 루프로 진행한다.",
-    "version": "state-plan-execute-v1"
+    "rule": "Always inspect current state first, then run research intelligence and hypothesis QC, then write a goal-to-plan strategy, then execute and verify. Do not start implementation before current-state, research, and development-plan artifacts exist unless the user explicitly requests a trivial one-shot task.",
+    "version": "state-plan-execute-v1",
+    "phases": [
+      {
+        "id": "current_state",
+        "name": "Current State Discovery",
+        "rule": "Inspect the real repo, runtime, installed app, SOT, dirty paths, existing capabilities, risks, and verification baseline before deciding implementation.",
+        "artifacts": [
+          "SOT/service-factory/current-state.md"
+        ]
+      },
+      {
+        "id": "research_intelligence",
+        "name": "Research Intelligence and Hypothesis QC",
+        "rule": "Before product planning, run K-Dense-backed research, market/technical evidence gathering, hypothesis framing, counter-evidence search, and methodology review. Planning must cite this research lane instead of relying on unsupported intuition.",
+        "artifacts": [
+          "SOT/service-factory/research-dossier.md",
+          "SOT/service-factory/evidence-map.md",
+          "SOT/service-factory/research-qc.md"
+        ]
+      },
+      {
+        "id": "development_plan",
+        "name": "Goal-to-Plan Strategy",
+        "rule": "Convert the goal, current-state baseline, and research intelligence into a gap analysis, ordered task packets, role assignments, owned paths, done_when, and verification strategy.",
+        "artifacts": [
+          "SOT/service-factory/development-plan.md"
+        ]
+      },
+      {
+        "id": "execution_verification",
+        "name": "Execution and Evidence Loop",
+        "rule": "Execute bounded task packets, integrate changes, run Probe/security/release/final-audit gates, and loop back to planning on failure or missing evidence.",
+        "artifacts": [
+          "SOT/service-factory/progress.jsonl",
+          "SOT/service-factory/artifact-review.md",
+          "SOT/service-factory/antigravity-readiness.md"
+        ]
+      }
+    ]
   },
   "project": {
     "name": "atelier",
@@ -6003,6 +6516,27 @@
       "owner": "Release",
       "purpose": "State ledger, dispatch/collect, gates, and delivery control under Stella command",
       "spawn_policy": "local"
+    },
+    {
+      "id": "research_director",
+      "kind": "researcher",
+      "owner": "k-dense-researcher",
+      "purpose": "K-Dense-backed research intelligence, evidence map, hypothesis framing, and source-quality routing before product planning",
+      "spawn_policy": "required_after_current_state"
+    },
+    {
+      "id": "research_synthesizer",
+      "kind": "researcher",
+      "owner": "knowledge-synthesizer",
+      "purpose": "Non-redundant synthesis of research, market, technical, and counter-evidence before implementation planning",
+      "spawn_policy": "after_research_inputs"
+    },
+    {
+      "id": "research_methodologist",
+      "kind": "reviewer",
+      "owner": "research-methodologist",
+      "purpose": "Research methodology, bias, falsifiability, and evidence-quality review before planning depends on the research lane",
+      "spawn_policy": "after_research_inputs"
     },
     {
       "id": "architect",
@@ -6055,13 +6589,54 @@
     }
   ],
   "run_log": {
-    "blocked_reason": null,
-    "command_owner": "Stella",
     "current_owner": "Stella",
-    "execution_controller": "Release",
+    "last_command": "service_factory.py assess",
     "last_artifact": "/Users/kansic/Service/atelier/SOT/service-factory/antigravity-readiness.md",
-    "last_command": "stella_factory_bootstrap",
-    "next_step": "resume state, refresh readiness report, dispatch the next executable milestone"
+    "blocked_reason": null,
+    "next_step": "pilot_ready: use the managed Factory cycle for product-specific goals and attach specialist agents for real implementation work",
+    "completion_claim_guard": {
+      "probe_required": true,
+      "probe_verified": true,
+      "completion_claim_allowed": false,
+      "blockers": [
+        "dod_unmet:physical-windows",
+        "dod_unmet:windows-public-signing",
+        "dod_unmet:mac-public-notarization"
+      ],
+      "depth_gate": {
+        "dod": {
+          "checklist_present": true,
+          "total": 8,
+          "satisfied": 5,
+          "unmet_ids": [
+            "physical-windows",
+            "windows-public-signing",
+            "mac-public-notarization"
+          ],
+          "fulfillment_rate": 0.625,
+          "all_met": false
+        },
+        "elaboration_blockers": []
+      },
+      "parity_gate": {
+        "budget": {
+          "budget_present": false,
+          "task_class": null,
+          "classified": false,
+          "discretion_enabled": false,
+          "rounds_cap": 0
+        },
+        "discretion_blockers": [],
+        "intent": {
+          "ledger_present": false,
+          "total": 0,
+          "reconciled": 0,
+          "unreconciled_ids": []
+        }
+      }
+    },
+    "command_owner": "Stella",
+    "execution_controller": "Release"
   },
   "runtime": {
     "backend": "command",
@@ -6214,6 +6789,24 @@
       "state": "done"
     },
     {
+      "id": "research_intelligence",
+      "state": "queued",
+      "roles": [
+        "research_director",
+        "research_synthesizer",
+        "research_methodologist"
+      ],
+      "depends_on": [
+        "current_state"
+      ],
+      "done_requires": [
+        "research_dossier",
+        "evidence_map",
+        "research_qc"
+      ],
+      "artifacts": []
+    },
+    {
       "artifacts": [
         "/Users/kansic/Service/atelier/SOT/service-factory/architecture.md",
         "/Users/kansic/Service/atelier/SOT/service-factory/critic-report.md",
@@ -6324,7 +6917,7 @@
         "/Users/kansic/Service/atelier/SOT/service-factory/security-audit.md"
       ],
       "depends_on": [
-        "current_state"
+        "research_intelligence"
       ],
       "done_requires": [
         "gap_analysis",
@@ -7576,5 +8169,165 @@
     }
   ],
   "status": "running",
-  "updated_at": 1780460255
+  "updated_at": "2026-07-13T09:35:39+09:00",
+  "elaboration": {
+    "current_state": {
+      "round": 0,
+      "status": "no_gaps",
+      "request_id": null,
+      "gaps": [],
+      "notes": [
+        "no_gaps declared: SOT/service-factory/evidence-map.md and final-audit.md reviewed on 2026-07-13"
+      ]
+    },
+    "development_plan": {
+      "round": 0,
+      "status": "no_gaps",
+      "request_id": null,
+      "gaps": [],
+      "notes": [
+        "no_gaps declared: SOT/service-factory/evidence-map.md and final-audit.md reviewed on 2026-07-13"
+      ]
+    },
+    "product_brief": {
+      "round": 0,
+      "status": "no_gaps",
+      "request_id": null,
+      "gaps": [],
+      "notes": [
+        "no_gaps declared: SOT/service-factory/evidence-map.md and final-audit.md reviewed on 2026-07-13"
+      ]
+    },
+    "repo_map": {
+      "round": 0,
+      "status": "no_gaps",
+      "request_id": null,
+      "gaps": [],
+      "notes": [
+        "no_gaps declared: SOT/service-factory/evidence-map.md and final-audit.md reviewed on 2026-07-13"
+      ]
+    },
+    "architecture": {
+      "round": 0,
+      "status": "no_gaps",
+      "request_id": null,
+      "gaps": [],
+      "notes": [
+        "no_gaps declared: SOT/service-factory/evidence-map.md and final-audit.md reviewed on 2026-07-13"
+      ]
+    },
+    "decomposition": {
+      "round": 0,
+      "status": "no_gaps",
+      "request_id": null,
+      "gaps": [],
+      "notes": [
+        "no_gaps declared: SOT/service-factory/evidence-map.md and final-audit.md reviewed on 2026-07-13"
+      ]
+    },
+    "parallel_implementation": {
+      "round": 0,
+      "status": "no_gaps",
+      "request_id": null,
+      "gaps": [],
+      "notes": [
+        "no_gaps declared: SOT/service-factory/evidence-map.md and final-audit.md reviewed on 2026-07-13"
+      ]
+    },
+    "integration": {
+      "round": 0,
+      "status": "no_gaps",
+      "request_id": null,
+      "gaps": [],
+      "notes": [
+        "no_gaps declared: SOT/service-factory/evidence-map.md and final-audit.md reviewed on 2026-07-13"
+      ]
+    },
+    "verification": {
+      "round": 0,
+      "status": "no_gaps",
+      "request_id": null,
+      "gaps": [],
+      "notes": [
+        "no_gaps declared: SOT/service-factory/evidence-map.md and final-audit.md reviewed on 2026-07-13"
+      ]
+    },
+    "security_review": {
+      "round": 0,
+      "status": "no_gaps",
+      "request_id": null,
+      "gaps": [],
+      "notes": [
+        "no_gaps declared: SOT/service-factory/evidence-map.md and final-audit.md reviewed on 2026-07-13"
+      ]
+    },
+    "deployment_readiness": {
+      "round": 0,
+      "status": "no_gaps",
+      "request_id": null,
+      "gaps": [],
+      "notes": [
+        "no_gaps declared: SOT/service-factory/evidence-map.md and final-audit.md reviewed on 2026-07-13"
+      ]
+    },
+    "final_audit": {
+      "round": 0,
+      "status": "no_gaps",
+      "request_id": null,
+      "gaps": [],
+      "notes": [
+        "no_gaps declared: SOT/service-factory/evidence-map.md and final-audit.md reviewed on 2026-07-13"
+      ]
+    }
+  },
+  "definition_of_done_checklist": [
+    {
+      "id": "local-runtime",
+      "desc": "Detached PTY, normalized agent lifecycle, isolation, review, and cancellation pass automated regression gates.",
+      "met": true,
+      "evidence": "SOT/evidence-log.md 0.2.5; cargo test 86/86 in native and store-build configurations; installed renderer-ready and signed OAuth helper allowlist probes; installed three-session PTY reconnect smoke; persistent terminal split, line-level review, and click-to-select preview release invariants"
+    },
+    {
+      "id": "automatic-preview-evidence",
+      "desc": "Matching localhost preview automatically captures bounded HTTP/service/DOM/screenshot/console/network evidence at turn completion.",
+      "met": true,
+      "evidence": "SOT/evidence-log.md 0.2.5; matching preview captures bounded evidence on successful and failed turns while stop/interruption suppresses capture; explicit element selection remains user-invoked and bounded"
+    },
+    {
+      "id": "windows-cross-target",
+      "desc": "Normal and Store Windows configurations pass strict Clippy and link PE32+ x86-64 executables.",
+      "met": true,
+      "evidence": "SOT/service-factory/deployment-readiness.md"
+    },
+    {
+      "id": "mac-installed-reflection",
+      "desc": "Signed macOS 0.2.5 package is installed and verified at /Applications/Atelier.app.",
+      "met": true,
+      "evidence": "Atelier 0.2.5 version and renderer-ready probes; strict codesign; DMG and installed executable SHA-256 recorded; installed three-session PTY smoke"
+    },
+    {
+      "id": "physical-windows",
+      "desc": "Physical Windows proves visible Claude/Codex browser login, authenticated CLI state, Smart App Control, and exact-version restart survival.",
+      "met": false,
+      "evidence": "Browser-process and visible-window gates exist in source; no registered physical Windows runner or Windows execution receipt"
+    },
+    {
+      "id": "windows-public-signing",
+      "desc": "Final Windows installer is publicly signed and passes signed-package smoke.",
+      "met": false,
+      "evidence": "SignPath/Store signing output not available locally"
+    },
+    {
+      "id": "mac-public-notarization",
+      "desc": "Public macOS package has Developer ID signature, notarization, and stapling.",
+      "met": false,
+      "evidence": "Developer ID/notarization credentials not available locally"
+    },
+    {
+      "id": "safety-boundary",
+      "desc": "No database or user-data deletion, credential mutation, production deployment, paid action, or external publication occurred.",
+      "met": true,
+      "evidence": "SOT/service-factory/final-audit.md"
+    }
+  ]
 }

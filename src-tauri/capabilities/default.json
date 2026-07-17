@@ -8,6 +8,7 @@
     "shell:default",
     "dialog:default",
     "clipboard-manager:default",
+    "notification:default",
     "updater:default",
     "process:default",
     "process:allow-restart"

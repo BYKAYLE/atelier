@@ -1,162 +1,185 @@
 # Atelier
 
-> 당신의 명령어, 당신의 작업실.
+> 명령을 맡기고, 진행과 증거를 확인하는 로컬 자율 개발 워크스페이스.
 
-이미지 붙여넣기가 되는 GUI 터미널. Tauri 기반 경량 데스크톱 앱.
+Atelier는 Claude Code, Codex, Hermes, Gajae Code를 하나의 구조화된 작업
+화면에서 실행하는 Tauri/Rust 데스크톱 앱입니다. 터미널 기능을 유지하면서
+세션 재연결, 작업 격리, 변경사항 리뷰, 라이브 프리뷰 검증, 구독 로그인,
+업데이트를 하나의 로컬 작업 기록으로 묶습니다.
 
-## 핵심 기능
+현재 개발 기준은 `0.2.8`입니다. 소스, 패키지, 설치 앱, 실제 Windows
+동작은 서로 다른 증거로 관리하며, 교차 컴파일 성공을 물리 Windows 검증으로
+간주하지 않습니다.
 
-- **스크린샷 붙여넣기** — macOS `⌘+V` / Windows `Ctrl+V`로 클립보드 이미지를 현재 세션에 바로 첨부
-  - macOS 캡처: `⌘+Shift+4` / `⌘+Shift+5` (클립보드 저장은 `Ctrl` 옵션 병행)
-  - Windows 캡처: `Win+Shift+S`
-- **라이브 프리뷰** — 세션이 HTML/Markdown/이미지를 쓰면 우측 패널에 자동 렌더 (v0.2 예정)
-- **멀티 세션** — 플랫폼별 프로파일 자동 필터
-  - macOS: Claude Code / Zsh / Bash / Node (+ PowerShell 설치 시)
-  - Windows: Claude Code / PowerShell / Bash / cmd / Node
-- **Claude Code 퍼스트파티 호환** — `claude` CLI를 subprocess로 실행 → Pro/Max 구독 합법 경로
-- **Stella Factory 작업 모드** — `/goal`, `/analyze`, `/probe`, `/audit`로
-  자연어 목표를 개발 작업으로 변환하고 검증/SOT 기록까지 이어가는 자율 개발 레이어
+## 주요 기능
 
-## 전제조건
+- **구조화된 에이전트 작업**
+  - Claude Code, Codex, Hermes, Gajae Code 프로파일
+  - 실행 중 후속 메시지 큐, 중지, 재개, 백그라운드 작업
+  - 제공자별 원본 로그와 공통 실행 상태 분리
+  - 대화, 코드, 변경사항을 하나의 작업 화면에서 전환하는 로컬 워크벤치
+- **재연결 가능한 터미널**
+  - 앱 화면이 다시 로드되어도 살아 있는 PTY 세션
+  - 좌우/상하 분할, 드래그 및 키보드 크기 조절, 레이아웃 복원
+  - 숨긴 작업의 출력 보존과 명시적 프로세스 종료
+- **작업 격리와 변경사항 리뷰**
+  - 선택형 Git worktree 격리
+  - 후보 작업 비교와 충돌 검사 후 명시적 반영
+  - 파일별 diff, 줄 번호, 리뷰 댓글, 에이전트 후속 수정 요청
+- **프리뷰와 Probe**
+  - 관리되는 로컬 프리뷰 서버와 작업 수명주기 연결
+  - HTTP, DOM, 스크린샷, 콘솔, 런타임, 네트워크 실패 증거 수집
+  - 화면 요소 선택 후 안전한 selector, geometry, CSS 증거 첨부
+  - 쿠키, 저장소, 요청 헤더, URL query, 응답 본문 전체는 수집하지 않음
+- **스크린샷 붙여넣기**
+  - macOS `Cmd+V`, Windows `Ctrl+V`로 작업에 이미지 첨부
+- **스텔라 모드**
+  - 자연어 목표를 분석, 계획, 구현, Probe, 보안 검토, 최종 감사로 연결
+  - 작업 상태와 검증 근거를 프로젝트 `SOT/`에 기록
+  - 필요할 때만 명시적으로 켜는 실행 모드
+- **크로스플랫폼 배포 기반**
+  - GitHub Release 기반 업데이트
+  - macOS 패키지와 설치본 검증
+  - Windows normal/Store 빌드, 서명 및 물리 장치 검증 워크플로
+  - Claude/Codex 로그인 URL을 검증하는 서명된 Atelier 브라우저 도우미
 
-### 공통
-| 도구 | 버전 | 확인 |
-|------|------|------|
-| Node | 18+ | `node -v` |
-| Rust | 1.77+ | `cargo --version` |
+## 안전 경계
 
-### macOS
-| 도구 | 비고 |
-|------|------|
-| Xcode Command Line Tools | `xcode-select --install` |
-| Apple Silicon 또는 Intel | 공식 릴리스는 Universal macOS 앱으로 빌드 |
+Atelier의 기본 권한은 작업공간 범위입니다. 다음 작업은 사용자 승인 없이
+자동 실행하지 않습니다.
 
-### Windows
-| 도구 | 비고 |
-|------|------|
-| MSVC Build Tools | Tauri Windows 빌드용 |
-| WebView2 | Windows 10/11 기본 설치됨 |
+- 데이터베이스 또는 사용자 데이터 삭제
+- 프로덕션 배포
+- 결제 또는 유료 작업
+- 자격증명 노출
+- 외부 게시와 외부 통신
 
-## 빠른 시작
+제공자 인증은 각 공식 CLI가 소유합니다. Atelier는 Claude Code나 Codex의
+외부 자격증명 저장소를 직접 읽거나 비공개 OAuth 프로토콜을 모방하지
+않습니다.
+
+## 설치 사용자 흐름
+
+1. 설정의 **프로필**에서 사용할 CLI를 설치하거나 기존 설치를 확인합니다.
+2. 설정의 **연결**에서 Claude 또는 Codex 구독 로그인을 시작합니다.
+3. **새 작업**에서 에이전트와 작업 폴더를 선택합니다.
+4. 일반 요청은 바로 보내고, 장기 자율 개발 목표는 **스텔라 모드**를 켭니다.
+5. 변경 파일, Probe, 프리뷰 증거를 확인한 뒤 필요한 후보만 반영합니다.
+
+Windows 구독 로그인은 기본 브라우저가 실제로 열리고 CLI 인증 상태가
+갱신되어야 완료입니다. 브라우저 도우미의 종료 코드만으로 로그인 성공을
+판정하지 않습니다.
+
+## 개발 환경
+
+| 도구 | 기준 |
+|---|---|
+| Node.js | 20 권장 |
+| Rust | stable |
+| macOS | Xcode Command Line Tools |
+| Windows | MSVC Build Tools, WebView2 |
+
+```bash
+npm ci --legacy-peer-deps
+npm run tauri:dev
+```
+
+핵심 검증:
+
+```bash
+npm run build
+npm run harness:fixture
+npm run smoke:pty-supervisor
+npm run smoke:terminal-layout
+npm run smoke:diff-review
+npm run smoke:devscreen-picker
+npm run smoke:updater-contract
+npm run audit:release
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+## 패키징
 
 ### macOS
 
 ```bash
-# 의존성 설치
-npm install
-
-# 개발 모드 (라이브 리로드)
-npm run tauri:dev
-
-# 릴리스 빌드 (.app 번들 + .dmg 디스크 이미지)
 npm run tauri:build
+npm run tauri:trust
 ```
 
-산출물 경로:
-- `.app` 번들: `src-tauri/target/release/bundle/macos/Atelier.app`
-- `.dmg` 이미지: `src-tauri/target/release/bundle/dmg/Atelier_0.1.0_aarch64.dmg`
+로컬 산출물:
 
-설치: `.dmg` 더블클릭 → `/Applications`로 드래그. 또는 `.app`을 직접 실행.
+- `src-tauri/target/release/bundle/macos/Atelier.app`
+- `src-tauri/target/release/bundle/dmg/Atelier_<version>_<arch>.dmg`
 
-> 미서명 빌드이므로 첫 실행 시 macOS가 "확인되지 않은 개발자" 경고를 띄울 수 있습니다.
-> 시스템 설정 → 개인정보 보호 및 보안 → "Atelier 실행 허용" 버튼으로 해제하세요.
+로컬 서명은 개발 설치 증거입니다. 공개 배포 완료를 주장하려면 Developer ID,
+notarization, stapling 증거가 추가로 필요합니다.
 
 ### Windows
 
-```bash
-npm install
-npm run tauri:dev
-npm run tauri:build   # MSI + NSIS installer
+```powershell
+npm ci --legacy-peer-deps
+npm run tauri -- build --ci
+powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1 -SelfTest
 ```
 
-산출물 경로: `src-tauri\target\release\bundle\{msi,nsis}\`.
+Windows normal, Store, SignPath 경로는 서로 다른 워크플로로 검증합니다.
+최종 배포에는 서명된 설치본, 실제 브라우저 로그인, 업데이트 후 동일 설치
+경로 재시작, Smart App Control 증거가 필요합니다.
+
+- Microsoft Store: [docs/microsoft-store-release.md](docs/microsoft-store-release.md)
+- Windows signing: [docs/windows-code-signing.md](docs/windows-code-signing.md)
+- Code signing policy: [docs/code-signing-policy.md](docs/code-signing-policy.md)
+- Privacy policy: [docs/privacy-policy.md](docs/privacy-policy.md)
 
 ## 프로젝트 구조
 
-```
+```text
 atelier/
-├── src/                      # React + TypeScript 프론트엔드
-│   ├── components/
-│   │   ├── App.tsx           # 루트, 화면 전환
-│   │   ├── TopChrome.tsx     # 상단 세그먼트 + 테마 토글
-│   │   ├── Welcome.tsx       # 홈 화면
-│   │   ├── Main.tsx          # 터미널 + 프리뷰 스플릿 (xterm.js + PTY)
-│   │   ├── Settings.tsx      # 설정 (터미널/외관/프로필/단축키/프리뷰)
-│   │   └── Icons.tsx
-│   ├── lib/
-│   │   ├── tokens.ts         # 액센트·프로필·기본값
-│   │   ├── useTweaks.ts      # 설정 영속화
-│   │   └── tauri.ts          # IPC 래퍼 (pty_*, clipboard_*)
-│   ├── main.tsx
-│   └── index.css
-├── src-tauri/                # Rust 백엔드
-│   ├── src/
-│   │   ├── lib.rs            # Tauri 앱 엔트리, 커맨드 등록
-│   │   ├── pty.rs            # portable-pty 기반 세션 관리
-│   │   └── clipboard.rs      # 클립보드 PNG → 임시파일
-│   ├── Cargo.toml
-│   └── tauri.conf.json
-└── index.html
+├── src/
+│   ├── components/           # 작업, 터미널, 프리뷰, 설정 UI
+│   └── lib/                  # diff, preview, layout, Stella, Tauri IPC
+├── src-tauri/
+│   └── src/
+│       ├── agent*.rs         # 제공자 실행, 상태, registry, worktree
+│       ├── pty*.rs           # PTY transport와 detached supervisor
+│       ├── credentials.rs    # 제공자 소유 인증과 브라우저 handoff
+│       └── stella.rs         # 스텔라 모드 SOT/Probe bridge
+├── tools/                    # smoke, package, release audit
+├── .github/workflows/        # macOS/Windows/Store/physical gates
+└── SOT/                      # 현재 상태, 계획, 증거, 최종 감사
 ```
 
-## 주요 IPC 커맨드
+## 스텔라 모드
 
-| 커맨드 | 설명 |
-|--------|------|
-| `pty_spawn(profile, cols, rows)` | 세션 생성 → 세션 id 반환 |
-| `pty_write(id, data)` | stdin 전송 |
-| `pty_resize(id, cols, rows)` | 터미널 크기 변경 |
-| `pty_kill(id)` | 세션 종료 |
-| `pty_list()` | 활성 세션 목록 |
-| `clipboard_save_image(png_base64)` | 클립보드 PNG → 임시파일 경로 |
-
-이벤트:
-- `pty://{id}/data` — stdout 청크
-- `pty://{id}/exit` — 종료 코드
-
-## Code signing policy
-
-Windows distribution is prepared for Microsoft Store MSIX packaging first, with
-SignPath kept as an optional direct-installer signing path.
-
-- Microsoft Store release: [docs/microsoft-store-release.md](docs/microsoft-store-release.md)
-- Privacy policy: [docs/privacy-policy.md](docs/privacy-policy.md)
-- Code signing policy: [docs/code-signing-policy.md](docs/code-signing-policy.md)
-- Windows signing workflow notes: [docs/windows-code-signing.md](docs/windows-code-signing.md)
-
-## Stella Factory
-
-Atelier is being upgraded in place into a Codex-like local autonomous
-development workspace while preserving the existing terminal and agent features.
-
-- Operating contract: [SOT/autonomous-workspace-contract.md](SOT/autonomous-workspace-contract.md)
-- Project summary: [SOT/L1-project-summary.md](SOT/L1-project-summary.md)
-- Feature notes: [docs/stella-factory.md](docs/stella-factory.md)
-
-The Agent Workspace now exposes one primary user entry point:
+사용자 진입점:
 
 ```text
-스텔라 팩토리 <objective>
-Stella Factory <objective>
+스텔라 모드 <목표>
+Stella Mode <objective>
 ```
 
-That single Factory launcher attaches local evidence and lets Stella/Release run
-planning, implementation, verification, security review, and final audit as one
-autonomous session. `/goal`, `/analyze`, `/probe`, and `/audit` remain internal
-or legacy-compatible commands, but they are no longer the main UI workflow.
+`/goal`, `/analyze`, `/probe`, `/audit`는 호환 및 내부 검토 명령으로
+유지됩니다. 단일 기능 패치는 장기 목표의 완료가 아니라 하나의 마일스톤으로
+기록됩니다.
 
-The Rust backend also exposes `stella_project_analysis`,
-`stella_workspace_probe`, and `stella_record_evidence` so Factory runs can
-inspect the real workspace, run allowlisted probes, and append SOT evidence
-without depending on a provider's terminal output.
+- 동작 계약: [SOT/autonomous-workspace-contract.md](SOT/autonomous-workspace-contract.md)
+- 현재 프로젝트 기준: [SOT/L1-project-summary.md](SOT/L1-project-summary.md)
+- Orca 도입 기준: [SOT/service-factory/orca-adoption-roadmap.md](SOT/service-factory/orca-adoption-roadmap.md)
+- 사용 설명: [docs/stella-factory.md](docs/stella-factory.md)
 
-## 로드맵
+## 현재 배포 판정
 
-- [x] v0.1 — 프로토타입 (홈/코드/설정) + PTY + 클립보드 이미지
-- [ ] v0.2 — 라이브 프리뷰 (파일 watcher + HTML/MD 렌더)
-- [ ] v0.3 — 탭 드래그/분할, 명령 팔레트
-- [ ] v0.4 — 자동 업데이트, 설정 동기화
+- macOS 로컬 패키지/설치본: 검증됨
+- Windows normal/Store 교차 빌드: 검증됨
+- 물리 Windows 브라우저 인증과 Smart App Control: 외부 검증 필요
+- 공개 Windows 서명: 외부 검증 필요
+- macOS Developer ID notarization: 외부 검증 필요
+
+세부 증거는
+[SOT/service-factory/deployment-readiness.md](SOT/service-factory/deployment-readiness.md)에
+기록합니다.
 
 ## 라이선스
 
-[MIT License](LICENSE) — Copyright (c) 2026 BYKAYLE
+[MIT License](LICENSE) - Copyright (c) 2026 BYKAYLE

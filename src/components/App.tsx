@@ -18,6 +18,7 @@ type SettingsSection =
   | "shortcuts"
   | "preview"
   | "connections"
+  | "remote"
   | "updates";
 
 type NavItem = {
@@ -55,16 +56,25 @@ const NAV_GROUPS: NavGroup[] = [
       {
         id: "sessions",
         screen: "agent",
-        icon: I.preview,
+        icon: I.sessions,
         labelKo: "Sessions",
         labelEn: "Sessions",
         hintKo: "Claude · Hermes · Codex",
         hintEn: "Claude · Hermes · Codex",
       },
       {
+        id: "terminal",
+        screen: "main",
+        icon: I.terminal,
+        labelKo: "Terminal",
+        labelEn: "Terminal",
+        hintKo: "CLI · 터미널 세션",
+        hintEn: "CLI · terminal sessions",
+      },
+      {
         id: "plugins",
         screen: "plugins",
-        icon: I.zap,
+        icon: I.plugin,
         labelKo: "플러그인&스킬",
         labelEn: "Plugins & Skills",
         hintKo: "설치 · 내장",
@@ -91,7 +101,7 @@ const NAV_GROUPS: NavGroup[] = [
         id: "profiles",
         screen: "settings",
         settingsSection: "profiles",
-        icon: I.zap,
+        icon: I.profile,
         labelKo: "Profiles",
         labelEn: "Profiles",
         hintKo: "CLI 실행 프로필",
@@ -108,14 +118,24 @@ const NAV_GROUPS: NavGroup[] = [
         hintEn: "Auth · API links",
       },
       {
+        id: "remote-access",
+        screen: "settings",
+        settingsSection: "remote",
+        icon: I.mobile,
+        labelKo: "원격 접근",
+        labelEn: "Remote access",
+        hintKo: "모바일 페어링 · 모니터링",
+        hintEn: "Pairing · Monitoring",
+      },
+      {
         id: "preview-settings",
         screen: "settings",
         settingsSection: "preview",
-        icon: I.eye,
-        labelKo: "Preview",
-        labelEn: "Preview",
-        hintKo: "패치 · 제보",
-        hintEn: "Patches · Bugs",
+        icon: I.report,
+        labelKo: "패치 & 제보",
+        labelEn: "Patches & Feedback",
+        hintKo: "릴리스 노트 · 버그 접수",
+        hintEn: "Release notes · Bug reports",
       },
       {
         id: "shortcuts",
@@ -151,13 +171,13 @@ const App: React.FC = () => {
       safeLocalStorageSet("atelier.agentDefaultMigrated", "1");
       return "agent";
     }
-    if (saved === "design" || saved === "main") return "agent";
+    if (saved === "design") return "agent";
     return isScreen(saved) ? saved : "agent";
   });
   const [activeNav, setActiveNav] = useState<string>(() => {
     const savedNav = safeLocalStorageGet("atelier.nav");
     if (savedNav === "settings") return "appearance";
-    if (savedNav === "terminal") return "sessions";
+    if (savedNav === "terminal") return "terminal";
     if (savedNav === "gateway") return "providers";
     if (
       savedNav === "agent" ||
@@ -166,12 +186,12 @@ const App: React.FC = () => {
       savedNav === "factory" ||
       savedNav === "design"
     ) return "sessions";
-    if (savedNav === "main") return "sessions";
+    if (savedNav === "main") return "terminal";
     if (savedNav === "skills") return "plugins";
     if (savedNav) return savedNav;
     if (screen === "settings") return "appearance";
     if (screen === "agent") return "sessions";
-    if (screen === "main") return "sessions";
+    if (screen === "main") return "terminal";
     return screen;
   });
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(() => {
@@ -232,7 +252,7 @@ const App: React.FC = () => {
             openNav({
               id: "sessions",
               screen: "agent",
-              icon: I.preview,
+              icon: I.sessions,
               labelKo: "Sessions",
               labelEn: "Sessions",
               hintKo: "Claude · Hermes · Codex",
@@ -386,7 +406,13 @@ const App: React.FC = () => {
           className="absolute inset-0"
           style={{ display: screen === "agent" ? "block" : "none" }}
         >
-          <AgentWorkspace tw={tw} />
+          <AgentWorkspace
+            tw={tw}
+            onOpenTerminal={() => {
+              setActiveNav("terminal");
+              setScreen("main");
+            }}
+          />
         </div>
         <div
           className="absolute inset-0"

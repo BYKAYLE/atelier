@@ -1,5 +1,24 @@
 # Stella Factory Development Plan
 
+active_baseline_at: 2026-07-13T09:35:39+09:00
+
+## Active Completion Plan
+
+1. Keep the 0.2.5 local runtime, packaged renderer-readiness contract, long-session rendering contract, persistent terminal pane tree, line-level
+   change review, failed-turn preview evidence, bounded click-to-select DOM/CSS
+   handoff, and WinRT-first Windows browser handoff under regression gates; do
+   not reopen completed runtime architecture without a failing receipt.
+2. Run the existing physical Windows provider and update-survival workflow when
+   a Windows runner is attached. Record visible browser launch, authenticated
+   CLI status, Authenticode, Smart App Control, and exact-version restart.
+3. Feed successful SignPath/Partner Center artifacts through the signed-package
+   smoke. Do not substitute unsigned cross-target PE files for this gate.
+4. Produce the public macOS artifact only with Developer ID, notarization, and
+   stapling credentials. The local identity remains an installed-development
+   receipt only.
+5. Keep remote continuity and account/device sync deferred until explicit trust,
+   encryption, and revocation contracts are implemented and reviewed.
+
 generated_at: 2026-05-31T19:45:55+09:00
 
 ## Goal

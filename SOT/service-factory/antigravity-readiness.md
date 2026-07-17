@@ -2,11 +2,11 @@
 
 factory_id: sf-20260531-133552
 state_file: /Users/kansic/Service/atelier/SOT/service-factory-state.json
-generated_at: 2026-05-31T23:31:05+09:00
+generated_at: 2026-07-13T02:37:56+09:00
 
 ## Verdict
 
-- readiness_score: 0.96
+- readiness_score: 0.97
 - verdict: pilot_ready
 - primary_blocker: None
 - next_step: pilot_ready: use the managed Factory cycle for product-specific goals and attach specialist agents for real implementation work
@@ -48,10 +48,14 @@ generated_at: 2026-05-31T23:31:05+09:00
       "contract_version": "state-plan-execute-v1",
       "required_order": [
         "current_state",
+        "research_intelligence",
         "development_plan",
         "execution_verification"
       ],
       "current_state_artifact": "/Users/kansic/Service/atelier/SOT/service-factory/current-state.md",
+      "research_dossier_artifact": "/Users/kansic/Service/atelier/SOT/service-factory/research-dossier.md",
+      "evidence_map_artifact": "/Users/kansic/Service/atelier/SOT/service-factory/evidence-map.md",
+      "research_qc_artifact": "/Users/kansic/Service/atelier/SOT/service-factory/research-qc.md",
       "development_plan_artifact": "/Users/kansic/Service/atelier/SOT/service-factory/development-plan.md",
       "artifacts_ready": true
     }
@@ -82,21 +86,21 @@ generated_at: 2026-05-31T23:31:05+09:00
     "status": "partial",
     "evidence": {
       "enabled": true,
-      "root": ".service-factory/worktrees",
-      "policy": "one_writer_per_owned_path"
+      "policy": "one_writer_per_owned_path",
+      "root": ".service-factory/worktrees"
     }
   },
   {
     "id": "watchdog",
     "status": "ready",
     "evidence": {
+      "action": "mark_blocked_or_respawn_from_handoff",
       "enabled": true,
-      "stale_after_minutes": 15,
       "progress_files": [
         "SOT/service-factory/progress.jsonl",
         "SOT/service-factory/handoff-latest.md"
       ],
-      "action": "mark_blocked_or_respawn_from_handoff",
+      "stale_after_minutes": 15,
       "recovery_proof": true,
       "recovered_requests": 2
     }
@@ -148,49 +152,47 @@ generated_at: 2026-05-31T23:31:05+09:00
     "evidence": {
       "configured": [
         {
-          "id": "node-test",
-          "cmd": "npm test",
           "argv": [
             "npm",
             "test"
           ],
-          "stage": "verification",
-          "optional": true,
-          "trusted": false,
+          "cmd": "npm test",
+          "env_policy": "minimal_allowlist",
+          "id": "node-test",
           "network_policy": "disabled_by_policy",
-          "env_policy": "minimal_allowlist"
+          "optional": true,
+          "stage": "verification",
+          "trusted": false
         },
         {
-          "id": "node-build",
-          "cmd": "npm run build",
           "argv": [
             "npm",
             "run",
             "build"
           ],
-          "stage": "verification",
-          "optional": true,
-          "trusted": false,
+          "cmd": "npm run build",
+          "env_policy": "minimal_allowlist",
+          "id": "node-build",
           "network_policy": "disabled_by_policy",
-          "env_policy": "minimal_allowlist"
+          "optional": true,
+          "stage": "verification",
+          "trusted": false
         },
         {
-          "id": "node-typecheck",
-          "cmd": "npm run typecheck",
           "argv": [
             "npm",
             "run",
             "typecheck"
           ],
-          "stage": "verification",
-          "optional": true,
-          "trusted": false,
+          "cmd": "npm run typecheck",
+          "env_policy": "minimal_allowlist",
+          "id": "node-typecheck",
           "network_policy": "disabled_by_policy",
-          "env_policy": "minimal_allowlist"
+          "optional": true,
+          "stage": "verification",
+          "trusted": false
         },
         {
-          "id": "service-factory-validate",
-          "cmd": "/opt/homebrew/opt/python@3.14/bin/python3.14 /Users/kansic/.claude/skills/release/scripts/service_factory.py validate --project .",
           "argv": [
             "/opt/homebrew/opt/python@3.14/bin/python3.14",
             "/Users/kansic/.claude/skills/release/scripts/service_factory.py",
@@ -198,11 +200,13 @@ generated_at: 2026-05-31T23:31:05+09:00
             "--project",
             "."
           ],
-          "stage": "final_audit",
-          "optional": false,
-          "trusted": true,
+          "cmd": "/opt/homebrew/opt/python@3.14/bin/python3.14 /Users/kansic/.claude/skills/release/scripts/service_factory.py validate --project .",
+          "env_policy": "minimal_allowlist",
+          "id": "service-factory-validate",
           "network_policy": "disabled_by_policy",
-          "env_policy": "minimal_allowlist"
+          "optional": false,
+          "stage": "final_audit",
+          "trusted": true
         }
       ],
       "results": 76
@@ -218,6 +222,15 @@ generated_at: 2026-05-31T23:31:05+09:00
       "status_counts": {
         "completed": 6
       }
+    }
+  },
+  {
+    "id": "probe_required_for_completion",
+    "status": "ready",
+    "evidence": {
+      "probe_required": true,
+      "probe_request_present": true,
+      "probe_verified": true
     }
   },
   {

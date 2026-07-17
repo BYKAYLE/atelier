@@ -4,19 +4,26 @@ import { FsEntry, homeDir, isTauri, listDir } from "../lib/tauri";
 
 interface Props {
   dark: boolean;
+  rootPath?: string;
+  selectedPath?: string | null;
   onOpenFile: (path: string, name: string) => void;
 }
 
-const FileTree: React.FC<Props> = ({ dark, onOpenFile }) => {
+const FileTree: React.FC<Props> = ({ dark, rootPath, selectedPath, onOpenFile }) => {
   const [cwd, setCwd] = useState<string>("");
   const [entries, setEntries] = useState<FsEntry[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
-  // 최초 로드 — HOME으로 시작.
+  // 작업 폴더가 있으면 그 위치에서 시작하고, 없을 때만 HOME을 사용한다.
   useEffect(() => {
     if (!isTauri()) return;
+    const nextRoot = rootPath?.trim();
+    if (nextRoot) {
+      setCwd(nextRoot);
+      return;
+    }
     homeDir().then(setCwd).catch((e) => setErr(String(e)));
-  }, []);
+  }, [rootPath]);
 
   // cwd 변경 시 디렉토리 리스팅.
   useEffect(() => {
@@ -26,12 +33,17 @@ const FileTree: React.FC<Props> = ({ dark, onOpenFile }) => {
       .catch((e) => setErr(String(e)));
   }, [cwd]);
 
-  const parts = cwd.split("/").filter(Boolean);
-  const goTo = (idx: number) => setCwd("/" + parts.slice(0, idx + 1).join("/"));
+  const normalizedCwd = cwd.replace(/\\/g, "/");
+  const parts = normalizedCwd.split("/").filter(Boolean);
+  const isWindowsPath = /^[A-Za-z]:/.test(normalizedCwd);
+  const pathFromParts = (nextParts: string[]) => {
+    if (isWindowsPath) return `${nextParts.join("\\")}${nextParts.length === 1 ? "\\" : ""}`;
+    return `/${nextParts.join("/")}`;
+  };
+  const goTo = (idx: number) => setCwd(pathFromParts(parts.slice(0, idx + 1)));
   const goUp = () => {
-    const p = cwd.split("/").filter(Boolean);
-    if (p.length === 0) return;
-    setCwd("/" + p.slice(0, -1).join("/"));
+    if (parts.length <= 1) return;
+    setCwd(pathFromParts(parts.slice(0, -1)));
   };
   const goHome = () => { homeDir().then(setCwd); };
 
@@ -105,7 +117,9 @@ const FileTree: React.FC<Props> = ({ dark, onOpenFile }) => {
             }}
             className={cls(
               "w-full h-7 px-3 flex items-center gap-2 text-left text-[12px] transition-colors",
-              dark ? "text-dink hover:bg-[#2a2a28]" : "text-ink hover:bg-muted",
+              selectedPath === e.path
+                ? dark ? "bg-[#343432] text-dink" : "bg-line text-ink"
+                : dark ? "text-dink hover:bg-[#2a2a28]" : "text-ink hover:bg-muted",
             )}
             title={e.path}
           >

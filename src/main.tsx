@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import "@xterm/xterm/css/xterm.css";
 import "./index.css";
 import App from "./components/App";
+import { rendererReady } from "./lib/tauri";
 
 type BootErrorBoundaryState = {
   error: Error | null;
@@ -38,6 +39,21 @@ class BootErrorBoundary extends React.Component<React.PropsWithChildren, BootErr
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
     console.error("Atelier boot render error", error, info);
+  }
+
+  componentDidMount() {
+    this.reportRendererStatus();
+  }
+
+  componentDidUpdate(_previousProps: React.PropsWithChildren, previousState: BootErrorBoundaryState) {
+    if (previousState.error !== this.state.error) this.reportRendererStatus();
+  }
+
+  private reportRendererStatus() {
+    const status = this.state.error ? "error" : "ready";
+    void rendererReady(status).catch((error) => {
+      console.error("Atelier renderer readiness receipt failed", error);
+    });
   }
 
   render() {

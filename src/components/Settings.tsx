@@ -10,6 +10,7 @@ import {
   WELCOME_COPY,
 } from "../lib/tokens";
 import { runtimeInstallInfo, type RuntimeInstallInfo } from "../lib/tauri";
+import { FeaturePanels } from "../features/featureRegistry";
 import ComposerSelectMenu from "./ComposerSelectMenu";
 import ConnectionsPanel from "./ConnectionsPanel";
 
@@ -41,6 +42,7 @@ const Settings: React.FC<Props> = ({ tw, setTw, initialSection }) => {
         {section === "shortcuts" && <ShortcutsSection dark={dark} language={tw.language} />}
         {section === "preview" && <PreviewSection dark={dark} language={tw.language} />}
         {section === "connections" && <ConnectionsPanel tw={tw} />}
+        {section === "remote" && <FeaturePanels slot="settings.remote" tw={tw} />}
         {section === "updates" && <UpdatesSection dark={dark} language={tw.language} />}
       </div>
     </div>
@@ -543,8 +545,8 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
   const [bugSendError, setBugSendError] = React.useState("");
   const copy = React.useMemo(() => language === "en"
     ? {
-        title: "Preview panel",
-        sub: "Recent Atelier patches and issue reporting for the preview workspace.",
+        title: "Patches & feedback",
+        sub: "Review the current release notes and report issues without mixing this page with the live preview workspace.",
         patchTitle: "Patch notes",
         patchHint: "Patch notes follow the current app version. GitHub Release notes are used first.",
         patchLoading: "Loading release notes...",
@@ -600,8 +602,8 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
         ],
       }
     : {
-        title: "미리보기 패널",
-        sub: "Atelier 최근 패치 내용과 미리보기/작업공간 버그 제보를 한곳에서 관리합니다.",
+        title: "패치 & 제보",
+        sub: "작업 프리뷰와 구분된 화면에서 현재 패치 내용과 버그 제보를 관리합니다.",
         patchTitle: "패치 내용",
         patchHint: "패치 내용은 현재 앱 버전 기준으로 표시됩니다. GitHub Release 노트를 먼저 사용합니다.",
         patchLoading: "릴리스 노트 불러오는 중…",
@@ -1090,6 +1092,12 @@ async function readUpdateInstallInfo(): Promise<UpdateInstallInfo> {
     runtimeInstallInfo().catch(() => ({
       exe_path: "",
       windows_store_like: false,
+      github_updater_available: false,
+      app_version: "",
+      platform: "",
+      architecture: "",
+      smart_app_control_state: null,
+      oauth_browser_handoff: "",
     })),
     import("@tauri-apps/api/app")
       .then((m) => m.getBundleType())
@@ -1115,6 +1123,7 @@ function windowsUpdaterTarget(info: UpdateInstallInfo | null): string | null | u
 }
 
 function canUseInAppUpdater(info: UpdateInstallInfo | null): boolean {
+  if (info && !info.github_updater_available) return false;
   if (!isWindowsRuntime()) return true;
   if (!info) return false;
   if (info.windows_store_like) return false;
@@ -1137,6 +1146,9 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
         currentVersion: "Current version",
         patchedAt: "Patched",
         installChannel: "Install channel",
+        runtimeDiagnostics: "Runtime diagnostics",
+        smartAppControl: "Smart App Control",
+        notReported: "Not reported",
         detectingChannel: "Detecting...",
         unknownChannel: "Unknown Windows package",
         storeChannel: "Microsoft Store / WindowsApps",
@@ -1171,6 +1183,9 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
         currentVersion: "현재 버전",
         patchedAt: "패치일",
         installChannel: "설치 채널",
+        runtimeDiagnostics: "런타임 진단",
+        smartAppControl: "Smart App Control",
+        notReported: "확인 불가",
         detectingChannel: "확인 중…",
         unknownChannel: "알 수 없는 Windows 패키지",
         storeChannel: "Microsoft Store / WindowsApps",
@@ -1399,6 +1414,29 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
       >
         <div className={cls("text-right text-[12px] font-mono", dark ? "text-dink" : "text-ink")}>
           {installChannelLabel}
+        </div>
+      </Row>
+      <Row
+        dark={dark}
+        label={copy.runtimeDiagnostics}
+      >
+        <div
+          className={cls("max-w-[420px] text-right text-[11.5px] leading-[1.55]", dark ? "text-dsub" : "text-sub")}
+          title={installInfo?.exe_path || undefined}
+        >
+          {installInfo ? (
+            <>
+              <div className={dark ? "text-dink" : "text-ink"}>
+                {installInfo.platform}/{installInfo.architecture} · v{installInfo.app_version}
+              </div>
+              <div>{installInfo.oauth_browser_handoff}</div>
+              {isWindowsRuntime() && (
+                <div>
+                  {copy.smartAppControl}: {installInfo.smart_app_control_state || copy.notReported}
+                </div>
+              )}
+            </>
+          ) : copy.detectingChannel}
         </div>
       </Row>
       <Row

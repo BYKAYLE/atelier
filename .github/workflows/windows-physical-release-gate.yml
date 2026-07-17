@@ -1,0 +1,64 @@
+name: Windows Physical Release Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_version:
+        description: "Installed Atelier version, without the v prefix"
+        required: true
+        type: string
+      atelier_exe:
+        description: "Optional full path to the installed Atelier.exe"
+        required: false
+        type: string
+      require_smart_app_control_evidence:
+        description: "Fail when Windows cannot report Smart App Control state"
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  physical-release-gate:
+    name: Signed install, browser auth, restart, and Smart App Control
+    runs-on: [self-hosted, windows, x64]
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Run strict physical Windows gate
+        shell: pwsh
+        env:
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          ATELIER_EXE: ${{ inputs.atelier_exe }}
+          REQUIRE_SMART_APP_CONTROL_EVIDENCE: ${{ inputs.require_smart_app_control_evidence }}
+        run: |
+          powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1 -SelfTest
+          $arguments = @(
+            "-File", "tools/windows-provider-smoke.ps1",
+            "-Login",
+            "-Strict",
+            "-RestartApplication",
+            "-RequireRendererReadyEvidence",
+            "-RequireAuthenticode",
+            "-RequireBrowserProcessEvidence",
+            "-RequireVisibleBrowserWindowEvidence",
+            "-ExpectedVersion", $env:EXPECTED_VERSION
+          )
+          if ($env:ATELIER_EXE) {
+            $arguments += @("-AtelierExe", $env:ATELIER_EXE)
+          }
+          if ($env:REQUIRE_SMART_APP_CONTROL_EVIDENCE -eq "true") {
+            $arguments += "-RequireSmartAppControlEvidence"
+          }
+          powershell -ExecutionPolicy Bypass @arguments
+
+      - name: Upload physical gate evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: atelier-windows-physical-release-gate-${{ inputs.expected_version }}
+          path: ${{ env.LOCALAPPDATA }}\Atelier\diagnostics\atelier-provider-smoke-*
+          if-no-files-found: error
+          retention-days: 30

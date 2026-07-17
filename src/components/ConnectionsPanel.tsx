@@ -6,18 +6,22 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { cls, Tweaks } from "../lib/tokens";
 import { safeLocalStorageGet, safeLocalStorageSet } from "../lib/storage";
+import { FeaturePanels } from "../features/featureRegistry";
 import {
   GajecodeUpdateStatus,
   HermesUpdateStatus,
+  ProviderBrowserProbeResult,
   ProviderLoginOauthResult,
   ProviderStatus,
   gajecodeCheckUpdate,
   gajecodeUpdate,
   hermesCheckUpdate,
   hermesUpdate,
+  isTauri,
   providerClearCredentials,
   providerInstallCli,
   providerLoginOauth,
+  providerOauthBrowserProbe,
   providerOpenOauthLoginUrl,
   providerOauthLoginState,
   providerSaveApiKey,
@@ -29,7 +33,7 @@ interface Props {
   tw: Tweaks;
 }
 
-type ProviderId = "claude" | "codex" | "openrouter" | "hermes" | "gajecode";
+type ProviderId = "claude" | "codex" | "openrouter" | "linear" | "hermes" | "gajecode";
 
 interface ProviderDef {
   id: ProviderId;
@@ -96,6 +100,20 @@ const PROVIDERS: ProviderDef[] = [
     apiUrl: "https://openrouter.ai/keys",
   },
   {
+    id: "linear",
+    name: "Linear",
+    desc: {
+      ko: "Linear 이슈와 워크플로 상태를 조회하고, 승인 후 이슈 생성·댓글·상태 변경을 실행합니다.",
+      en: "Inspect Linear issues and workflow states, then create issues, comment, or change status after approval.",
+    },
+    oauthCta: { ko: "", en: "" },
+    apiHelp: {
+      ko: "Linear 개인 API 키 — Linear 설정의 Security & access에서 발급",
+      en: "Linear personal API key — create one under Linear Settings > Security & access",
+    },
+    apiUrl: "https://linear.app/settings/api",
+  },
+  {
     id: "gajecode",
     name: "가재코드 (Gajae Code)",
     desc: {
@@ -159,6 +177,13 @@ const COPY = {
     installTimeout:
       "설치 완료를 아직 감지하지 못했습니다. Node.js/npm, Git Bash 또는 네트워크 상태를 확인한 뒤 다시 눌러주세요.",
     refresh: "상태 새로고침",
+    browserProbeTitle: "브라우저 연결 진단",
+    browserProbeClaude: "Claude 테스트",
+    browserProbeCodex: "Codex 테스트",
+    browserProbeRunning: "브라우저 전달 중…",
+    browserProbeSuccess: (name: string, handoff: string) =>
+      `${name} 로그인 주소를 OS에 전달했습니다 · ${handoff}. 실제 브라우저 창을 확인하세요.`,
+    browserProbeFailed: (message: string) => `브라우저 전달 실패: ${message}`,
     loginStartFailed: (name: string, message: string) =>
       `${name} 로그인을 시작하지 못했습니다. ${message}`,
     loginAlreadyConnected: (name: string) => `${name} 구독 로그인이 이미 연결되어 있습니다.`,
@@ -243,6 +268,13 @@ const COPY = {
     installTimeout:
       "Atelier still cannot detect the CLI. Check Node.js/npm, Git Bash, or your network, then try again.",
     refresh: "Refresh status",
+    browserProbeTitle: "Browser handoff diagnostics",
+    browserProbeClaude: "Test Claude",
+    browserProbeCodex: "Test Codex",
+    browserProbeRunning: "Handing off to the browser…",
+    browserProbeSuccess: (name: string, handoff: string) =>
+      `${name} login URL was handed to the OS via ${handoff}. Confirm that the browser window appeared.`,
+    browserProbeFailed: (message: string) => `Browser handoff failed: ${message}`,
     loginStartFailed: (name: string, message: string) =>
       `Could not start ${name} sign-in. ${message}`,
     loginAlreadyConnected: (name: string) => `${name} subscription sign-in is already connected.`,
@@ -310,26 +342,41 @@ const COPY = {
 type CopyT = typeof COPY[keyof typeof COPY];
 
 async function openExternalUrl(provider: ProviderId, url: string): Promise<boolean> {
-  let opened = false;
+  const allowedRoots = provider === "claude"
+    ? ["claude.ai", "claude.com", "anthropic.com"]
+    : provider === "codex"
+      ? ["openai.com", "chatgpt.com"]
+      : [];
+  let allowed = false;
   try {
-    const { open } = await import("@tauri-apps/plugin-shell");
-    await open(url);
-    opened = true;
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    allowed = parsed.protocol === "https:" && allowedRoots.some((root) => host === root || host.endsWith(`.${root}`));
   } catch {
-    // Fall through to the Rust/browser fallback below.
+    allowed = false;
   }
-  if (!opened) {
-    try {
-      await providerOpenOauthLoginUrl(provider, url);
-      opened = true;
-    } catch {
-      // Fall through to the webview fallback below.
+  if (!allowed) return false;
+
+  // Keep one authoritative desktop path. The Rust command validates the
+  // provider host and uses native ShellExecuteExW/open instead of treating a
+  // successful plugin invocation as proof that Windows displayed a browser.
+  try {
+    await providerOpenOauthLoginUrl(provider, url);
+    return true;
+  } catch {
+    if (isTauri()) {
+      try {
+        // Independent OS-open fallback for packaged hosts where the direct
+        // Windows shell call is rejected by the local runtime or policy.
+        const { open } = await import("@tauri-apps/plugin-shell");
+        await open(url);
+        return true;
+      } catch {
+        return false;
+      }
     }
   }
-  if (!opened) {
-    opened = window.open(url, "_blank", "noopener,noreferrer") !== null;
-  }
-  return opened;
+  return !isTauri() && window.open(url, "_blank", "noopener,noreferrer") !== null;
 }
 
 export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
@@ -340,6 +387,7 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
     claude: null,
     codex: null,
     openrouter: null,
+    linear: null,
     hermes: null,
     gajecode: null,
   });
@@ -355,9 +403,12 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
   } | null>(null);
   const [panelError, setPanelError] = useState<string | null>(null);
   const [panelNotice, setPanelNotice] = useState<string | null>(null);
+  const [browserProbeBusy, setBrowserProbeBusy] = useState<"claude" | "codex" | null>(null);
+  const [browserProbeResult, setBrowserProbeResult] = useState<ProviderBrowserProbeResult | null>(null);
+  const [browserProbeError, setBrowserProbeError] = useState<string | null>(null);
 
   const refresh = useCallback(async (only?: ProviderId) => {
-    const targets = only ? [only] : (["claude", "codex", "openrouter", "hermes", "gajecode"] as ProviderId[]);
+    const targets = only ? [only] : (["claude", "codex", "openrouter", "linear", "hermes", "gajecode"] as ProviderId[]);
     const results = await Promise.all(
       targets.map(async (pid) => {
         const status = await providerStatus(pid).catch(() => null);
@@ -395,7 +446,9 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
         const nextUrl = loginState.login_url || null;
         if (nextUrl && openedLoginUrlsRef.current[loginProvider] !== nextUrl) {
           openedLoginUrlsRef.current[loginProvider] = nextUrl;
-          void openExternalUrl(loginProvider, nextUrl);
+          if (!loginState.browser_opened) {
+            void openExternalUrl(loginProvider, nextUrl);
+          }
         }
         setLoginModal((m) =>
           m?.provider === loginProvider
@@ -475,7 +528,9 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
       });
       if (result.login_url) {
         openedLoginUrlsRef.current[p.id] = result.login_url;
-        void openExternalUrl(p.id, result.login_url);
+        if (!result.browser_opened) {
+          void openExternalUrl(p.id, result.login_url);
+        }
       }
       void refresh(p.id);
       if (result.completed || result.already_logged_in) {
@@ -489,6 +544,19 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
     }
   }
 
+  async function runBrowserProbe(provider: "claude" | "codex") {
+    setBrowserProbeBusy(provider);
+    setBrowserProbeResult(null);
+    setBrowserProbeError(null);
+    try {
+      setBrowserProbeResult(await providerOauthBrowserProbe(provider));
+    } catch (error) {
+      setBrowserProbeError(copy.browserProbeFailed(String(error)));
+    } finally {
+      setBrowserProbeBusy(null);
+    }
+  }
+
   return (
     <div className={cls("space-y-4", dark ? "text-dink" : "text-ink")}>
       <header className="space-y-1.5">
@@ -497,6 +565,51 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
           {copy.sub}
         </p>
       </header>
+
+      <div className={cls("border-y py-3", dark ? "border-dline" : "border-line")}>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className={cls("text-[12.5px] font-medium", dark ? "text-dink" : "text-ink")}>
+            {copy.browserProbeTitle}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void runBrowserProbe("claude")}
+              disabled={browserProbeBusy !== null}
+              className={cls(
+                "h-8 rounded-md border px-3 text-[12px] disabled:opacity-50",
+                dark ? "border-dline text-dsub hover:text-dink" : "border-line text-sub hover:text-ink",
+              )}
+            >
+              {browserProbeBusy === "claude" ? copy.browserProbeRunning : copy.browserProbeClaude}
+            </button>
+            <button
+              type="button"
+              onClick={() => void runBrowserProbe("codex")}
+              disabled={browserProbeBusy !== null}
+              className={cls(
+                "h-8 rounded-md border px-3 text-[12px] disabled:opacity-50",
+                dark ? "border-dline text-dsub hover:text-dink" : "border-line text-sub hover:text-ink",
+              )}
+            >
+              {browserProbeBusy === "codex" ? copy.browserProbeRunning : copy.browserProbeCodex}
+            </button>
+          </div>
+        </div>
+        {browserProbeResult && (
+          <div className={cls("mt-2 text-[11.5px] leading-relaxed", dark ? "text-dsub" : "text-sub")}>
+            {copy.browserProbeSuccess(
+              browserProbeResult.provider === "claude" ? "Claude" : "Codex",
+              browserProbeResult.handoff,
+            )}
+          </div>
+        )}
+        {browserProbeError && (
+          <div className={cls("mt-2 text-[11.5px]", dark ? "text-red-300" : "text-red-700")}>
+            {browserProbeError}
+          </div>
+        )}
+      </div>
 
       <div className="space-y-3">
         {PROVIDERS.map((p) => (
@@ -534,6 +647,8 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
             setTimeout(() => void refresh("gajecode"), 1000);
           }}
         />
+
+        <FeaturePanels slot="connections" tw={tw} />
       </div>
 
       {panelError && (
@@ -626,7 +741,7 @@ const ProviderCard: React.FC<CardProps> = ({
   const oauthLoggedIn = status?.oauth_logged_in ?? false;
   const apiKeyPresent = status?.api_key_present ?? false;
   const connected = oauthLoggedIn || apiKeyPresent;
-  const shouldForceOauthLogin = def.id === "claude" && oauthLoggedIn;
+  const shouldForceOauthLogin = (def.id === "claude" || def.id === "codex") && oauthLoggedIn;
   const oauthButtonLabel = shouldForceOauthLogin ? copy.oauthReconnect : def.oauthCta[lang];
 
   const statusLabel = connected

@@ -37,27 +37,28 @@ jobs:
       contents: read
     env:
       WINAPP_CLI_TELEMETRY_OPTOUT: "1"
+      ATELIER_PTY_SMOKE_WRITES: "300"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           components: rustfmt,clippy
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: "./src-tauri -> target"
 
       - name: Install npm deps
-        run: npm install --legacy-peer-deps
+        run: npm ci --legacy-peer-deps
 
       - name: Install Rust security audit
         run: cargo install cargo-audit --locked
@@ -67,11 +68,25 @@ jobs:
         run: |
           npm run build
           npm run harness:fixture
-          npm audit --omit=dev --audit-level=high
+          npm run smoke:terminal-layout
+          npm run smoke:diff-review
+          npm run smoke:review-workflow
+          npm run smoke:agent-fleet
+          npm run smoke:editor-diagnostics
+          npm run smoke:devscreen-picker
+          npm run smoke:agent-performance
+          npm run gate:orca-features
+          npm audit --audit-level=low
           cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
           cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features store-build -- -D warnings
           cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture
+          cargo test --manifest-path src-tauri/Cargo.toml --features store-build -- --nocapture
+          cargo build --manifest-path src-tauri/Cargo.toml
+          npm run smoke:pty-supervisor
+          npm run smoke:updater-contract
           npm run audit:release
+          powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1 -SelfTest
           powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1 -Install -Strict
 
       - name: Install winapp CLI
@@ -92,7 +107,7 @@ jobs:
         run: powershell -ExecutionPolicy Bypass -File tools/windows-package-smoke.ps1
 
       - name: Upload Store MSIX package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: atelier-windows-store-msix
           path: output/windows-store/*.msix
@@ -105,7 +120,7 @@ jobs:
 
       - name: Upload Store MSI candidate
         if: ${{ inputs.build_msi_candidate }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: atelier-windows-store-msi-candidate
           path: src-tauri/target/release/bundle/msi/*.msi

@@ -9,6 +9,7 @@ on:
 env:
   RELEASE_OWNER: ${{ vars.RELEASE_OWNER || github.repository_owner }}
   RELEASE_REPO: ${{ vars.RELEASE_REPO || github.event.repository.name }}
+  ATELIER_PTY_SMOKE_WRITES: "300"
   SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
   SIGNPATH_WAIT_TIMEOUT_SECONDS: ${{ vars.SIGNPATH_WAIT_TIMEOUT_SECONDS || '3600' }}
 
@@ -20,28 +21,28 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
           components: rustfmt,clippy
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: "./src-tauri -> target"
 
       - name: Install npm deps
-        run: npm install --legacy-peer-deps
+        run: npm ci --legacy-peer-deps
 
       - name: Install Rust security audit
         run: cargo install cargo-audit --locked
@@ -50,10 +51,21 @@ jobs:
         run: |
           npm run build
           npm run harness:fixture
-          npm audit --omit=dev --audit-level=high
+          npm run smoke:terminal-layout
+          npm run smoke:diff-review
+          npm run smoke:review-workflow
+          npm run smoke:agent-fleet
+          npm run smoke:editor-diagnostics
+          npm run smoke:devscreen-picker
+          npm run smoke:agent-performance
+          npm run gate:orca-features
+          npm audit --audit-level=low
           cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
           cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
           cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture
+          cargo build --manifest-path src-tauri/Cargo.toml
+          npm run smoke:pty-supervisor
+          npm run smoke:updater-contract
           npm run audit:release
 
       - name: Generate release notes
@@ -78,8 +90,13 @@ jobs:
             exit 1
           fi
 
+      - name: Prove packaged renderer startup
+        run: |
+          npm run tauri -- build --bundles app
+          npm run smoke:renderer-ready:mac
+
       - name: Build and upload macOS bundle
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN || github.token }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -111,29 +128,53 @@ jobs:
       unsigned-artifact-id: ${{ steps.upload-unsigned-artifact.outputs.artifact-id }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          components: rustfmt,clippy
 
       - name: Rust cache
-        uses: swatinem/rust-cache@v2
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: "./src-tauri -> target"
 
       - name: Install npm deps
-        run: npm install --legacy-peer-deps
+        run: npm ci --legacy-peer-deps
+
+      - name: Install Rust security audit
+        run: cargo install cargo-audit --locked
 
       - name: Probe Windows CLI and auth paths
         shell: pwsh
         run: |
           npm run build
+          npm run harness:fixture
+          npm run smoke:terminal-layout
+          npm run smoke:diff-review
+          npm run smoke:review-workflow
+          npm run smoke:agent-fleet
+          npm run smoke:editor-diagnostics
+          npm run smoke:devscreen-picker
+          npm run smoke:agent-performance
+          npm run gate:orca-features
+          npm audit --audit-level=low
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --features store-build -- -D warnings
           cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture
+          cargo test --manifest-path src-tauri/Cargo.toml --features store-build -- --nocapture
+          cargo build --manifest-path src-tauri/Cargo.toml
+          npm run smoke:pty-supervisor
+          npm run smoke:updater-contract
+          npm run audit:release
+          powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1 -SelfTest
           powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1 -Install -Strict
 
       - name: Build unsigned Windows installers
@@ -153,7 +194,7 @@ jobs:
 
       - name: Upload unsigned artifact for SignPath
         id: upload-unsigned-artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: atelier-windows-unsigned-${{ github.ref_name }}
           path: signpath-windows-unsigned
@@ -170,15 +211,15 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       - name: Install npm deps
-        run: npm install --legacy-peer-deps
+        run: npm ci --legacy-peer-deps
 
       - name: Check SignPath configuration
         id: signpath-config
@@ -207,7 +248,7 @@ jobs:
 
       - name: Submit SignPath signing request
         if: ${{ steps.signpath-config.outputs.ready == 'true' && vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG == '' }}
-        uses: signpath/github-action-submit-signing-request@v2
+        uses: signpath/github-action-submit-signing-request@b9d91eadd323de506c0c81cf0c7fe7438f3360fd # v2
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
@@ -223,7 +264,7 @@ jobs:
 
       - name: Submit SignPath signing request with artifact configuration
         if: ${{ steps.signpath-config.outputs.ready == 'true' && vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG != '' }}
-        uses: signpath/github-action-submit-signing-request@v2
+        uses: signpath/github-action-submit-signing-request@b9d91eadd323de506c0c81cf0c7fe7438f3360fd # v2
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}

@@ -12,10 +12,137 @@ const releaseTargets = [
 
 const credentialSource = readFileSync("src-tauri/src/credentials.rs", "utf8");
 const agentSource = readFileSync("src-tauri/src/agent.rs", "utf8");
+const agentModelsSource = readFileSync("src-tauri/src/agent_models.rs", "utf8");
+const agentPreviewSource = readFileSync("src-tauri/src/agent_preview.rs", "utf8");
+const lifecycleSource = readFileSync("src-tauri/src/agent_lifecycle.rs", "utf8");
+const supervisorSource = readFileSync("src-tauri/src/pty_supervisor.rs", "utf8");
+const worktreeSource = readFileSync("src-tauri/src/agent_worktree.rs", "utf8").split("#[cfg(test)]")[0];
+const libSource = readFileSync("src-tauri/src/lib.rs", "utf8");
+const mainSource = readFileSync("src-tauri/src/main.rs", "utf8");
+const cargoSource = readFileSync(manifest, "utf8");
+const packageSource = readFileSync("package.json", "utf8");
+const storeBuildSource = readFileSync("tools/windows-store/build-msix.ps1", "utf8");
+const windowsProviderSmokeSource = readFileSync("tools/windows-provider-smoke.ps1", "utf8");
+const windowsPhysicalGateSource = readFileSync(
+  ".github/workflows/windows-physical-release-gate.yml",
+  "utf8",
+);
+const ptySupervisorSmokeSource = readFileSync("tools/pty-supervisor-smoke.mjs", "utf8");
+const agentHarnessSource = readFileSync("tools/atelier-agent-harness.mjs", "utf8");
+const connectionsSource = readFileSync("src/components/ConnectionsPanel.tsx", "utf8");
+const settingsSource = readFileSync("src/components/Settings.tsx", "utf8");
+const agentWorkspaceSource = readFileSync("src/components/AgentWorkspace.tsx", "utf8");
+const indexCssSource = readFileSync("src/index.css", "utf8");
+const agentPerformanceSmokeSource = readFileSync("tools/agent-workspace-performance-smoke.mjs", "utf8");
+const rendererReceiptSource = readFileSync("src-tauri/src/runtime_receipt.rs", "utf8");
+const rendererSmokeSource = readFileSync("tools/renderer-ready-smoke.sh", "utf8");
+const terminalWorkspaceSource = readFileSync("src/components/Main.tsx", "utf8");
+const terminalLayoutSource = readFileSync("src/lib/terminalLayout.ts", "utf8");
+const diffReviewSource = readFileSync("src/lib/diffReview.ts", "utf8");
+const reviewWorkflowSource = readFileSync("src/components/review-workflow/reviewWorkflow.ts", "utf8");
+const reviewWorkflowViewSource = readFileSync("src/components/review-workflow/ReviewWorkflowStatus.tsx", "utf8");
+const devScreenSource = readFileSync("src/lib/devScreen.ts", "utf8");
+const devScreenPickerSmokeSource = readFileSync("tools/devscreen-element-picker-smoke.ts", "utf8");
+const workflowSource = [
+  readFileSync(".github/workflows/release.yml", "utf8"),
+  readFileSync(".github/workflows/windows-store.yml", "utf8"),
+  readFileSync(".github/workflows/windows-provider-smoke.yml", "utf8"),
+].join("\n");
+const openLoginBrowserSource = credentialSource
+  .split("fn open_login_url_in_browser", 2)[1]
+  ?.split("fn watch_and_open_login_url", 1)[0] || "";
+const unpinnedWorkflowUses = [...workflowSource.matchAll(/\buses:\s*[^@\s]+@([^\s#]+)/g)]
+  .map((match) => match[1])
+  .filter((ref) => !/^[0-9a-f]{40}$/i.test(ref));
 const sourceInvariants = [
   {
     ok: !credentialSource.includes("sync_gajecode_claude_subscription_credential"),
     message: "Gajae OAuth refresh tokens must not be copied into agent.db",
+  },
+  {
+    ok:
+      mainSource.includes('"--atelier-version-probe"') &&
+      mainSource.includes('"--atelier-renderer-ready-probe"') &&
+      rendererReceiptSource.includes("process_is_alive") &&
+      rendererReceiptSource.includes("receipt_path_for") &&
+      rendererReceiptSource.includes("Sha256::digest") &&
+      rendererReceiptSource.includes("renderer receipt belongs to a different executable") &&
+      rendererSmokeSource.includes('receipt["pid"] == expected_pid') &&
+      windowsProviderSmokeSource.includes("Test-AtelierInstalledRuntime") &&
+      windowsProviderSmokeSource.includes("RequireAuthenticode") &&
+      windowsProviderSmokeSource.includes("RequireSmartAppControlEvidence") &&
+      windowsProviderSmokeSource.includes("Convert-SmartAppControlRegistryValue") &&
+      windowsProviderSmokeSource.includes('1 { return "On" }') &&
+      windowsProviderSmokeSource.includes('2 { return "Evaluation" }') &&
+      windowsProviderSmokeSource.includes("SelfTest") &&
+      windowsPhysicalGateSource.includes("self-hosted") &&
+      windowsPhysicalGateSource.includes("windows") &&
+      windowsPhysicalGateSource.includes("-RestartApplication") &&
+      windowsPhysicalGateSource.includes("-RequireRendererReadyEvidence") &&
+      windowsPhysicalGateSource.includes("-RequireBrowserProcessEvidence") &&
+      windowsPhysicalGateSource.includes("-RequireVisibleBrowserWindowEvidence") &&
+      windowsPhysicalGateSource.includes("-SelfTest"),
+    message:
+      "Physical Windows release gate must prove installed version, signature, restart, browser auth, and Smart App Control evidence",
+  },
+  {
+    ok:
+      agentPreviewSource.includes("redact_preview_output_line") &&
+      agentPreviewSource.includes("preview_output_redacts_credentials_before_storage_and_events") &&
+      agentWorkspaceSource.includes("redactPreviewEvidenceText") &&
+      agentWorkspaceSource.includes("serviceOutput?: string[]") &&
+      agentWorkspaceSource.includes('networkMethod: "GET"'),
+    message:
+      "Preview task evidence must retain bounded HTTP/server diagnostics without persisting provider credentials",
+  },
+  {
+    ok:
+      devScreenSource.includes("__ATELIER_PREVIEW_DIAGNOSTICS_V1__") &&
+      devScreenSource.includes("performance.getEntriesByType('resource')") &&
+      devScreenSource.includes('url.search = ""') &&
+      devScreenSource.includes('url.hash = ""') &&
+      devScreenSource.includes("redactDiagnosticText") &&
+      !devScreenSource.includes("document.cookie") &&
+      !devScreenSource.includes("localStorage") &&
+      !devScreenSource.includes("sessionStorage") &&
+      !devScreenSource.includes("response.text()") &&
+      agentWorkspaceSource.includes("browserErrorCount?: number") &&
+      agentWorkspaceSource.includes("consoleEvidence?: string[]") &&
+      agentWorkspaceSource.includes("networkEvidence?: string[]") &&
+      agentWorkspaceSource.includes("formatDevScreenPromptContext") &&
+      agentWorkspaceSource.includes("devScreenMatchesPreview") &&
+      agentWorkspaceSource.includes("const automaticCheck = await devScreenCheck") &&
+      agentWorkspaceSource.includes("Number(entry.status || 0) >= 400") &&
+      agentWorkspaceSource.includes("if (!wasInterrupted && !wasStopped && completedPreviewUrl)") &&
+      !agentWorkspaceSource.includes("if (!result.is_error && !wasInterrupted && !wasStopped && completedPreviewUrl)"),
+    message:
+      "Preview browser diagnostics must retain bounded redacted console/network metadata without reading bodies, headers, cookies, or storage",
+  },
+  {
+    ok:
+      packageSource.includes('"smoke:devscreen-picker"') &&
+      (workflowSource.match(/npm run smoke:devscreen-picker/g) || []).length >= 3 &&
+      devScreenSource.includes("__ATELIER_ELEMENT_PICKER_V1__") &&
+      devScreenSource.includes("ELEMENT_PICKER_START_SCRIPT") &&
+      devScreenSource.includes("ELEMENT_PICKER_POLL_SCRIPT") &&
+      devScreenSource.includes("ELEMENT_PICKER_CANCEL_SCRIPT") &&
+      devScreenSource.includes("DEV_SCREEN_STYLE_ALLOWLIST") &&
+      devScreenSource.includes("normalizeDevScreenElementSelection") &&
+      devScreenSource.includes("formatDevScreenElementSelectionPrompt") &&
+      !devScreenSource.includes("element.value") &&
+      !devScreenSource.includes(".outerHTML") &&
+      agentWorkspaceSource.includes("runDevScreenElementPickerStart") &&
+      agentWorkspaceSource.includes("cancelDevScreenElementPicker") &&
+      agentWorkspaceSource.includes("devScreenSelectionAttached") &&
+      agentWorkspaceSource.includes("devScreenElementSelection") &&
+      agentWorkspaceSource.includes("elementSelection?: DevScreenElementSelection") &&
+      agentWorkspaceSource.includes("elementSelection: normalizeDevScreenElementSelection(turn.elementSelection) || undefined") &&
+      agentWorkspaceSource.includes("payload.elementSelection || null") &&
+      agentWorkspaceSource.includes("formatDevScreenElementSelectionPrompt(payload.elementSelection, tw.language)") &&
+      devScreenPickerSmokeSource.includes("backgroundImage") &&
+      devScreenPickerSmokeSource.includes("http://localhost:5173/settings"),
+    message:
+      "Preview element selection must stay localhost-only, bounded, user-controlled, credential-redacted, and release-tested",
   },
   {
     ok: !credentialSource.includes("sync_codex_auth_to_hermes"),
@@ -24,14 +151,39 @@ const sourceInvariants = [
   {
     ok:
       agentSource.includes('cmd.env("ANTHROPIC_OAUTH_TOKEN", token)') &&
-      credentialSource.includes("atelier-keychain-env-migration"),
-    message: "Gajae must receive short-lived OAuth access through process environment only",
+      agentSource.includes('cmd.env("CLAUDE_CODE_OAUTH_TOKEN", token)') &&
+      credentialSource.includes("atelier-keychain-env-migration") &&
+      credentialSource.includes('vec![vec!["setup-token"], vec!["auth", "login", "--claudeai"]]') &&
+      credentialSource.includes("cache_claude_setup_token_from_output") &&
+      !credentialSource.includes("sync_claude_credentials_file_to_app_cache") &&
+      !credentialSource.includes("read_claude_oauth_credential_from_credentials_file") &&
+      !credentialSource.includes("refresh_claude_subscription_oauth_credential") &&
+      !credentialSource.includes("cache_claude_subscription_oauth_credential") &&
+      !credentialSource.includes("https://api.anthropic.com/v1/oauth/token"),
+    message: "Claude automation must use only the official setup-token bridge without refresh-token fan-in",
   },
   {
     ok:
-      credentialSource.includes("atelier_codex_cli_access") &&
-      credentialSource.includes("scrub_staged_codex_access_from_hermes"),
-    message: "Hermes Codex access staging must be marked and scrubbed after execution",
+      !credentialSource.includes("stage_codex_access_for_hermes") &&
+      !credentialSource.includes("scrub_staged_codex_access_from_hermes") &&
+      !credentialSource.includes('home_file(&[".hermes", "auth.json"])') &&
+      !libSource.includes("scrub_staged_codex_access_from_hermes") &&
+      !windowsProviderSmokeSource.includes("auth.json") &&
+      windowsProviderSmokeSource.includes('"auth", "status", "openai-codex"'),
+    message: "Atelier must not read, write, or delete Hermes provider authentication state",
+  },
+  {
+    ok:
+      libSource.includes("sensitive_home_path") &&
+      libSource.includes("configured_hermes_roots") &&
+      libSource.includes('std::env::var_os("HERMES_HOME")') &&
+      libSource.includes('std::env::var_os("LOCALAPPDATA")') &&
+      libSource.includes('basename.starts_with("auth.json.")') &&
+      libSource.includes('relative.starts_with("mcp-tokens/")') &&
+      libSource.includes('".codex/auth.json"') &&
+      libSource.includes('".claude/.credentials.json"') &&
+      libSource.includes('return Some("Hermes provider credential")'),
+    message: "Generic file preview must block provider credential stores after canonicalization",
   },
   {
     ok:
@@ -40,8 +192,249 @@ const sourceInvariants = [
     message: "Atelier must not read Claude Code's external macOS Keychain item",
   },
   {
-    ok: credentialSource.includes('vec!["login", "--device-auth"]'),
-    message: "Codex subscription login must keep the cross-platform device authorization path",
+    ok:
+      credentialSource.includes('vec!["login", "--device-auth"]') &&
+      credentialSource.includes(
+        'const CODEX_DEVICE_AUTH_URL: &str = "https://auth.openai.com/codex/device"',
+      ) &&
+      credentialSource.includes("oauth_login_url_hint") &&
+      credentialSource.includes("hinted_browser_opened"),
+    message: "Codex subscription login must pre-open the validated cross-platform device authorization path",
+  },
+  {
+    ok:
+      windowsProviderSmokeSource.includes('"login", "--device-auth"') &&
+      windowsProviderSmokeSource.includes('"setup-token"') &&
+      windowsProviderSmokeSource.includes('ProcessStartInfo]::new()') &&
+      windowsProviderSmokeSource.includes('Properties.Name -contains "ArgumentList"') &&
+      windowsProviderSmokeSource.includes("EnvironmentVariables") &&
+      windowsProviderSmokeSource.includes('$script:AtelierBrowserHelper') &&
+      windowsProviderSmokeSource.includes('$env:BROWSER = if ($script:AtelierBrowserHelper)') &&
+      windowsProviderSmokeSource.includes("authenticated after device login") &&
+      windowsProviderSmokeSource.includes("authenticated after setup-token login") &&
+      windowsProviderSmokeSource.includes("did not prove Atelier's native and signed-helper browser handoff") &&
+      windowsProviderSmokeSource.includes("Get-BrowserProcessRecords") &&
+      windowsProviderSmokeSource.includes("Wait-BrowserProcessEvidence") &&
+      windowsProviderSmokeSource.includes("RequireBrowserProcessEvidence") &&
+      windowsProviderSmokeSource.includes("RequireVisibleBrowserWindowEvidence") &&
+      workflowSource.includes("-ProbeBrowserHandoff") &&
+      workflowSource.includes("-RequireBrowserProcessEvidence") &&
+      windowsProviderSmokeSource.includes("authentication failed after login") &&
+      windowsProviderSmokeSource.includes("Get-AppxPackage") &&
+      windowsProviderSmokeSource.includes('Programs\\Atelier Agent\\Atelier.exe') &&
+      !windowsProviderSmokeSource.includes('@("/C", "codex", "login")') &&
+      !windowsProviderSmokeSource.includes('@("/C", "claude", "auth", "login"'),
+    message: "Windows provider smoke must mirror device-auth/setup-token, support PowerShell 5.1, and strictly verify final auth",
+  },
+  {
+    ok:
+      credentialSource.includes("open_oauth_browser_probe") &&
+      credentialSource.includes("provider_oauth_browser_probe") &&
+      libSource.includes("run_oauth_browser_probe") &&
+      mainSource.includes('"--atelier-oauth-browser-probe"') &&
+      mainSource.includes('"--atelier-oauth-open-url"') &&
+      mainSource.includes("run_oauth_browser_url") &&
+      libSource.includes("run_oauth_browser_url") &&
+      credentialSource.includes("open_oauth_browser_helper_url") &&
+      connectionsSource.includes("providerOauthBrowserProbe") &&
+      windowsProviderSmokeSource.includes('"Atelier native browser probe"') &&
+      windowsProviderSmokeSource.includes('"--atelier-oauth-browser-probe", "codex"') &&
+      windowsProviderSmokeSource.includes('"Atelier signed browser helper probe"') &&
+      windowsProviderSmokeSource.includes('"--atelier-oauth-open-url", "https://auth.openai.com/codex/device"'),
+    message: "Physical and in-app diagnostics must exercise Atelier's native browser handoff path",
+  },
+  {
+    ok:
+      libSource.includes("windows_smart_app_control_state") &&
+      libSource.includes("VerifiedAndReputablePolicyState") &&
+      libSource.includes("smart_app_control_state") &&
+      settingsSource.includes("installInfo.smart_app_control_state") &&
+      settingsSource.includes("installInfo.oauth_browser_handoff"),
+    message: "Installed runtime diagnostics must expose read-only Smart App Control and OAuth handoff state",
+  },
+  {
+    ok:
+      lifecycleSource.includes("AgentLifecyclePhase::Cancelled") &&
+      lifecycleSource.includes("if state.phase.is_terminal()"),
+    message: "Agent lifecycle must preserve explicit cancellation and exactly-once terminal state",
+  },
+  {
+    ok:
+      packageSource.includes('"smoke:terminal-layout"') &&
+      (workflowSource.match(/npm run smoke:terminal-layout/g) || []).length >= 3 &&
+      terminalWorkspaceSource.includes("async function splitActiveTerminal(direction: TerminalSplitDirection)") &&
+      terminalWorkspaceSource.includes('setCodeLayout("grid")') &&
+      terminalWorkspaceSource.includes('e.code === "Backslash"') &&
+      terminalWorkspaceSource.includes('splitActiveTerminal("vertical")') &&
+      terminalWorkspaceSource.includes('splitActiveTerminal("horizontal")') &&
+      terminalWorkspaceSource.includes("updateTerminalSplitRatio") &&
+      terminalWorkspaceSource.includes("terminalSplitDivider") &&
+      terminalLayoutSource.includes("MIN_TERMINAL_SPLIT_RATIO") &&
+      terminalLayoutSource.includes("MAX_TERMINAL_SPLIT_RATIO") &&
+      terminalLayoutSource.includes("reconcileTerminalLayout") &&
+      terminalLayoutSource.includes("parseTerminalLayout"),
+    message: "Terminal workspace must preserve, restore, split, resize, and release-test its pane tree",
+  },
+  {
+    ok:
+      packageSource.includes('"smoke:agent-performance"') &&
+      (workflowSource.match(/npm run smoke:agent-performance/g) || []).length >= 3 &&
+      agentPerformanceSmokeSource.includes("elapsed-time updates must not rerender the entire workspace") &&
+      agentWorkspaceSource.includes("const AgentActivityView = React.memo") &&
+      !agentWorkspaceSource.includes("const [nowTickMs") &&
+      agentWorkspaceSource.includes("atelier-transcript-message flex min-w-0 gap-3") &&
+      indexCssSource.includes("content-visibility: auto"),
+    message:
+      "Agent workspace must keep keystrokes ref-backed, isolate elapsed-time ticks, and defer offscreen transcript rendering",
+  },
+  {
+    ok:
+      packageSource.includes('"smoke:diff-review"') &&
+      (workflowSource.match(/npm run smoke:diff-review/g) || []).length >= 3 &&
+      diffReviewSource.includes("parseUnifiedDiff") &&
+      diffReviewSource.includes("normalizeReviewAnnotations") &&
+      diffReviewSource.includes("reviewAnnotationMatchesLine") &&
+      diffReviewSource.includes("formatReviewAnnotationsPrompt") &&
+      agentWorkspaceSource.includes("reviewAnnotations?: ChangeReviewAnnotation[]") &&
+      agentWorkspaceSource.includes("saveLineReview") &&
+      agentWorkspaceSource.includes("sendLineReviews") &&
+      agentWorkspaceSource.includes("atelier-diff-line"),
+    message: "Change review must parse line numbers, persist bounded annotations, and release-test agent feedback",
+  },
+  {
+    ok:
+      packageSource.includes('"smoke:review-workflow"') &&
+      (workflowSource.match(/npm run smoke:review-workflow/g) || []).length >= 3 &&
+      reviewWorkflowSource.includes("RECEIPT_LIMIT") &&
+      reviewWorkflowSource.includes("normalizeReviewDispatchContext") &&
+      reviewWorkflowSource.includes("transitionReviewWorkflow") &&
+      reviewWorkflowSource.includes("finalizeInterruptedReviewWorkflow") &&
+      reviewWorkflowViewSource.includes("summary.pending === 0") &&
+      agentWorkspaceSource.includes("reviewRequest?: ReviewDispatchContext") &&
+      agentWorkspaceSource.includes("updateReviewWorkflowStatus"),
+    message: "Line review dispatches must be bounded, restart-safe, lifecycle-linked, and release-tested",
+  },
+  {
+    ok:
+      libSource.includes('"atelier-quick-open"') &&
+      libSource.includes('.accelerator("CmdOrCtrl+P")') &&
+      libSource.includes('app.emit("atelier://quick-open", ())') &&
+      /onQuickOpenRequested\((?:openQuickOpen|requestQuickOpen)\)/.test(agentWorkspaceSource),
+    message:
+      "Quick Open must retain both the native desktop accelerator path and the workspace event listener",
+  },
+  {
+    ok:
+      agentModelsSource.includes("codex_reasoning_levels") &&
+      agentModelsSource.includes("codex_model_requires_multi_agent_v2") &&
+      agentSource.includes('cmd.arg("--enable").arg("multi_agent_v2")') &&
+      agentModelsSource.includes('"low" | "medium" | "high" | "xhigh" | "max" | "ultra"') &&
+      agentHarnessSource.includes("requiresMultiAgentV2") &&
+      agentHarnessSource.includes('"multi_agent_v2"'),
+    message: "Codex adapters must map live model capabilities to native effort and collaboration runtime flags",
+  },
+  {
+    ok:
+      ptySupervisorSmokeSource.includes("parallelSessionCount = 3") &&
+      ptySupervisorSmokeSource.includes("parallelReconnect: true") &&
+      ptySupervisorSmokeSource.includes("did not survive reconnect"),
+    message: "Release PTY smoke must prove multiple hidden sessions survive fresh-client reconnects",
+  },
+  {
+    ok:
+      supervisorSource.includes('TcpListener::bind(("127.0.0.1", 0))') &&
+      supervisorSource.includes("token"),
+    message: "Detached PTY supervisor must stay loopback-only and token authenticated",
+  },
+  {
+    ok:
+      !worktreeSource.includes("reset --hard") &&
+      !worktreeSource.includes('arg("remove")') &&
+      !worktreeSource.includes("rm -rf"),
+    message: "Production worktree isolation must not delete, reset, or auto-remove user work",
+  },
+  {
+    ok:
+      worktreeSource.includes('env("GIT_INDEX_FILE", index)') &&
+      worktreeSource.includes('canonical_git_common_dir(&source_root)? != canonical_git_common_dir(&candidate_root)?') &&
+      worktreeSource.includes('&["apply", "--check", "--whitespace=nowarn", "-"]') &&
+      worktreeSource.includes("save_adoption_receipt") &&
+      !worktreeSource.includes('arg("merge")') &&
+      !worktreeSource.includes('arg("commit")'),
+    message:
+      "Candidate adoption must use an isolated index, verify repository identity and conflicts, retain a receipt, and never auto-merge or commit",
+  },
+  {
+    ok:
+      !openLoginBrowserSource.includes('Command::new("cmd.exe")') &&
+      credentialSource.includes("Launcher::LaunchUriAsync") &&
+      credentialSource.includes("RoInitialize") &&
+      credentialSource.includes("RO_INIT_SINGLETHREADED") &&
+      credentialSource.includes('name("atelier-oauth-browser-winrt".into())') &&
+      credentialSource.includes("ShellExecuteExW") &&
+      credentialSource.includes("CoInitializeEx") &&
+      credentialSource.includes("SEE_MASK_NOASYNC") &&
+      credentialSource.includes('name("atelier-oauth-browser-sta".into())') &&
+      credentialSource.includes("COINIT_APARTMENTTHREADED") &&
+      credentialSource.indexOf("windows_runtime_launch_url(url)") <
+        credentialSource.indexOf("windows_shell_execute_url(url)"),
+    message: "Windows OAuth browser handoff must prefer WinRT Launcher, retain the COM STA ShellExecute fallback, and avoid cmd.exe URL interpretation",
+  },
+  {
+    ok:
+      credentialSource.includes("std::env::current_exe()") &&
+      credentialSource.includes('Some(PathBuf::from("explorer.exe"))') &&
+      credentialSource.includes('PathBuf::from("/usr/bin/open")') &&
+      !credentialSource.includes('join("atelier-oauth-browser")') &&
+      !credentialSource.includes('join("open-url.sh")'),
+    message: "OAuth browser helpers must reuse the signed Atelier executable or trusted system binaries instead of generated scripts",
+  },
+  {
+    ok: (() => {
+      const handoff = connectionsSource
+        .split("async function openExternalUrl", 2)[1]
+        ?.split("export const ConnectionsPanel", 1)[0] || "";
+      const nativeIndex = handoff.indexOf("await providerOpenOauthLoginUrl(provider, url)");
+      const fallbackIndex = handoff.indexOf('@tauri-apps/plugin-shell');
+      return nativeIndex >= 0
+        && fallbackIndex > nativeIndex
+        && handoff.includes('parsed.protocol === "https:"')
+        && handoff.includes('host.endsWith(`.${root}`)')
+        && handoff.includes('["claude.ai", "claude.com", "anthropic.com"]')
+        && handoff.includes('["openai.com", "chatgpt.com"]');
+    })(),
+    message: "Packaged OAuth browser handoff must validate provider HTTPS hosts, try native open first, then use only the trusted Tauri fallback",
+  },
+  {
+    ok:
+      cargoSource.includes("store-build = []") &&
+      libSource.includes('#[cfg(not(feature = "store-build"))]') &&
+      libSource.includes('github_updater_available: cfg!(not(feature = "store-build"))') &&
+      storeBuildSource.includes("--features store-build") &&
+      packageSource.includes("--features store-build --bundles msi"),
+    message: "Microsoft Store builds must compile without the GitHub updater plugin",
+  },
+  {
+    ok:
+      connectionsSource.includes("if (!loginState.browser_opened)") &&
+      connectionsSource.includes("if (!result.browser_opened)"),
+    message: "OAuth browser handoff must not reopen a URL already opened by the native backend",
+  },
+  {
+    ok: unpinnedWorkflowUses.length === 0,
+    message: `Release workflow actions must be pinned to full commits (${unpinnedWorkflowUses.join(", ")})`,
+  },
+  {
+    ok:
+      !workflowSource.includes("npm install --legacy-peer-deps") &&
+      (workflowSource.match(/npm ci --legacy-peer-deps/g) || []).length >= 4,
+    message: "Release workflows must install the locked npm dependency graph with npm ci",
+  },
+  {
+    ok:
+      packageSource.includes('"smoke:updater-contract"') &&
+      workflowSource.includes("npm run smoke:updater-contract"),
+    message: "Release workflows must verify the signed Windows updater platform contract",
   },
 ];
 for (const invariant of sourceInvariants) {
@@ -50,7 +443,7 @@ for (const invariant of sourceInvariants) {
     process.exit(1);
   }
 }
-console.log("release credential boundary check: no long-lived cross-provider token fan-out");
+console.log("release credential boundary check: provider-owned auth with setup-token-only automation bridge");
 
 function run(command, args, options = {}) {
   return spawnSync(command, args, {

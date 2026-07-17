@@ -8,6 +8,11 @@ on:
         required: false
         type: boolean
         default: true
+      verify_browser_process:
+        description: "Build Atelier and require a real browser process after the native OAuth handoff"
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   provider-smoke:
@@ -17,19 +22,42 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: Install dependencies and build the Atelier browser helper
+        shell: pwsh
+        run: |
+          npm ci --legacy-peer-deps
+          npm run build
+          npm run gate:orca-features
+          cargo build --manifest-path src-tauri/Cargo.toml
 
       - name: Run Windows provider smoke
         shell: pwsh
         run: |
+          powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1 -SelfTest
           $scriptArgs = @("-File", "tools/windows-provider-smoke.ps1")
           if ("${{ inputs.run_install }}" -eq "true") {
             $scriptArgs += "-Install"
           }
           powershell -ExecutionPolicy Bypass @scriptArgs
+          if ("${{ inputs.verify_browser_process }}" -eq "true") {
+            powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1 `
+              -AtelierExe "$PWD\src-tauri\target\debug\atelier.exe" `
+              -ProbeBrowserHandoff `
+              -RequireBrowserProcessEvidence
+          }
 
       - name: Upload smoke diagnostics
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: atelier-windows-provider-smoke
           path: ${{ env.LOCALAPPDATA }}\Atelier\diagnostics\atelier-provider-smoke-*

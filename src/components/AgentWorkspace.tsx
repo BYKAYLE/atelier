@@ -5,6 +5,10 @@ import remarkGfm from "remark-gfm";
 import {
   devScreenCheck,
   devScreenClick,
+  devScreenDiagnostics,
+  devScreenElementPickerCancel,
+  devScreenElementPickerPoll,
+  devScreenElementPickerStart,
   devScreenJs,
   devScreenKey,
   devScreenResize,
@@ -12,6 +16,8 @@ import {
   devScreenSnapshot,
   devScreenStatus,
   devScreenType,
+  formatDevScreenElementSelectionPrompt,
+  normalizeDevScreenElementSelection,
 } from "../lib/devScreen";
 import {
   formatStellaOntologyInstruction,
@@ -28,6 +34,16 @@ import {
 } from "../lib/stellaFactory";
 import type { StellaFactoryCommand } from "../lib/stellaFactory";
 import { safeLocalStorageGet, safeLocalStorageSet } from "../lib/storage";
+import { findAutoPreviewUrl, findUrl, isAutoReviewablePreviewUrl, restoreAutoPreviewUrl } from "../lib/previewUrl";
+import {
+  formatReviewAnnotationsPrompt,
+  normalizeReviewAnnotations,
+  parseUnifiedDiff,
+  reviewAnnotationMatchesLine,
+  reviewLineLabel,
+} from "../lib/diffReview";
+import type { ChangeReviewAnnotation, DiffReviewLine } from "../lib/diffReview";
+import { classifyGajaePrefixedInput, splitCliArgs } from "../lib/gajaeCommand";
 import {
   ACADEMIC_RESEARCH_SLASH_COMMANDS,
   parseAcademicResearchCommand,
@@ -35,6 +51,9 @@ import {
 import type {
   DevScreenActionResult,
   DevScreenCheckResult,
+  DevScreenDiagnosticsResult,
+  DevScreenElementPickerResult,
+  DevScreenElementSelection,
   DevScreenOptions,
   DevScreenScreenshotResult,
   DevScreenSnapshotResult,
@@ -45,20 +64,29 @@ import {
   agentChangeBaseline,
   agentChangeSummary,
   agentCliCommand,
+	agentQuickOpenIndex,
 	  agentSend,
-	  agentUndoChanges,
+  agentUndoChanges,
+  agentWorktreeAdopt,
+  agentWorktreePrepare,
 	  academicResearchInstallClaudePlugin,
-	  clipboardSaveImage,
+  clipboardSaveImage,
 	  claudeModelOptions,
 	  codexModelOptions,
+  controlRequestClaim,
+  controlRequestComplete,
+  controlRequestsPending,
   homeDir,
   isTauri,
   onAgentEvent,
+  onAgentLifecycle,
+  onQuickOpenRequested,
   openRouterModelOptions,
   previewHealthCheck,
   previewServiceStart,
   previewServiceStatus,
   previewServiceStop,
+  searchWorkspaceFiles,
   stellaFactoryAutopilot,
   stellaFactoryBootstrap,
   stellaFactoryStatus,
@@ -69,9 +97,15 @@ import {
 import type {
   AgentChangeBaseline,
   AgentChangeSummary,
+  AtelierControlRequest,
+  AgentLifecycleEvent,
+  AgentLifecyclePhase,
   AgentPermissionMode,
   AgentProvider,
+  AgentQuickOpenIndexEntry,
   AgentStreamEvent,
+  AgentWorktreeInfo,
+  FsEntry,
   PreviewCheckResult,
   PreviewServiceStatus,
   StellaFactoryStatusResult,
@@ -79,6 +113,55 @@ import type {
 import { cls, Profile, Tweaks } from "../lib/tokens";
 import ComposerSelectMenu from "./ComposerSelectMenu";
 import { I } from "./Icons";
+import CodexModelMenu from "./agent-composer/CodexModelMenu";
+import {
+  AgentFleetLauncher,
+  AgentFleetPanel,
+  beginAgentFleetAdoption,
+  completeAgentFleetAdoption,
+  failAgentFleetAdoption,
+  finalizeInterruptedAgentFleetAdoption,
+  legacyAgentFleetAdoptionHistory,
+  normalizeAgentFleetAdoptionHistory,
+  selectAgentFleetProfileIds,
+} from "./agent-fleet";
+import type {
+  AgentFleetAdoptionHistory,
+  AgentFleetCandidateView,
+  AgentFleetPreset,
+} from "./agent-fleet";
+import { DesktopNotificationToggle, useDesktopNotifications } from "./desktop-notifications";
+import type { DesktopNotificationTask } from "./desktop-notifications";
+import {
+  createReviewDispatch,
+  finalizeInterruptedReviewWorkflow,
+  normalizeReviewDispatchContext,
+  normalizeReviewWorkflowState,
+  ReviewWorkflowStatus,
+  transitionReviewWorkflow,
+} from "./review-workflow";
+import { normalizeFeatureControlTask } from "../features/featureRegistry";
+import type {
+  ChangeReviewWorkflowState,
+  ReviewDispatchContext,
+  ReviewWorkflowPhase,
+} from "./review-workflow";
+import {
+  buildQuickOpenResults,
+  sameQuickOpenPath,
+} from "./quick-open-index";
+import type {
+  QuickOpenCommandDefinition,
+  QuickOpenCommandId,
+  QuickOpenItem,
+  QuickOpenSessionCandidate,
+} from "./quick-open-index";
+import { SessionInboxToolbar, useSessionInbox } from "./session-inbox";
+import type { SessionInboxItem, SessionInboxPhase } from "./session-inbox";
+import ChangesWorkbench from "./workbench/ChangesWorkbench";
+import CodeWorkbench from "./workbench/CodeWorkbench";
+import WorkspaceModeBar from "./workbench/WorkspaceModeBar";
+import type { WorkspaceView } from "./workbench/WorkspaceModeBar";
 
 type Role = "user" | "assistant" | "system";
 
@@ -96,13 +179,16 @@ type ModelOption = {
   value: string;
   label: string;
   disabled?: boolean;
+  supported_reasoning_levels?: string[];
+  default_reasoning_level?: string | null;
+  requires_multi_agent_v2?: boolean;
 };
 
 type WorkloadLevel = "low" | "medium" | "high" | "xhigh" | "ultra";
 type CodexEffort = WorkloadLevel;
 type CodexSpeed = "default" | "fast";
-type CodexMenuPanel = "root" | "model" | "speed";
 type HermesInferenceProvider = "openai-codex" | "openrouter";
+type GajaeInferenceProvider = "claude" | "codex";
 type SlashCommandScope = "atelier" | AgentProvider;
 
 type SlashCommandSpec = {
@@ -113,16 +199,20 @@ type SlashCommandSpec = {
   detailEn: string;
 };
 
-const GAJAE_CODE_COMMANDS: Array<SlashCommandSpec & { quick?: boolean; labelKo?: string; labelEn?: string }> = [
+type GajaeCommandSpec = SlashCommandSpec & {
+  primaryLabelKo?: string;
+  primaryLabelEn?: string;
+};
+
+const GAJAE_CODE_COMMANDS: GajaeCommandSpec[] = [
   {
     command: "gjc <message>",
     insert: "/gjc ",
     scope: "gajecode",
-    detailKo: "일반 Gajae Code 메시지 또는 CLI 인자 실행",
-    detailEn: "Run a regular Gajae Code message or CLI args",
-    quick: true,
-    labelKo: "GJC",
-    labelEn: "GJC",
+    detailKo: "가재코드 에이전트에 자연어 작업 요청",
+    detailEn: "Send a natural-language task to the Gajae Code agent",
+    primaryLabelKo: "GJC",
+    primaryLabelEn: "GJC",
   },
   {
     command: "gjc --help",
@@ -130,9 +220,6 @@ const GAJAE_CODE_COMMANDS: Array<SlashCommandSpec & { quick?: boolean; labelKo?:
     scope: "gajecode",
     detailKo: "Gajae Code 전체 도움말",
     detailEn: "Show Gajae Code help",
-    quick: true,
-    labelKo: "도움말",
-    labelEn: "Help",
   },
   {
     command: "gjc --version",
@@ -147,9 +234,6 @@ const GAJAE_CODE_COMMANDS: Array<SlashCommandSpec & { quick?: boolean; labelKo?:
     scope: "gajecode",
     detailKo: "설정된 provider 모델 목록 확인",
     detailEn: "List configured provider models",
-    quick: true,
-    labelKo: "모델",
-    labelEn: "Models",
   },
   {
     command: "gjc -p <prompt>",
@@ -157,9 +241,6 @@ const GAJAE_CODE_COMMANDS: Array<SlashCommandSpec & { quick?: boolean; labelKo?:
     scope: "gajecode",
     detailKo: "비대화형 프롬프트 실행 후 종료",
     detailEn: "Run a non-interactive prompt and exit",
-    quick: true,
-    labelKo: "프린트",
-    labelEn: "Print",
   },
   {
     command: "gjc --continue <message>",
@@ -195,9 +276,6 @@ const GAJAE_CODE_COMMANDS: Array<SlashCommandSpec & { quick?: boolean; labelKo?:
     scope: "gajecode",
     detailKo: "격리된 Gajae Code 스킬 목록",
     detailEn: "List isolated Gajae Code skills",
-    quick: true,
-    labelKo: "스킬",
-    labelEn: "Skills",
   },
   {
     command: "gjc skills read <name>",
@@ -212,9 +290,6 @@ const GAJAE_CODE_COMMANDS: Array<SlashCommandSpec & { quick?: boolean; labelKo?:
     scope: "gajecode",
     detailKo: "GJC 관리 tmux 세션 목록",
     detailEn: "List GJC-managed tmux sessions",
-    quick: true,
-    labelKo: "세션",
-    labelEn: "Sessions",
   },
   {
     command: "gjc session status <session>",
@@ -245,14 +320,22 @@ const GAJAE_CODE_COMMANDS: Array<SlashCommandSpec & { quick?: boolean; labelKo?:
     detailEn: "Run Hermes MCP setup smoke checks",
   },
   {
+    command: "gjc team <workers:role> <task>",
+    insert: "/gjc team 3:executor ",
+    scope: "gajecode",
+    detailKo: "tmux 기반 병렬 코딩 팀 실행",
+    detailEn: "Run a tmux-backed parallel coding team",
+    primaryLabelKo: "Team",
+    primaryLabelEn: "Team",
+  },
+  {
     command: "gjc rlm <task>",
     insert: "/gjc rlm ",
     scope: "gajecode",
     detailKo: "RLM 연구 모드 실행",
     detailEn: "Run RLM research mode",
-    quick: true,
-    labelKo: "RLM",
-    labelEn: "RLM",
+    primaryLabelKo: "RLM",
+    primaryLabelEn: "RLM",
   },
   {
     command: "gjc rlm --data <DATA.md> <task>",
@@ -281,9 +364,6 @@ const GAJAE_CODE_COMMANDS: Array<SlashCommandSpec & { quick?: boolean; labelKo?:
     scope: "gajecode",
     detailKo: "Coordinator MCP 서버 설정 점검",
     detailEn: "Check coordinator MCP server configuration",
-    quick: true,
-    labelKo: "MCP 점검",
-    labelEn: "MCP check",
   },
   {
     command: "gjc web-search <query>",
@@ -378,6 +458,10 @@ const GAJAE_CODE_COMMANDS: Array<SlashCommandSpec & { quick?: boolean; labelKo?:
   },
 ];
 
+const GAJAE_PRIMARY_COMMANDS = GAJAE_CODE_COMMANDS.filter(
+  (command) => command.primaryLabelKo && command.primaryLabelEn,
+);
+
 function activeFactoryCommandFromText(rawText: string): StellaFactoryCommand | null {
   const trimmed = rawText.trimStart();
   const slash = trimmed.match(/^\/(goal|analyze|probe|audit)(?:\s|$)/i);
@@ -440,6 +524,36 @@ interface ChatMessage {
   activities?: AgentActivity[];
   attachments?: ChatAttachment[];
   rawEvents?: string[];
+  lifecyclePhase?: AgentLifecyclePhase;
+  worktree?: AgentWorktreeInfo;
+  previewEvidence?: TaskPreviewEvidence;
+  reviewAnnotations?: ChangeReviewAnnotation[];
+  reviewWorkflow?: ChangeReviewWorkflowState;
+}
+
+interface TaskPreviewEvidence {
+  url: string;
+  ok: boolean;
+  status?: number | null;
+  title?: string | null;
+  error?: string | null;
+  checkedAt: number;
+  serviceRunning?: boolean;
+  servicePid?: number;
+  serviceRestarts?: number;
+  serviceError?: string;
+  serviceOutput?: string[];
+  bodyText?: string;
+  networkMethod?: "GET";
+  domNodes?: number;
+  screenshotCaptured?: boolean;
+  diagnosticsArmedAt?: number;
+  browserErrorCount?: number;
+  browserWarningCount?: number;
+  consoleEvidence?: string[];
+  networkRequestCount?: number;
+  networkFailureCount?: number;
+  networkEvidence?: string[];
 }
 
 const ORPHANED_RUN_TEXT = "이전 실행이 중단되어 응답을 완료하지 못했습니다.";
@@ -487,11 +601,14 @@ type QueuedAgentTurn = {
   displayText?: string;
   factoryCommand?: StellaFactoryCommand;
   factoryEvidence?: string;
+  elementSelection?: DevScreenElementSelection;
   attachments: ChatAttachment[];
   cwd: string;
   createdAt: number;
   autoRetryCount?: number;
   notBefore?: number;
+  reviewRequest?: ReviewDispatchContext;
+  controlRequestId?: string;
 };
 
 type SmoothRevealState = {
@@ -514,6 +631,16 @@ interface AgentSession {
   codexSpeed?: CodexSpeed;
   permissionMode?: AgentPermissionMode;
   queueMode?: boolean;
+  worktreeEnabled?: boolean;
+  worktreeInfo?: AgentWorktreeInfo;
+  parallelBatchId?: string;
+  parallelBatchLabel?: string;
+  parallelSourceSessionId?: string;
+  parallelCandidateIndex?: number;
+  parallelCandidateCount?: number;
+  parallelAdoptedAt?: number;
+  parallelAdoptionSummary?: string;
+  parallelAdoption?: AgentFleetAdoptionHistory;
   cwd: string;
   providerSessionId?: string;
   providerSessionModel?: string;
@@ -556,6 +683,7 @@ const DEV_SCREEN_PORT_KEY = "atelier.agent.devscreen.port.v1";
 const DEV_SCREEN_WINDOW_KEY = "atelier.agent.devscreen.window.v1";
 const TASK_LIST_VISIBLE_KEY = "atelier.agent.tasklist.visible.v1";
 const COMPOSER_HEIGHT_KEY = "atelier.agent.composer.height.v1";
+const WORKSPACE_VIEW_KEY = "atelier.agent.workspace.view.v1";
 const FACTORY_DEFAULT_OFF_MIGRATION_KEY = "atelier.agent.factory.defaultOff.v1";
 const DEFAULT_PROVIDER: AgentProvider = "claude";
 const DEFAULT_HERMES_PROVIDER: HermesInferenceProvider = "openai-codex";
@@ -576,6 +704,7 @@ const MAX_PERSISTED_QUEUED_TURNS = 16;
 const MAX_PERSISTED_CHANGE_FILES = 40;
 const MAX_PERSISTED_CHANGE_DIFF_CHARS = 6000;
 const MAX_PERSISTED_CHANGE_PATCH_CHARS = 12000;
+const MAX_PERSISTED_REVIEW_ANNOTATIONS = 80;
 const FALLBACK_PERSISTED_MESSAGES_PER_SESSION = 24;
 const FALLBACK_PERSISTED_MESSAGE_TEXT_CHARS = 6000;
 const MAX_COMPACT_AGENT_CONTEXT_CHARS = 9000;
@@ -593,7 +722,6 @@ const PREVIEW_VP_SIZES: Record<Exclude<PreviewViewport, "desktop">, { w: number;
   mobile: { w: 390, h: 844 },
   tablet: { w: 834, h: 1194 },
 };
-const LOCAL_PREVIEW_RE = /^https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d+)?(?:[/?#]|$)/i;
 const TERMINAL_ISSUE_RE =
   /\b(?:error|failed|failure|exception|panic|traceback|npm ERR|EADDRINUSE|ECONNREFUSED|ECONNRESET|vite error|compile failed|compilation failed)\b/i;
 const NO_AGENT_RESPONSE_KO = "응답을 완료하지 못했습니다. 같은 작업에서 다시 요청하면 이어서 확인할 수 있습니다.";
@@ -631,6 +759,26 @@ function composerMaxHeight() {
 function initialComposerHeight() {
   const saved = Number(safeLocalStorageGet(COMPOSER_HEIGHT_KEY));
   return clampNumber(Number.isFinite(saved) && saved > 0 ? saved : 260, 150, composerMaxHeight());
+}
+
+function initialWorkspaceView(): WorkspaceView {
+  const saved = safeLocalStorageGet(WORKSPACE_VIEW_KEY);
+  return saved === "code" || saved === "changes" ? saved : "conversation";
+}
+
+function resolveWorkspaceFilePath(root: string, path: string): string {
+  if (!path) return path;
+  if (path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path)) return path;
+  const separator = root.includes("\\") ? "\\" : "/";
+  return `${root.replace(/[\\/]$/, "")}${separator}${path}`;
+}
+
+function relativeWorkspaceFilePath(root: string, path: string): string {
+  const normalizedRoot = root.replace(/\\/g, "/").replace(/\/$/, "");
+  const normalizedPath = path.replace(/\\/g, "/");
+  return normalizedPath.startsWith(`${normalizedRoot}/`)
+    ? normalizedPath.slice(normalizedRoot.length + 1)
+    : normalizedPath;
 }
 
 function noAgentResponseText(language?: string) {
@@ -1187,6 +1335,18 @@ const GAJECODE_MODELS: ModelOption[] = [
   { value: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
 ];
 
+function gajecodeModelOptions(
+  provider: GajaeInferenceProvider,
+  claudeModels: ModelOption[],
+  codexModels: ModelOption[],
+): ModelOption[] {
+  if (provider === "claude") return claudeModels.length > 0 ? claudeModels : GAJECODE_MODELS;
+  return (codexModels.length > 0 ? codexModels : CODEX_MODELS).map((option) => ({
+    ...option,
+    value: `codex/${option.value}`,
+  }));
+}
+
 const MODEL_OPTIONS: Record<AgentProvider, ModelOption[]> = {
   claude: CLAUDE_MODELS,
   hermes: OPENAI_CODEX_MODELS,
@@ -1197,6 +1357,11 @@ const MODEL_OPTIONS: Record<AgentProvider, ModelOption[]> = {
 const HERMES_PROVIDERS: Array<{ value: HermesInferenceProvider; label: string }> = [
   { value: "openai-codex", label: "Codex" },
   { value: "openrouter", label: "OpenRouter" },
+];
+
+const GAJECODE_PROVIDERS: Array<{ value: GajaeInferenceProvider; label: string }> = [
+  { value: "claude", label: "Claude" },
+  { value: "codex", label: "Codex" },
 ];
 
 const HERMES_MODEL_OPTIONS: Record<HermesInferenceProvider, ModelOption[]> = {
@@ -1257,6 +1422,9 @@ const isProvider = (value: unknown): value is AgentProvider =>
 const isHermesProvider = (value: unknown): value is HermesInferenceProvider =>
   value === "openai-codex" || value === "openrouter";
 
+const isGajaeProvider = (value: unknown): value is GajaeInferenceProvider =>
+  value === "claude" || value === "codex";
+
 const isCodexEffort = (value: unknown): value is CodexEffort =>
   value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "ultra";
 
@@ -1316,6 +1484,10 @@ function inferHermesProviderFromModel(model?: string | null) {
   return DEFAULT_HERMES_PROVIDER;
 }
 
+function inferGajaeProviderFromModel(model?: string | null): GajaeInferenceProvider {
+  return model?.trim().startsWith("codex/") ? "codex" : "claude";
+}
+
 function modelOptionsFor(
   provider: AgentProvider,
   selected?: string | null,
@@ -1335,11 +1507,11 @@ function modelOptionsFor(
           : HERMES_MODEL_OPTIONS[hermesProvider])
       : provider === "codex"
         ? liveCodexModels
-        : provider === "claude"
+      : provider === "claude"
           ? liveClaudeModels
           : provider === "gajecode"
-            ? liveClaudeModels
-          : MODEL_OPTIONS[provider] || [];
+            ? gajecodeModelOptions(inferGajaeProviderFromModel(selected), liveClaudeModels, liveCodexModels)
+            : MODEL_OPTIONS[provider] || [];
   const trimmed = selected?.trim();
   if (!trimmed || options.some((option) => option.value === trimmed)) return options;
   if (provider === "claude" || provider === "codex" || provider === "gajecode" || (provider === "hermes" && (hermesProvider === "openai-codex" || hermesProvider === "openrouter"))) return options;
@@ -1357,7 +1529,14 @@ function sanitizeModelOptions(options: ModelOption[]) {
     const value = option.value?.trim();
     if (!value || seen.has(value)) continue;
     seen.add(value);
-    clean.push({ value, label: option.label?.trim() || value, disabled: option.disabled });
+    clean.push({
+      value,
+      label: option.label?.trim() || value,
+      disabled: option.disabled,
+      supported_reasoning_levels: option.supported_reasoning_levels,
+      default_reasoning_level: option.default_reasoning_level,
+      requires_multi_agent_v2: option.requires_multi_agent_v2,
+    });
   }
   return clean;
 }
@@ -1383,7 +1562,11 @@ function normalizeWorkloadInput(value: string): WorkloadLevel | null {
   return null;
 }
 
-function nativeCodexEffort(workload: WorkloadLevel): "low" | "medium" | "high" | "xhigh" {
+function nativeCodexEffort(workload: WorkloadLevel, model: string, options: ModelOption[]): string {
+  const supported = options.find((option) => option.value === model)?.supported_reasoning_levels || [];
+  if (supported.includes(workload)) return workload;
+  if (workload === "ultra" && supported.includes("max")) return "max";
+  if (workload === "ultra" && supported.includes("xhigh")) return "xhigh";
   return workload === "ultra" ? "xhigh" : workload;
 }
 
@@ -1503,6 +1686,13 @@ function slashCommandsFor(
       scope: "atelier",
       detailKo: "Atelier 온톨로지 실행 모드 변경",
       detailEn: "Change Atelier ontology execution mode",
+    },
+    {
+      command: "/isolation workspace|worktree",
+      insert: "/isolation ",
+      scope: "atelier",
+      detailKo: "현재 작업을 원본 폴더 또는 격리 Git worktree에서 실행",
+      detailEn: "Run this task in the source workspace or an isolated Git worktree",
     },
     {
       command: "/que",
@@ -1738,6 +1928,13 @@ function slashCommandsFor(
   if (provider === "gajecode") {
     return [
       ...common,
+      {
+        command: "/provider claude|codex",
+        insert: "/provider ",
+        scope: "gajecode",
+        detailKo: "가재코드 하위 provider 변경",
+        detailEn: "Change Gajae Code sub-provider",
+      },
       ...GAJAE_CODE_COMMANDS,
     ];
   }
@@ -1868,6 +2065,7 @@ function normalizeModel(provider: AgentProvider, model?: string | null) {
   }
 
   if (provider === "gajecode") {
+    if (key.startsWith("codex/")) return trimmed;
     const legacy: Record<string, string> = {
       default: "claude-opus-4-8",
       opus: "claude-opus-4-8",
@@ -2001,6 +2199,10 @@ function compactMessageForPersistence(message: ChatMessage, textLimit = MAX_PERS
     ...message,
     text: compactTextForPersistence(message.text, textLimit),
     changes: compactChangeSummaryForPersistence(message.changes),
+    reviewAnnotations: Array.isArray(message.reviewAnnotations)
+      ? normalizeReviewAnnotations(message.reviewAnnotations).slice(-MAX_PERSISTED_REVIEW_ANNOTATIONS)
+      : undefined,
+    reviewWorkflow: normalizeReviewWorkflowState(message.reviewWorkflow),
     changesLoading: false,
     activities: Array.isArray(message.activities)
       ? message.activities.slice(-MAX_PERSISTED_ACTIVITIES).map((activity) => ({ ...activity, active: false }))
@@ -2013,11 +2215,14 @@ function compactMessageForPersistence(message: ChatMessage, textLimit = MAX_PERS
 }
 
 function compactQueuedTurnForPersistence(turn: QueuedAgentTurn): QueuedAgentTurn {
+  const elementSelection = normalizeDevScreenElementSelection(turn.elementSelection);
   return {
     ...turn,
     text: compactTextForPersistence(turn.text, MAX_PERSISTED_MESSAGE_TEXT_CHARS),
     displayText: compactTextForPersistence(turn.displayText, MAX_PERSISTED_MESSAGE_TEXT_CHARS),
     factoryEvidence: compactTextForPersistence(turn.factoryEvidence, MAX_PERSISTED_MESSAGE_TEXT_CHARS),
+    elementSelection: elementSelection || undefined,
+    reviewRequest: normalizeReviewDispatchContext(turn.reviewRequest),
     attachments: Array.isArray(turn.attachments) ? turn.attachments.slice(-MAX_PERSISTED_ATTACHMENTS) : [],
   };
 }
@@ -2096,6 +2301,31 @@ function loadSessions(): AgentSession[] {
           codexSpeed: provider === "codex" ? normalizeCodexSpeed(session.codexSpeed) : undefined,
           permissionMode: normalizePermissionMode(session.permissionMode),
           queueMode: Boolean(session.queueMode),
+          worktreeEnabled: Boolean(session.worktreeEnabled),
+          worktreeInfo:
+            session.worktreeInfo
+            && typeof session.worktreeInfo.source_cwd === "string"
+            && typeof session.worktreeInfo.worktree_cwd === "string"
+            && typeof session.worktreeInfo.branch === "string"
+              ? session.worktreeInfo
+              : undefined,
+          parallelBatchId: typeof session.parallelBatchId === "string" ? session.parallelBatchId : undefined,
+          parallelBatchLabel: typeof session.parallelBatchLabel === "string" ? session.parallelBatchLabel : undefined,
+          parallelSourceSessionId: typeof session.parallelSourceSessionId === "string" ? session.parallelSourceSessionId : undefined,
+          parallelCandidateIndex: typeof session.parallelCandidateIndex === "number" ? session.parallelCandidateIndex : undefined,
+          parallelCandidateCount: typeof session.parallelCandidateCount === "number" ? session.parallelCandidateCount : undefined,
+          parallelAdoptedAt: typeof session.parallelAdoptedAt === "number" ? session.parallelAdoptedAt : undefined,
+          parallelAdoptionSummary: typeof session.parallelAdoptionSummary === "string" ? session.parallelAdoptionSummary : undefined,
+          parallelAdoption: finalizeInterruptedAgentFleetAdoption(
+            normalizeAgentFleetAdoptionHistory(session.parallelAdoption)
+              || legacyAgentFleetAdoptionHistory({
+                adoptedAt: typeof session.parallelAdoptedAt === "number" ? session.parallelAdoptedAt : undefined,
+                summary: typeof session.parallelAdoptionSummary === "string" ? session.parallelAdoptionSummary : undefined,
+                batchId: typeof session.parallelBatchId === "string" ? session.parallelBatchId : undefined,
+                candidateSessionId: session.id,
+                sourceSessionId: typeof session.parallelSourceSessionId === "string" ? session.parallelSourceSessionId : undefined,
+              }),
+          ),
           cwd: session.cwd || "",
           providerSessionId: session.providerSessionId,
           providerSessionModel: typeof session.providerSessionModel === "string" ? session.providerSessionModel : undefined,
@@ -2103,7 +2333,11 @@ function loadSessions(): AgentSession[] {
             ? session.providerSessionHermesProvider
             : undefined,
           messages: Array.isArray(session.messages)
-            ? finalizeOrphanedStreamingMessages(session.messages)
+              ? finalizeOrphanedStreamingMessages(session.messages.map((message) => ({
+                ...message,
+                reviewAnnotations: normalizeReviewAnnotations(message.reviewAnnotations),
+                reviewWorkflow: finalizeInterruptedReviewWorkflow(message.reviewWorkflow),
+              })))
             : [],
           queuedTurns: Array.isArray(session.queuedTurns)
             ? session.queuedTurns
@@ -2117,6 +2351,8 @@ function loadSessions(): AgentSession[] {
                 )
                 .map((turn) => ({
                   ...turn,
+                  elementSelection: normalizeDevScreenElementSelection(turn.elementSelection) || undefined,
+                  reviewRequest: normalizeReviewDispatchContext(turn.reviewRequest),
                   attachments: Array.isArray(turn.attachments) ? turn.attachments : [],
                   cwd: typeof turn.cwd === "string" ? turn.cwd : "",
                   createdAt: typeof turn.createdAt === "number" ? turn.createdAt : Date.now(),
@@ -2124,7 +2360,7 @@ function loadSessions(): AgentSession[] {
                 }))
             : [],
           rawEvents: Array.isArray(session.rawEvents) ? session.rawEvents : [],
-          previewUrl: typeof session.previewUrl === "string" ? session.previewUrl : undefined,
+          previewUrl: restoreAutoPreviewUrl(session.previewUrl),
           previewVisible: typeof session.previewVisible === "boolean" ? session.previewVisible : undefined,
           previewViewport:
             session.previewViewport === "mobile" || session.previewViewport === "tablet" || session.previewViewport === "desktop"
@@ -2136,7 +2372,9 @@ function loadSessions(): AgentSession[] {
         };
       });
     }
-  } catch {}
+  } catch (error) {
+    console.warn("load agent sessions failed", error);
+  }
   return [];
 }
 
@@ -2147,10 +2385,7 @@ function clipRawEvent(raw: string) {
 }
 
 function findPreviewUrl(text?: string | null) {
-  if (!text) return null;
-  const matches = text.match(/https?:\/\/[A-Za-z0-9\-._~:/?#[\]@!$&*+,;=%]+/g);
-  if (!matches?.length) return null;
-  return matches[matches.length - 1].replace(/[.,;:]+$/, "");
+  return findUrl(text);
 }
 
 function cleanStoredPreviewUrl(text?: string | null) {
@@ -2159,7 +2394,27 @@ function cleanStoredPreviewUrl(text?: string | null) {
 }
 
 function isLocalPreviewUrl(url?: string | null) {
-  return Boolean(url && LOCAL_PREVIEW_RE.test(url.trim()));
+  return isAutoReviewablePreviewUrl(url);
+}
+
+function localPreviewOriginKey(value?: string | null) {
+  if (!value || !isLocalPreviewUrl(value)) return "";
+  try {
+    const url = new URL(value);
+    const host = ["localhost", "127.0.0.1", "0.0.0.0", "[::1]", "::1"].includes(url.hostname)
+      ? "loopback"
+      : url.hostname;
+    const port = url.port || (url.protocol === "https:" ? "443" : "80");
+    return `${url.protocol}//${host}:${port}`;
+  } catch {
+    return "";
+  }
+}
+
+function devScreenMatchesPreview(diagnostics: DevScreenDiagnosticsResult | null | undefined, previewUrl: string) {
+  const previewOrigin = localPreviewOriginKey(previewUrl);
+  const screenOrigin = localPreviewOriginKey(diagnostics?.pageUrl);
+  return Boolean(previewOrigin && screenOrigin && previewOrigin === screenOrigin);
 }
 
 function parseRawJson(raw?: string | null): unknown {
@@ -2219,22 +2474,14 @@ function stripAnsi(text: string) {
   );
 }
 
-function splitCliArgs(input: string) {
-  const args: string[] = [];
-  const re = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^']*)'|(\S+)/g;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(input)) !== null) {
-    const value = match[1] ?? match[2] ?? match[3] ?? "";
-    args.push(value.replace(/\\"/g, "\""));
-  }
-  return args;
-}
-
-function parseGajaeCliInput(input: string) {
-  const args = splitCliArgs(input.trim());
-  if (args.length === 0) return null;
-  if (args[0]?.toLowerCase() !== "gjc") return null;
-  return args.slice(1);
+function redactPreviewEvidenceText(text: string) {
+  return stripAnsi(text)
+    .replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+\/-]{8,}/gi, "<redacted>")
+    .replace(/\bsk-[A-Za-z0-9_-]{12,}/g, "<redacted>")
+    .replace(
+      /\b(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|authorization|password)\s*[:=]\s*["']?[^\s,"';}\]]+/gi,
+      "$1=<redacted>",
+    );
 }
 
 function parseCliTableRows(output: string) {
@@ -2426,19 +2673,19 @@ function formatPreviewPromptContext(
   lines.push(`${label.url}: ${previewUrl}`);
   if (previewCheck) {
     lines.push(`${label.status}: ${previewCheck.ok ? "ok" : "error"}${previewCheck.status ? ` HTTP ${previewCheck.status}` : ""}`);
-    if (previewCheck.error) lines.push(`${label.error}: ${clipActivityText(previewCheck.error, 360)}`);
-    if (previewCheck.title) lines.push(`${label.title}: ${clipActivityText(previewCheck.title, 220)}`);
-    if (previewCheck.body_text) lines.push(`${label.body}: ${clipActivityText(previewCheck.body_text, 700)}`);
+    if (previewCheck.error) lines.push(`${label.error}: ${clipActivityText(redactPreviewEvidenceText(previewCheck.error), 360)}`);
+    if (previewCheck.title) lines.push(`${label.title}: ${clipActivityText(redactPreviewEvidenceText(previewCheck.title), 220)}`);
+    if (previewCheck.body_text) lines.push(`${label.body}: ${clipActivityText(redactPreviewEvidenceText(previewCheck.body_text), 700)}`);
   }
   if (service?.managed) {
     lines.push(`${label.service}: ${service.running ? "running" : "stopped"}${service.pid ? ` PID ${service.pid}` : ""}`);
-    if (service.command) lines.push(`${label.command}: ${clipActivityText(service.command, 260)}`);
+    if (service.command) lines.push(`${label.command}: ${clipActivityText(redactPreviewEvidenceText(service.command), 260)}`);
     service.recent_output.slice(-3).forEach((line) => {
-      lines.push(`${label.log}: ${clipActivityText(line, 300)}`);
+      lines.push(`${label.log}: ${clipActivityText(redactPreviewEvidenceText(line), 300)}`);
     });
   }
   diagnostics.slice(-3).forEach((diagnostic) => {
-    lines.push(`${label.diagnostic}: ${clipActivityText(diagnostic.text, 360)}`);
+    lines.push(`${label.diagnostic}: ${clipActivityText(redactPreviewEvidenceText(diagnostic.text), 360)}`);
   });
   return lines.join("\n");
 }
@@ -2447,19 +2694,24 @@ function formatDevScreenPromptContext(
   language: "ko" | "en",
   status: DevScreenStatusResult | null,
   snapshot: DevScreenSnapshotResult | null,
+  diagnostics: DevScreenDiagnosticsResult | null,
   check: DevScreenCheckResult | null,
   lastAction: DevScreenActionResult | null,
+  elementSelection: DevScreenElementSelection | null,
   error: string | null,
 ) {
   const latestStatus = check?.status || status;
   const latestSnapshot = check?.snapshot || snapshot;
-  if (!latestStatus && !latestSnapshot && !lastAction && !error) return "";
+  const latestDiagnostics = check?.diagnostics || diagnostics;
+  if (!latestStatus && !latestSnapshot && !latestDiagnostics && !lastAction && !elementSelection && !error) return "";
   const label = language === "en"
     ? {
         section: "Atelier Tauri dev screen:",
         bridge: "Bridge",
         window: "Window",
         snapshot: "DOM snapshot",
+        console: "Browser console",
+        network: "Browser network",
         action: "Last screen action",
         error: "Screen error",
       }
@@ -2468,6 +2720,8 @@ function formatDevScreenPromptContext(
         bridge: "Bridge",
         window: "창",
         snapshot: "DOM 스냅샷",
+        console: "브라우저 콘솔",
+        network: "브라우저 네트워크",
         action: "최근 화면 액션",
         error: "화면 에러",
       };
@@ -2479,9 +2733,26 @@ function formatDevScreenPromptContext(
   if (latestSnapshot?.text) {
     lines.push(`${label.snapshot}:\n${clipActivityText(latestSnapshot.text, 1400)}`);
   }
+  if (latestDiagnostics) {
+    const consoleLines = [
+      ...latestDiagnostics.runtimeErrors.map((entry) => `[runtime error] ${entry}`),
+      ...latestDiagnostics.consoleEntries.map((entry) => `[${entry.level}] ${entry.text}`),
+    ].slice(-10);
+    consoleLines.forEach((entry) => {
+      lines.push(`${label.console}: ${clipActivityText(redactPreviewEvidenceText(entry), 420)}`);
+    });
+    latestDiagnostics.networkFailures.slice(-6).forEach((entry) => {
+      lines.push(`${label.network}: ${clipActivityText(redactPreviewEvidenceText(entry), 420)}`);
+    });
+    latestDiagnostics.networkEntries.slice(-12).forEach((entry) => {
+      lines.push(`${label.network}: ${entry.initiatorType}${entry.status ? ` ${entry.status}` : ""} ${entry.durationMs}ms ${entry.url}`);
+    });
+  }
   if (lastAction) {
     lines.push(`${label.action}: ${clipActivityText(JSON.stringify(lastAction.data), 520)}`);
   }
+  const elementContext = formatDevScreenElementSelectionPrompt(elementSelection, language);
+  if (elementContext) lines.push(elementContext);
   if (error) {
     lines.push(`${label.error}: ${clipActivityText(error, 520)}`);
   }
@@ -2737,7 +3008,75 @@ function revealNextLength(
   return nextLength;
 }
 
-const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
+interface AgentActivityViewProps {
+  createdAt: number;
+  currentLabel: string;
+  language: Tweaks["language"];
+  icon: React.ReactNode;
+  dark: boolean;
+  canStop: boolean;
+  stopping: boolean;
+  stopLabel: string;
+  stoppingLabel: string;
+  onStop: () => void;
+}
+
+const AgentActivityView = React.memo(function AgentActivityView({
+  createdAt,
+  currentLabel,
+  language,
+  icon,
+  dark,
+  canStop,
+  stopping,
+  stopLabel,
+  stoppingLabel,
+  onStop,
+}: AgentActivityViewProps) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    setNow(Date.now());
+    const handle = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(handle);
+  }, [createdAt]);
+  const elapsedSec = Math.max(0, Math.floor((now - createdAt) / 1000));
+  const elapsedLabel = language === "en"
+    ? `Working for ${elapsedSec}s`
+    : `${elapsedSec}s 동안 작업 중입니다`;
+
+  return (
+    <div className="atelier-activity-codex" aria-live="polite">
+      <div className="flex items-center justify-between gap-3">
+        <div className="atelier-activity-elapsed">{elapsedLabel}</div>
+        {canStop && (
+          <button
+            type="button"
+            onClick={onStop}
+            disabled={stopping}
+            className={cls(
+              "shrink-0 h-8 rounded-[7px] border px-3 inline-flex items-center gap-2 text-[12px] font-medium disabled:opacity-50",
+              dark
+                ? "border-[#7a4638] bg-[#2a211e] text-[#f28b68] hover:bg-[#342722]"
+                : "border-[#d7a08a] bg-[#fff4ef] text-[#b94f2f] hover:bg-[#ffe8df]",
+            )}
+            aria-label={stopping ? stoppingLabel : stopLabel}
+            title={stopping ? stoppingLabel : stopLabel}
+            data-testid="agent-stop-activity"
+          >
+            <span aria-hidden="true" className="h-2.5 w-2.5 rounded-[2px] bg-current" />
+            <span>{stopping ? stoppingLabel : stopLabel}</span>
+          </button>
+        )}
+      </div>
+      <div className="atelier-activity-line atelier-activity-active">
+        <span className="atelier-activity-icon" aria-hidden="true">{icon}</span>
+        <span className="atelier-activity-label">{currentLabel}</span>
+      </div>
+    </div>
+  );
+});
+
+const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({ tw, onOpenTerminal }) => {
   const dark = tw.dark;
   const [sessions, setSessions] = useState<AgentSession[]>(() => loadSessions());
   const [activeId, setActiveId] = useState<string | null>(() => safeLocalStorageGet(ACTIVE_KEY));
@@ -2748,10 +3087,23 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const [isPastingImage, setIsPastingImage] = useState(false);
   const [cwd, setCwd] = useState(() => safeLocalStorageGet(CWD_KEY) || "");
   const [showTaskList, setShowTaskList] = useState(() => safeLocalStorageGet(TASK_LIST_VISIBLE_KEY) !== "0");
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(() => initialWorkspaceView());
+  const [workspaceChanges, setWorkspaceChanges] = useState<AgentChangeSummary | null>(null);
+  const [workspaceChangesLoading, setWorkspaceChangesLoading] = useState(false);
+  const [workspaceChangesError, setWorkspaceChangesError] = useState<string | null>(null);
+  const [workbenchFilePath, setWorkbenchFilePath] = useState<string | null>(null);
+  const [workbenchInitialLine, setWorkbenchInitialLine] = useState<number | null>(null);
+  const [showQuickOpen, setShowQuickOpen] = useState(false);
+  const [quickOpenQuery, setQuickOpenQuery] = useState("");
+  const [quickOpenIndex, setQuickOpenIndex] = useState(0);
+  const [quickOpenFiles, setQuickOpenFiles] = useState<FsEntry[]>([]);
+  const [quickOpenIndexedEntries, setQuickOpenIndexedEntries] = useState<AgentQuickOpenIndexEntry[]>([]);
+  const quickOpenInputRef = useRef<HTMLInputElement>(null);
   const [showPreview, setShowPreview] = useState(
     () => safeLocalStorageGet(PREVIEW_VISIBLE_KEY) === "1" || safeLocalStorageGet(DEV_SCREEN_VISIBLE_KEY) === "1",
   );
   const [previewUrl, setPreviewUrl] = useState(() => cleanStoredPreviewUrl(safeLocalStorageGet(PREVIEW_KEY) || ""));
+  const previewUrlRef = useRef(previewUrl);
   const [previewInput, setPreviewInput] = useState(() => cleanStoredPreviewUrl(safeLocalStorageGet(PREVIEW_KEY) || ""));
   const [previewReloadKey, setPreviewReloadKey] = useState(0);
   const [previewCheck, setPreviewCheck] = useState<PreviewCheckResult | null>(null);
@@ -2770,7 +3122,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const [devScreenStatusResult, setDevScreenStatusResult] = useState<DevScreenStatusResult | null>(null);
   const [devScreenScreenshotResult, setDevScreenScreenshotResult] = useState<DevScreenScreenshotResult | null>(null);
   const [devScreenSnapshotResult, setDevScreenSnapshotResult] = useState<DevScreenSnapshotResult | null>(null);
+  const [devScreenDiagnosticsResult, setDevScreenDiagnosticsResult] = useState<DevScreenDiagnosticsResult | null>(null);
   const [devScreenCheckResult, setDevScreenCheckResult] = useState<DevScreenCheckResult | null>(null);
+  const devScreenCheckUrlRef = useRef("");
+  const devScreenArmKeyRef = useRef("");
   const [devScreenActionResult, setDevScreenActionResult] = useState<DevScreenActionResult | null>(null);
   const [devScreenError, setDevScreenError] = useState<string | null>(null);
   const [devScreenJsCode, setDevScreenJsCode] = useState("document.title");
@@ -2779,6 +3134,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const [devScreenKeyName, setDevScreenKeyName] = useState("Enter");
   const [devScreenResizeWidth, setDevScreenResizeWidth] = useState("1440");
   const [devScreenResizeHeight, setDevScreenResizeHeight] = useState("980");
+  const [devScreenPickerStatus, setDevScreenPickerStatus] = useState<DevScreenElementPickerResult["status"]>("idle");
+  const [devScreenElementSelection, setDevScreenElementSelection] = useState<DevScreenElementSelection | null>(null);
+  const [devScreenSelectionAttached, setDevScreenSelectionAttached] = useState(false);
+  const [devScreenPickerError, setDevScreenPickerError] = useState<string | null>(null);
   const [factoryStatus, setFactoryStatus] = useState<StellaFactoryStatusResult | null>(null);
   const [factoryStatusLoading, setFactoryStatusLoading] = useState(false);
   const [factoryStatusError, setFactoryStatusError] = useState<string | null>(null);
@@ -2788,10 +3147,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const [resizingPreview, setResizingPreview] = useState(false);
   const [composerHeight, setComposerHeight] = useState(() => initialComposerHeight());
   const [resizingComposer, setResizingComposer] = useState(false);
-  const [showModelMenu, setShowModelMenu] = useState(false);
-  const [modelMenuPosition, setModelMenuPosition] = useState<React.CSSProperties | null>(null);
   const [slashMenuPosition, setSlashMenuPosition] = useState<React.CSSProperties | null>(null);
-  const [codexMenuPanel, setCodexMenuPanel] = useState<CodexMenuPanel>("root");
   const [claudeRuntimeModels, setClaudeRuntimeModels] = useState<ModelOption[]>(CLAUDE_MODELS);
   const [codexRuntimeModels, setCodexRuntimeModels] = useState<ModelOption[]>(CODEX_MODELS);
   const [openRouterRuntimeModels, setOpenRouterRuntimeModels] = useState<ModelOption[]>(OPENROUTER_MODELS);
@@ -2864,15 +3220,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       return next;
     });
   };
-  const anyBusy = Object.keys(busyTurnIdsBySession).length > 0;
   // active 세션의 turnId (있으면 입력 가드 적용, 없으면 다른 세션이 바빠도 입력 가능)
   // 아래에서 active를 사용하지만 여기선 미선언이라 effect에서 사용 시 별도로 참조.
-  const [nowTickMs, setNowTickMs] = useState<number>(() => Date.now());
-  useEffect(() => {
-    if (!anyBusy) return;
-    const handle = window.setInterval(() => setNowTickMs(Date.now()), 1000);
-    return () => window.clearInterval(handle);
-  }, [anyBusy]);
   useEffect(() => {
     if (!stoppingTurnId) return;
     if (Object.values(busyTurnIdsBySession).includes(stoppingTurnId)) return;
@@ -2881,17 +3230,24 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const [visibleTextById, setVisibleTextById] = useState<Record<string, string>>({});
   const [reviewOpenById, setReviewOpenById] = useState<Record<string, boolean>>({});
   const [expandedDiffByKey, setExpandedDiffByKey] = useState<Record<string, boolean>>({});
+  const [reviewTargetKey, setReviewTargetKey] = useState<string | null>(null);
+  const [reviewDraft, setReviewDraft] = useState("");
   const [logsOpenById, setLogsOpenById] = useState<Record<string, boolean>>({});
   const [showProfilePicker, setShowProfilePicker] = useState(false);
+  const [showParallelLauncher, setShowParallelLauncher] = useState(false);
+  const [parallelProfileIds, setParallelProfileIds] = useState<string[]>([]);
+  const [parallelLaunching, setParallelLaunching] = useState(false);
+  const [parallelError, setParallelError] = useState<string | null>(null);
+  const [stoppingParallelBatchId, setStoppingParallelBatchId] = useState<string | null>(null);
+  const [adoptCandidateId, setAdoptCandidateId] = useState<string | null>(null);
+  const [adoptingCandidateId, setAdoptingCandidateId] = useState<string | null>(null);
+  const [adoptError, setAdoptError] = useState<string | null>(null);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [slashSelection, setSlashSelection] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const inputDraftRef = useRef(input);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const modelMenuRef = useRef<HTMLDivElement | null>(null);
-  const modelMenuButtonRef = useRef<HTMLButtonElement | null>(null);
-  const modelMenuPopoverRef = useRef<HTMLDivElement | null>(null);
   const slashMenuPopoverRef = useRef<HTMLDivElement | null>(null);
   const skipRenameCommitRef = useRef(false);
   const previewHydratingSessionRef = useRef<string | null>(null);
@@ -2915,6 +3271,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const composerResizeRef = useRef<{ startY: number; startH: number } | null>(null);
   const previewAutoStartRef = useRef<Record<string, number>>({});
   const lastPreviewCommandRef = useRef<string | null>(null);
+  const controlRequestHandlerRef = useRef<(request: AtelierControlRequest) => Promise<void>>(
+    async () => undefined,
+  );
+  const controlRequestProcessingRef = useRef<Set<string>>(new Set());
 
   const syncComposerUi = (next: string) => {
     const nextUi = composerUiStateFromText(next);
@@ -2950,6 +3310,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         title: "Workspace",
         subtitle: "Claude, Hermes, and Codex run behind a structured desktop workspace.",
         newSession: "New",
+        quickOpen: "Quick Open",
+        quickOpenPlaceholder: "Search commands, tasks, files, symbols, branches, and worktrees",
+        quickOpenEmpty: "No matching workspace result.",
+        quickOpenRecent: "Workspace index",
         preview: "Preview",
         previewUrl: "Preview URL",
         open: "Open",
@@ -3001,10 +3365,54 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         devScreenResult: "Result",
         devScreenSnapshot: "Snapshot",
         devScreenNoShot: "No screenshot",
+        devScreenPickElement: "Select element",
+        devScreenPickingElement: "Click an element in the target app · Esc to cancel",
+        devScreenCancelPick: "Cancel selection",
+        devScreenSelectedElement: "Selected element",
+        devScreenAttachSelection: "Add to next request",
+        devScreenSelectionAttached: "Included in next request",
+        devScreenClearSelection: "Clear",
+        devScreenPickerRequiresApp: "Element selection requires the installed Atelier app.",
         devScreenActionOk: "Screen action complete",
         devScreenActionFailed: (message: string) => `Screen action failed: ${message}`,
         cwd: "Working folder",
         noAgentProfiles: "No Claude/Hermes/Codex/Gajae Code profiles in Settings.",
+        parallel: "Parallel",
+        parallelTitle: "Parallel worktrees",
+        parallelDescription: "Send this prompt to multiple isolated agents, then compare their results.",
+        parallelSelect: "Select at least two agents.",
+        parallelPromptRequired: "Enter a prompt before starting parallel work.",
+        parallelGitRequired: "Parallel worktrees require a Git repository working folder.",
+        parallelLaunch: "Run in parallel",
+        parallelLaunching: "Preparing...",
+        parallelPresetCore: "Core 2",
+        parallelPresetBalanced: "Balanced 3",
+        parallelPresetAll: "All",
+        parallelCompare: "Parallel results",
+        parallelCandidates: (count: number) => `${count} candidates`,
+        parallelProgress: (completed: number, count: number) => `${completed}/${count} finished`,
+        parallelRunning: "running",
+        parallelDone: "done",
+        parallelFailed: "failed",
+        parallelWaiting: "waiting",
+        parallelNoChanges: "No changes yet",
+        parallelNoResponse: "No final response yet",
+        parallelOpen: "Open",
+        parallelAdopt: "Adopt changes",
+        parallelAdopting: "Adopting...",
+        parallelAdopted: "Adopted",
+        parallelAdoptionVerifying: "Verifying adoption",
+        parallelAdoptionFailed: "Adoption failed",
+        parallelAdoptionCancelled: "Adoption interrupted",
+        parallelAdoptionEvidence: "Adoption evidence",
+        parallelPatchReceipt: "Patch receipt",
+        parallelAdoptTitle: "Adopt this candidate?",
+        parallelAdoptDescription: "Atelier will verify the complete patch against the source workspace before applying it. Conflicts leave the source untouched.",
+        parallelAdoptDirty: "The source workspace already has local changes. Non-overlapping edits are preserved; overlapping edits are rejected.",
+        parallelAdoptCancel: "Cancel",
+        parallelAdoptFailed: (message: string) => `Adoption failed: ${message}`,
+        parallelStopAll: "Stop all",
+        parallelStoppingAll: "Stopping...",
         factoryLabel: "Stella Mode",
         factoryLauncherTitle: "Start or resume a Stella Mode autonomous development session",
         placeholder: "Ask the selected agent to change, inspect, or explain this workspace...",
@@ -3058,6 +3466,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           "/analyze · /probe · /audit - internal Stella Mode review commands",
           "/stella - turn on Stella/Atelier ontology mode",
           "/mode direct|stella|evidence - change Atelier ontology mode",
+          "/isolation workspace|worktree - choose source workspace or isolated Git worktree",
           "/que - toggle queue mode",
           "/queue - show queued turns",
           "/queue clear - clear queued turns",
@@ -3095,6 +3504,15 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         hideTaskList: "Hide task list",
         showTaskList: "Show task list",
         noDiff: "No text diff available.",
+        addLineReview: "Add line comment",
+        lineReviewPlaceholder: "Describe the issue or requested change",
+        saveLineReview: "Save comment",
+        cancelLineReview: "Cancel",
+        resolveLineReview: "Resolve comment",
+        reopenLineReview: "Reopen comment",
+        deleteLineReview: "Delete comment",
+        reviewCommentCount: (count: number) => `${count} open comments`,
+        sendLineReviews: "Send review",
         undoDone: "Undo applied.",
         undoFailed: (message: string) => `Undo failed: ${message}`,
       }
@@ -3102,6 +3520,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         title: "작업",
         subtitle: "터미널 화면 대신 Claude, Hermes, Codex를 구조화된 작업 UI로 보여줍니다.",
         newSession: "새 작업",
+        quickOpen: "빠른 열기",
+        quickOpenPlaceholder: "명령, 작업, 파일, 심볼, 브랜치, 워크트리 검색",
+        quickOpenEmpty: "일치하는 워크스페이스 결과가 없습니다.",
+        quickOpenRecent: "워크스페이스 인덱스",
         preview: "프리뷰",
         previewUrl: "프리뷰 URL",
         open: "열기",
@@ -3153,10 +3575,54 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         devScreenResult: "결과",
         devScreenSnapshot: "스냅샷",
         devScreenNoShot: "캡처 없음",
+        devScreenPickElement: "요소 선택",
+        devScreenPickingElement: "대상 앱에서 요소를 클릭하세요 · Esc로 취소",
+        devScreenCancelPick: "선택 취소",
+        devScreenSelectedElement: "선택한 요소",
+        devScreenAttachSelection: "다음 요청에 추가",
+        devScreenSelectionAttached: "다음 요청에 포함됨",
+        devScreenClearSelection: "지우기",
+        devScreenPickerRequiresApp: "요소 선택은 설치된 Atelier 앱에서 사용할 수 있습니다.",
         devScreenActionOk: "화면 작업 완료",
         devScreenActionFailed: (message: string) => `화면 작업 실패: ${message}`,
         cwd: "작업 폴더",
         noAgentProfiles: "설정 프로필에 Claude/Hermes/Codex/가재코드가 없습니다.",
+        parallel: "병렬",
+        parallelTitle: "병렬 워크트리",
+        parallelDescription: "같은 요청을 여러 격리 에이전트에 보내고 결과를 비교합니다.",
+        parallelSelect: "에이전트를 두 개 이상 선택하세요.",
+        parallelPromptRequired: "병렬 실행할 요청을 먼저 입력하세요.",
+        parallelGitRequired: "병렬 워크트리는 Git 저장소 작업 폴더에서 사용할 수 있습니다.",
+        parallelLaunch: "병렬 실행",
+        parallelLaunching: "준비 중…",
+        parallelPresetCore: "핵심 2",
+        parallelPresetBalanced: "균형 3",
+        parallelPresetAll: "전체",
+        parallelCompare: "병렬 결과 비교",
+        parallelCandidates: (count: number) => `후보 ${count}개`,
+        parallelProgress: (completed: number, count: number) => `${completed}/${count} 완료`,
+        parallelRunning: "실행 중",
+        parallelDone: "완료",
+        parallelFailed: "실패",
+        parallelWaiting: "대기",
+        parallelNoChanges: "아직 변경 없음",
+        parallelNoResponse: "아직 최종 응답 없음",
+        parallelOpen: "열기",
+        parallelAdopt: "변경 채택",
+        parallelAdopting: "채택 중…",
+        parallelAdopted: "채택 완료",
+        parallelAdoptionVerifying: "채택 검증 중",
+        parallelAdoptionFailed: "채택 실패",
+        parallelAdoptionCancelled: "채택 중단됨",
+        parallelAdoptionEvidence: "채택 증거",
+        parallelPatchReceipt: "패치 영수증",
+        parallelAdoptTitle: "이 후보를 채택할까요?",
+        parallelAdoptDescription: "전체 패치를 원본 작업공간에 미리 검사한 뒤 적용합니다. 충돌하면 원본 파일은 전혀 변경하지 않습니다.",
+        parallelAdoptDirty: "원본 작업공간에 기존 로컬 변경이 있습니다. 겹치지 않는 변경은 보존하고, 겹치는 변경은 채택을 거절합니다.",
+        parallelAdoptCancel: "취소",
+        parallelAdoptFailed: (message: string) => `채택 실패: ${message}`,
+        parallelStopAll: "전체 중지",
+        parallelStoppingAll: "중지 중…",
         factoryLabel: "스텔라 모드",
         factoryLauncherTitle: "스텔라 모드 자율 개발 세션 시작 또는 재개",
         placeholder: "선택한 에이전트에게 이 작업공간의 수정, 분석, 설명을 요청하세요...",
@@ -3210,6 +3676,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           "/analyze · /probe · /audit - 스텔라 모드 내부 검토 명령",
           "/stella - Stella/Atelier 온톨로지 모드 켜기",
           "/mode direct|stella|evidence - Atelier 온톨로지 실행 모드 변경",
+          "/isolation workspace|worktree - 원본 폴더 또는 격리 Git worktree 선택",
           "/que - 대기열 모드 켜기/끄기",
           "/queue - 대기열 보기",
           "/queue clear - 대기열 비우기",
@@ -3247,6 +3714,15 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         hideTaskList: "작업 목록 숨기기",
         showTaskList: "작업 목록 보이기",
         noDiff: "표시할 텍스트 diff가 없습니다.",
+        addLineReview: "줄 의견 추가",
+        lineReviewPlaceholder: "문제점이나 요청할 변경을 적어주세요",
+        saveLineReview: "의견 저장",
+        cancelLineReview: "취소",
+        resolveLineReview: "의견 해결",
+        reopenLineReview: "의견 다시 열기",
+        deleteLineReview: "의견 삭제",
+        reviewCommentCount: (count: number) => `미해결 의견 ${count}개`,
+        sendLineReviews: "리뷰 전달",
         undoDone: "실행 취소가 적용되었습니다.",
         undoFailed: (message: string) => `실행 취소 실패: ${message}`,
       };
@@ -3255,6 +3731,121 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     () => sessions.find((s) => s.id === activeId) || sessions[0] || null,
     [activeId, sessions],
   );
+  const activeExecutionCwd = active?.worktreeEnabled && active.worktreeInfo?.worktree_cwd
+    ? active.worktreeInfo.worktree_cwd
+    : cwd;
+  const quickOpenResults = useMemo<Array<QuickOpenItem<AgentSession>>>(() => {
+    const labels = tw.language === "en"
+      ? {
+          conversation: ["Conversation", "Open the current task conversation"],
+          code: ["Code", "Open the integrated multi-file editor"],
+          changes: ["Source control", "Review, stage, and commit Git changes"],
+          preview: [showPreview ? "Hide preview" : "Show preview", "Toggle the live preview panel"],
+          terminal: ["Terminal", "Open the supervised terminal workspace"],
+          newTask: ["New task", "Choose an agent and start a local task"],
+        }
+      : {
+          conversation: ["대화", "현재 작업 대화 열기"],
+          code: ["코드", "통합 다중 파일 편집기 열기"],
+          changes: ["소스 제어", "Git 변경 검토, 스테이징, 커밋"],
+          preview: [showPreview ? "프리뷰 숨기기" : "프리뷰 보이기", "라이브 프리뷰 패널 전환"],
+          terminal: ["터미널", "감독되는 터미널 워크스페이스 열기"],
+          newTask: ["새 작업", "에이전트를 선택해 로컬 작업 시작"],
+        };
+    const rawCommandDefinitions: Array<[QuickOpenCommandId, string[]]> = [
+      ["conversation", labels.conversation],
+      ["code", labels.code],
+      ["changes", labels.changes],
+      ["preview", labels.preview],
+      ["terminal", labels.terminal],
+      ["new-task", labels.newTask],
+    ];
+    const commands: QuickOpenCommandDefinition[] = rawCommandDefinitions.map(([command, values]) => ({
+        command,
+        label: values[0],
+        detail: values[1],
+      }));
+    const sessionCandidates: Array<QuickOpenSessionCandidate<AgentSession>> = [...sessions]
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, 24)
+      .map((session) => {
+        const meta = providerMeta(session.provider);
+        const sourceCwd = session.worktreeInfo?.source_cwd || session.cwd;
+        return {
+          session,
+          key: `session:${session.id}`,
+          label: session.title,
+          detail: `${sourceCwd}${session.worktreeInfo?.branch ? ` · ${session.worktreeInfo.branch}` : ""}`,
+          trailing: session.profileName || meta.label,
+          searchable: [
+            session.title,
+            session.profileName,
+            meta.label,
+            meta.short,
+            sourceCwd,
+            session.cwd,
+            session.worktreeInfo?.worktree_cwd,
+            session.worktreeInfo?.branch,
+          ],
+          updatedAt: session.updatedAt,
+        };
+      });
+    return buildQuickOpenResults({
+      query: quickOpenQuery,
+      commands,
+      files: quickOpenFiles,
+      sessions: sessionCandidates,
+      indexedEntries: quickOpenIndexedEntries,
+      maxResults: 40,
+    });
+  }, [quickOpenFiles, quickOpenIndexedEntries, quickOpenQuery, sessions, showPreview, tw.language]);
+  useEffect(() => {
+    const query = quickOpenQuery.trim();
+    if (!showQuickOpen || !query || !activeExecutionCwd.trim() || !isTauri()) {
+      setQuickOpenFiles([]);
+      setQuickOpenIndexedEntries([]);
+      return;
+    }
+    let disposed = false;
+    const timer = window.setTimeout(() => {
+      Promise.allSettled([
+        searchWorkspaceFiles(activeExecutionCwd, query, 24),
+        agentQuickOpenIndex(activeExecutionCwd, query, 32),
+      ]).then(([fileResult, indexResult]) => {
+        if (disposed) return;
+        setQuickOpenFiles(fileResult.status === "fulfilled" ? fileResult.value : []);
+        setQuickOpenIndexedEntries(indexResult.status === "fulfilled" ? indexResult.value.entries : []);
+      });
+    }, 90);
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+    };
+  }, [activeExecutionCwd, quickOpenQuery, showQuickOpen]);
+  const latestSessionChanges = useMemo(() => {
+    const messages = active?.messages || [];
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index].changes) return messages[index].changes || null;
+    }
+    return null;
+  }, [active?.messages]);
+  const visibleWorkspaceChanges = workspaceChanges || latestSessionChanges;
+  const refreshWorkspaceChanges = useCallback(async () => {
+    if (!isTauri() || !activeExecutionCwd.trim()) {
+      setWorkspaceChanges(null);
+      setWorkspaceChangesError(null);
+      return;
+    }
+    setWorkspaceChangesLoading(true);
+    setWorkspaceChangesError(null);
+    try {
+      setWorkspaceChanges(await agentChangeSummary(activeExecutionCwd));
+    } catch (err) {
+      setWorkspaceChangesError(String(err instanceof Error ? err.message : err));
+    } finally {
+      setWorkspaceChangesLoading(false);
+    }
+  }, [activeExecutionCwd]);
   // active 세션 기준 busy 가드 — 다른 세션이 바빠도 active가 한가하면 입력 가능.
   const busyTurnId: string | null = active ? busyTurnIdsBySession[active.id] || null : null;
   const isStoppingActiveTurn = Boolean(busyTurnId && stoppingTurnId === busyTurnId);
@@ -3321,6 +3912,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         : "desktop";
     const fallbackWidth = clampNumber(Number(safeLocalStorageGet(PREVIEW_WIDTH_KEY)) || 430, 320, 760);
     const sessionPreviewUrl = cleanStoredPreviewUrl(active.previewUrl ?? "");
+    previewUrlRef.current = sessionPreviewUrl;
     setPreviewUrl(sessionPreviewUrl);
     setPreviewInput(sessionPreviewUrl);
     setShowPreview(active.previewVisible ?? fallbackVisible);
@@ -3405,6 +3997,16 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       .filter((item): item is { profile: Profile; provider: AgentProvider } => Boolean(item.provider)),
     [tw.profiles],
   );
+  const agentFleetProfiles = useMemo(
+    () => agentProfiles.map(({ profile, provider }) => ({
+      id: profile.id,
+      provider,
+      name: profile.name,
+      short: providerMeta(provider).short,
+      dot: normalizeAgentDotColor(profile.dot || providerMeta(provider).dot),
+    })),
+    [agentProfiles],
+  );
   const fallbackProfile = agentProfiles[0]?.profile;
   const fallbackProvider = agentProfiles[0]?.provider || DEFAULT_PROVIDER;
   const activeProvider = active?.provider || fallbackProvider;
@@ -3413,6 +4015,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const activeHermesProvider = activeProvider === "hermes"
     ? normalizeHermesProvider(active?.hermesProvider || inferHermesProviderFromModel(rawActiveModel))
     : DEFAULT_HERMES_PROVIDER;
+  const activeGajaeProvider = activeProvider === "gajecode"
+    ? inferGajaeProviderFromModel(rawActiveModel)
+    : "claude";
   const normalizedActiveModel = activeProvider === "hermes"
     ? normalizeHermesModel(activeHermesProvider, rawActiveModel)
     : normalizeModel(activeProvider, rawActiveModel);
@@ -3432,18 +4037,14 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     },
     [activeProvider, slashCommands, composerUi.slashText, tw.language],
   );
-  const gajecodeQuickCommands = useMemo(
-    () => activeProvider === "gajecode"
-      ? GAJAE_CODE_COMMANDS.filter((command) => command.quick)
-      : [],
-    [activeProvider],
-  );
   const showSlashMenu = Boolean(composerUi.slashText) && visibleSlashCommands.length > 0;
   const activeSlashSelection = Math.min(slashSelection, Math.max(visibleSlashCommands.length - 1, 0));
   const selectedSlashCommand = visibleSlashCommands[activeSlashSelection];
   const activeCodexEffort = normalizeCodexEffort(active?.codexEffort);
   const activeCodexSpeed = normalizeCodexSpeed(active?.codexSpeed);
-  const activeCodexModelSurface = activeProvider === "codex" || (activeProvider === "hermes" && activeHermesProvider === "openai-codex");
+  const activeCodexModelSurface = activeProvider === "codex"
+    || (activeProvider === "hermes" && activeHermesProvider === "openai-codex")
+    || (activeProvider === "gajecode" && activeGajaeProvider === "codex");
   const activeCodexToolbarLabel = codexToolbarLabel(activeModelLabel, activeModel);
   const activePermissionMode = normalizePermissionMode(active?.permissionMode);
   const localPreview = isLocalPreviewUrl(previewUrl);
@@ -3489,6 +4090,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const latestDevScreenStatus = devScreenCheckResult?.status || devScreenStatusResult;
   const latestDevScreenScreenshot = devScreenCheckResult?.screenshot || devScreenScreenshotResult;
   const latestDevScreenSnapshot = devScreenCheckResult?.snapshot || devScreenSnapshotResult;
+  const latestDevScreenDiagnostics = devScreenCheckResult?.diagnostics || devScreenDiagnosticsResult;
+  const latestDevScreenNetworkFailureCount = latestDevScreenDiagnostics
+    ? latestDevScreenDiagnostics.networkFailures.length
+      + latestDevScreenDiagnostics.networkEntries.filter((entry) => Number(entry.status || 0) >= 400).length
+    : 0;
   const latestDevScreenData = devScreenActionResult
     ? JSON.stringify(devScreenActionResult.data, null, 2)
     : latestDevScreenStatus
@@ -3554,6 +4160,103 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     || Boolean(session.queuedTurns?.length);
   const isSessionDone = (session: AgentSession) =>
     !isSessionRunning(session) && lastAssistantStatus(session) === "done";
+
+  const sessionInboxItems = useMemo<SessionInboxItem[]>(() => sessions.map((session) => {
+    const lastAssistant = [...session.messages].reverse().find((message) => message.role === "assistant");
+    const needsAttention = lastAssistant?.status === "error"
+      || lastAssistant?.lifecyclePhase === "failed"
+      || lastAssistant?.lifecyclePhase === "waiting_for_user";
+    const phase: SessionInboxPhase = needsAttention
+      ? "attention"
+      : isSessionRunning(session)
+        ? "running"
+        : isSessionDone(session)
+          ? "done"
+          : "idle";
+    return { id: session.id, updatedAt: session.updatedAt, phase };
+  }), [busyTurnIdsBySession, sessions]);
+  const {
+    filter: sessionInboxFilter,
+    setFilter: setSessionInboxFilter,
+    counts: sessionInboxCounts,
+    visibleIds: sessionInboxVisibleIds,
+    unreadIds: sessionInboxUnreadIds,
+    markRead: markSessionRead,
+    toggleUnread: toggleSessionUnread,
+  } = useSessionInbox(sessionInboxItems, activeId);
+  const filteredSessions = useMemo(
+    () => sessions.filter((session) => sessionInboxVisibleIds.has(session.id)),
+    [sessionInboxVisibleIds, sessions],
+  );
+  const sessionInboxPhaseById = useMemo(
+    () => new Map(sessionInboxItems.map((item) => [item.id, item.phase])),
+    [sessionInboxItems],
+  );
+  const desktopNotificationTasks = useMemo<DesktopNotificationTask[]>(() => {
+    const sessionById = new Map(sessions.map((session) => [session.id, session]));
+    return sessionInboxItems.map((item) => {
+      const session = sessionById.get(item.id);
+      return {
+        ...item,
+        title: session?.title || (session ? providerMeta(session.provider).label : "Atelier"),
+      };
+    });
+  }, [sessionInboxItems, sessions]);
+  const desktopNotifications = useDesktopNotifications(
+    desktopNotificationTasks,
+    activeId,
+    tw.language === "en" ? "en" : "ko",
+  );
+
+  const activeParallelSessions = useMemo(() => {
+    if (!active?.parallelBatchId) return [];
+    return sessions
+      .filter((session) => session.parallelBatchId === active.parallelBatchId)
+      .sort((left, right) => (left.parallelCandidateIndex || 0) - (right.parallelCandidateIndex || 0));
+  }, [active?.parallelBatchId, sessions]);
+
+  const parallelSessionStatus = (session: AgentSession) => {
+    if (isSessionRunning(session)) return "running" as const;
+    const status = lastAssistantStatus(session);
+    if (status === "error") return "failed" as const;
+    if (status === "done") return "done" as const;
+    return "waiting" as const;
+  };
+
+  const parallelSessionChanges = (session: AgentSession) => {
+    const summary = [...session.messages]
+      .reverse()
+      .find((message) => message.role === "assistant" && message.changes)?.changes;
+    return summary || null;
+  };
+
+  const parallelSessionPreview = (session: AgentSession) => {
+    const message = [...session.messages]
+      .reverse()
+      .find((item) => item.role === "assistant" && cleanAgentText(item.text));
+    if (!message) return copy.parallelNoResponse;
+    return clipActivityText(cleanAgentText(message.text).replace(/\s+/g, " "), 180);
+  };
+
+  const activeFleetCandidates: AgentFleetCandidateView[] = activeParallelSessions.map((candidate) => {
+    const changes = parallelSessionChanges(candidate);
+    const phase = parallelSessionStatus(candidate);
+    const meta = providerMeta(candidate.provider);
+    return {
+      id: candidate.id,
+      profileName: candidate.profileName || meta.label,
+      providerShort: meta.short,
+      dot: normalizeAgentDotColor(candidate.profileDot || meta.dot),
+      branch: candidate.worktreeInfo?.branch,
+      phase,
+      changeCount: changes?.files.length,
+      additions: changes?.additions,
+      deletions: changes?.deletions,
+      preview: parallelSessionPreview(candidate),
+      adoption: candidate.parallelAdoption,
+      canAdopt: phase === "done" && Boolean(changes?.files.length && candidate.worktreeInfo),
+    };
+  });
 
   const scrollTranscriptToBottom = () => {
     const el = scrollRef.current;
@@ -3700,6 +4403,18 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   }, [showTaskList]);
 
   useEffect(() => {
+    safeLocalStorageSet(WORKSPACE_VIEW_KEY, workspaceView);
+  }, [workspaceView]);
+
+  useEffect(() => {
+    setWorkspaceChanges(null);
+    setWorkspaceChangesError(null);
+    if (workspaceView === "changes") {
+      refreshWorkspaceChanges().catch(console.error);
+    }
+  }, [activeExecutionCwd, refreshWorkspaceChanges, workspaceView]);
+
+  useEffect(() => {
     safeLocalStorageSet(PREVIEW_VISIBLE_KEY, showPreview ? "1" : "0");
   }, [showPreview]);
 
@@ -3740,89 +4455,66 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   }, [devScreenWindow]);
 
   useEffect(() => {
+    const targetUrl = cleanStoredPreviewUrl(previewUrl);
+    const armKey = [
+      targetUrl,
+      previewReloadKey,
+      devScreenHost.trim(),
+      devScreenPort.trim(),
+      devScreenWindow.trim(),
+    ].join("|");
+    if (devScreenArmKeyRef.current !== armKey) {
+      devScreenArmKeyRef.current = armKey;
+      setDevScreenDiagnosticsResult(null);
+      if (cleanStoredPreviewUrl(devScreenCheckUrlRef.current) !== targetUrl) {
+        devScreenCheckUrlRef.current = "";
+        setDevScreenCheckResult(null);
+      }
+    }
+    if (!isTauri() || !showPreview || !isLocalPreviewUrl(targetUrl)) return;
+
+    let cancelled = false;
+    let timer: number | undefined;
+    const retryDelays = [220, 900, 1800];
+    const arm = (index: number) => {
+      timer = window.setTimeout(async () => {
+        try {
+          const trimmedPort = devScreenPort.trim();
+          const result = await devScreenDiagnostics({
+            host: devScreenHost.trim() || "127.0.0.1",
+            port: trimmedPort ? Number(trimmedPort) : null,
+            windowLabel: devScreenWindow.trim() || "main",
+            timeoutMs: trimmedPort ? 900 : 1400,
+          });
+          if (cancelled || !devScreenMatchesPreview(result, targetUrl)) return;
+          setDevScreenDiagnosticsResult(result);
+          setDevScreenHost((current) => current === result.host ? current : result.host);
+          setDevScreenPort((current) => current === String(result.port) ? current : String(result.port));
+          setDevScreenWindow((current) => current === result.windowLabel ? current : result.windowLabel);
+          setDevScreenError(null);
+        } catch {
+          if (!cancelled && index + 1 < retryDelays.length) arm(index + 1);
+        }
+      }, retryDelays[index]);
+    };
+    arm(0);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [
+    showPreview,
+    previewUrl,
+    previewReloadKey,
+    devScreenHost,
+    devScreenPort,
+    devScreenWindow,
+  ]);
+
+  useEffect(() => {
     if (cwd) return;
     homeDir().then((h) => setCwd(h)).catch(() => {});
   }, [cwd]);
-
-  useEffect(() => {
-    if (activeProvider === "codex") return;
-    setShowModelMenu(false);
-    setCodexMenuPanel("root");
-  }, [activeProvider]);
-
-  useEffect(() => {
-    if (!showModelMenu) return;
-    const onPointerDown = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-      if (
-        target
-        && (modelMenuRef.current?.contains(target) || modelMenuPopoverRef.current?.contains(target))
-      ) return;
-      setShowModelMenu(false);
-      setCodexMenuPanel("root");
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      setShowModelMenu(false);
-      setCodexMenuPanel("root");
-    };
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [showModelMenu]);
-
-  useEffect(() => {
-    if (!showModelMenu) {
-      setModelMenuPosition(null);
-      return;
-    }
-
-    const updatePosition = () => {
-      const button = modelMenuButtonRef.current;
-      if (!button) return;
-      const rect = button.getBoundingClientRect();
-      const viewportPadding = 12;
-      const gap = 8;
-      const width = Math.min(292, Math.max(220, window.innerWidth - viewportPadding * 2));
-      const left = Math.min(
-        Math.max(viewportPadding, rect.right - width),
-        Math.max(viewportPadding, window.innerWidth - width - viewportPadding),
-      );
-      const availableAbove = Math.max(0, rect.top - gap - viewportPadding);
-      const availableBelow = Math.max(0, window.innerHeight - rect.bottom - gap - viewportPadding);
-      const openAbove = availableAbove >= 220 || availableAbove >= availableBelow;
-      const available = openAbove ? availableAbove : availableBelow;
-      const maxHeight = Math.max(140, Math.min(480, available));
-
-      setModelMenuPosition({
-        left,
-        width,
-        maxHeight,
-        ...(openAbove
-          ? { bottom: window.innerHeight - rect.top + gap }
-          : { top: rect.bottom + gap }),
-      });
-    };
-
-    updatePosition();
-    window.addEventListener("resize", updatePosition);
-    window.addEventListener("scroll", updatePosition, true);
-    return () => {
-      window.removeEventListener("resize", updatePosition);
-      window.removeEventListener("scroll", updatePosition, true);
-    };
-  }, [showModelMenu]);
-
-  useEffect(() => {
-    if (!showModelMenu) return;
-    const frame = window.requestAnimationFrame(() => {
-      modelMenuPopoverRef.current?.scrollTo({ top: 0, behavior: "auto" });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [codexMenuPanel, showModelMenu]);
 
   useEffect(() => {
     if (!showSlashMenu) {
@@ -4080,15 +4772,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     setSessions(next);
   };
 
-  const updateWorkspaceCwd = (value: string) => {
-    setCwd(value);
-    const id = activeIdRef.current;
-    if (!id) return;
-    patchSession(id, (current) =>
-      current.cwd === value ? current : { ...current, cwd: value, updatedAt: Date.now() },
-    );
-  };
-
   const devScreenOptions = (): DevScreenOptions => {
     const trimmedPort = devScreenPort.trim();
     return {
@@ -4139,7 +4822,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     runDevScreenAction(
       () => devScreenCheck(devScreenOptions()),
       (result) => {
+        devScreenCheckUrlRef.current = previewUrlRef.current;
         setDevScreenCheckResult(result);
+        setDevScreenDiagnosticsResult(result.diagnostics);
         setDevScreenStatusResult(result.status);
         setDevScreenScreenshotResult(result.screenshot);
         setDevScreenSnapshotResult(result.snapshot);
@@ -4152,6 +4837,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       () => devScreenScreenshot(devScreenOptions()),
       (result) => {
         setDevScreenScreenshotResult(result);
+        devScreenCheckUrlRef.current = "";
         setDevScreenCheckResult(null);
         setDevScreenActionResult(null);
       },
@@ -4162,6 +4848,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       () => devScreenSnapshot(devScreenOptions()),
       (result) => {
         setDevScreenSnapshotResult(result);
+        devScreenCheckUrlRef.current = "";
         setDevScreenCheckResult(null);
         setDevScreenActionResult(null);
       },
@@ -4197,6 +4884,104 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       (result) => setDevScreenActionResult(result),
     );
 
+  const recordDevScreenPickerResult = (result: DevScreenElementPickerResult) => {
+    if (result.host && result.host !== devScreenHost) setDevScreenHost(result.host);
+    if (result.port && String(result.port) !== devScreenPort) setDevScreenPort(String(result.port));
+    if (result.windowLabel && result.windowLabel !== devScreenWindow) setDevScreenWindow(result.windowLabel);
+    setDevScreenError(null);
+    setDevScreenPickerStatus(result.status);
+    setDevScreenPickerError(result.error || null);
+    if (result.selection) {
+      setDevScreenElementSelection(result.selection);
+      setDevScreenSelectionAttached(false);
+    }
+  };
+
+  const runDevScreenElementPickerStart = async () => {
+    if (devScreenBusy || devScreenPickerStatus === "armed") return;
+    if (!isTauri()) {
+      setDevScreenPickerError(copy.devScreenPickerRequiresApp);
+      setDevScreenPickerStatus("error");
+      return;
+    }
+    setDevScreenBusy(true);
+    setDevScreenError(null);
+    setDevScreenPickerError(null);
+    setDevScreenElementSelection(null);
+    setDevScreenSelectionAttached(false);
+    try {
+      recordDevScreenPickerResult(await devScreenElementPickerStart(devScreenOptions()));
+    } catch (error) {
+      const message = String(error instanceof Error ? error.message : error);
+      setDevScreenPickerError(message);
+      setDevScreenPickerStatus("error");
+    } finally {
+      setDevScreenBusy(false);
+    }
+  };
+
+  const cancelDevScreenElementPicker = async () => {
+    if (devScreenPickerStatus !== "armed") return;
+    setDevScreenPickerStatus("cancelled");
+    try {
+      recordDevScreenPickerResult(await devScreenElementPickerCancel(devScreenOptions()));
+    } catch (error) {
+      setDevScreenPickerError(String(error instanceof Error ? error.message : error));
+    }
+  };
+
+  const clearDevScreenElementSelection = () => {
+    setDevScreenPickerStatus("idle");
+    setDevScreenElementSelection(null);
+    setDevScreenSelectionAttached(false);
+    setDevScreenPickerError(null);
+  };
+
+  useEffect(() => {
+    if (devScreenPickerStatus !== "armed") return;
+    let cancelled = false;
+    let polling = false;
+    const timer = window.setInterval(() => {
+      if (cancelled || polling) return;
+      polling = true;
+      devScreenElementPickerPoll(devScreenOptions())
+        .then((result) => {
+          if (!cancelled) recordDevScreenPickerResult(result);
+        })
+        .catch((error) => {
+          if (cancelled) return;
+          setDevScreenPickerError(String(error instanceof Error ? error.message : error));
+          setDevScreenPickerStatus("error");
+        })
+        .finally(() => {
+          polling = false;
+        });
+    }, 450);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [devScreenPickerStatus, devScreenHost, devScreenPort, devScreenWindow]);
+
+  useEffect(() => {
+    if (devScreenPickerStatus === "armed") {
+      void devScreenElementPickerCancel(devScreenOptions()).catch(() => undefined);
+    }
+    setDevScreenPickerStatus("idle");
+    setDevScreenElementSelection(null);
+    setDevScreenSelectionAttached(false);
+    setDevScreenPickerError(null);
+  }, [activeId, previewUrl]);
+
+  useEffect(() => {
+    if (showPreview && showDevScreen) return;
+    if (devScreenPickerStatus === "armed") {
+      void devScreenElementPickerCancel(devScreenOptions()).catch(() => undefined);
+      setDevScreenPickerStatus("idle");
+    }
+    setDevScreenPickerError(null);
+  }, [showPreview, showDevScreen]);
+
   const resetComposer = () => {
     setComposerInput("");
     setPendingAttachments([]);
@@ -4207,9 +4992,115 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     if (id !== activeId) resetComposer();
     const nextSession = sessionsRef.current.find((session) => session.id === id);
     if (nextSession?.cwd) setCwd(nextSession.cwd);
+    markSessionRead(id);
     activeIdRef.current = id;
     setActiveId(id);
   };
+
+  const openQuickOpen = useCallback(() => {
+    setQuickOpenQuery("");
+    setQuickOpenIndex(0);
+    setQuickOpenFiles([]);
+    setQuickOpenIndexedEntries([]);
+    setShowQuickOpen(true);
+  }, []);
+
+  const requestQuickOpen = useCallback(() => openQuickOpen(), [openQuickOpen]);
+
+  const chooseQuickOpenItem = (item: QuickOpenItem<AgentSession>) => {
+    if (item.kind === "session") {
+      selectSession(item.candidate.session.id);
+    } else if (item.kind === "file") {
+      setWorkbenchFilePath(item.file.path);
+      setWorkbenchInitialLine(null);
+      setWorkspaceView("code");
+    } else if (item.kind === "index") {
+      if (item.entry.kind === "symbol" && item.entry.path) {
+        setWorkbenchFilePath(item.entry.path);
+        setWorkbenchInitialLine(item.entry.line);
+        setWorkspaceView("code");
+      } else {
+        const matchingSession = sessionsRef.current.find((session) => (
+          sameQuickOpenPath(session.worktreeInfo?.worktree_cwd, item.entry.path)
+          || (item.entry.branch && session.worktreeInfo?.branch === item.entry.branch)
+        ));
+        if (matchingSession) {
+          selectSession(matchingSession.id);
+        } else if (item.entry.kind === "worktree" && item.entry.path) {
+          setCwd(item.entry.path);
+          setWorkspaceView("code");
+        } else {
+          setWorkspaceView("changes");
+          refreshWorkspaceChanges().catch(console.error);
+        }
+      }
+    } else {
+      switch (item.command) {
+        case "conversation":
+          setWorkspaceView("conversation");
+          break;
+        case "code":
+          setWorkspaceView("code");
+          break;
+        case "changes":
+          setWorkspaceView("changes");
+          refreshWorkspaceChanges().catch(console.error);
+          break;
+        case "preview":
+          setShowPreview((visible) => !visible);
+          break;
+        case "terminal":
+          onOpenTerminal?.();
+          break;
+        case "new-task":
+          setShowTaskList(true);
+          setShowProfilePicker(true);
+          break;
+      }
+    }
+    setShowQuickOpen(false);
+  };
+
+  useEffect(() => {
+    const onQuickOpenKey = (event: KeyboardEvent) => {
+      const key = event.key.toLocaleLowerCase();
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && key === "p") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat) requestQuickOpen();
+        return;
+      }
+      if (showQuickOpen && event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setShowQuickOpen(false);
+      }
+    };
+    document.addEventListener("keydown", onQuickOpenKey, true);
+    return () => document.removeEventListener("keydown", onQuickOpenKey, true);
+  }, [requestQuickOpen, showQuickOpen]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    onQuickOpenRequested(requestQuickOpen)
+      .then((cleanup) => {
+        if (disposed) cleanup();
+        else unlisten = cleanup;
+      })
+      .catch((error) => console.warn("quick open menu listener unavailable", error));
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [requestQuickOpen]);
+
+  useEffect(() => {
+    if (!showQuickOpen) return;
+    const frame = window.requestAnimationFrame(() => quickOpenInputRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [showQuickOpen]);
 
   const makeSession = (
     profile: Profile | undefined,
@@ -4246,6 +5137,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       codexSpeed: provider === "codex" ? DEFAULT_CODEX_SPEED : undefined,
       permissionMode: DEFAULT_PERMISSION_MODE,
       queueMode: false,
+      worktreeEnabled: false,
       cwd,
       messages: [],
       queuedTurns: [],
@@ -4265,6 +5157,37 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     setShowProfilePicker(false);
     if (clearInput) resetComposer();
     return session;
+  };
+
+  const openParallelLauncher = () => {
+    if (showParallelLauncher) {
+      setShowParallelLauncher(false);
+      setParallelError(null);
+      return;
+    }
+    const preferredIds = [
+      active?.profileId,
+      ...agentProfiles.map(({ profile }) => profile.id),
+    ].filter((id, index, items): id is string => Boolean(id) && items.indexOf(id) === index);
+    const ordered = preferredIds.flatMap((id) => agentFleetProfiles.filter((profile) => profile.id === id));
+    setParallelProfileIds(selectAgentFleetProfileIds(ordered, "balanced"));
+    setParallelError(null);
+    setComposerHeight((height) => Math.max(height, Math.min(320, composerMaxHeight())));
+    setShowParallelLauncher(true);
+  };
+
+  const toggleParallelProfile = (profileId: string) => {
+    setParallelProfileIds((current) =>
+      current.includes(profileId)
+        ? current.filter((id) => id !== profileId)
+        : [...current, profileId],
+    );
+    setParallelError(null);
+  };
+
+  const applyParallelPreset = (preset: AgentFleetPreset) => {
+    setParallelProfileIds(selectAgentFleetProfileIds(agentFleetProfiles, preset));
+    setParallelError(null);
   };
 
   const handleNewSessionClick = () => {
@@ -4323,6 +5246,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     const trimmed = cleanStoredPreviewUrl(url);
     if (!trimmed) return;
     const normalized = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+    previewUrlRef.current = normalized;
     setPreviewUrl(normalized);
     setPreviewInput(normalized);
     if (options?.reveal) setShowPreview(true);
@@ -4343,6 +5267,27 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       }
       return [...prev, nextItem].slice(-5);
     });
+  };
+
+  const prepareWorktreeForSession = async (
+    session: AgentSession,
+    sourceCwd: string,
+  ): Promise<AgentWorktreeInfo> => {
+    if (session.worktreeInfo?.worktree_cwd) return session.worktreeInfo;
+    if (!sourceCwd.trim()) {
+      throw new Error(
+        tw.language === "en"
+          ? "Choose a Git working folder before enabling worktree isolation."
+          : "worktree 격리를 사용하려면 먼저 Git 작업 폴더를 선택하세요.",
+      );
+    }
+    const worktree = await agentWorktreePrepare(sourceCwd, session.id);
+    patchSession(session.id, (current) => ({
+      ...current,
+      worktreeInfo: worktree,
+      updatedAt: Date.now(),
+    }));
+    return worktree;
   };
 
   const noteTerminalIssue = (event: AgentStreamEvent) => {
@@ -4374,9 +5319,14 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       });
     }
     try {
+      let serviceCwd = activeExecutionCwd || null;
+      if (active?.worktreeEnabled) {
+        const worktree = await prepareWorktreeForSession(active, active.cwd || cwd);
+        serviceCwd = worktree.worktree_cwd;
+      }
       const status = await previewServiceStart({
         url: previewUrl,
-        cwd: cwd || null,
+        cwd: serviceCwd,
         command: previewServiceCommand || null,
         autoRestart: true,
       });
@@ -4512,8 +5462,18 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     patchSession(active.id, (session) => ({ ...session, permissionMode, updatedAt: Date.now() }));
   };
 
+  const toggleActiveWorktree = () => {
+    if (!active || busyTurnId) return;
+    const enabling = !active.worktreeEnabled;
+    patchSession(active.id, (session) => ({
+      ...session,
+      worktreeEnabled: enabling,
+      updatedAt: Date.now(),
+    }));
+  };
+
   const maybeAutoPreview = (event: AgentStreamEvent) => {
-    const url = findPreviewUrl(event.text) || findPreviewUrl(event.raw);
+    const url = findAutoPreviewUrl(event.text) || findAutoPreviewUrl(event.raw);
     if (url) {
       if (!previewServiceCommand && lastPreviewCommandRef.current) {
         setPreviewServiceCommand(lastPreviewCommandRef.current);
@@ -4525,7 +5485,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
   const rememberInactiveSessionPreview = (sessionId: string, event: AgentStreamEvent) => {
     const command = commandFromValue(parseRawJson(event.raw)) || event.text || event.status || "";
     const previewCommand = normalizePreviewStartCommand(clipActivityText(command, 220));
-    const url = findPreviewUrl(event.text) || findPreviewUrl(event.raw);
+    const url = findAutoPreviewUrl(event.text) || findAutoPreviewUrl(event.raw);
     if (!previewCommand && !url) return;
 
     patchSession(sessionId, (session) => ({
@@ -4805,6 +5765,72 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     }
   };
 
+  const handleAgentLifecycle = (
+    sessionId: string,
+    assistantId: string,
+    event: AgentLifecycleEvent,
+  ) => {
+    if (event.phase === "started") {
+      pushActivity(sessionId, assistantId, {
+        kind: "status",
+        status: event.status || "starting",
+        text: null,
+        raw: null,
+        provider_session_id: event.provider_session_id,
+        is_error: false,
+      });
+    } else if (event.phase === "tool_started") {
+      pushActivity(sessionId, assistantId, {
+        kind: "tool",
+        status: event.status || "tool",
+        text: event.summary,
+        raw: null,
+        provider_session_id: event.provider_session_id,
+        is_error: false,
+      });
+    } else if (event.phase === "waiting_for_user") {
+      pushActivity(sessionId, assistantId, {
+        kind: "status",
+        status: event.status || "waiting_for_user",
+        text: event.summary,
+        raw: null,
+        provider_session_id: event.provider_session_id,
+        is_error: false,
+      });
+    }
+
+    if (event.terminal) finishActivities(sessionId, assistantId);
+    patchSession(sessionId, (session) => ({
+      ...session,
+      providerSessionId: event.provider_session_id || session.providerSessionId,
+      messages: session.messages.map((message) => {
+        if (message.id !== assistantId) return message;
+        const lifecyclePhase = event.phase;
+        if (event.phase === "cancelled") {
+          return {
+            ...message,
+            lifecyclePhase,
+            text: cleanAgentText(message.text) || copy.stoppedResponse,
+            status: "done" as const,
+          };
+        }
+        if (event.phase === "failed" && message.status === "streaming") {
+          return {
+            ...message,
+            lifecyclePhase,
+            text: cleanAgentText(message.text) || cleanAgentText(event.summary) || "Agent error",
+            status: "error" as const,
+          };
+        }
+        if (event.phase === "completed" && message.status === "streaming") {
+          return { ...message, lifecyclePhase, status: "done" as const };
+        }
+        return { ...message, lifecyclePhase };
+      }),
+      updatedAt: Date.now(),
+    }));
+  };
+
   const loadMessageChanges = async (
     sessionId: string,
     assistantId: string,
@@ -4857,6 +5883,125 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     }
   };
 
+  const captureMessagePreviewEvidence = async (
+    sessionId: string,
+    assistantId: string,
+    url?: string | null,
+  ) => {
+    if (!isTauri() || !url || !isLocalPreviewUrl(url)) return;
+    const check = await previewHealthCheck(url);
+    const targetUrl = cleanStoredPreviewUrl(url);
+    let recentBridgeCheck = devScreenCheckResult
+      && Date.now() - devScreenCheckResult.checkedAt < 10 * 60 * 1000
+      && cleanStoredPreviewUrl(devScreenCheckUrlRef.current) === targetUrl
+      && devScreenMatchesPreview(devScreenCheckResult.diagnostics, targetUrl)
+      ? devScreenCheckResult
+      : null;
+    const armedDiagnostics = devScreenMatchesPreview(devScreenDiagnosticsResult, targetUrl)
+      ? devScreenDiagnosticsResult
+      : null;
+    if (!recentBridgeCheck) {
+      try {
+        const trimmedPort = devScreenPort.trim();
+        const automaticCheck = await devScreenCheck({
+          host: armedDiagnostics?.host || devScreenHost.trim() || "127.0.0.1",
+          port: armedDiagnostics?.port || (trimmedPort ? Number(trimmedPort) : null),
+          windowLabel: armedDiagnostics?.windowLabel || devScreenWindow.trim() || "main",
+          timeoutMs: armedDiagnostics?.port || trimmedPort ? 900 : 1600,
+        });
+        if (devScreenMatchesPreview(automaticCheck.diagnostics, targetUrl)) {
+          recentBridgeCheck = automaticCheck;
+          devScreenCheckUrlRef.current = targetUrl;
+          setDevScreenCheckResult(automaticCheck);
+          setDevScreenDiagnosticsResult(automaticCheck.diagnostics);
+          setDevScreenStatusResult(automaticCheck.status);
+          setDevScreenScreenshotResult(automaticCheck.screenshot);
+          setDevScreenSnapshotResult(automaticCheck.snapshot);
+          recordDevScreenSuccess(automaticCheck);
+        }
+      } catch {
+        // A normal web preview may not expose a Tauri dev-screen bridge.
+      }
+    }
+    const snapshotData = recentBridgeCheck?.snapshot.data as { nodes?: unknown[] } | undefined;
+    const browserDiagnostics = recentBridgeCheck?.diagnostics || armedDiagnostics;
+    const browserErrorCount = browserDiagnostics
+      ? browserDiagnostics.runtimeErrors.length
+        + browserDiagnostics.consoleEntries.filter((entry) => entry.level === "error").length
+      : 0;
+    const browserWarningCount = browserDiagnostics
+      ? browserDiagnostics.consoleEntries.filter((entry) => entry.level === "warn").length
+      : 0;
+    const consoleEvidence = browserDiagnostics
+      ? [
+          ...browserDiagnostics.runtimeErrors.map((entry) => `[runtime error] ${entry}`),
+          ...browserDiagnostics.consoleEntries.map((entry) => `[${entry.level}] ${entry.text}`),
+        ].slice(-12).map((entry) => clipActivityText(redactPreviewEvidenceText(entry), 600))
+      : [];
+    const networkFailures = browserDiagnostics
+      ? browserDiagnostics.networkFailures
+        .slice(-8)
+        .map((entry) => `[failed] ${clipActivityText(redactPreviewEvidenceText(entry), 560)}`)
+      : [];
+    const failedNetworkEntries = browserDiagnostics
+      ? browserDiagnostics.networkEntries.filter((entry) => Number(entry.status || 0) >= 400)
+      : [];
+    const networkFailureCount = networkFailures.length + failedNetworkEntries.length;
+    const networkEvidence = browserDiagnostics
+      ? [
+          ...networkFailures,
+          ...browserDiagnostics.networkEntries.slice(-20).map((entry) => [
+            `[${entry.initiatorType}]`,
+            entry.status ? String(entry.status) : "status n/a",
+            `${entry.durationMs}ms`,
+            entry.transferSize ? `${entry.transferSize}B` : "",
+            entry.url,
+          ].filter(Boolean).join(" ")),
+        ]
+      : [];
+    let serviceStatus: PreviewServiceStatus | null = null;
+    try {
+      serviceStatus = await previewServiceStatus(url);
+    } catch {
+      serviceStatus = null;
+    }
+    const previewEvidence: TaskPreviewEvidence = {
+      url: check.url,
+      ok: check.ok && browserErrorCount === 0 && networkFailureCount === 0,
+      status: check.status,
+      title: check.title ? clipActivityText(redactPreviewEvidenceText(check.title), 220) : null,
+      error: check.error ? clipActivityText(redactPreviewEvidenceText(check.error), 420) : null,
+      checkedAt: check.checked_at,
+      bodyText: check.body_text ? clipActivityText(redactPreviewEvidenceText(check.body_text), 700) : undefined,
+      networkMethod: "GET",
+      serviceRunning: serviceStatus?.running,
+      servicePid: serviceStatus?.pid || undefined,
+      serviceRestarts: serviceStatus?.restarts,
+      serviceError: serviceStatus?.last_error
+        ? clipActivityText(redactPreviewEvidenceText(serviceStatus.last_error), 420)
+        : undefined,
+      serviceOutput: serviceStatus?.recent_output
+        .slice(-6)
+        .map((line) => clipActivityText(redactPreviewEvidenceText(line), 300)),
+      domNodes: Array.isArray(snapshotData?.nodes) ? snapshotData.nodes.length : undefined,
+      screenshotCaptured: Boolean(recentBridgeCheck?.screenshot.dataUrl),
+      diagnosticsArmedAt: browserDiagnostics?.armedAt,
+      browserErrorCount: browserDiagnostics ? browserErrorCount : undefined,
+      browserWarningCount: browserDiagnostics ? browserWarningCount : undefined,
+      consoleEvidence: consoleEvidence.length ? consoleEvidence : undefined,
+      networkRequestCount: browserDiagnostics?.networkEntries.length,
+      networkFailureCount: browserDiagnostics ? networkFailureCount : undefined,
+      networkEvidence: networkEvidence.length ? networkEvidence : undefined,
+    };
+    patchSession(sessionId, (session) => ({
+      ...session,
+      messages: session.messages.map((message) =>
+        message.id === assistantId ? { ...message, previewEvidence } : message,
+      ),
+      updatedAt: Date.now(),
+    }));
+  };
+
   const undoMessageChanges = async (sessionId: string, messageId: string, summary: AgentChangeSummary) => {
     if (!summary.patch.trim()) return;
     try {
@@ -4905,6 +6050,147 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     });
   };
 
+  const diffReviewTargetKey = (messageId: string, filePath: string, lineKey: string) =>
+    `${messageId}:${filePath}:${lineKey}`;
+
+  const openLineReview = (messageId: string, filePath: string, line: DiffReviewLine) => {
+    if (!line.annotatable) return;
+    const key = diffReviewTargetKey(messageId, filePath, line.key);
+    setReviewTargetKey((current) => current === key ? null : key);
+    setReviewDraft("");
+  };
+
+  const saveLineReview = (
+    sessionId: string,
+    messageId: string,
+    filePath: string,
+    line: DiffReviewLine,
+  ) => {
+    const body = reviewDraft.trim();
+    if (!body || !line.annotatable) return;
+    const annotation: ChangeReviewAnnotation = {
+      id: nowId("line-review"),
+      filePath,
+      lineKey: line.key,
+      kind: line.kind === "addition" || line.kind === "deletion" ? line.kind : "context",
+      oldLine: line.oldLine,
+      newLine: line.newLine,
+      lineText: line.raw,
+      body,
+      resolved: false,
+      createdAt: Date.now(),
+    };
+    patchSession(sessionId, (session) => ({
+      ...session,
+      messages: session.messages.map((item) => item.id === messageId
+        ? { ...item, reviewAnnotations: [...(item.reviewAnnotations || []), annotation] }
+        : item),
+      updatedAt: Date.now(),
+    }));
+    setReviewTargetKey(null);
+    setReviewDraft("");
+  };
+
+  const updateLineReview = (sessionId: string, messageId: string, annotationId: string, resolved: boolean) => {
+    patchSession(sessionId, (session) => ({
+      ...session,
+      messages: session.messages.map((item) => item.id === messageId
+        ? {
+            ...item,
+            reviewAnnotations: (item.reviewAnnotations || []).map((annotation) =>
+              annotation.id === annotationId ? { ...annotation, resolved } : annotation,
+            ),
+          }
+        : item),
+      updatedAt: Date.now(),
+    }));
+  };
+
+  const deleteLineReview = (sessionId: string, messageId: string, annotationId: string) => {
+    patchSession(sessionId, (session) => ({
+      ...session,
+      messages: session.messages.map((item) => item.id === messageId
+        ? {
+            ...item,
+            reviewAnnotations: (item.reviewAnnotations || []).filter((annotation) => annotation.id !== annotationId),
+          }
+        : item),
+      updatedAt: Date.now(),
+    }));
+  };
+
+  const updateReviewWorkflowStatus = (
+    sessionId: string,
+    request: ReviewDispatchContext | undefined,
+    status: ReviewWorkflowPhase,
+    details: {
+      responseMessageId?: string;
+      responseExcerpt?: string;
+      error?: string;
+    } = {},
+  ) => {
+    if (!request) return;
+    patchSession(sessionId, (session) => ({
+      ...session,
+      messages: session.messages.map((item) => item.id === request.sourceMessageId
+        ? {
+            ...item,
+            reviewWorkflow: transitionReviewWorkflow(item.reviewWorkflow, request, status, details),
+          }
+        : item),
+      updatedAt: Date.now(),
+    }));
+  };
+
+  const sendLineReviews = async (message: ChatMessage) => {
+    if (!active) return;
+    const prompt = formatReviewAnnotationsPrompt(
+      message.reviewAnnotations || [],
+      tw.language === "en" ? "en" : "ko",
+    );
+    if (!prompt) return;
+    const dispatch = createReviewDispatch({
+      dispatchId: nowId("review-dispatch"),
+      sessionId: active.id,
+      sourceMessageId: message.id,
+      annotations: message.reviewAnnotations || [],
+      state: message.reviewWorkflow,
+    });
+    if (!dispatch) return;
+    const sessionId = active.id;
+    const createdAt = Date.now();
+    const payload: QueuedAgentTurn = {
+      id: nowId("queued-turn"),
+      userMessageId: nowId("user"),
+      text: prompt,
+      displayText: prompt,
+      attachments: [],
+      cwd: active.cwd || cwd,
+      createdAt,
+      reviewRequest: dispatch.context,
+    };
+    const isBusy = Boolean(busyTurnIdsRef.current[sessionId]);
+    patchSession(sessionId, (session) => ({
+      ...session,
+      queuedTurns: isBusy ? [...(session.queuedTurns || []), payload] : (session.queuedTurns || []),
+      messages: [
+        ...(isBusy ? session.messages : finalizeOrphanedStreamingMessages(session.messages)).map((item) =>
+          item.id === message.id ? { ...item, reviewWorkflow: dispatch.state } : item,
+        ),
+        {
+          id: payload.userMessageId,
+          role: "user",
+          text: prompt,
+          createdAt,
+          status: isBusy ? "queued" : "done",
+          attachments: [],
+        },
+      ],
+      updatedAt: createdAt,
+    }));
+    if (!isBusy) await runAgentTurn(sessionId, payload);
+  };
+
   const renderChangeSummary = (message: ChatMessage) => {
     const summary = message.changes;
     const canLoadChanges = Boolean(message.changeBaselineId);
@@ -4942,6 +6228,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       );
     }
     if (!summary.scope && !summary.undo_applied) return null;
+    const reviewAnnotations = message.reviewAnnotations || [];
+    const openReviewAnnotations = reviewAnnotations.filter((annotation) => !annotation.resolved);
     const allOpen = summary.files.length > 0
       && summary.files.every((file) => expandedDiffByKey[`${message.id}:${file.path}`]);
     return (
@@ -4951,6 +6239,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
             <span>{copy.changedFiles(summary.files.length)}</span>
             <span className="atelier-change-add">+{summary.additions}</span>
             <span className="atelier-change-del">-{summary.deletions}</span>
+            {openReviewAnnotations.length > 0 && (
+              <span className="atelier-change-review-count">
+                {copy.reviewCommentCount(openReviewAnnotations.length)}
+              </span>
+            )}
           </div>
           <div className="atelier-change-actions">
             <button
@@ -4969,9 +6262,18 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
             </button>
           </div>
         </div>
+        <ReviewWorkflowStatus
+          annotations={reviewAnnotations}
+          state={message.reviewWorkflow}
+          language={tw.language === "en" ? "en" : "ko"}
+          disabled={!active}
+          onSend={() => { sendLineReviews(message).catch(console.error); }}
+        />
         {summary.files.map((file) => {
           const key = `${message.id}:${file.path}`;
           const open = reviewOpenById[message.id] || expandedDiffByKey[key];
+          const parsedLines = parseUnifiedDiff(file.diff);
+          const fileAnnotations = reviewAnnotations.filter((annotation) => annotation.filePath === file.path);
           return (
             <div className="atelier-change-file" key={file.path}>
               <button type="button" className="atelier-change-row" onClick={() => toggleFileDiff(message.id, file.path)}>
@@ -4981,9 +6283,99 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                 <span className={cls("atelier-change-chevron", open ? "atelier-change-chevron-open" : "")}>⌄</span>
               </button>
               {open && (
-                <pre className="atelier-change-diff">
-                  {file.diff.trim() || copy.noDiff}
-                </pre>
+                <div className="atelier-change-diff">
+                  {parsedLines.length === 0 ? (
+                    <div className="atelier-diff-empty">{copy.noDiff}</div>
+                  ) : parsedLines.map((line) => {
+                    const targetKey = diffReviewTargetKey(message.id, file.path, line.key);
+                    const lineAnnotations = fileAnnotations.filter((annotation) =>
+                      reviewAnnotationMatchesLine(annotation, line),
+                    );
+                    return (
+                      <div className="atelier-diff-line-shell" key={line.key}>
+                        <button
+                          type="button"
+                          className={cls(
+                            "atelier-diff-line",
+                            `atelier-diff-line-${line.kind}`,
+                            line.annotatable ? "atelier-diff-line-annotatable" : "",
+                          )}
+                          disabled={!line.annotatable}
+                          onClick={() => openLineReview(message.id, file.path, line)}
+                          aria-label={line.annotatable ? copy.addLineReview : undefined}
+                          title={line.annotatable ? copy.addLineReview : undefined}
+                        >
+                          <span className="atelier-diff-line-number">{line.oldLine ?? ""}</span>
+                          <span className="atelier-diff-line-number">{line.newLine ?? ""}</span>
+                          <span className="atelier-diff-code">{line.raw || " "}</span>
+                          <span className="atelier-diff-comment-indicator" aria-hidden="true">
+                            {lineAnnotations.length > 0 ? lineAnnotations.length : line.annotatable ? I.comment : null}
+                          </span>
+                        </button>
+                        {lineAnnotations.map((annotation) => (
+                          <div
+                            key={annotation.id}
+                            className={cls("atelier-diff-comment", annotation.resolved ? "atelier-diff-comment-resolved" : "")}
+                          >
+                            <span className="atelier-diff-comment-location">
+                              {reviewLineLabel(annotation, tw.language === "en" ? "en" : "ko")}
+                            </span>
+                            <span className="atelier-diff-comment-body">{annotation.body}</span>
+                            <button
+                              type="button"
+                              onClick={() => active && updateLineReview(active.id, message.id, annotation.id, !annotation.resolved)}
+                              title={annotation.resolved ? copy.reopenLineReview : copy.resolveLineReview}
+                              aria-label={annotation.resolved ? copy.reopenLineReview : copy.resolveLineReview}
+                            >
+                              {I.check}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => active && deleteLineReview(active.id, message.id, annotation.id)}
+                              title={copy.deleteLineReview}
+                              aria-label={copy.deleteLineReview}
+                            >
+                              {I.x}
+                            </button>
+                          </div>
+                        ))}
+                        {reviewTargetKey === targetKey && active && (
+                          <div className="atelier-diff-comment-editor">
+                            <textarea
+                              autoFocus
+                              value={reviewDraft}
+                              onChange={(event) => setReviewDraft(event.target.value)}
+                              placeholder={copy.lineReviewPlaceholder}
+                              maxLength={2000}
+                              onKeyDown={(event) => {
+                                if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                                  event.preventDefault();
+                                  saveLineReview(active.id, message.id, file.path, line);
+                                }
+                                if (event.key === "Escape") {
+                                  setReviewTargetKey(null);
+                                  setReviewDraft("");
+                                }
+                              }}
+                            />
+                            <div className="atelier-diff-comment-editor-actions">
+                              <button type="button" onClick={() => { setReviewTargetKey(null); setReviewDraft(""); }}>
+                                {copy.cancelLineReview}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={!reviewDraft.trim()}
+                                onClick={() => saveLineReview(active.id, message.id, file.path, line)}
+                              >
+                                {copy.saveLineReview}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </div>
           );
@@ -5004,42 +6396,22 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     const last = message.activities?.length
       ? message.activities[message.activities.length - 1]
       : null;
-    const elapsedSec = Math.max(0, Math.floor((nowTickMs - message.createdAt) / 1000));
-    const elapsedLabel = tw.language === "en"
-      ? `Working for ${elapsedSec}s`
-      : `${elapsedSec}s 동안 작업 중입니다`;
     const fallbackLabel = tw.language === "en" ? "Thinking" : "생각 중";
     const currentLabel = last?.label || fallbackLabel;
     const icon = !last || last.kind === "thinking" ? "…" : I.terminal;
     return (
-      <div className="atelier-activity-codex" aria-live="polite">
-        <div className="flex items-center justify-between gap-3">
-          <div className="atelier-activity-elapsed">{elapsedLabel}</div>
-          {busyTurnId && (
-            <button
-              type="button"
-              onClick={stopActiveTurn}
-              disabled={isStoppingActiveTurn}
-              className={cls(
-                "shrink-0 h-8 rounded-[7px] border px-3 inline-flex items-center gap-2 text-[12px] font-medium disabled:opacity-50",
-                dark
-                  ? "border-[#7a4638] bg-[#2a211e] text-[#f28b68] hover:bg-[#342722]"
-                  : "border-[#d7a08a] bg-[#fff4ef] text-[#b94f2f] hover:bg-[#ffe8df]",
-              )}
-              aria-label={isStoppingActiveTurn ? copy.stopping : copy.stop}
-              title={isStoppingActiveTurn ? copy.stopping : copy.stop}
-              data-testid="agent-stop-activity"
-            >
-              <span aria-hidden="true" className="h-2.5 w-2.5 rounded-[2px] bg-current" />
-              <span>{isStoppingActiveTurn ? copy.stopping : copy.stop}</span>
-            </button>
-          )}
-        </div>
-        <div className="atelier-activity-line atelier-activity-active">
-          <span className="atelier-activity-icon" aria-hidden="true">{icon}</span>
-          <span className="atelier-activity-label">{currentLabel}</span>
-        </div>
-      </div>
+      <AgentActivityView
+        createdAt={message.createdAt}
+        currentLabel={currentLabel}
+        language={tw.language}
+        icon={icon}
+        dark={dark}
+        canStop={Boolean(busyTurnId)}
+        stopping={isStoppingActiveTurn}
+        stopLabel={copy.stop}
+        stoppingLabel={copy.stopping}
+        onStop={stopActiveTurn}
+      />
     );
   };
 
@@ -5064,6 +6436,129 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     );
   };
 
+  const renderTaskEvidence = (message: ChatMessage) => {
+    if (message.role !== "assistant" || (!message.worktree && !message.previewEvidence)) return null;
+    return (
+      <div className={cls(
+        "mt-3 overflow-hidden rounded-[8px] border text-[11px]",
+        dark ? "border-dline bg-dsurf text-dsub" : "border-line bg-muted text-sub",
+      )}>
+        {message.worktree && (
+          <div className={cls(
+            "grid grid-cols-[18px_minmax(0,1fr)] gap-2 px-3 py-2.5",
+            message.previewEvidence ? (dark ? "border-b border-dline" : "border-b border-line") : "",
+          )}>
+            <span className="mt-0.5 text-[#e26f4f]" aria-hidden="true">{I.split}</span>
+            <div className="min-w-0">
+              <div className={cls("font-medium", dark ? "text-dink" : "text-ink")}>
+                {tw.language === "en" ? "Isolated worktree" : "격리 worktree"} · {message.worktree.branch}
+              </div>
+              <div className="mt-0.5 truncate font-mono" title={message.worktree.worktree_cwd}>
+                {message.worktree.worktree_cwd}
+              </div>
+              {message.worktree.source_dirty && (
+                <div className="mt-1 text-[#d79b3d]">
+                  {tw.language === "en"
+                    ? "Source workspace edits were preserved and were not copied into this worktree."
+                    : "원본 작업공간의 기존 변경은 보존했으며 이 worktree로 복사하지 않았습니다."}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        {message.previewEvidence && (
+          <div className="grid grid-cols-[18px_minmax(0,1fr)] gap-2 px-3 py-2.5">
+            <span className={cls("mt-0.5", message.previewEvidence.ok ? "text-[#31b879]" : "text-[#d9534f]")} aria-hidden="true">
+              {I.eye}
+            </span>
+            <div className="min-w-0">
+              <div className={cls("font-medium", dark ? "text-dink" : "text-ink")}>
+                {message.previewEvidence.ok
+                  ? (tw.language === "en" ? "Preview verified" : "프리뷰 검증 완료")
+                  : (tw.language === "en" ? "Preview issue detected" : "프리뷰 문제 감지")}
+                {message.previewEvidence.status ? ` · HTTP ${message.previewEvidence.status}` : ""}
+                {message.previewEvidence.serviceRunning !== undefined
+                  ? ` · ${message.previewEvidence.serviceRunning
+                    ? (tw.language === "en" ? "service running" : "서비스 실행 중")
+                    : (tw.language === "en" ? "service stopped" : "서비스 중지됨")}`
+                  : ""}
+                {message.previewEvidence.servicePid ? ` · PID ${message.previewEvidence.servicePid}` : ""}
+              </div>
+              <div className="mt-0.5 truncate" title={message.previewEvidence.url}>{message.previewEvidence.url}</div>
+              <div className="mt-1 font-mono">
+                {message.previewEvidence.networkMethod || "GET"}
+                {message.previewEvidence.checkedAt
+                  ? ` · ${new Date(message.previewEvidence.checkedAt).toLocaleTimeString()}`
+                  : ""}
+                {message.previewEvidence.serviceRestarts
+                  ? ` · ${tw.language === "en" ? "restarts" : "재시작"} ${message.previewEvidence.serviceRestarts}`
+                  : ""}
+              </div>
+              {(message.previewEvidence.domNodes !== undefined || message.previewEvidence.screenshotCaptured) && (
+                <div className="mt-1 font-mono">
+                  {message.previewEvidence.domNodes !== undefined ? `DOM ${message.previewEvidence.domNodes}` : ""}
+                  {message.previewEvidence.domNodes !== undefined && message.previewEvidence.screenshotCaptured ? " · " : ""}
+                  {message.previewEvidence.screenshotCaptured ? (tw.language === "en" ? "screenshot captured" : "스크린샷 캡처됨") : ""}
+                </div>
+              )}
+              {(message.previewEvidence.browserErrorCount !== undefined
+                || message.previewEvidence.networkRequestCount !== undefined) && (
+                <div className="mt-1 font-mono">
+                  Console {message.previewEvidence.browserErrorCount || 0}
+                  {message.previewEvidence.browserWarningCount ? `/${message.previewEvidence.browserWarningCount} warn` : ""}
+                  {" · "}Network {message.previewEvidence.networkRequestCount || 0}
+                  {message.previewEvidence.networkFailureCount ? `/${message.previewEvidence.networkFailureCount} failed` : ""}
+                </div>
+              )}
+              {message.previewEvidence.error && <div className="mt-1 text-[#d9534f]">{message.previewEvidence.error}</div>}
+              {message.previewEvidence.serviceError && <div className="mt-1 text-[#d9534f]">{message.previewEvidence.serviceError}</div>}
+              {message.previewEvidence.bodyText && (
+                <details className="mt-1.5">
+                  <summary className="cursor-pointer select-none">
+                    {tw.language === "en" ? "HTTP response evidence" : "HTTP 응답 증거"}
+                  </summary>
+                  <div className="mt-1 whitespace-pre-wrap break-words font-mono">
+                    {message.previewEvidence.bodyText}
+                  </div>
+                </details>
+              )}
+              {Boolean(message.previewEvidence.serviceOutput?.length) && (
+                <details className="mt-1.5">
+                  <summary className="cursor-pointer select-none">
+                    {tw.language === "en" ? "Preview server output" : "프리뷰 서버 출력"}
+                  </summary>
+                  <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono">
+                    {message.previewEvidence.serviceOutput?.join("\n")}
+                  </pre>
+                </details>
+              )}
+              {Boolean(message.previewEvidence.consoleEvidence?.length) && (
+                <details className="mt-1.5">
+                  <summary className="cursor-pointer select-none">
+                    {tw.language === "en" ? "Browser console evidence" : "브라우저 콘솔 증거"}
+                  </summary>
+                  <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono">
+                    {message.previewEvidence.consoleEvidence?.join("\n")}
+                  </pre>
+                </details>
+              )}
+              {Boolean(message.previewEvidence.networkEvidence?.length) && (
+                <details className="mt-1.5">
+                  <summary className="cursor-pointer select-none">
+                    {tw.language === "en" ? "Browser network evidence" : "브라우저 네트워크 증거"}
+                  </summary>
+                  <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono">
+                    {message.previewEvidence.networkEvidence?.join("\n")}
+                  </pre>
+                </details>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderedTranscriptMessages = useMemo(() => {
     if (!active) return null;
     return active.messages.map((m) => {
@@ -5081,7 +6576,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         : cleanedRenderedText;
       const hasRenderedText = renderedText.trim().length > 0;
       return (
-        <article key={m.id} className={cls("flex min-w-0 gap-3", m.role === "user" ? "justify-end" : "justify-start")}>
+        <article
+          key={m.id}
+          className={cls("atelier-transcript-message flex min-w-0 gap-3", m.role === "user" ? "justify-end" : "justify-start")}
+          data-streaming={m.status === "streaming" ? "true" : "false"}
+        >
           {m.role !== "user" && (
             <div
               className="mt-1 h-7 w-7 shrink-0 rounded-[7px] text-white grid place-items-center text-[10px] font-semibold"
@@ -5142,6 +6641,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
               </div>
             )}
             {m.status === "streaming" && renderAgentActivity(m)}
+            {m.role === "assistant" && renderTaskEvidence(m)}
             {m.role === "assistant" && renderChangeSummary(m)}
             {m.role === "assistant" && renderAgentLogs(m)}
           </div>
@@ -5158,7 +6658,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     visibleTextById,
     dark,
     copy,
-    nowTickMs,
     expandedDiffByKey,
     reviewOpenById,
     logsOpenById,
@@ -5450,6 +6949,38 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       return true;
     }
 
+    if (command === "/isolation") {
+      const requested = arg.toLowerCase();
+      if (requested !== "workspace" && requested !== "worktree") {
+        localAssistantMessage(
+          session.id,
+          rawText,
+          tw.language === "en"
+            ? "Usage: /isolation workspace|worktree"
+            : "사용법: /isolation workspace|worktree",
+        );
+        return true;
+      }
+      const enabled = requested === "worktree";
+      patchSession(session.id, (current) => ({
+        ...current,
+        worktreeEnabled: enabled,
+        updatedAt: Date.now(),
+      }));
+      localAssistantMessage(
+        session.id,
+        rawText,
+        tw.language === "en"
+          ? enabled
+            ? "Isolated worktree is on. The next run will prepare a task branch without changing source-workspace edits."
+            : "Isolation is off. The next run will use the source workspace."
+          : enabled
+            ? "격리 worktree를 켰습니다. 다음 실행은 원본 작업공간의 기존 변경을 건드리지 않고 별도 작업 브랜치를 준비합니다."
+            : "격리를 껐습니다. 다음 실행부터 원본 작업공간을 사용합니다.",
+      );
+      return true;
+    }
+
     if (command === "/que" && !arg) {
       const nextMode = !session.queueMode;
       patchSession(session.id, (current) => ({ ...current, queueMode: nextMode, updatedAt: Date.now() }));
@@ -5550,6 +7081,22 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       if (session.provider !== provider) {
         localAssistantMessage(session.id, rawText, providerOnlyMessage(provider));
         return true;
+      }
+      if (provider === "gajecode") {
+        const classified = classifyGajaePrefixedInput(rawText);
+        if (classified.kind === "prompt") return false;
+        if (classified.kind === "empty") {
+          localAssistantMessage(
+            session.id,
+            rawText,
+            tw.language === "en" ? "Usage: /gjc <task or CLI command>" : "사용법: /gjc <자연어 작업 또는 CLI 명령>",
+          );
+          return true;
+        }
+        if (classified.kind === "cli") {
+          await runProviderCliSlashCommand(session, rawText, classified.args);
+          return true;
+        }
       }
       await runProviderCliSlashCommand(session, rawText, splitCliArgs(arg));
       return true;
@@ -5733,6 +7280,23 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     }
 
     if (command === "/provider") {
+      if (session.provider === "gajecode") {
+        if (!arg || !isGajaeProvider(arg)) {
+          localAssistantMessage(session.id, rawText, tw.language === "en" ? "Usage: /provider claude|codex" : "사용법: /provider claude|codex");
+          return true;
+        }
+        const options = modelOptionsFor("gajecode", arg === "codex" ? "codex/gpt-5.5" : "claude-opus-4-8", DEFAULT_HERMES_PROVIDER, claudeRuntimeModels, codexRuntimeModels, openRouterRuntimeModels);
+        const nextModel = options[0]?.value || (arg === "codex" ? "codex/gpt-5.5" : "claude-opus-4-8");
+        patchSession(session.id, (current) => ({
+          ...current,
+          model: nextModel,
+          providerSessionId: undefined,
+          providerSessionModel: undefined,
+          updatedAt: Date.now(),
+        }));
+        localAssistantMessage(session.id, rawText, tw.language === "en" ? `Gajae provider changed: ${arg}` : `가재코드 provider를 ${arg === "codex" ? "Codex" : "Claude"}로 변경했습니다.`);
+        return true;
+      }
       if (session.provider !== "hermes") {
         localAssistantMessage(
           session.id,
@@ -5839,7 +7403,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         return true;
       }
       setCwd(arg);
-      patchSession(session.id, (current) => ({ ...current, cwd: arg, updatedAt: Date.now() }));
+      patchSession(session.id, (current) => ({
+        ...current,
+        cwd: arg,
+        worktreeInfo: undefined,
+        updatedAt: Date.now(),
+      }));
       localAssistantMessage(session.id, rawText, `${copy.cwd}: ${arg}`);
       return true;
     }
@@ -5876,6 +7445,14 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     setComposerInput("");
   };
 
+  const runGajaeProviderCommandFromPicker = async (provider: GajaeInferenceProvider) => {
+    if (!active || active.provider !== "gajecode" || activeGajaeProvider === provider) return;
+    const command = `/provider ${provider}`;
+    setComposerInput(command);
+    await handleSlashCommand(active, command);
+    setComposerInput("");
+  };
+
   const runAgentTurn = async (sessionId: string, payload: QueuedAgentTurn) => {
     if (busyTurnIdsRef.current[sessionId]) return;
     const session = sessionsRef.current.find((item) => item.id === sessionId);
@@ -5883,7 +7460,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     const meta = providerMeta(session.provider);
     const assistantId = nowId("assistant");
     const turnId = nowId("turn");
-    const runCwd = payload.cwd || session.cwd || cwd;
+    let runCwd = payload.cwd || session.cwd || cwd;
     const fastPatchTask = isFastPatchTask(payload.text);
     const hermesProvider = session.provider === "hermes"
       ? normalizeHermesProvider(session.hermesProvider || inferHermesProviderFromModel(session.model))
@@ -5921,11 +7498,13 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           tw.language,
           devScreenStatusResult,
           devScreenSnapshotResult,
+          devScreenDiagnosticsResult,
           devScreenCheckResult,
           devScreenActionResult,
+          payload.elementSelection || null,
           devScreenError,
         )
-      : null;
+      : formatDevScreenElementSelectionPrompt(payload.elementSelection, tw.language);
     const compactContext = useHermesCodexFastPath
       ? formatCompactAgentContext(session.messages, tw.language, payload.userMessageId)
       : null;
@@ -5934,6 +7513,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     backgroundedAssistantIdsRef.current.delete(assistantId);
     autoScrollRef.current = true;
     setBusyForSession(sessionId, turnId);
+	  updateReviewWorkflowStatus(sessionId, payload.reviewRequest, "running", {
+	    responseMessageId: assistantId,
+	  });
 	    patchSession(sessionId, (s) => ({
 	      ...s,
 	      cwd: runCwd,
@@ -5950,12 +7532,28 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
     }));
 
     let unlisten: (() => void) | undefined;
+    let unlistenLifecycle: (() => void) | undefined;
     try {
       if (isTauri()) {
+        if (session.worktreeEnabled) {
+          const worktree = await prepareWorktreeForSession(session, runCwd);
+          runCwd = worktree.worktree_cwd;
+          patchSession(sessionId, (current) => ({
+            ...current,
+            worktreeInfo: worktree,
+            messages: current.messages.map((message) =>
+              message.id === assistantId ? { ...message, worktree } : message,
+            ),
+            updatedAt: Date.now(),
+          }));
+        }
         const changeBaseline = fastPatchTask
           ? null
           : await captureChangeBaselineForTurn(runCwd || null, CHANGE_BASELINE_TIMEOUT_MS);
         unlisten = await onAgentEvent(turnId, (event) => handleAgentEvent(sessionId, assistantId, event));
+        unlistenLifecycle = await onAgentLifecycle(turnId, (event) =>
+          handleAgentLifecycle(sessionId, assistantId, event),
+        );
         const runWorkload = fastPatchTask ? "low" : normalizeCodexEffort(session.codexEffort);
         const basePrompt = formatOntologyAgentPrompt(
           payload.text,
@@ -5975,8 +7573,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           cwd: runCwd || null,
           model: runModel,
           hermesProvider,
-          effort: session.provider === "codex" ? nativeCodexEffort(runWorkload) : null,
-          speed: session.provider === "codex" ? (fastPatchTask ? "fast" : normalizeCodexSpeed(session.codexSpeed)) : null,
+          effort: session.provider === "codex" || (session.provider === "gajecode" && inferGajaeProviderFromModel(runModel) === "codex")
+            ? nativeCodexEffort(runWorkload, runModel, runModelOptions)
+            : null,
+          speed: session.provider === "codex" || (session.provider === "gajecode" && inferGajaeProviderFromModel(runModel) === "codex")
+            ? (fastPatchTask ? "fast" : normalizeCodexSpeed(session.codexSpeed))
+            : null,
           permissionMode: normalizePermissionMode(session.permissionMode),
         });
 	        flushAgentStream(assistantId);
@@ -6046,10 +7648,56 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           ),
           updatedAt: Date.now(),
         }));
+        updateReviewWorkflowStatus(
+          sessionId,
+          payload.reviewRequest,
+          shouldScheduleCooldownRetry
+            ? "queued"
+            : wasStopped || wasInterrupted
+              ? "cancelled"
+              : result.is_error
+                ? "failed"
+                : "responded",
+          {
+            responseMessageId: assistantId,
+            responseExcerpt: shouldScheduleCooldownRetry ? undefined : finalTextForReveal,
+            error: result.is_error && !shouldScheduleCooldownRetry ? result.error || finalTextForReveal : undefined,
+          },
+        );
+        if (payload.controlRequestId && !shouldScheduleCooldownRetry) {
+          const controlStatus = wasStopped || wasInterrupted
+            ? "cancelled"
+            : result.is_error
+              ? "failed"
+              : "succeeded";
+          await controlRequestComplete(
+            payload.controlRequestId,
+            controlStatus,
+            clipBlockText(finalTextForReveal || result.error || copy.noResponse, 1200),
+            {
+              sessionId,
+              provider: session.provider,
+              model: runModel,
+              workspace: runCwd || null,
+            },
+          ).catch((error) => console.warn("Atelier CLI receipt write failed", error));
+        }
         if (finalTextForReveal && (!isWorkspaceForeground() || backgroundedAssistantIdsRef.current.has(assistantId))) {
           revealMessageImmediately(assistantId, finalTextForReveal);
         }
         backgroundedAssistantIdsRef.current.delete(assistantId);
+        const completedSession = sessionsRef.current.find((item) => item.id === sessionId);
+        const completedPreviewUrl = sessionId === activeIdRef.current
+          ? previewUrlRef.current
+          : completedSession?.previewUrl;
+        // A failed provider/tool turn can still leave the preview in the most
+        // useful diagnostic state. Capture it unless the user explicitly
+        // stopped or interrupted the turn; cancellation should remain cheap.
+        if (!wasInterrupted && !wasStopped && completedPreviewUrl) {
+          captureMessagePreviewEvidence(sessionId, assistantId, completedPreviewUrl).catch((err) =>
+            console.warn("preview evidence capture failed", err),
+          );
+        }
         if (payload.factoryCommand) {
           stellaRecordEvidence({
             cwd: runCwd || null,
@@ -6066,14 +7714,19 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         }
       } else {
         await new Promise((resolve) => window.setTimeout(resolve, 500));
+        const fallbackText = "Tauri 런타임에서 선택한 에이전트 adapter가 연결됩니다.";
         patchSession(sessionId, (s) => ({
           ...s,
           messages: s.messages.map((m) =>
             m.id === assistantId
-              ? { ...m, text: "Tauri 런타임에서 선택한 에이전트 adapter가 연결됩니다.", status: "done" }
+              ? { ...m, text: fallbackText, status: "done" }
               : m,
           ),
         }));
+        updateReviewWorkflowStatus(sessionId, payload.reviewRequest, "responded", {
+          responseMessageId: assistantId,
+          responseExcerpt: fallbackText,
+        });
       }
     } catch (err) {
       flushAgentStream(assistantId);
@@ -6097,6 +7750,29 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
             : m,
         ),
       }));
+      updateReviewWorkflowStatus(
+        sessionId,
+        payload.reviewRequest,
+        wasStopped || wasInterrupted ? "cancelled" : "failed",
+        {
+          responseMessageId: assistantId,
+          responseExcerpt: finalTextForReveal,
+          error: wasStopped || wasInterrupted ? undefined : finalTextForReveal || String(err),
+        },
+      );
+      if (payload.controlRequestId) {
+        await controlRequestComplete(
+          payload.controlRequestId,
+          wasStopped || wasInterrupted ? "cancelled" : "failed",
+          clipBlockText(finalTextForReveal || String(err), 1200),
+          {
+            sessionId,
+            provider: session.provider,
+            model: runModel,
+            workspace: runCwd || null,
+          },
+        ).catch((error) => console.warn("Atelier CLI failure receipt write failed", error));
+      }
       if (finalTextForReveal && (!isWorkspaceForeground() || backgroundedAssistantIdsRef.current.has(assistantId))) {
         revealMessageImmediately(assistantId, finalTextForReveal);
       }
@@ -6117,6 +7793,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       }
     } finally {
       unlisten?.();
+      unlistenLifecycle?.();
       flushAgentStream(assistantId);
       delete pendingStreamRef.current[assistantId];
       interruptedTurnIdsRef.current.delete(turnId);
@@ -6160,7 +7837,13 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       setPasteError(null);
       return;
     }
-    const academicResearchRequest = !quePrefixedText && !factoryRequest && attachments.length === 0
+    const gajaePrefixedInput = session.provider === "gajecode" && attachments.length === 0
+      ? classifyGajaePrefixedInput(userText)
+      : { kind: "none" } as const;
+    const gajaePromptText = gajaePrefixedInput.kind === "prompt"
+      ? gajaePrefixedInput.prompt
+      : null;
+    const academicResearchRequest = !quePrefixedText && !factoryRequest && !gajaePromptText && attachments.length === 0
       ? parseAcademicResearchCommand(userText, tw.language, session.provider)
       : null;
     let turnText = quePrefixedText
@@ -6169,7 +7852,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         ? factoryRequest.prompt
         : academicResearchRequest
           ? academicResearchRequest.prompt
-          : userText;
+          : gajaePromptText || userText;
     let factoryEvidence: string | undefined;
     if (factoryRequest && isTauri()) {
       try {
@@ -6201,20 +7884,20 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       turnText = `${turnText}\n\n---\n${factoryEvidence}`;
     }
     const visibleUserText = userText;
+    const elementSelection = devScreenSelectionAttached
+      ? normalizeDevScreenElementSelection(devScreenElementSelection) || undefined
+      : undefined;
 
     setComposerInput("");
     setPendingAttachments([]);
     setPasteError(null);
 
-    const directGajaeCliArgs = attachments.length === 0 && session.provider === "gajecode"
-      ? parseGajaeCliInput(userText)
-      : null;
-    if (!quePrefixedText && !factoryRequest && !academicResearchRequest && directGajaeCliArgs) {
-      await runProviderCliSlashCommand(session, userText, directGajaeCliArgs);
+    if (!quePrefixedText && !factoryRequest && !academicResearchRequest && gajaePrefixedInput.kind === "cli") {
+      await runProviderCliSlashCommand(session, userText, gajaePrefixedInput.args);
       return;
     }
 
-    if (!quePrefixedText && !factoryRequest && !academicResearchRequest && attachments.length === 0 && await handleSlashCommand(session, userText)) return;
+    if (!quePrefixedText && !factoryRequest && !academicResearchRequest && !gajaePromptText && attachments.length === 0 && await handleSlashCommand(session, userText)) return;
 
     const createdAt = Date.now();
     const payload: QueuedAgentTurn = {
@@ -6224,6 +7907,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       displayText: visibleUserText,
       factoryCommand: factoryRequest?.command,
       factoryEvidence,
+      elementSelection,
       attachments,
       cwd,
       createdAt,
@@ -6255,6 +7939,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       ],
       updatedAt: createdAt,
     }));
+    if (elementSelection) setDevScreenSelectionAttached(false);
 
     if (isBusy) {
       if (!shouldQueue) {
@@ -6267,6 +7952,335 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       return;
     }
     await runAgentTurn(session.id, payload);
+  };
+
+  controlRequestHandlerRef.current = async (pendingRequest) => {
+    const request = await controlRequestClaim(pendingRequest.requestId);
+    try {
+      if (request.action === "worktree.create") {
+        const workspace = typeof request.workspace === "string" ? request.workspace : "";
+        const taskId = typeof request.payload.taskId === "string" ? request.payload.taskId.trim() : "";
+        if (!workspace || !taskId) throw new Error("The worktree request is missing workspace or taskId.");
+        const worktree = await agentWorktreePrepare(workspace, taskId);
+        await controlRequestComplete(
+          request.requestId,
+          "succeeded",
+          `Prepared isolated worktree ${worktree.branch}`,
+          worktree,
+        );
+        return;
+      }
+
+      if (request.action !== "task.dispatch") {
+        throw new Error(`Unsupported Atelier control action: ${request.action}`);
+      }
+      const controlTask = normalizeFeatureControlTask(request, cwd);
+      const {
+        provider: providerValue,
+        prompt,
+        workspace,
+      } = controlTask;
+      const profile = agentProfiles.find((item) => item.provider === providerValue)?.profile;
+      const session = makeSession(profile, providerValue, prompt.slice(0, 42));
+      session.cwd = workspace;
+      if (controlTask.model) {
+        session.model = controlTask.model;
+      }
+      if (controlTask.effort) {
+        session.codexEffort = normalizeCodexEffort(controlTask.effort);
+      }
+      if (controlTask.permissionMode) {
+        session.permissionMode = normalizePermissionMode(controlTask.permissionMode);
+      }
+
+      let turnText = prompt;
+      let factoryCommand: StellaFactoryCommand | undefined;
+      let factoryEvidence: string | undefined;
+      if (controlTask.stellaMode) {
+        const factoryRequest = parseStellaFactoryCommand(`/goal ${prompt}`, tw.language);
+        if (factoryRequest) {
+          factoryCommand = factoryRequest.command;
+          turnText = factoryRequest.prompt;
+          try {
+            const analysis = await stellaProjectAnalysis(workspace || null);
+            const bootstrap = await stellaFactoryBootstrap({
+              cwd: workspace || null,
+              goal: factoryRequest.body,
+            });
+            const autopilot = await stellaFactoryAutopilot({
+              cwd: workspace || null,
+              goal: factoryRequest.body,
+              maxCycles: 12,
+            });
+            factoryEvidence = formatStellaFactoryPreflightBlock(
+              { analysis, bootstrap, autopilot, probe: null },
+              tw.language,
+            );
+            turnText = `${turnText}\n\n---\n${factoryEvidence}`;
+          } catch (error) {
+            factoryEvidence = formatStellaFactoryPreflightBlock({ error: String(error) }, tw.language);
+            turnText = `${turnText}\n\n---\n${factoryEvidence}`;
+          }
+        }
+      }
+
+      const createdAt = Date.now();
+      const payload: QueuedAgentTurn = {
+        id: nowId("queued-turn"),
+        userMessageId: nowId("user"),
+        text: turnText,
+        displayText: prompt,
+        factoryCommand,
+        factoryEvidence,
+        attachments: [],
+        cwd: workspace,
+        createdAt,
+        controlRequestId: request.requestId,
+      };
+      session.messages = [{
+        id: payload.userMessageId,
+        role: "user",
+        text: prompt,
+        createdAt,
+        status: "done",
+        attachments: [],
+      }];
+      const nextSessions = [session, ...sessionsRef.current];
+      sessionsRef.current = nextSessions;
+      persistSessions(nextSessions);
+      setSessions(nextSessions);
+      if (!activeIdRef.current) {
+        activeIdRef.current = session.id;
+        setActiveId(session.id);
+      }
+      await runAgentTurn(session.id, payload);
+    } catch (error) {
+      await controlRequestComplete(
+        request.requestId,
+        "failed",
+        clipBlockText(String(error), 1200),
+        { action: request.action },
+      ).catch((receiptError) => console.warn("Atelier CLI rejection receipt failed", receiptError));
+    }
+  };
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    let polling = false;
+    const poll = async () => {
+      if (disposed || polling) return;
+      polling = true;
+      try {
+        const requests = await controlRequestsPending();
+        for (const request of requests) {
+          if (disposed || controlRequestProcessingRef.current.has(request.requestId)) continue;
+          controlRequestProcessingRef.current.add(request.requestId);
+          controlRequestHandlerRef.current(request)
+            .catch((error) => console.warn("Atelier CLI request handling failed", error))
+            .finally(() => controlRequestProcessingRef.current.delete(request.requestId));
+        }
+      } catch (error) {
+        console.warn("Atelier CLI request polling failed", error);
+      } finally {
+        polling = false;
+      }
+    };
+    poll().catch(console.warn);
+    const timer = window.setInterval(() => poll().catch(console.warn), 750);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  const launchParallelRun = async () => {
+    if (parallelLaunching || isPastingImage) return;
+    const text = inputDraftRef.current.trim();
+    const attachments = pendingAttachments;
+    const userText = text || (attachments.length > 0 ? copy.imageOnlyPrompt : "");
+    if (!userText) {
+      setParallelError(copy.parallelPromptRequired);
+      return;
+    }
+    const selectedProfiles = agentProfiles.filter(({ profile }) => parallelProfileIds.includes(profile.id));
+    if (selectedProfiles.length < 2) {
+      setParallelError(copy.parallelSelect);
+      return;
+    }
+    if (!cwd.trim()) {
+      setParallelError(copy.parallelGitRequired);
+      return;
+    }
+
+    setParallelLaunching(true);
+    setParallelError(null);
+    try {
+      if (isTauri()) {
+        const sourceSummary = await agentChangeSummary(cwd, null);
+        if (!sourceSummary.is_git) {
+          setParallelError(copy.parallelGitRequired);
+          return;
+        }
+      }
+
+      const createdAt = Date.now();
+      const elementSelection = devScreenSelectionAttached
+        ? normalizeDevScreenElementSelection(devScreenElementSelection) || undefined
+        : undefined;
+      const batchId = nowId("parallel");
+      const batchLabel = userText.replace(/\s+/g, " ").trim().slice(0, 48);
+      const sourceSessionId = active?.id;
+      const candidates = selectedProfiles.map(({ profile, provider }, index) => {
+        const session = makeSession(profile, provider, `${batchLabel} · ${profile.name}`);
+        const userMessageId = nowId("user");
+        const payload: QueuedAgentTurn = {
+          id: nowId("queued-turn"),
+          userMessageId,
+          text: userText,
+          displayText: userText,
+          elementSelection,
+          attachments,
+          cwd,
+          createdAt,
+        };
+        session.cwd = cwd;
+        session.worktreeEnabled = true;
+        session.parallelBatchId = batchId;
+        session.parallelBatchLabel = batchLabel;
+        session.parallelSourceSessionId = sourceSessionId;
+        session.parallelCandidateIndex = index + 1;
+        session.parallelCandidateCount = selectedProfiles.length;
+        session.messages = [{
+          id: userMessageId,
+          role: "user",
+          text: userText,
+          createdAt,
+          status: "done",
+          attachments,
+        }];
+        session.updatedAt = createdAt;
+        return { session, payload };
+      });
+
+      const nextSessions = [...candidates.map(({ session }) => session), ...sessionsRef.current];
+      sessionsRef.current = nextSessions;
+      persistSessionsNow(nextSessions);
+      setSessions(nextSessions);
+      const firstSession = candidates[0].session;
+      activeIdRef.current = firstSession.id;
+      setActiveId(firstSession.id);
+      setCwd(firstSession.cwd);
+      setShowParallelLauncher(false);
+      resetComposer();
+      if (elementSelection) setDevScreenSelectionAttached(false);
+
+      candidates.forEach(({ session, payload }) => {
+        runAgentTurn(session.id, payload).catch((err) => console.error("parallel agent run failed", err));
+      });
+    } catch (err) {
+      setParallelError(String(err instanceof Error ? err.message : err));
+    } finally {
+      setParallelLaunching(false);
+    }
+  };
+
+  const stopParallelBatch = async () => {
+    const batchId = active?.parallelBatchId;
+    if (!batchId || stoppingParallelBatchId === batchId) return;
+    const runningTurns = activeParallelSessions
+      .map((session) => ({ sessionId: session.id, turnId: busyTurnIdsRef.current[session.id] }))
+      .filter((item): item is { sessionId: string; turnId: string } => Boolean(item.turnId));
+    if (runningTurns.length === 0) return;
+    if (!isTauri()) {
+      setPasteError(copy.stopFailed("Tauri runtime unavailable"));
+      return;
+    }
+
+    setStoppingParallelBatchId(batchId);
+    setPasteError(null);
+    runningTurns.forEach(({ turnId }) => stoppedTurnIdsRef.current.add(turnId));
+    const results = await Promise.allSettled(
+      runningTurns.map(({ turnId }) => agentCancel(turnId)),
+    );
+    let failed = 0;
+    results.forEach((result, index) => {
+      if (result.status === "rejected" || result.value === false) {
+        failed += 1;
+        stoppedTurnIdsRef.current.delete(runningTurns[index].turnId);
+      }
+    });
+    if (failed > 0) {
+      setPasteError(copy.stopFailed(
+        tw.language === "en"
+          ? `${failed} parallel runs could not be stopped.`
+          : `병렬 실행 ${failed}개를 중지하지 못했습니다.`,
+      ));
+    }
+    setStoppingParallelBatchId(null);
+  };
+
+  const adoptionCandidate = adoptCandidateId
+    ? sessions.find((session) => session.id === adoptCandidateId) || null
+    : null;
+  const adoptionChanges = adoptionCandidate ? parallelSessionChanges(adoptionCandidate) : null;
+
+  const adoptParallelCandidate = async () => {
+    const candidate = adoptionCandidate;
+    if (!candidate?.worktreeInfo || !candidate.parallelBatchId || adoptingCandidateId) return;
+    if (!isTauri()) {
+      setAdoptError(copy.parallelAdoptFailed("Tauri runtime unavailable"));
+      return;
+    }
+    const receiptId = nowId("fleet-adoption");
+    const adoptionStartedAt = Date.now();
+    patchSession(candidate.id, (session) => ({
+      ...session,
+      parallelAdoption: beginAgentFleetAdoption(session.parallelAdoption, {
+        id: receiptId,
+        batchId: candidate.parallelBatchId || "",
+        candidateSessionId: candidate.id,
+        sourceSessionId: candidate.parallelSourceSessionId,
+        sourceCwd: candidate.worktreeInfo?.source_cwd,
+        worktreeCwd: candidate.worktreeInfo?.worktree_cwd,
+        branch: candidate.worktreeInfo?.branch,
+        baseHead: candidate.worktreeInfo?.head,
+        now: adoptionStartedAt,
+      }),
+      updatedAt: adoptionStartedAt,
+    }));
+    setAdoptingCandidateId(candidate.id);
+    setAdoptError(null);
+    try {
+      const result = await agentWorktreeAdopt(candidate.worktreeInfo);
+      const summary = `${result.file_count} files · +${result.additions} -${result.deletions}`;
+      patchSession(candidate.id, (session) => ({
+        ...session,
+        parallelAdoption: completeAgentFleetAdoption(
+          session.parallelAdoption,
+          receiptId,
+          result,
+        ),
+        parallelAdoptedAt: Date.now(),
+        parallelAdoptionSummary: summary,
+        updatedAt: Date.now(),
+      }));
+      setAdoptCandidateId(null);
+      const sourceSessionId = candidate.parallelSourceSessionId;
+      if (sourceSessionId && sessionsRef.current.some((session) => session.id === sourceSessionId)) {
+        patchSession(sourceSessionId, (session) => ({ ...session, updatedAt: Date.now() }));
+      }
+    } catch (err) {
+      const message = String(err instanceof Error ? err.message : err);
+      patchSession(candidate.id, (session) => ({
+        ...session,
+        parallelAdoption: failAgentFleetAdoption(session.parallelAdoption, receiptId, message),
+        updatedAt: Date.now(),
+      }));
+      setAdoptError(copy.parallelAdoptFailed(message));
+    } finally {
+      setAdoptingCandidateId(null);
+    }
   };
 
   async function stopActiveTurn() {
@@ -6347,6 +8361,18 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
       </button>
       <button
         type="button"
+        onClick={openQuickOpen}
+        className={cls(
+          "atelier-task-icon-button",
+          dark ? "text-dsub hover:bg-dmuted hover:text-dink" : "text-sub hover:bg-muted hover:text-ink",
+        )}
+        title={`${copy.quickOpen} · ⌘/Ctrl+P`}
+        aria-label={copy.quickOpen}
+      >
+        {I.search}
+      </button>
+      <button
+        type="button"
         onClick={createSessionFromRail}
         className={cls(
           "atelier-task-icon-button",
@@ -6362,7 +8388,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
           const color = normalizeAgentDotColor(s.profileDot || providerMeta(s.provider).dot);
           const selected = active?.id === s.id;
           const running = isSessionRunning(s);
-          const done = !running && isSessionDone(s);
+          const attention = sessionInboxPhaseById.get(s.id) === "attention";
+          const unread = sessionInboxUnreadIds.has(s.id);
           return (
             <button
               key={s.id}
@@ -6387,7 +8414,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                 {providerMeta(s.provider).short}
               </span>
               {running && <span className="atelier-task-session-indicator atelier-agent-spinner" />}
-              {done && <span className="atelier-task-session-indicator atelier-agent-done-dot" />}
+              {!running && attention && <span className="atelier-task-session-indicator atelier-agent-attention-dot" />}
+              {!running && !attention && unread && <span className="atelier-task-session-indicator atelier-agent-done-dot" />}
             </button>
           );
         })}
@@ -6397,12 +8425,243 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
 
   return (
     <div className={cls("atelier-workspace-root h-full w-full flex min-w-0", dark ? "bg-dbg text-dink" : "bg-cream text-ink")}>
+      {showQuickOpen && (
+        <div
+          className="fixed inset-0 z-[220] flex items-start justify-center bg-black/45 px-3 pt-[10vh]"
+          onMouseDown={() => setShowQuickOpen(false)}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-label={copy.quickOpen}
+            className={cls(
+              "w-full max-w-[680px] overflow-hidden rounded-[8px] border shadow-2xl",
+              dark ? "border-dline bg-dsurf" : "border-line bg-surface",
+            )}
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className={cls("flex h-12 items-center gap-3 border-b px-4", dark ? "border-dline" : "border-line")}>
+              <span className={dark ? "text-dsub" : "text-sub"}>{I.search}</span>
+              <input
+                ref={quickOpenInputRef}
+                value={quickOpenQuery}
+                onChange={(event) => {
+                  setQuickOpenQuery(event.target.value);
+                  setQuickOpenIndex(0);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    setQuickOpenIndex((index) => Math.min(index + 1, Math.max(0, quickOpenResults.length - 1)));
+                  } else if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    setQuickOpenIndex((index) => Math.max(0, index - 1));
+                  } else if (event.key === "Enter") {
+                    event.preventDefault();
+                    const selected = quickOpenResults[quickOpenIndex];
+                    if (selected) chooseQuickOpenItem(selected);
+                  }
+                }}
+                placeholder={copy.quickOpenPlaceholder}
+                className={cls(
+                  "min-w-0 flex-1 bg-transparent text-[14px] outline-none",
+                  dark ? "text-dink placeholder:text-dsub" : "text-ink placeholder:text-sub",
+                )}
+              />
+              <kbd className={cls("text-[10px] font-mono", dark ? "text-dsub" : "text-sub")}>ESC</kbd>
+            </div>
+            <div className="max-h-[min(60vh,520px)] overflow-y-auto p-2">
+              <div className={cls("px-2 pb-1 pt-0.5 text-[10px] font-semibold uppercase", dark ? "text-dsub" : "text-sub")}>
+                {copy.quickOpenRecent}
+              </div>
+              {quickOpenResults.length === 0 ? (
+                <div className={cls("px-3 py-8 text-center text-[13px]", dark ? "text-dsub" : "text-sub")}>
+                  {copy.quickOpenEmpty}
+                </div>
+              ) : quickOpenResults.map((item, index) => {
+                const session = item.kind === "session" ? item.candidate.session : null;
+                const sourceCwd = session ? session.worktreeInfo?.source_cwd || session.cwd : "";
+                const meta = session ? providerMeta(session.provider) : null;
+                const label = item.kind === "command"
+                  ? item.label
+                  : item.kind === "file"
+                    ? item.file.name
+                    : item.kind === "index"
+                      ? item.entry.label
+                      : item.candidate.label;
+                const detail = item.kind === "command"
+                  ? item.detail
+                  : item.kind === "file"
+                    ? relativeWorkspaceFilePath(activeExecutionCwd, item.file.path)
+                    : item.kind === "index"
+                      ? item.entry.detail
+                      : item.candidate.detail || `${sourceCwd}${session?.worktreeInfo?.branch ? ` · ${session.worktreeInfo.branch}` : ""}`;
+                const trailing = item.kind === "command"
+                  ? (tw.language === "en" ? "Command" : "명령")
+                  : item.kind === "file"
+                    ? (tw.language === "en" ? "File" : "파일")
+                    : item.kind === "index"
+                      ? tw.language === "en"
+                        ? item.entry.kind === "symbol" ? "Symbol" : item.entry.kind === "worktree" ? "Worktree" : "Branch"
+                        : item.entry.kind === "symbol" ? "심볼" : item.entry.kind === "worktree" ? "워크트리" : "브랜치"
+                      : item.candidate.trailing;
+                const secondaryIcon = item.kind === "file"
+                  ? I.split
+                  : item.kind === "index"
+                    ? item.entry.kind === "symbol"
+                      ? I.code
+                      : item.entry.kind === "worktree"
+                        ? I.worktree
+                        : I.changes
+                  : item.kind === "command"
+                    ? item.command === "terminal"
+                      ? I.terminal
+                      : item.command === "preview"
+                        ? I.eye
+                        : item.command === "new-task"
+                          ? I.plus
+                          : I.zap
+                    : I.comment;
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onMouseEnter={() => setQuickOpenIndex(index)}
+                    onClick={() => chooseQuickOpenItem(item)}
+                    className={cls(
+                      "flex w-full items-center gap-3 rounded-[6px] px-3 py-2 text-left",
+                      index === quickOpenIndex
+                        ? dark ? "bg-dmuted" : "bg-muted"
+                        : dark ? "hover:bg-[#292927]" : "hover:bg-muted/70",
+                    )}
+                  >
+                    {session && meta ? (
+                      <span
+                        className={cls("grid h-7 w-7 shrink-0 place-items-center rounded-[6px] text-[9px] font-semibold", dark ? "text-dink" : "text-ink")}
+                        style={{
+                          background: `${normalizeAgentDotColor(session.profileDot || meta.dot)}22`,
+                          boxShadow: `inset 0 0 0 1px ${normalizeAgentDotColor(session.profileDot || meta.dot)}66`,
+                        }}
+                      >
+                        {meta.short}
+                      </span>
+                    ) : (
+                      <span className={cls("grid h-7 w-7 shrink-0 place-items-center rounded-[6px]", dark ? "bg-[#2a2a28] text-dsub" : "bg-muted text-sub")}>
+                        {secondaryIcon}
+                      </span>
+                    )}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[13px] font-medium">{label}</span>
+                      <span className={cls("mt-0.5 block truncate text-[10.5px] font-mono", dark ? "text-dsub" : "text-sub")}>
+                        {detail}
+                      </span>
+                    </span>
+                    <span className={cls("shrink-0 text-[10px]", dark ? "text-dsub" : "text-sub")}>
+                      {item.kind === "index" && item.entry.current
+                        ? `${trailing} · ${tw.language === "en" ? "Current" : "현재"}`
+                        : trailing}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        </div>
+      )}
+      {adoptionCandidate?.worktreeInfo && adoptionChanges && (
+        <div
+          className="fixed inset-0 z-[230] flex items-center justify-center bg-black/50 p-4"
+          onMouseDown={() => adoptingCandidateId ? undefined : setAdoptCandidateId(null)}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-label={copy.parallelAdoptTitle}
+            className={cls(
+              "w-full max-w-[620px] overflow-hidden rounded-[8px] border shadow-2xl",
+              dark ? "border-dline bg-dsurf" : "border-line bg-surface",
+            )}
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className={cls("border-b px-4 py-3", dark ? "border-dline" : "border-line")}>
+              <div className="text-[15px] font-semibold">{copy.parallelAdoptTitle}</div>
+              <div className={cls("mt-1 text-[11.5px] leading-[1.55]", dark ? "text-dsub" : "text-sub")}>
+                {copy.parallelAdoptDescription}
+              </div>
+            </div>
+            <div className="space-y-3 px-4 py-3">
+              <div className={cls("rounded-[6px] border px-3 py-2", dark ? "border-dline bg-dmuted" : "border-line bg-muted/60")}>
+                <div className="truncate text-[12px] font-medium">{adoptionCandidate.profileName || providerMeta(adoptionCandidate.provider).label}</div>
+                <div className={cls("mt-1 truncate text-[10.5px] font-mono", dark ? "text-dsub" : "text-sub")}>
+                  {adoptionCandidate.worktreeInfo.branch} · {adoptionChanges.files.length} files · +{adoptionChanges.additions} -{adoptionChanges.deletions}
+                </div>
+              </div>
+              {adoptionCandidate.worktreeInfo.source_dirty && (
+                <div className={cls("rounded-[6px] border px-3 py-2 text-[11px] leading-[1.5]", dark ? "border-[#72543c] bg-[#2a241e] text-[#e4b07c]" : "border-[#e2bd91] bg-[#fff8ec] text-[#8a5728]")}>
+                  {copy.parallelAdoptDirty}
+                </div>
+              )}
+              <div className={cls("max-h-[230px] overflow-y-auto rounded-[6px] border", dark ? "border-dline" : "border-line")}>
+                {adoptionChanges.files.slice(0, 20).map((file) => (
+                  <div key={file.path} className={cls("flex items-center gap-2 border-b px-3 py-2 text-[10.5px] last:border-b-0", dark ? "border-dline" : "border-line")}>
+                    <span className={cls("w-[62px] shrink-0 uppercase", file.status === "deleted" ? "text-[#e06a5f]" : file.status === "added" ? "text-[#31b879]" : dark ? "text-dsub" : "text-sub")}>
+                      {file.status}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate font-mono" title={file.path}>{file.path}</span>
+                    <span className="shrink-0 font-mono"><span className="text-[#31b879]">+{file.additions}</span> <span className="text-[#e06a5f]">-{file.deletions}</span></span>
+                  </div>
+                ))}
+                {adoptionChanges.files.length > 20 && (
+                  <div className={cls("px-3 py-2 text-[10.5px]", dark ? "text-dsub" : "text-sub")}>
+                    +{adoptionChanges.files.length - 20} more
+                  </div>
+                )}
+              </div>
+              {adoptError && (
+                <div className="rounded-[6px] border border-[#8c3f38] bg-[#3a211f] px-3 py-2 text-[11px] leading-[1.5] text-[#ffaaa1]">
+                  {adoptError}
+                </div>
+              )}
+            </div>
+            <div className={cls("flex justify-end gap-2 border-t px-4 py-3", dark ? "border-dline" : "border-line")}>
+              <button
+                type="button"
+                disabled={Boolean(adoptingCandidateId)}
+                onClick={() => setAdoptCandidateId(null)}
+                className={cls("h-8 rounded-[6px] border px-3 text-[11.5px] disabled:opacity-50", dark ? "border-dline text-dsub hover:bg-dmuted" : "border-line text-sub hover:bg-muted")}
+              >
+                {copy.parallelAdoptCancel}
+              </button>
+              <button
+                type="button"
+                disabled={Boolean(adoptingCandidateId)}
+                onClick={() => adoptParallelCandidate().catch(console.error)}
+                className="h-8 rounded-[6px] border border-[#b65338] bg-[#9f4933] px-3 text-[11.5px] font-medium text-white hover:bg-[#b65338] disabled:opacity-50"
+              >
+                {adoptingCandidateId ? copy.parallelAdopting : copy.parallelAdopt}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       {showTaskList ? (
       <aside className={cls("atelier-task-sidebar border-r flex flex-col", dark ? "border-dline" : "border-line")}>
         <div className="atelier-task-sidebar-compact">{renderTaskIconRail(false)}</div>
         <div className="atelier-task-sidebar-content flex min-h-0 flex-1 flex-col">
         <div className={cls("h-12 px-3 flex items-center gap-2 border-b relative", dark ? "border-dline" : "border-line")}>
           <div className="font-display text-[18px] font-medium flex-1">{copy.title}</div>
+          <button
+            type="button"
+            onClick={openQuickOpen}
+            className={cls(
+              "h-8 w-8 rounded-[7px] text-[14px] grid place-items-center",
+              dark ? "text-dsub hover:bg-dmuted hover:text-dink" : "text-sub hover:bg-muted hover:text-ink",
+            )}
+            title={`${copy.quickOpen} · ⌘/Ctrl+P`}
+            aria-label={copy.quickOpen}
+          >
+            {I.search}
+          </button>
           <button
             type="button"
             onClick={() => setShowTaskList(false)}
@@ -6458,13 +8717,36 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
             </div>
           )}
         </div>
+        <SessionInboxToolbar
+          dark={dark}
+          language={tw.language === "en" ? "en" : "ko"}
+          filter={sessionInboxFilter}
+          counts={sessionInboxCounts}
+          onChange={setSessionInboxFilter}
+          trailingControl={(
+            <DesktopNotificationToggle
+              dark={dark}
+              language={tw.language === "en" ? "en" : "ko"}
+              enabled={desktopNotifications.enabled}
+              permission={desktopNotifications.permission}
+              busy={desktopNotifications.busy}
+              error={desktopNotifications.error}
+              onToggle={() => desktopNotifications.toggle().catch(console.error)}
+            />
+          )}
+        />
         <div className="flex-1 min-h-0 overflow-auto p-2">
           {sessions.length === 0 && (
             <div className={cls("p-3 text-[12px] leading-[1.55]", dark ? "text-dsub" : "text-sub")}>
               {copy.noMessages}
             </div>
           )}
-          {sessions.map((s) => (
+          {sessions.length > 0 && filteredSessions.length === 0 && (
+            <div className={cls("p-3 text-[12px] leading-[1.55]", dark ? "text-dsub" : "text-sub")}>
+              {tw.language === "en" ? "No tasks match this filter." : "이 필터에 표시할 작업이 없습니다."}
+            </div>
+          )}
+          {filteredSessions.map((s) => (
             <div
               key={s.id}
               onClick={() => selectSession(s.id)}
@@ -6532,7 +8814,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                     </div>
                   )}
                   <div className={cls("mt-0.5 text-[9.5px] font-mono truncate", dark ? "text-dsub" : "text-sub")}>
-                    {s.profileName || providerMeta(s.provider).label} · {s.providerSessionId ? "resume" : "new"} · {relTime(s.updatedAt)}
+                    {s.profileName || providerMeta(s.provider).label}
+                    {s.parallelBatchId ? ` · ${s.parallelCandidateIndex || 1}/${s.parallelCandidateCount || 1}` : ""}
+                    {` · ${s.providerSessionId ? "resume" : "new"} · ${relTime(s.updatedAt)}`}
                   </div>
                 </div>
                 {isSessionRunning(s) && (
@@ -6544,13 +8828,52 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                     <span className="atelier-agent-spinner" />
                   </span>
                 )}
-                {!isSessionRunning(s) && isSessionDone(s) && (
+                {!isSessionRunning(s) && sessionInboxPhaseById.get(s.id) === "attention" && (
                   <span
                     className="mt-0.5 h-5 w-5 shrink-0 grid place-items-center"
-                    aria-label={copy.done}
-                    title={copy.done}
+                    aria-label={tw.language === "en" ? "Needs attention" : "확인 필요"}
+                    title={tw.language === "en" ? "Needs attention" : "확인 필요"}
+                  >
+                    <span className="atelier-agent-attention-dot" />
+                  </span>
+                )}
+                {!isSessionRunning(s)
+                  && sessionInboxPhaseById.get(s.id) !== "attention"
+                  && sessionInboxUnreadIds.has(s.id) && (
+                  <span
+                    className="mt-0.5 h-5 w-5 shrink-0 grid place-items-center"
+                    aria-label={tw.language === "en" ? "Unread" : "읽지 않음"}
+                    title={tw.language === "en" ? "Unread" : "읽지 않음"}
                   >
                     <span className="atelier-agent-done-dot" />
+                  </span>
+                )}
+                {!isSessionRunning(s) && (
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleSessionUnread(s.id);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key !== "Enter" && e.key !== " ") return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      toggleSessionUnread(s.id);
+                    }}
+                    className={cls(
+                      "opacity-0 group-hover:opacity-100 focus:opacity-100 h-5 w-5 grid place-items-center rounded-[4px]",
+                      dark ? "text-dsub hover:text-dink hover:bg-[#3d3d3b]" : "text-sub hover:text-ink hover:bg-line",
+                    )}
+                    title={sessionInboxUnreadIds.has(s.id)
+                      ? tw.language === "en" ? "Mark as read" : "읽음으로 표시"
+                      : tw.language === "en" ? "Mark as unread" : "읽지 않음으로 표시"}
+                    aria-label={sessionInboxUnreadIds.has(s.id)
+                      ? tw.language === "en" ? "Mark as read" : "읽음으로 표시"
+                      : tw.language === "en" ? "Mark as unread" : "읽지 않음으로 표시"}
+                  >
+                    {sessionInboxUnreadIds.has(s.id) ? I.eye : I.eyeOff}
                   </span>
                 )}
                 <span
@@ -6587,38 +8910,62 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
               {copy.subtitle}
             </div>
           </div>
-          <label className={cls("atelier-cwd-label text-[11px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
-            {copy.cwd}
-          </label>
-          <input
-            value={cwd}
-            onChange={(e) => updateWorkspaceCwd(e.target.value)}
-            className={cls(
-              "atelier-cwd-input h-8 px-2.5 rounded-[6px] border text-[11px] font-mono outline-none",
-              dark ? "bg-dmuted border-dline text-dink" : "bg-surface border-line text-ink",
-            )}
-          />
-          <button
-            type="button"
-            onClick={() => setShowPreview((v) => !v)}
-            className={cls(
-              "h-8 px-2.5 rounded-[6px] text-[12px]",
-              showPreview
-                ? dark ? "bg-dline text-dink" : "bg-line text-ink"
-                : dark ? "text-dsub hover:bg-dmuted hover:text-dink" : "text-sub hover:bg-muted hover:text-ink",
-            )}
-          >
-            {copy.preview}
-          </button>
         </div>
+
+        <WorkspaceModeBar
+          dark={dark}
+          language={tw.language}
+          view={workspaceView}
+          previewActive={showPreview}
+          changeCount={visibleWorkspaceChanges?.files.length || 0}
+          onViewChange={setWorkspaceView}
+          onTogglePreview={() => setShowPreview((visible) => !visible)}
+        />
 
         <div className="relative flex-1 min-h-0 flex">
           <div className="flex-1 min-w-0 flex flex-col">
             <div
               ref={scrollRef}
               onScroll={handleTranscriptScroll}
-              className="flex-1 min-h-0 overflow-auto px-5 py-4"
+              className={cls(
+                "flex-1 min-h-0 overflow-auto px-5 py-4",
+                workspaceView !== "conversation" && "hidden",
+              )}
             >
+              <AgentFleetPanel
+                dark={dark}
+                icon={I.parallel}
+                batchLabel={active?.parallelBatchLabel}
+                activeCandidateId={active?.id}
+                candidates={activeFleetCandidates}
+                stopping={stoppingParallelBatchId === active?.parallelBatchId}
+                copy={{
+                  compare: copy.parallelCompare,
+                  progress: copy.parallelProgress,
+                  running: copy.parallelRunning,
+                  done: copy.parallelDone,
+                  failed: copy.parallelFailed,
+                  waiting: copy.parallelWaiting,
+                  noChanges: copy.parallelNoChanges,
+                  open: copy.parallelOpen,
+                  adopt: copy.parallelAdopt,
+                  adopted: copy.parallelAdopted,
+                  adoptedFiles: (count) => tw.language === "en" ? `${count} files` : `${count}개 파일`,
+                  adoptionVerifying: copy.parallelAdoptionVerifying,
+                  adoptionFailed: copy.parallelAdoptionFailed,
+                  adoptionCancelled: copy.parallelAdoptionCancelled,
+                  adoptionEvidence: copy.parallelAdoptionEvidence,
+                  patchReceipt: copy.parallelPatchReceipt,
+                  stopAll: copy.parallelStopAll,
+                  stoppingAll: copy.parallelStoppingAll,
+                }}
+                onOpenCandidate={selectSession}
+                onAdoptCandidate={(candidateId) => {
+                  setAdoptError(null);
+                  setAdoptCandidateId(candidateId);
+                }}
+                onStopAll={() => stopParallelBatch().catch(console.error)}
+              />
               {!active || active.messages.length === 0 ? (
                 <div className={cls("h-full flex items-center justify-center text-center text-[13px]", dark ? "text-dsub" : "text-sub")}>
                   <div>
@@ -6633,6 +8980,33 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                   {renderedTranscriptMessages}
                 </div>
               )}
+            </div>
+
+            <div className={cls("min-h-0 flex-1 flex-col", workspaceView === "code" ? "flex" : "hidden")}>
+              <CodeWorkbench
+                dark={dark}
+                language={tw.language}
+                rootPath={activeExecutionCwd}
+                initialPath={workbenchFilePath}
+                initialLine={workbenchInitialLine}
+                onSaved={() => refreshWorkspaceChanges().catch(console.error)}
+              />
+            </div>
+
+            <div className={cls("min-h-0 flex-1 flex-col", workspaceView === "changes" ? "flex" : "hidden")}>
+              <ChangesWorkbench
+                dark={dark}
+                language={tw.language}
+                rootPath={activeExecutionCwd}
+                summary={visibleWorkspaceChanges}
+                loading={workspaceChangesLoading}
+                error={workspaceChangesError}
+                onRefresh={refreshWorkspaceChanges}
+                onOpenFile={(path) => {
+                  setWorkbenchFilePath(resolveWorkspaceFilePath(activeExecutionCwd, path));
+                  setWorkspaceView("code");
+                }}
+              />
             </div>
 
             <form
@@ -6650,7 +9024,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                   onPointerDown={startComposerResize}
                   className={cls("atelier-composer-resize-handle", resizingComposer ? "atelier-composer-resize-handle-active" : "")}
                 />
-                {(pendingAttachments.length > 0 || isPastingImage || pasteError) && (
+                {(pendingAttachments.length > 0 || isPastingImage || pasteError || (devScreenSelectionAttached && devScreenElementSelection)) && (
                   <div className="atelier-attachment-tray">
                     {pendingAttachments.map((attachment) => (
                       <div key={attachment.id} className="atelier-attachment-chip" title={attachment.path}>
@@ -6667,53 +9041,80 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                         </button>
                       </div>
                     ))}
+                    {devScreenSelectionAttached && devScreenElementSelection && (
+                      <div className="atelier-attachment-chip" title={devScreenElementSelection.selector}>
+                        {I.search}
+                        <span>{copy.devScreenSelectedElement}</span>
+                        <span className="atelier-attachment-name">{devScreenElementSelection.selector}</span>
+                        <button
+                          type="button"
+                          onClick={() => setDevScreenSelectionAttached(false)}
+                          aria-label={copy.removeAttachment}
+                          title={copy.removeAttachment}
+                        >
+                          {I.x}
+                        </button>
+                      </div>
+                    )}
                     {isPastingImage && <div className="atelier-attachment-status">{copy.imagePasting}</div>}
                     {pasteError && <div className="atelier-attachment-error">{pasteError}</div>}
                   </div>
                 )}
-                {activeProvider === "gajecode" ? (
-                  <div className={cls("mb-2 border-b pb-2", dark ? "border-dline" : "border-line")}>
-                    <div className="flex min-w-0 items-center gap-2">
-                      <div className={cls(
-                        "h-7 shrink-0 rounded-[7px] px-2.5 inline-flex items-center gap-1.5 text-[11px] font-medium border",
-                        dark
-                          ? "border-[#7d4b43] bg-[#302725] text-dink"
-                          : "border-[#d56f55] bg-[#fff6f2] text-ink",
-                      )}>
-                        <span className="text-[#e26f4f]">{I.zap}</span>
-                        <span>{tw.language === "en" ? "gjc commands" : "gjc 명령어"}</span>
-                      </div>
-                      <span className={cls("min-w-0 truncate text-[11px]", dark ? "text-dsub" : "text-sub")}>
-                        {tw.language === "en"
-                          ? "Insert real gjc CLI commands from the Gajae Code docs."
-                          : "Gajae Code 문서 기준 실제 gjc 명령을 입력합니다."}
-                      </span>
-                    </div>
-                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                      {gajecodeQuickCommands.map((command) => {
-                        const label = tw.language === "en"
-                          ? command.labelEn || command.command
-                          : command.labelKo || command.command;
-                        return (
-                          <button
-                            key={command.command}
-                            type="button"
-                            onClick={() => applySlashCommand(command)}
-                            className={cls(
-                              "h-7 rounded-[7px] border px-2.5 text-[11px] font-medium transition-colors",
-                              dark
-                                ? "border-[#4b4b48] bg-[#272725] text-dink hover:bg-[#343431]"
-                                : "border-line bg-surface text-ink hover:bg-muted",
-                            )}
-                            title={tw.language === "en" ? command.detailEn : command.detailKo}
-                          >
-                            {label}
-                          </button>
-                        );
-                      })}
-                    </div>
+                {showParallelLauncher && (
+                  <AgentFleetLauncher
+                    dark={dark}
+                    icon={I.parallel}
+                    profiles={agentFleetProfiles}
+                    selectedIds={parallelProfileIds}
+                    launching={parallelLaunching}
+                    error={parallelError}
+                    copy={{
+                      title: copy.parallelTitle,
+                      description: copy.parallelDescription,
+                      presetCore: copy.parallelPresetCore,
+                      presetBalanced: copy.parallelPresetBalanced,
+                      presetAll: copy.parallelPresetAll,
+                      launch: copy.parallelLaunch,
+                      launching: copy.parallelLaunching,
+                    }}
+                    onPreset={applyParallelPreset}
+                    onToggle={toggleParallelProfile}
+                    onLaunch={() => launchParallelRun().catch(console.error)}
+                  />
+                )}
+                {activeProvider === "gajecode" && (
+                  <div
+                    className={cls(
+                      "mb-2 flex items-center gap-1.5 border-b pb-2",
+                      dark ? "border-dline" : "border-line",
+                    )}
+                    data-testid="gajae-primary-actions"
+                  >
+                    {GAJAE_PRIMARY_COMMANDS.map((command) => {
+                      const label = tw.language === "en"
+                        ? command.primaryLabelEn
+                        : command.primaryLabelKo;
+                      return (
+                        <button
+                          key={command.command}
+                          type="button"
+                          onClick={() => applySlashCommand(command)}
+                          className={cls(
+                            "h-7 rounded-[7px] border px-3 text-[11px] font-medium transition-colors",
+                            dark
+                              ? "border-[#4b4b48] bg-[#272725] text-dink hover:border-[#7d4b43] hover:bg-[#34302e]"
+                              : "border-line bg-surface text-ink hover:border-[#d56f55] hover:bg-[#fff6f2]",
+                          )}
+                          title={tw.language === "en" ? command.detailEn : command.detailKo}
+                          aria-label={tw.language === "en" ? command.detailEn : command.detailKo}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
                   </div>
-                ) : (
+                )}
+                {activeProvider !== "gajecode" && (
                   <>
                     <div className={cls("mb-2 flex items-center gap-2 border-b pb-2", dark ? "border-dline" : "border-line")}>
                       <button
@@ -6908,27 +9309,81 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                     {busyTurnId ? copy.draftHint : "⌘/Ctrl + Enter"}
                   </div>
                   <div className="atelier-composer-actions shrink-0 flex items-center gap-1.5">
-                    {activeProvider === "hermes" && (
+                    {(activeProvider === "hermes" || activeProvider === "gajecode") && (
                       <>
                         <span className={cls("text-[11px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
                           {copy.providerLabel}
                         </span>
                         <ComposerSelectMenu
                           dark={dark}
-                          value={activeHermesProvider}
-                          options={HERMES_PROVIDERS}
+                          value={activeProvider === "hermes" ? activeHermesProvider : activeGajaeProvider}
+                          options={activeProvider === "hermes" ? HERMES_PROVIDERS : GAJECODE_PROVIDERS}
                           onChange={(value) => {
-                            runHermesProviderCommandFromPicker(value as HermesInferenceProvider).catch(console.error);
+                            if (activeProvider === "hermes") {
+                              runHermesProviderCommandFromPicker(value as HermesInferenceProvider).catch(console.error);
+                            } else {
+                              runGajaeProviderCommandFromPicker(value as GajaeInferenceProvider).catch(console.error);
+                            }
                           }}
                           disabled={!active || !!busyTurnId}
                           ariaLabel={copy.providerLabel}
-                          title="Hermes provider"
+                          title={activeProvider === "hermes" ? "Hermes provider" : "Gajae Code provider"}
                           triggerClassName="h-8 min-w-[116px] max-w-[142px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2"
                           menuWidth={180}
-                          testId="hermes-provider-menu"
+                          testId={activeProvider === "hermes" ? "hermes-provider-menu" : "gajecode-provider-menu"}
                         />
                       </>
                     )}
+                    <button
+                      type="button"
+                      onClick={toggleActiveWorktree}
+                      disabled={!active || !!busyTurnId}
+                      aria-pressed={Boolean(active?.worktreeEnabled)}
+                      aria-label={tw.language === "en" ? "Toggle isolated worktree" : "격리 worktree 전환"}
+                      title={active?.worktreeEnabled
+                        ? (tw.language === "en"
+                            ? `Isolated worktree on${active.worktreeInfo?.branch ? ` · ${active.worktreeInfo.branch}` : ""}`
+                            : `격리 worktree 켜짐${active.worktreeInfo?.branch ? ` · ${active.worktreeInfo.branch}` : ""}`)
+                        : (tw.language === "en" ? "Run in an isolated Git worktree" : "격리 Git worktree에서 실행")}
+                      className={cls(
+                        "atelier-icon-tooltip relative",
+                        "h-8 w-8 shrink-0 rounded-[7px] border grid place-items-center transition-colors disabled:opacity-45",
+                        active?.worktreeEnabled
+                          ? dark
+                            ? "border-[#e26f4f] bg-[#3a2a23] text-[#f08a6d]"
+                            : "border-[#e26f4f] bg-[#fff1eb] text-[#c95f42]"
+                          : dark
+                            ? "border-dline bg-dsurf text-dsub hover:text-dink"
+                            : "border-line bg-surface text-sub hover:text-ink",
+                      )}
+                      data-tooltip={tw.language === "en" ? "Isolated worktree" : "격리 워크트리"}
+                      data-testid="worktree-toggle"
+                    >
+                      {I.worktree}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={openParallelLauncher}
+                      disabled={agentProfiles.length < 2 || parallelLaunching}
+                      aria-pressed={showParallelLauncher}
+                      aria-label={copy.parallelTitle}
+                      title={copy.parallelDescription}
+                      className={cls(
+                        "atelier-icon-tooltip relative",
+                        "h-8 w-8 shrink-0 rounded-[7px] border grid place-items-center transition-colors disabled:opacity-45",
+                        showParallelLauncher
+                          ? dark
+                            ? "border-[#e26f4f] bg-[#3a2a23] text-[#f08a6d]"
+                            : "border-[#e26f4f] bg-[#fff1eb] text-[#c95f42]"
+                          : dark
+                            ? "border-dline bg-dsurf text-dsub hover:text-dink"
+                            : "border-line bg-surface text-sub hover:text-ink",
+                      )}
+                      data-tooltip={copy.parallel}
+                      data-testid="parallel-launcher-toggle"
+                    >
+                      {I.parallel}
+                    </button>
                     <ComposerSelectMenu
                       dark={dark}
                       value={activePermissionMode}
@@ -6949,191 +9404,33 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                       {copy.modelLabel}
                     </span>
                     {activeCodexModelSurface ? (
-                      <div ref={modelMenuRef} className="relative">
-                        <button
-                          ref={modelMenuButtonRef}
-                          type="button"
-                          onClick={() => {
-                            if (!active || busyTurnId) return;
-                            refreshCodexRuntimeModels().catch(console.error);
-                            setShowModelMenu((value) => !value);
-                            setCodexMenuPanel("root");
-                          }}
-                          disabled={!active || !!busyTurnId}
-                          className={cls(
-                            "h-8 min-w-[134px] max-w-[190px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2",
-                            dark
-                              ? "bg-dsurf border-dline text-dink disabled:text-dsub"
-                              : "bg-surface border-line text-ink disabled:text-sub",
-                          )}
-                          aria-label={copy.modelLabel}
-                          aria-haspopup="menu"
-                          aria-expanded={showModelMenu}
-                          title={activeProviderMeta.label}
-                        >
-                          <span className="truncate">{activeCodexToolbarLabel}</span>
-                          <span className={cls("shrink-0 transition-transform", showModelMenu ? "rotate-180" : "")}>
-                            {I.chevron}
-                          </span>
-                        </button>
-                        {showModelMenu && modelMenuPosition && createPortal(
-                          <div
-                            ref={modelMenuPopoverRef}
-                            style={modelMenuPosition}
-                            className={cls(
-                              "fixed z-[200] overflow-y-auto overscroll-contain rounded-[16px] border p-2 shadow-[0_16px_44px_rgba(0,0,0,0.34)]",
-                              dark
-                                ? "bg-[#2c2c2b]/95 border-[#444442] text-dink backdrop-blur"
-                                : "bg-[#f1efea]/95 border-[#d4d0c7] text-ink backdrop-blur",
-                            )}
-                            role="menu"
-                            data-testid="codex-model-menu"
-                          >
-                            {codexMenuPanel === "root" && (
-                              <>
-                                <div className={cls("px-3 pt-1 pb-2 text-[11px]", dark ? "text-dsub" : "text-sub")}>
-                                  {copy.reasoning}
-                                </div>
-                                {CODEX_EFFORTS.map((option) => {
-                                  const selected = activeCodexEffort === option.value;
-                                  return (
-                                    <button
-                                      key={option.value}
-                                      type="button"
-                                      onClick={() => updateActiveCodexEffort(option.value)}
-                                      className={cls(
-                                        "h-9 w-full rounded-[10px] px-3 flex items-center justify-between text-[11px] text-left",
-                                        selected
-                                          ? dark ? "bg-[#444442] text-dink" : "bg-[#dedbd3] text-ink"
-                                          : dark ? "hover:bg-[#393937]" : "hover:bg-[#e4e1da]",
-                                      )}
-                                      role="menuitemradio"
-                                      aria-checked={selected}
-                                    >
-                                      <span>{tw.language === "en" ? option.en : option.ko}</span>
-                                      {selected && <span className="text-[15px] leading-none">✓</span>}
-                                    </button>
-                                  );
-                                })}
-                                <div className={cls("my-2 border-t", dark ? "border-[#444442]" : "border-[#d8d4cc]")} />
-                                <button
-                                  type="button"
-                                  onClick={() => setCodexMenuPanel("model")}
-                                  className={cls(
-                                    "h-9 w-full rounded-[10px] px-3 flex items-center justify-between gap-3 text-[11px] text-left",
-                                    dark ? "hover:bg-[#393937]" : "hover:bg-[#e4e1da]",
-                                  )}
-                                  role="menuitem"
-                                >
-                                  <span className="truncate">{activeModelLabel}</span>
-                                  <span className={cls("text-[16px]", dark ? "text-dsub" : "text-sub")}>›</span>
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setCodexMenuPanel("speed")}
-                                  className={cls(
-                                    "h-9 w-full rounded-[10px] px-3 flex items-center justify-between gap-3 text-[11px] text-left",
-                                    dark ? "hover:bg-[#393937]" : "hover:bg-[#e4e1da]",
-                                  )}
-                                  role="menuitem"
-                                >
-                                  <span>{copy.speed}</span>
-                                  <span className={cls("text-[16px]", dark ? "text-dsub" : "text-sub")}>›</span>
-                                </button>
-                              </>
-                            )}
-                            {codexMenuPanel === "model" && (
-                              <>
-                                <button
-                                  type="button"
-                                  onClick={() => setCodexMenuPanel("root")}
-                                  className={cls(
-                                    "h-8 w-full rounded-[9px] px-3 flex items-center gap-2 text-[11px]",
-                                    dark ? "text-dsub hover:bg-[#393937]" : "text-sub hover:bg-[#e4e1da]",
-                                  )}
-                                >
-                                  <span className="text-[14px]">‹</span>
-                                  <span>{copy.modelLabel}</span>
-                                </button>
-                                <div className={cls("my-1 border-t", dark ? "border-[#444442]" : "border-[#d8d4cc]")} />
-                                {activeModelOptions.map((option) => {
-                                  const selected = activeModel === option.value;
-                                  return (
-                                    <button
-                                      key={option.value}
-                                      type="button"
-                                      onClick={() => {
-                                        if (option.disabled) return;
-                                        if (activeProvider === "hermes") {
-                                          runHermesModelCommandFromPicker(option.value).catch(console.error);
-                                        } else {
-                                          updateActiveModel(option.value);
-                                        }
-                                        setCodexMenuPanel("root");
-                                      }}
-                                      className={cls(
-                                        "h-9 w-full rounded-[10px] px-3 flex items-center justify-between gap-3 text-[11px] text-left",
-                                        option.disabled
-                                          ? dark ? "text-dsub/60 cursor-not-allowed" : "text-sub/60 cursor-not-allowed"
-                                          : selected
-                                          ? dark ? "bg-[#444442] text-dink" : "bg-[#dedbd3] text-ink"
-                                          : dark ? "hover:bg-[#393937]" : "hover:bg-[#e4e1da]",
-                                      )}
-                                      disabled={option.disabled}
-                                      role="menuitemradio"
-                                      aria-checked={selected}
-                                    >
-                                      <span className="truncate">{option.label}</span>
-                                      {selected && <span className="text-[15px] leading-none">✓</span>}
-                                    </button>
-                                  );
-                                })}
-                              </>
-                            )}
-                            {codexMenuPanel === "speed" && (
-                              <>
-                                <button
-                                  type="button"
-                                  onClick={() => setCodexMenuPanel("root")}
-                                  className={cls(
-                                    "h-8 w-full rounded-[9px] px-3 flex items-center gap-2 text-[11px]",
-                                    dark ? "text-dsub hover:bg-[#393937]" : "text-sub hover:bg-[#e4e1da]",
-                                  )}
-                                >
-                                  <span className="text-[14px]">‹</span>
-                                  <span>{copy.speed}</span>
-                                </button>
-                                <div className={cls("my-1 border-t", dark ? "border-[#444442]" : "border-[#d8d4cc]")} />
-                                {CODEX_SPEEDS.map((option) => {
-                                  const selected = activeCodexSpeed === option.value;
-                                  return (
-                                    <button
-                                      key={option.value}
-                                      type="button"
-                                      onClick={() => {
-                                        updateActiveCodexSpeed(option.value);
-                                        setCodexMenuPanel("root");
-                                      }}
-                                      className={cls(
-                                        "h-9 w-full rounded-[10px] px-3 flex items-center justify-between text-[11px] text-left",
-                                        selected
-                                          ? dark ? "bg-[#444442] text-dink" : "bg-[#dedbd3] text-ink"
-                                          : dark ? "hover:bg-[#393937]" : "hover:bg-[#e4e1da]",
-                                      )}
-                                      role="menuitemradio"
-                                      aria-checked={selected}
-                                    >
-                                      <span>{tw.language === "en" ? option.en : option.ko}</span>
-                                      {selected && <span className="text-[15px] leading-none">✓</span>}
-                                    </button>
-                                  );
-                                })}
-                              </>
-                            )}
-                          </div>,
-                          document.body,
-                        )}
-                      </div>
+                      <CodexModelMenu
+                        dark={dark}
+                        language={tw.language}
+                        disabled={!active || !!busyTurnId}
+                        contextKey={`${active?.id || "none"}:${activeProvider}:${activeHermesProvider}`}
+                        title={activeProviderMeta.label}
+                        modelLabel={copy.modelLabel}
+                        reasoningLabel={copy.reasoning}
+                        speedLabel={copy.speed}
+                        toolbarLabel={activeCodexToolbarLabel}
+                        modelValue={activeModel}
+                        modelOptions={activeModelOptions}
+                        effortValue={activeCodexEffort}
+                        effortOptions={CODEX_EFFORTS}
+                        speedValue={activeCodexSpeed}
+                        speedOptions={CODEX_SPEEDS}
+                        onOpen={() => refreshCodexRuntimeModels().catch(console.error)}
+                        onEffortChange={(value) => updateActiveCodexEffort(value as CodexEffort)}
+                        onModelChange={(value) => {
+                          if (activeProvider === "hermes") {
+                            runHermesModelCommandFromPicker(value).catch(console.error);
+                          } else {
+                            updateActiveModel(value);
+                          }
+                        }}
+                        onSpeedChange={(value) => updateActiveCodexSpeed(value as CodexSpeed)}
+                      />
                     ) : (
                       <ComposerSelectMenu
                         dark={dark}
@@ -7149,8 +9446,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                           }
                         }}
                         onOpen={() => {
-                          if (activeProvider === "claude" || activeProvider === "gajecode") {
+                          if (activeProvider === "claude") {
                             refreshClaudeRuntimeModels().catch(console.error);
+                          } else if (activeProvider === "gajecode") {
+                            refreshClaudeRuntimeModels().catch(console.error);
+                            refreshCodexRuntimeModels().catch(console.error);
                           } else if (activeProvider === "hermes" && activeHermesProvider === "openrouter") {
                             refreshOpenRouterRuntimeModels().catch(console.error);
                           }
@@ -7448,7 +9748,62 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                     <button type="button" onClick={runDevScreenSnapshot} disabled={devScreenBusy} className="atelier-devscreen-button">
                       {copy.devScreenDom}
                     </button>
+                    <button
+                      type="button"
+                      onClick={devScreenPickerStatus === "armed" ? cancelDevScreenElementPicker : runDevScreenElementPickerStart}
+                      disabled={devScreenBusy}
+                      className={cls("atelier-devscreen-button atelier-devscreen-picker-button", devScreenPickerStatus === "armed" ? "is-active" : "")}
+                    >
+                      <span className="atelier-devscreen-picker-icon" aria-hidden="true">
+                        {devScreenPickerStatus === "armed" ? I.x : I.search}
+                      </span>
+                      {devScreenPickerStatus === "armed" ? copy.devScreenCancelPick : copy.devScreenPickElement}
+                    </button>
                   </div>
+
+                  {(devScreenPickerStatus === "armed" || devScreenElementSelection || devScreenPickerError) && (
+                    <div className={cls("atelier-devscreen-picker", dark ? "atelier-devscreen-picker-dark" : "")}>
+                      {devScreenPickerStatus === "armed" && (
+                        <div className="atelier-devscreen-picker-live">
+                          <span className="atelier-devscreen-picker-pulse" aria-hidden="true" />
+                          <span>{copy.devScreenPickingElement}</span>
+                        </div>
+                      )}
+                      {devScreenElementSelection && (
+                        <div className="atelier-devscreen-selection">
+                          <div className="atelier-devscreen-selection-main">
+                            <span className="atelier-devscreen-selection-kicker">{copy.devScreenSelectedElement}</span>
+                            <code>{devScreenElementSelection.selector}</code>
+                            {(devScreenElementSelection.label || devScreenElementSelection.text) && (
+                              <span className="atelier-devscreen-selection-label">
+                                {devScreenElementSelection.label || devScreenElementSelection.text}
+                              </span>
+                            )}
+                            <span className="atelier-devscreen-selection-meta">
+                              {devScreenElementSelection.tag} · {devScreenElementSelection.rect.width}×{devScreenElementSelection.rect.height}
+                              {` · ${Object.keys(devScreenElementSelection.styles).length} CSS`}
+                            </span>
+                          </div>
+                          <div className="atelier-devscreen-selection-actions">
+                            <button
+                              type="button"
+                              onClick={() => setDevScreenSelectionAttached(true)}
+                              className={cls("atelier-devscreen-button", devScreenSelectionAttached ? "is-active" : "")}
+                              disabled={devScreenSelectionAttached}
+                            >
+                              {devScreenSelectionAttached ? copy.devScreenSelectionAttached : copy.devScreenAttachSelection}
+                            </button>
+                            <button type="button" onClick={clearDevScreenElementSelection} className="atelier-devscreen-button">
+                              {copy.devScreenClearSelection}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      {devScreenPickerError && (
+                        <div className="atelier-devscreen-picker-error">{devScreenPickerError}</div>
+                      )}
+                    </div>
+                  )}
 
                   <div className={cls("atelier-devscreen-controls", dark ? "atelier-devscreen-controls-dark" : "")}>
                     <div className="atelier-devscreen-row">
@@ -7522,6 +9877,25 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                           </span>
                         </div>
                       )}
+                      {latestDevScreenDiagnostics && (
+                        <div className={cls(
+                          "atelier-preview-diagnostic",
+                          latestDevScreenDiagnostics.runtimeErrors.length
+                            || latestDevScreenNetworkFailureCount
+                            || latestDevScreenDiagnostics.consoleEntries.some((entry) => entry.level === "error")
+                            ? "atelier-preview-diagnostic-error"
+                            : "atelier-preview-diagnostic-ok",
+                        )}>
+                          <span className="atelier-preview-diagnostic-source">browser</span>
+                          <span className="atelier-preview-diagnostic-text">
+                            Console {latestDevScreenDiagnostics.consoleEntries.length + latestDevScreenDiagnostics.runtimeErrors.length}
+                            {" · "}Network {latestDevScreenDiagnostics.networkEntries.length}
+                            {latestDevScreenNetworkFailureCount
+                              ? ` · ${latestDevScreenNetworkFailureCount} failed`
+                              : ""}
+                          </span>
+                        </div>
+                      )}
                       {devScreenError && (
                         <div className="atelier-preview-diagnostic atelier-preview-diagnostic-error">
                           <span className="atelier-preview-diagnostic-source">error</span>
@@ -7531,7 +9905,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                     </div>
                   )}
 
-                  {(latestDevScreenScreenshot?.dataUrl || latestDevScreenSnapshot?.text || latestDevScreenData) && (
+                  {(latestDevScreenScreenshot?.dataUrl || latestDevScreenSnapshot?.text || latestDevScreenDiagnostics || latestDevScreenData) && (
                     <div className={cls("atelier-preview-inspector-results", dark ? "atelier-preview-inspector-results-dark" : "")}>
                       {latestDevScreenScreenshot?.dataUrl && (
                         <div className="atelier-devscreen-shot-wrap">
@@ -7546,6 +9920,24 @@ const AgentWorkspace: React.FC<{ tw: Tweaks }> = ({ tw }) => {
                         <div className={cls("atelier-devscreen-panel", dark ? "atelier-devscreen-panel-dark" : "")}>
                           <div className="atelier-devscreen-panel-title">{copy.devScreenSnapshot}</div>
                           <pre>{latestDevScreenSnapshot.text}</pre>
+                        </div>
+                      )}
+                      {latestDevScreenDiagnostics && (
+                        <div className={cls("atelier-devscreen-panel", dark ? "atelier-devscreen-panel-dark" : "")}>
+                          <div className="atelier-devscreen-panel-title">
+                            {tw.language === "en" ? "Browser diagnostics" : "브라우저 진단"}
+                          </div>
+                          <pre>{[
+                            ...latestDevScreenDiagnostics.runtimeErrors.map((entry) => `[runtime error] ${entry}`),
+                            ...latestDevScreenDiagnostics.consoleEntries.map((entry) => `[${entry.level}] ${entry.text}`),
+                            ...latestDevScreenDiagnostics.networkFailures.map((entry) => `[network failed] ${entry}`),
+                            ...latestDevScreenDiagnostics.networkEntries.map((entry) => [
+                              `[${entry.initiatorType}]`,
+                              entry.status || "status n/a",
+                              `${entry.durationMs}ms`,
+                              entry.url,
+                            ].join(" ")),
+                          ].join("\n") || (tw.language === "en" ? "No browser issues captured." : "수집된 브라우저 문제가 없습니다.")}</pre>
                         </div>
                       )}
                       {latestDevScreenData && (

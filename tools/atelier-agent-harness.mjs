@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -14,6 +14,7 @@ function parseArgs(argv) {
     prompt: DEFAULT_PROMPT,
     cwd: process.cwd(),
     model: "",
+    effort: "xhigh",
     hermesProvider: "openai-codex",
     permission: "auto",
     timeoutMs: DEFAULT_TIMEOUT_MS,
@@ -41,6 +42,9 @@ function parseArgs(argv) {
         break;
       case "--model":
         out.model = next();
+        break;
+      case "--effort":
+        out.effort = next();
         break;
       case "--hermes-provider":
         out.hermesProvider = next();
@@ -86,6 +90,7 @@ Options:
   --prompt TEXT                        Prompt to send. Default: ${DEFAULT_PROMPT}
   --cwd PATH                           Working directory. Default: current repo
   --model NAME                         Provider model override
+  --effort LEVEL                       Codex effort: low|medium|high|xhigh|max|ultra
   --hermes-provider NAME               Hermes backend. Default: openai-codex
   --permission basic|auto|full         Matches Atelier permission mode. Default: auto
   --timeout SECONDS                    Per-provider timeout. Default: 120
@@ -295,6 +300,31 @@ function redact(text) {
     .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer <redacted>");
 }
 
+function codexModelMetadata(model) {
+  try {
+    const cachePath = path.join(os.homedir(), ".codex", "models_cache.json");
+    const parsed = JSON.parse(readFileSync(cachePath, "utf8"));
+    const entry = (parsed.models || []).find((item) => item.slug === model || item.id === model);
+    if (!entry) return { efforts: [], requiresMultiAgentV2: false };
+    const efforts = (entry.supported_reasoning_levels || [])
+      .map((item) => typeof item === "string" ? item : item?.effort)
+      .filter(Boolean);
+    return {
+      efforts,
+      requiresMultiAgentV2: efforts.includes("ultra"),
+    };
+  } catch {
+    return { efforts: [], requiresMultiAgentV2: false };
+  }
+}
+
+function normalizedCodexEffort(model, requested) {
+  const { efforts } = codexModelMetadata(model);
+  if (efforts.includes(requested)) return requested;
+  if ((requested === "ultra" || requested === "max") && efforts.includes("xhigh")) return "xhigh";
+  return ["low", "medium", "high", "xhigh"].includes(requested) ? requested : "xhigh";
+}
+
 function commandForProvider(options) {
   if (options.provider === "claude") {
     const cli = cliCommandSpec("claude");
@@ -320,15 +350,22 @@ function commandForProvider(options) {
 
   if (options.provider === "codex") {
     const cli = cliCommandSpec("codex");
+    const model = options.model || "gpt-5.5";
+    const metadata = codexModelMetadata(model);
+    const effort = normalizedCodexEffort(model, options.effort);
     return {
       command: cli.command,
       args: [
         ...cli.args,
         ...codexPermissionArgs(options.permission),
+        ...(metadata.requiresMultiAgentV2 ? ["--enable", "multi_agent_v2"] : []),
         "exec",
         "--cd",
         options.cwd,
-        ...(options.model ? ["--model", options.model] : []),
+        "--model",
+        model,
+        "-c",
+        `model_reasoning_effort=${JSON.stringify(effort)}`,
         "--json",
         "--skip-git-repo-check",
         options.prompt,
@@ -446,10 +483,17 @@ function analyzePlainProviderLine(state, line) {
   const value = parseJsonLine(line);
   if (value) {
     state.jsonLines += 1;
-    if (value.session_id || value.sessionId) state.sessionId = value.session_id || value.sessionId;
+    if (value.session_id || value.sessionId || value.thread_id) {
+      state.sessionId = value.session_id || value.sessionId || value.thread_id;
+    }
+    if (value.type === "item.completed" && value.item?.type === "agent_message") {
+      if (typeof value.item.text === "string") state.finalText = value.item.text;
+    }
     if (typeof value.result === "string") state.finalText = value.result;
     if (typeof value.message === "string") state.finalText += value.message;
-    if (value.type === "error" || value.is_error === true) state.errorEvents.push(value.message || line);
+    if (value.type === "error" || value.type === "turn.failed" || value.is_error === true) {
+      state.errorEvents.push(value.message || value.error?.message || line);
+    }
   } else {
     state.rawTextLines += 1;
     if (line.trim()) {
@@ -564,7 +608,7 @@ async function runProvider(options) {
   const providerExitOk =
     options.provider === "claude"
       ? streamSuccess
-      : processResult.exitCode === 0;
+      : processResult.exitCode === 0 && Boolean(state.finalText.trim());
   const ok =
     !processResult.spawnError &&
     !processResult.timedOut &&
