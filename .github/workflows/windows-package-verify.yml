@@ -2,6 +2,8 @@ name: Windows Package Verification
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [main]
 
 jobs:
   package-verification:
