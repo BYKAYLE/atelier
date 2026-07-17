@@ -54,11 +54,16 @@ jobs:
           }
           powershell -ExecutionPolicy Bypass @arguments
 
+      - name: Collect physical gate evidence
+        if: always()
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File tools/collect-windows-provider-evidence.ps1 -Destination artifacts/windows-physical-release-gate
+
       - name: Upload physical gate evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: atelier-windows-physical-release-gate-${{ inputs.expected_version }}
-          path: ${{ env.LOCALAPPDATA }}\Atelier\diagnostics\atelier-provider-smoke-*
-          if-no-files-found: error
+          path: artifacts/windows-physical-release-gate/*
+          if-no-files-found: warn
           retention-days: 30
