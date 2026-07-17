@@ -17,7 +17,7 @@ param(
   [string]$LogDir = "$env:LOCALAPPDATA\Atelier\diagnostics"
 )
 
-$ErrorActionPreference = "Continue"
+$ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
 function New-DirectoryIfMissing {
@@ -95,6 +95,35 @@ function ConvertTo-NativeArgument {
   return $builder.ToString()
 }
 
+function Set-ProcessEnvironmentValue {
+  param(
+    [System.Diagnostics.ProcessStartInfo]$ProcessStartInfo,
+    [string]$Name,
+    [string]$Value
+  )
+
+  # PowerShell 5.1 enumerates EnvironmentVariables when it is returned from an
+  # expression, turning the dictionary into an array. Write to the native store
+  # directly so string keys are never interpreted as array indexes.
+  if ($ProcessStartInfo.PSObject.Properties.Name -contains "Environment") {
+    $ProcessStartInfo.Environment[$Name] = $Value
+  } else {
+    $ProcessStartInfo.EnvironmentVariables[$Name] = $Value
+  }
+}
+
+function Test-ProcessEnvironmentValue {
+  param(
+    [System.Diagnostics.ProcessStartInfo]$ProcessStartInfo,
+    [string]$Name
+  )
+
+  if ($ProcessStartInfo.PSObject.Properties.Name -contains "Environment") {
+    return $ProcessStartInfo.Environment.ContainsKey($Name)
+  }
+  return $ProcessStartInfo.EnvironmentVariables.ContainsKey($Name)
+}
+
 function Invoke-Captured {
   param(
     [string]$Name,
@@ -118,16 +147,11 @@ function Invoke-Captured {
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
   $psi.CreateNoWindow = $true
-  $processEnvironment = if ($psi.PSObject.Properties.Name -contains "Environment") {
-    $psi.Environment
-  } else {
-    $psi.EnvironmentVariables
-  }
-  $processEnvironment["PATH"] = $env:Path
-  if (-not $processEnvironment.ContainsKey("CLAUDE_CODE_GIT_BASH_PATH")) {
+  Set-ProcessEnvironmentValue -ProcessStartInfo $psi -Name "PATH" -Value $env:Path
+  if (-not (Test-ProcessEnvironmentValue -ProcessStartInfo $psi -Name "CLAUDE_CODE_GIT_BASH_PATH")) {
     foreach ($candidate in @("$env:ProgramFiles\Git\bin\bash.exe", "${env:ProgramFiles(x86)}\Git\bin\bash.exe")) {
       if (Test-Path -LiteralPath $candidate) {
-        $processEnvironment["CLAUDE_CODE_GIT_BASH_PATH"] = $candidate
+        Set-ProcessEnvironmentValue -ProcessStartInfo $psi -Name "CLAUDE_CODE_GIT_BASH_PATH" -Value $candidate
         break
       }
     }
@@ -557,6 +581,11 @@ if ($SelfTest) {
   }
   if (-not (Test-IsBrowserProcessName "msedge") -or (Test-IsBrowserProcessName "explorer")) {
     throw "Windows browser process classification self-test failed"
+  }
+  $environmentProbe = [System.Diagnostics.ProcessStartInfo]::new()
+  Set-ProcessEnvironmentValue -ProcessStartInfo $environmentProbe -Name "ATELIER_SMOKE_SENTINEL" -Value "ready"
+  if (-not (Test-ProcessEnvironmentValue -ProcessStartInfo $environmentProbe -Name "ATELIER_SMOKE_SENTINEL")) {
+    throw "Windows process environment self-test failed"
   }
   Write-Host "Windows provider smoke self-test passed."
   exit 0
