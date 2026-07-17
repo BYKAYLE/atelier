@@ -124,6 +124,58 @@ function Test-ProcessEnvironmentValue {
   return $ProcessStartInfo.EnvironmentVariables.ContainsKey($Name)
 }
 
+function Resolve-CapturedTextTask {
+  param(
+    [object]$Task,
+    [int]$WaitMilliseconds = 2000
+  )
+
+  if ($null -eq $Task) { return "" }
+  try {
+    if (-not $Task.IsCompleted) {
+      [void]$Task.Wait($WaitMilliseconds)
+    }
+  } catch {
+    # A cancelled or faulted read is diagnostic-only. The process result still
+    # carries the authoritative timeout/exit state.
+  }
+  if (-not $Task.IsCompleted) { return "" }
+  try {
+    return [string]$Task.GetAwaiter().GetResult()
+  } catch {
+    return ""
+  }
+}
+
+function Stop-CapturedProcessTree {
+  param([System.Diagnostics.Process]$Process)
+
+  if ($null -eq $Process) { return }
+  try {
+    if ($Process.HasExited) { return }
+  } catch {
+    return
+  }
+
+  # Windows PowerShell 5.1 runs on .NET Framework, where Process.Kill(true)
+  # does not exist. taskkill /T closes descendants as well, preventing a child
+  # installer from retaining the redirected stdout/stderr pipe forever.
+  $taskkill = if ($env:SystemRoot) {
+    Join-Path $env:SystemRoot "System32\taskkill.exe"
+  } else {
+    "taskkill.exe"
+  }
+  try {
+    & $taskkill /PID $Process.Id /T /F 1>$null 2>$null
+  } catch {
+    # Fall through to a parent-only kill when taskkill is unavailable.
+  }
+  try {
+    if (-not $Process.HasExited) { $Process.Kill() }
+  } catch {}
+  try { [void]$Process.WaitForExit(2000) } catch {}
+}
+
 function Invoke-Captured {
   param(
     [string]$Name,
@@ -172,27 +224,47 @@ function Invoke-Captured {
   $stderrTask = $process.StandardError.ReadToEndAsync()
 
   if (-not $process.WaitForExit($TimeoutSec * 1000)) {
-    try { $process.Kill($true) } catch { try { $process.Kill() } catch {} }
-    try { [void]$process.WaitForExit(2000) } catch {}
-    $stdout = Redact-Line $stdoutTask.GetAwaiter().GetResult()
-    $stderr = Redact-Line $stderrTask.GetAwaiter().GetResult()
+    Stop-CapturedProcessTree $process
+    $stdout = Redact-Line (Resolve-CapturedTextTask $stdoutTask 2000)
+    $stderr = Redact-Line (Resolve-CapturedTextTask $stderrTask 2000)
     Write-Host "  timed out after ${TimeoutSec}s"
+    $process.Dispose()
     return [pscustomobject]@{ ok = $false; exitCode = $null; timedOut = $true; stdout = $stdout; stderr = $(if ($stderr.Trim()) { $stderr } else { "timeout" }) }
   }
 
-  $stdout = Redact-Line $stdoutTask.GetAwaiter().GetResult()
-  $stderr = Redact-Line $stderrTask.GetAwaiter().GetResult()
+  $stdout = Redact-Line (Resolve-CapturedTextTask $stdoutTask 2000)
+  $stderr = Redact-Line (Resolve-CapturedTextTask $stderrTask 2000)
+  $exitCode = $process.ExitCode
   if ($stdout.Trim()) { Write-Host ($stdout.Trim() -split "`r?`n" | Select-Object -First 20 | ForEach-Object { "  out: $_" }) }
   if ($stderr.Trim()) { Write-Host ($stderr.Trim() -split "`r?`n" | Select-Object -First 20 | ForEach-Object { "  err: $_" }) }
-  Write-Host "  exit: $($process.ExitCode)"
-  return [pscustomobject]@{ ok = ($process.ExitCode -eq 0); exitCode = $process.ExitCode; timedOut = $false; stdout = $stdout; stderr = $stderr }
+  Write-Host "  exit: $exitCode"
+  $process.Dispose()
+  return [pscustomobject]@{ ok = ($exitCode -eq 0); exitCode = $exitCode; timedOut = $false; stdout = $stdout; stderr = $stderr }
 }
 
 function Find-Exe {
   param([string]$Command)
   Refresh-Path
-  $cmd = Get-Command $Command -ErrorAction SilentlyContinue
-  if ($cmd) { return $cmd.Source }
+  $commands = @(Get-Command $Command -All -ErrorAction SilentlyContinue | Where-Object {
+    -not [string]::IsNullOrWhiteSpace($_.Source)
+  })
+  if ($commands.Count -gt 0) {
+    # npm packages often expose both .cmd and .ps1 shims. Hermes also keeps an
+    # extensionless POSIX launcher before venv\Scripts\hermes.exe on PATH.
+    # Prefer native executables and Windows launchers so a valid installation
+    # is not misreported as Win32 error 193.
+    $ranked = $commands | Sort-Object @{ Expression = {
+      switch ([IO.Path]::GetExtension($_.Source).ToLowerInvariant()) {
+        ".exe" { 0 }
+        ".com" { 1 }
+        ".cmd" { 2 }
+        ".bat" { 3 }
+        ".ps1" { 4 }
+        default { 5 }
+      }
+    } }, @{ Expression = { $_.Source.Length } }
+    return $ranked[0].Source
+  }
   return $null
 }
 
@@ -210,6 +282,20 @@ function Invoke-ProviderCaptured {
   $extension = [IO.Path]::GetExtension($path).ToLowerInvariant()
   if ($extension -in @(".cmd", ".bat")) {
     return Invoke-Captured $Name "cmd.exe" (@("/D", "/Q", "/S", "/C", $path) + $Arguments) $TimeoutSec
+  }
+  if ($extension -eq ".ps1") {
+    return Invoke-Captured $Name "powershell.exe" (@("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $path) + $Arguments) $TimeoutSec
+  }
+  if ([string]::IsNullOrWhiteSpace($extension)) {
+    $firstLine = ""
+    try { $firstLine = [string](Get-Content -LiteralPath $path -TotalCount 1 -ErrorAction Stop) } catch {}
+    if ($firstLine -match '^#!.*\b(bash|sh)(\.exe)?\b') {
+      $bash = Find-Exe "bash"
+      if (-not $bash) {
+        return [pscustomobject]@{ ok = $false; exitCode = $null; timedOut = $false; stdout = ""; stderr = "$Command requires bash but bash was not found" }
+      }
+      return Invoke-Captured $Name $bash (@($path) + $Arguments) $TimeoutSec
+    }
   }
   return Invoke-Captured $Name $path $Arguments $TimeoutSec
 }
@@ -586,6 +672,17 @@ if ($SelfTest) {
   Set-ProcessEnvironmentValue -ProcessStartInfo $environmentProbe -Name "ATELIER_SMOKE_SENTINEL" -Value "ready"
   if (-not (Test-ProcessEnvironmentValue -ProcessStartInfo $environmentProbe -Name "ATELIER_SMOKE_SENTINEL")) {
     throw "Windows process environment self-test failed"
+  }
+  $hostExe = try { (Get-Process -Id $PID).Path } catch { "powershell.exe" }
+  $timeoutStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+  $timeoutProbe = Invoke-Captured "Process-tree timeout self-test" $hostExe @(
+    "-NoProfile",
+    "-Command",
+    "Start-Process -FilePath powershell.exe -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 30' -NoNewWindow | Out-Null; Start-Sleep -Seconds 30"
+  ) 1
+  $timeoutStopwatch.Stop()
+  if (-not $timeoutProbe.timedOut -or $timeoutStopwatch.Elapsed.TotalSeconds -gt 8) {
+    throw "Windows process-tree timeout self-test did not return within the bounded interval"
   }
   Write-Host "Windows provider smoke self-test passed."
   exit 0

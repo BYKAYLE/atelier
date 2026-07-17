@@ -18,6 +18,7 @@ jobs:
   provider-smoke:
     name: CLI install/status smoke
     runs-on: windows-latest
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
@@ -44,7 +45,7 @@ jobs:
         shell: pwsh
         run: |
           powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1 -SelfTest
-          $scriptArgs = @("-File", "tools/windows-provider-smoke.ps1")
+          $scriptArgs = @("-File", "tools/windows-provider-smoke.ps1", "-Strict")
           if ("${{ inputs.run_install }}" -eq "true") {
             $scriptArgs += "-Install"
           }

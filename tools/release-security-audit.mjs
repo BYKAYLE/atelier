@@ -23,6 +23,10 @@ const cargoSource = readFileSync(manifest, "utf8");
 const packageSource = readFileSync("package.json", "utf8");
 const storeBuildSource = readFileSync("tools/windows-store/build-msix.ps1", "utf8");
 const windowsProviderSmokeSource = readFileSync("tools/windows-provider-smoke.ps1", "utf8");
+const windowsProviderWorkflowSource = readFileSync(
+  ".github/workflows/windows-provider-smoke.yml",
+  "utf8",
+);
 const windowsPhysicalGateSource = readFileSync(
   ".github/workflows/windows-physical-release-gate.yml",
   "utf8",
@@ -46,7 +50,7 @@ const devScreenPickerSmokeSource = readFileSync("tools/devscreen-element-picker-
 const workflowSource = [
   readFileSync(".github/workflows/release.yml", "utf8"),
   readFileSync(".github/workflows/windows-store.yml", "utf8"),
-  readFileSync(".github/workflows/windows-provider-smoke.yml", "utf8"),
+  windowsProviderWorkflowSource,
 ].join("\n");
 const openLoginBrowserSource = credentialSource
   .split("fn open_login_url_in_browser", 2)[1]
@@ -208,6 +212,12 @@ const sourceInvariants = [
       windowsProviderSmokeSource.includes('ProcessStartInfo]::new()') &&
       windowsProviderSmokeSource.includes('Properties.Name -contains "ArgumentList"') &&
       windowsProviderSmokeSource.includes("EnvironmentVariables") &&
+      windowsProviderSmokeSource.includes("Stop-CapturedProcessTree") &&
+      windowsProviderSmokeSource.includes('System32\\taskkill.exe') &&
+      windowsProviderSmokeSource.includes("Resolve-CapturedTextTask") &&
+      windowsProviderSmokeSource.includes("Get-Command $Command -All") &&
+      windowsProviderSmokeSource.includes('if ($extension -eq ".ps1")') &&
+      windowsProviderSmokeSource.includes("Process-tree timeout self-test") &&
       windowsProviderSmokeSource.includes('$script:AtelierBrowserHelper') &&
       windowsProviderSmokeSource.includes('$env:BROWSER = if ($script:AtelierBrowserHelper)') &&
       windowsProviderSmokeSource.includes("authenticated after device login") &&
@@ -219,6 +229,8 @@ const sourceInvariants = [
       windowsProviderSmokeSource.includes("RequireVisibleBrowserWindowEvidence") &&
       workflowSource.includes("-ProbeBrowserHandoff") &&
       workflowSource.includes("-RequireBrowserProcessEvidence") &&
+      windowsProviderWorkflowSource.includes("timeout-minutes: 45") &&
+      windowsProviderWorkflowSource.includes('$scriptArgs = @("-File", "tools/windows-provider-smoke.ps1", "-Strict")') &&
       windowsProviderSmokeSource.includes("authentication failed after login") &&
       windowsProviderSmokeSource.includes("Get-AppxPackage") &&
       windowsProviderSmokeSource.includes('Programs\\Atelier Agent\\Atelier.exe') &&
