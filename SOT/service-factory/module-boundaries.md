@@ -69,11 +69,18 @@ it must not read or mutate another feature's local state through DOM queries.
 
 ## Removable feature packages
 
-Orca-benchmark capabilities are mounted through
-`src/features/featureRegistry.tsx`. Each removable frontend package owns a
-`src/components/<feature>/feature.tsx` descriptor and contributes only through a
-declared slot, source-control integration, or control-task adapter. Composition
-roots must not import those implementations directly.
+These are compile-time detachable packages, not runtime hot-plug extensions.
+Removing one changes the distribution build and requires rebuilding the app, but
+does not require editing the core composition implementation or leaving the
+disabled feature code in the shipped frontend/backend binaries.
+
+Orca-benchmark capabilities are mounted through a generated feature manifest.
+`vite.config.ts` discovers `src/components/<feature>/feature.tsx` descriptors at
+build time and emits static imports through `virtual:atelier-feature-modules`.
+`src/features/featureRegistry.tsx` consumes only that generated manifest. Each
+removable frontend package contributes through a declared slot, source-control
+integration, or control-task adapter; composition roots must not import those
+implementations directly.
 
 The matching Rust implementation is guarded by an independent Cargo feature in
 `src-tauri/Cargo.toml`. Tauri command registration and shutdown cleanup use the
@@ -96,17 +103,22 @@ package in this set has a private cross-feature dependency.
 
 Removal rules:
 
-1. Remove or omit a frontend feature directory/descriptor. Auto-discovery then
-   removes its UI contribution without editing a composition root.
+1. Remove or omit a frontend feature directory/descriptor, or exclude its id
+   with `VITE_ATELIER_FEATURES`. The generated manifest then omits the static
+   import without editing a composition root.
 2. Disable the matching Cargo feature. The Rust module, commands, and cleanup
    hooks are excluded at compile time.
-3. Run `npm run smoke:feature-boundaries`, a production frontend build, and a
-   Cargo check with the intended feature set.
+3. Run `npm run gate:orca-features`. The restricted production build fails if
+   an excluded feature directory leaks into any output chunk, and emits
+   `dist/atelier-feature-manifest.json` as inclusion evidence.
 
-`VITE_ATELIER_FEATURES` can restrict the registered frontend modules for a
-distribution profile. Because discovery is currently eager, this is a runtime
-registration filter; physical bundle removal is proven by omitting the feature
-directory from that distribution.
+The frontend distribution id and matching Cargo feature are the two public
+switches for one package. They must be changed together so that a removed UI
+does not leave an unused backend command set, or vice versa.
+
+`VITE_ATELIER_FEATURES` is a build-time distribution profile. It controls the
+generated imports, so excluded frontend feature implementations are physically
+absent from the bundle rather than merely hidden at registration time.
 
 This contract currently covers the eight packages above. Core session,
 conversation, composer, preview, terminal, and older workspace modules are not
