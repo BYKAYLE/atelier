@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
 
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const cargo = process.platform === "win32" ? "cargo.exe" : "cargo";
 const manifest = "src-tauri/Cargo.toml";
+const npmEntrypoint = process.env.npm_execpath;
 
 const smokeScripts = [
   "smoke:feature-boundaries",
@@ -48,11 +48,19 @@ function run(command, args, options = {}) {
   }
 }
 
-for (const script of smokeScripts) {
-  run(npm, ["run", script]);
+function runNpm(args, options = {}) {
+  if (npmEntrypoint) {
+    run(process.execPath, [npmEntrypoint, ...args], options);
+    return;
+  }
+  run("npm", args, options);
 }
 
-run(npm, ["run", "build"], {
+for (const script of smokeScripts) {
+  runNpm(["run", script]);
+}
+
+runNpm(["run", "build"], {
   env: { VITE_ATELIER_FEATURES: "atelier-cli" },
 });
 
