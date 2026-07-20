@@ -74,11 +74,11 @@ const Row: React.FC<{
 }> = ({ dark, label, hint, children }) => (
   <div
     className={cls(
-      "py-5 border-b flex items-start gap-6",
+      "py-5 border-b flex flex-col gap-2 md:flex-row md:items-start md:gap-6",
       dark ? "border-dline" : "border-line",
     )}
   >
-    <div className="flex-1 min-w-0 pt-1">
+    <div className="w-full min-w-0 pt-1 md:flex-1">
       <div className={cls("text-[13.5px] font-medium", dark ? "text-dink" : "text-ink")}>
         {label}
       </div>
@@ -93,7 +93,7 @@ const Row: React.FC<{
         </div>
       )}
     </div>
-    <div className="shrink-0 flex items-center gap-2">{children}</div>
+    <div className="w-full md:w-auto md:shrink-0 flex flex-wrap items-center gap-2">{children}</div>
   </div>
 );
 
@@ -164,7 +164,7 @@ const TerminalSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => voi
             step={1}
             value={tw.terminalFontPx}
             onChange={(e) => setTw({ terminalFontPx: +e.target.value })}
-            className="w-[160px]"
+            className="w-full max-w-[160px]"
             style={{ accentColor: "var(--accent)" }}
           />
           <span
@@ -290,7 +290,7 @@ const AppearanceSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => v
           value={tw.welcomeHeadline}
           onChange={(e) => setTw({ welcomeHeadline: e.target.value })}
           className={cls(
-            "h-8 px-2.5 rounded-[7px] border text-[13px] w-[320px] outline-none",
+            "h-8 px-2.5 rounded-[7px] border text-[13px] w-full max-w-[320px] outline-none",
             dark
               ? "bg-dmuted border-dline text-dink"
               : "bg-surface border-line text-ink",
@@ -346,7 +346,7 @@ const ProfilesSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => voi
           <div
             key={p.id}
             className={cls(
-              "flex items-center gap-3 px-4 py-2 min-h-14",
+              "flex flex-col gap-3 px-4 py-2 min-h-14 md:flex-row md:items-center",
               i > 0 ? (dark ? "border-t border-dline" : "border-t border-line") : "",
             )}
           >
@@ -363,7 +363,7 @@ const ProfilesSection: React.FC<{ tw: Tweaks; setTw: (p: Partial<Tweaks>) => voi
               onChange={(e) => updateProfile(i, { name: e.target.value })}
               placeholder={copy.name}
               className={cls(
-                "h-8 px-2.5 rounded-[6px] border text-[13px] w-[180px] outline-none",
+                "h-8 px-2.5 rounded-[6px] border text-[13px] w-full max-w-[180px] outline-none",
                 dark
                   ? "bg-dmuted border-dline text-dink"
                   : "bg-surface border-line text-ink",
@@ -789,7 +789,7 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
         )}
       >
         <div className={cls("px-4 py-3 border-b", dark ? "border-dline" : "border-line")}>
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div className="min-w-0">
               <div className={cls("text-[14px] font-medium", dark ? "text-dink" : "text-ink")}>{copy.patchTitle}</div>
               <div className={cls("text-[12px] mt-0.5", dark ? "text-dsub" : "text-sub")}>{copy.patchHint}</div>
@@ -805,7 +805,7 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
                 </div>
               )}
             </div>
-            <div className="shrink-0 flex items-center gap-2">
+            <div className="w-full md:w-auto md:shrink-0 flex flex-wrap items-center gap-2 md:justify-end">
               <button
                 type="button"
                 onClick={() => void loadPatchNotes(currentVersion || "dev")}
@@ -834,7 +834,7 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
         </div>
         <div className="divide-y divide-[rgba(128,128,128,0.18)]">
           {(patchNotes.length ? patchNotes : fallbackPatchNotes).map((patch) => (
-            <div key={patch.title} className="px-4 py-3 grid grid-cols-[1fr_auto] gap-4">
+            <div key={patch.title} className="px-4 py-3 grid grid-cols-1 gap-4 md:grid-cols-[1fr_auto]">
               <div className="min-w-0">
                 <div className={cls("text-[13.5px] font-medium", dark ? "text-dink" : "text-ink")}>{patch.title}</div>
                 <div className={cls("text-[12px] leading-[1.55] mt-1", dark ? "text-dsub" : "text-sub")}>
@@ -864,7 +864,7 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
           <div className={cls("text-[14px] font-medium", dark ? "text-dink" : "text-ink")}>{copy.bugTitle}</div>
           <div className={cls("text-[12px] mt-0.5", dark ? "text-dsub" : "text-sub")}>{copy.bugHint}</div>
         </div>
-        <div className="grid grid-cols-[1fr_180px] gap-3 mb-3">
+        <div className="grid grid-cols-1 gap-3 mb-3 md:grid-cols-[1fr_180px]">
           <label className="min-w-0">
             <span className={cls("block text-[11px] font-mono uppercase tracking-wider mb-1.5", dark ? "text-dsub" : "text-sub")}>
               {copy.titleLabel}
