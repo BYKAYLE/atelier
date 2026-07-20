@@ -113,7 +113,7 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "Atelier ${{ github.ref_name }}"
           releaseBody: ${{ steps.release-notes.outputs.body }}
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
           updaterJsonPreferNsis: true
@@ -327,3 +327,12 @@ jobs:
           gh release upload $env:GITHUB_REF_NAME @assets `
             --repo "$env:RELEASE_OWNER/$env:RELEASE_REPO" `
             --clobber
+
+      - name: Publish GitHub release after Windows gates
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN || github.token }}
+        run: |
+          gh release edit $env:GITHUB_REF_NAME `
+            --repo "$env:RELEASE_OWNER/$env:RELEASE_REPO" `
+            --draft=false

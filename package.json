@@ -26,7 +26,7 @@
     "harness:agent": "node tools/atelier-agent-harness.mjs",
     "harness:claude": "node tools/atelier-agent-harness.mjs --provider claude",
     "harness:fixture": "node tools/atelier-agent-harness.mjs --fixture all",
-    "audit:release": "node tools/release-security-audit.mjs",
+    "audit:release": "node --test tools/release-security-audit.test.mjs && node tools/release-security-audit.mjs",
     "store:msix": "powershell -ExecutionPolicy Bypass -File tools/windows-store/build-msix.ps1",
     "smoke:windows-providers": "powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1",
     "smoke:pty-supervisor": "node tools/pty-supervisor-smoke.mjs",
