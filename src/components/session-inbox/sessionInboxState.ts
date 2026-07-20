@@ -2,9 +2,15 @@ export type SessionInboxFilter = "all" | "running" | "attention" | "unread";
 
 export type SessionInboxPhase = "idle" | "running" | "attention" | "done";
 
+export interface SessionFreshnessTimestamps {
+  updatedAt: number;
+  lastContentAt?: number;
+  lastAttentionAt?: number;
+}
+
 export interface SessionInboxItem {
   id: string;
-  updatedAt: number;
+  freshnessAt: number;
   phase: SessionInboxPhase;
 }
 
@@ -25,9 +31,19 @@ export const EMPTY_SESSION_INBOX_STATE: SessionInboxReadState = {
   forcedUnreadById: {},
 };
 
+function normalizedTimestamp(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+export function sessionFreshnessAt(value: SessionFreshnessTimestamps): number {
+  const contentAt = normalizedTimestamp(value.lastContentAt) ?? normalizedTimestamp(value.updatedAt) ?? 0;
+  const attentionAt = normalizedTimestamp(value.lastAttentionAt) ?? 0;
+  return Math.max(contentAt, attentionAt);
+}
+
 export function createInitialSessionInboxState(items: SessionInboxItem[]): SessionInboxReadState {
   return {
-    readAtById: Object.fromEntries(items.map((item) => [item.id, item.updatedAt])),
+    readAtById: Object.fromEntries(items.map((item) => [item.id, item.freshnessAt])),
     forcedUnreadById: {},
   };
 }
@@ -56,7 +72,7 @@ export function isSessionInboxItemUnread(
   state: SessionInboxReadState,
 ): boolean {
   if (state.forcedUnreadById[item.id]) return true;
-  return item.updatedAt > (state.readAtById[item.id] || 0);
+  return item.freshnessAt > (state.readAtById[item.id] || 0);
 }
 
 export function markSessionInboxItemRead(
@@ -64,12 +80,12 @@ export function markSessionInboxItemRead(
   item: SessionInboxItem,
 ): SessionInboxReadState {
   const alreadyRead = !state.forcedUnreadById[item.id]
-    && (state.readAtById[item.id] || 0) >= item.updatedAt;
+    && (state.readAtById[item.id] || 0) >= item.freshnessAt;
   if (alreadyRead) return state;
   const forcedUnreadById = { ...state.forcedUnreadById };
   delete forcedUnreadById[item.id];
   return {
-    readAtById: { ...state.readAtById, [item.id]: item.updatedAt },
+    readAtById: { ...state.readAtById, [item.id]: item.freshnessAt },
     forcedUnreadById,
   };
 }

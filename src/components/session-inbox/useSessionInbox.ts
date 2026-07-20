@@ -42,7 +42,7 @@ export function useSessionInbox(items: SessionInboxItem[], activeId: string | nu
     () => new Map(items.map((item) => [item.id, item])),
     [items],
   );
-  const activeUpdatedAt = activeId ? itemById.get(activeId)?.updatedAt : undefined;
+  const activeFreshnessAt = activeId ? itemById.get(activeId)?.freshnessAt : undefined;
 
   const markRead = useCallback((id: string) => {
     const item = itemById.get(id);
@@ -77,14 +77,14 @@ export function useSessionInbox(items: SessionInboxItem[], activeId: string | nu
   }, [state]);
 
   useEffect(() => {
-    if (!activeId || activeUpdatedAt === undefined) return;
+    if (!activeId || activeFreshnessAt === undefined) return;
     if (document.visibilityState !== "visible") return;
     setState((current) => {
       if (current.forcedUnreadById[activeId]) return current;
       const item = itemById.get(activeId);
       return item ? markSessionInboxItemRead(current, item) : current;
     });
-  }, [activeId, activeUpdatedAt, itemById]);
+  }, [activeFreshnessAt, activeId, itemById]);
 
   const counts = useMemo(() => sessionInboxCounts(items, state), [items, state]);
   const visibleIds = useMemo(
