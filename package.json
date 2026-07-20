@@ -40,6 +40,7 @@
     "smoke:linear-workflows": "node --experimental-strip-types tools/linear-workflows-smoke.ts",
     "smoke:ssh-workspaces": "node --experimental-strip-types tools/ssh-workspaces-smoke.ts",
     "smoke:provider-usage": "node --experimental-strip-types tools/provider-usage-smoke.ts",
+    "smoke:connections-installer": "node --experimental-strip-types tools/connections-installer-smoke.ts",
     "smoke:mobile-control": "node --experimental-strip-types tools/mobile-control-smoke.ts",
     "smoke:remote-followup": "node --experimental-strip-types tools/remote-followup-smoke.ts",
     "smoke:computer-use": "node --experimental-strip-types tools/computer-use-smoke.ts",
