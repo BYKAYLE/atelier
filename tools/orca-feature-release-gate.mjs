@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 
 const cargo = process.platform === "win32" ? "cargo.exe" : "cargo";
 const manifest = "src-tauri/Cargo.toml";
@@ -38,12 +39,10 @@ function run(command, args, options = {}) {
   });
 
   if (result.error) {
-    console.error(`[orca-feature-gate] failed to start ${label}: ${result.error.message}`);
-    process.exit(1);
+    throw new Error(`[orca-feature-gate] failed to start ${label}: ${result.error.message}`);
   }
   if (result.status !== 0) {
-    console.error(`[orca-feature-gate] ${label} exited with ${result.status ?? "no status"}`);
-    process.exit(result.status || 1);
+    throw new Error(`[orca-feature-gate] ${label} exited with ${result.status ?? "no status"}`);
   }
 }
 
@@ -55,30 +54,55 @@ function runNpm(args, options = {}) {
   run("npm", args, options);
 }
 
-for (const script of smokeScripts) {
-  runNpm(["run", script]);
+function withFeatureBundleSmoke(enabledFeatures, smokeScript) {
+  const outDir = mkdtempSync(join(tmpdir(), "atelier-feature-bundle-smoke-"));
+  let failure;
+  try {
+    const buildEnv = {
+      ...process.env,
+      VITE_ATELIER_FEATURES: enabledFeatures,
+      ATELIER_FEATURE_BUNDLE_OUT_DIR: outDir,
+    };
+    runNpm(["run", "build"], { env: buildEnv });
+    runNpm(["run", smokeScript], { env: buildEnv });
+  } catch (error) {
+    failure = error;
+    throw error;
+  } finally {
+    try {
+      rmSync(outDir, { recursive: true, force: true });
+    } catch (cleanupError) {
+      if (failure) {
+        console.error(`[orca-feature-gate] failed to cleanup ${outDir}: ${cleanupError.message}`);
+      } else {
+        throw cleanupError;
+      }
+    }
+  }
 }
 
-runNpm(["run", "build"], {
-  env: { VITE_ATELIER_FEATURES: "atelier-cli" },
-});
-runNpm(["run", "smoke:feature-bundle"]);
+try {
+  for (const script of smokeScripts) {
+    runNpm(["run", script]);
+  }
 
-runNpm(["run", "build"], {
-  env: { VITE_ATELIER_FEATURES: "mobile-control" },
-});
-runNpm(["run", "smoke:feature-dependency-bundle"]);
+  withFeatureBundleSmoke("atelier-cli", "smoke:feature-bundle");
+  withFeatureBundleSmoke("mobile-control", "smoke:feature-dependency-bundle");
 
-run(cargo, ["check", "--manifest-path", manifest, "--no-default-features"]);
-for (const feature of cargoFeatures) {
-  run(cargo, [
-    "check",
-    "--manifest-path",
-    manifest,
-    "--no-default-features",
-    "--features",
-    feature,
-  ]);
+  run(cargo, ["check", "--manifest-path", manifest, "--no-default-features"]);
+  for (const feature of cargoFeatures) {
+    run(cargo, [
+      "check",
+      "--manifest-path",
+      manifest,
+      "--no-default-features",
+      "--features",
+      feature,
+    ]);
+  }
+
+  console.log(`\nOrca feature release gate passed (${smokeScripts.length + 2} contract smokes, ${cargoFeatures.length} removable backend features).`);
+} catch (error) {
+  console.error(error.message);
+  process.exit(1);
 }
-
-console.log(`\nOrca feature release gate passed (${smokeScripts.length + 2} contract smokes, ${cargoFeatures.length} removable backend features).`);

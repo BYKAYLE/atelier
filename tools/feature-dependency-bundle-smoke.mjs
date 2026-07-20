@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-const manifestPath = resolve(process.cwd(), "dist", "atelier-feature-manifest.json");
+const distDir = process.env.ATELIER_FEATURE_BUNDLE_OUT_DIR?.trim();
+const manifestPath = resolve(process.cwd(), distDir ?? "dist", "atelier-feature-manifest.json");
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
 const expectedEnabled = ["mobile-control", "remote-followup"];
 

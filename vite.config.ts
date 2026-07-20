@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join, normalize } from "node:path";
+import { join, normalize, resolve } from "node:path";
 import { defineConfig, loadEnv, normalizePath, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -148,6 +148,10 @@ export default defineConfig(({ mode }) => {
     .split(",")
     .map((id) => id.trim())
     .filter(Boolean);
+  const configuredOutDir = resolve(
+    root,
+    process.env.ATELIER_FEATURE_BUNDLE_OUT_DIR ?? "dist",
+  );
 
   return {
     plugins: [atelierFeatureModules(root, configuredFeatureIds), react()],
@@ -160,6 +164,9 @@ export default defineConfig(({ mode }) => {
         ? { protocol: "ws", host, port: 1421 }
         : undefined,
       watch: { ignored: ["**/src-tauri/**"] },
+    },
+    build: {
+      outDir: configuredOutDir,
     },
     envPrefix: ["VITE_", "TAURI_ENV_*"],
   };
