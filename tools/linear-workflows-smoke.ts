@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   emptyLinearActionDraft,
   linearActionInput,
+  linearIssueWorkItem,
   searchLinearIssues,
   statesForDraft,
 } from "../src/components/linear-workflows/linearWorkflow.ts";
@@ -45,5 +46,11 @@ const input = linearActionInput({
 });
 assert.equal(input.body, "reviewed");
 assert.equal(input.issueId, "issue-1");
+
+const workItem = linearIssueWorkItem(snapshot.issues[0], "/workspace/repo", "ko");
+assert.equal(workItem.source, "linear");
+assert.equal(workItem.externalId, "ENG-7");
+assert.equal(workItem.workspace, "/workspace/repo");
+assert.match(workItem.prompt, /격리된 worktree/);
 
 console.log("linear workflows smoke passed");

@@ -1,5 +1,8 @@
 # Orca feature removability audit
 
+> Historical 0.2.9 audit. Current package count, current-head evidence, and
+> installed-app truth are maintained in `orca-live-parity-audit-2026-07-18.md`.
+
 Date: 2026-07-18 KST
 Status: source, build, frontend physical removal, macOS package, and installed-app
 reflection verified; current-head Windows NSIS install and renderer reflection

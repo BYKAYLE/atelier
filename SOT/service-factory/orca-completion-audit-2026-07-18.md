@@ -1,5 +1,8 @@
 # Orca modular completion audit
 
+> Historical 0.2.9 audit. Current package count, current-head evidence, and
+> installed-app truth are maintained in `orca-live-parity-audit-2026-07-18.md`.
+
 Date: 2026-07-18 KST
 Audited source head: `8987a55498d61eadfaaae791e358bca769d6b744`
 Distribution version: `0.2.9`

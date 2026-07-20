@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, normalize } from "node:path";
 import { defineConfig, loadEnv, normalizePath, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
@@ -8,23 +8,77 @@ const host = process.env.TAURI_DEV_HOST;
 const virtualFeatureModuleId = "virtual:atelier-feature-modules";
 const resolvedVirtualFeatureModuleId = `\0${virtualFeatureModuleId}`;
 
-function discoverFeatureIds(root: string): string[] {
+interface FeaturePackageManifest {
+  schemaVersion: 1;
+  id: string;
+  rustFeature: string;
+  rustModule: string;
+  smokeScript: string;
+  dependencies: string[];
+}
+
+function discoverFeaturePackages(root: string): FeaturePackageManifest[] {
   const componentsRoot = join(root, "src", "components");
-  return readdirSync(componentsRoot, { withFileTypes: true })
+  const featureIds = readdirSync(componentsRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .filter((id) => existsSync(join(componentsRoot, id, "feature.tsx")))
     .sort();
+
+  return featureIds.map((id) => {
+    const manifestPath = join(componentsRoot, id, "feature.manifest.json");
+    if (!existsSync(manifestPath)) {
+      throw new Error(`Atelier feature ${id} is missing feature.manifest.json`);
+    }
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as FeaturePackageManifest;
+    if (manifest.schemaVersion !== 1 || manifest.id !== id) {
+      throw new Error(`Invalid Atelier feature manifest for ${id}`);
+    }
+    if (!manifest.rustFeature || !manifest.rustModule || !manifest.smokeScript) {
+      throw new Error(`Incomplete Atelier feature manifest for ${id}`);
+    }
+    if (!Array.isArray(manifest.dependencies)) {
+      throw new Error(`Atelier feature ${id} must declare a dependencies array`);
+    }
+    return manifest;
+  });
+}
+
+function resolveEnabledFeatureIds(
+  configuredIds: string[],
+  packages: FeaturePackageManifest[],
+): string[] {
+  const packageById = new Map(packages.map((manifest) => [manifest.id, manifest]));
+  const enabled = new Set<string>();
+  const visiting = new Set<string>();
+
+  const include = (id: string) => {
+    if (enabled.has(id)) return;
+    if (visiting.has(id)) {
+      throw new Error(`Circular Atelier feature dependency involving ${id}`);
+    }
+    const manifest = packageById.get(id);
+    if (!manifest) throw new Error(`Unknown Atelier feature module: ${id}`);
+    visiting.add(id);
+    manifest.dependencies.forEach(include);
+    visiting.delete(id);
+    enabled.add(id);
+  };
+
+  (configuredIds.length > 0 ? configuredIds : packages.map((manifest) => manifest.id))
+    .forEach(include);
+  return packages.map((manifest) => manifest.id).filter((id) => enabled.has(id));
 }
 
 function atelierFeatureModules(root: string, configuredIds: string[]): Plugin {
-  const availableIds = discoverFeatureIds(root);
+  const packages = discoverFeaturePackages(root);
+  const availableIds = packages.map((manifest) => manifest.id);
   const unknownIds = configuredIds.filter((id) => !availableIds.includes(id));
   if (unknownIds.length > 0) {
     throw new Error(`Unknown Atelier feature module: ${unknownIds.join(", ")}`);
   }
 
-  const enabledIds = configuredIds.length > 0 ? configuredIds : availableIds;
+  const enabledIds = resolveEnabledFeatureIds(configuredIds, packages);
   const excludedIds = availableIds.filter((id) => !enabledIds.includes(id));
 
   return {
@@ -40,7 +94,10 @@ function atelierFeatureModules(root: string, configuredIds: string[]): Plugin {
         (featureId, index) => `import feature${index} from "/src/components/${featureId}/feature.tsx";`,
       );
       const entries = enabledIds.map(
-        (featureId, index) => `  { path: "../components/${featureId}/feature.tsx", module: feature${index} },`,
+        (featureId, index) => {
+          const manifest = packages.find((candidate) => candidate.id === featureId);
+          return `  { path: "../components/${featureId}/feature.tsx", module: feature${index}, manifest: ${JSON.stringify(manifest)} },`;
+        },
       );
       return `${imports.join("\n")}\nexport default [\n${entries.join("\n")}\n];\n`;
     },
@@ -75,6 +132,7 @@ function atelierFeatureModules(root: string, configuredIds: string[]): Plugin {
           enabledFeatureIds: enabledIds,
           excludedFeatureIds: excludedIds,
           compiledFeatureIds,
+          featurePackages: packages,
         }, null, 2)}\n`,
       });
     },

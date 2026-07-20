@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "atelier-cli",
+  "rustFeature": "orca-atelier-cli",
+  "rustModule": "atelier_cli",
+  "smokeScript": "smoke:atelier-cli",
+  "dependencies": []
+}

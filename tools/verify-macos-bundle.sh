@@ -18,9 +18,14 @@ if [[ ! -d "$APP" || -z "$DMG" || ! -f "$DMG" ]]; then
   exit 1
 fi
 
-xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
-xattr -dr com.apple.provenance "$APP" 2>/dev/null || true
 codesign --verify --deep --strict "$APP"
+LOCAL_SIGNING_BYPASS=0
+if [[ "${ATELIER_ALLOW_LOCAL_SIGNING:-0}" != "1" ]]; then
+  spctl --assess --type execute --verbose=4 "$APP"
+else
+  LOCAL_SIGNING_BYPASS=1
+  echo "warning: Gatekeeper assessment skipped for explicitly allowed local signing" >&2
+fi
 "$ROOT_DIR/tools/renderer-ready-smoke.sh" "$APP"
 
 MOUNT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/atelier-dmg.XXXXXX")"
@@ -35,6 +40,9 @@ DMG_APP="$MOUNT_DIR/Atelier.app"
 DMG_PLIST="$DMG_APP/Contents/Info.plist"
 
 codesign --verify --deep --strict "$DMG_APP"
+if [[ "$LOCAL_SIGNING_BYPASS" != "1" ]]; then
+  spctl --assess --type execute --verbose=4 "$DMG_APP"
+fi
 for key in \
   NSContactsUsageDescription \
   NSPhotoLibraryUsageDescription \
@@ -48,4 +56,8 @@ do
   fi
 done
 
-echo "verified signed app and DMG payload: $DMG"
+if [[ "$LOCAL_SIGNING_BYPASS" == "1" ]]; then
+  echo "verified local signed app, renderer readiness, and DMG payload; Gatekeeper distribution proof was not claimed: $DMG"
+else
+  echo "verified signed app, Gatekeeper policy, renderer readiness, and DMG payload: $DMG"
+fi

@@ -38,6 +38,16 @@ const settingsSource = readFileSync("src/components/Settings.tsx", "utf8");
 const agentWorkspaceSource = readFileSync("src/components/AgentWorkspace.tsx", "utf8");
 const indexCssSource = readFileSync("src/index.css", "utf8");
 const agentPerformanceSmokeSource = readFileSync("tools/agent-workspace-performance-smoke.mjs", "utf8");
+const sessionRunRegistrySource = readFileSync(
+  "src/components/agent-runtime/sessionRunRegistry.ts",
+  "utf8",
+);
+const sessionRunHookSource = readFileSync(
+  "src/components/agent-runtime/useSessionRunRegistry.ts",
+  "utf8",
+);
+const sessionRunSmokeSource = readFileSync("tools/session-run-registry-smoke.ts", "utf8");
+const orcaFeatureGateSource = readFileSync("tools/orca-feature-release-gate.mjs", "utf8");
 const rendererReceiptSource = readFileSync("src-tauri/src/runtime_receipt.rs", "utf8");
 const rendererSmokeSource = readFileSync("tools/renderer-ready-smoke.sh", "utf8");
 const terminalWorkspaceSource = readFileSync("src/components/Main.tsx", "utf8");
@@ -218,11 +228,10 @@ const sourceInvariants = [
       windowsProviderSmokeSource.includes("Get-Command $Command -All") &&
       windowsProviderSmokeSource.includes('if ($extension -eq ".ps1")') &&
       windowsProviderSmokeSource.includes("Process-tree timeout self-test") &&
-      windowsProviderSmokeSource.includes('$script:AtelierBrowserHelper') &&
-      windowsProviderSmokeSource.includes('$env:BROWSER = if ($script:AtelierBrowserHelper)') &&
+      windowsProviderSmokeSource.includes('Remove-Item Env:BROWSER') &&
       windowsProviderSmokeSource.includes("authenticated after device login") &&
       windowsProviderSmokeSource.includes("authenticated after setup-token login") &&
-      windowsProviderSmokeSource.includes("did not prove Atelier's native and signed-helper browser handoff") &&
+      windowsProviderSmokeSource.includes("did not prove Atelier's native browser handoff and URL fallback") &&
       windowsProviderSmokeSource.includes("Get-BrowserProcessRecords") &&
       windowsProviderSmokeSource.includes("Wait-BrowserProcessEvidence") &&
       windowsProviderSmokeSource.includes("RequireBrowserProcessEvidence") &&
@@ -269,6 +278,22 @@ const sourceInvariants = [
       lifecycleSource.includes("AgentLifecyclePhase::Cancelled") &&
       lifecycleSource.includes("if state.phase.is_terminal()"),
     message: "Agent lifecycle must preserve explicit cancellation and exactly-once terminal state",
+  },
+  {
+    ok:
+      packageSource.includes('"smoke:session-runs"') &&
+      orcaFeatureGateSource.includes('"smoke:session-runs"') &&
+      sessionRunRegistrySource.includes("registry[sessionId] !== turnId") &&
+      sessionRunRegistrySource.includes('current === "stopped"') &&
+      sessionRunHookSource.includes("busyTurnIdsRef.current = next") &&
+      sessionRunSmokeSource.includes("independent sessions must run concurrently") &&
+      sessionRunSmokeSource.includes("a stale finalizer must not clear the live turn") &&
+      agentWorkspaceSource.includes("beginRunForSession(sessionId, turnId)") &&
+      agentWorkspaceSource.includes("finishRunForSession(sessionId, turnId)") &&
+      !agentWorkspaceSource.includes("interruptedTurnIdsRef") &&
+      !agentWorkspaceSource.includes("stoppedTurnIdsRef"),
+    message:
+      "Session runs must remain concurrent across sessions, exact-turn finalized, cancellation-prioritized, and release-gated",
   },
   {
     ok:
@@ -394,12 +419,12 @@ const sourceInvariants = [
   },
   {
     ok:
-      credentialSource.includes("std::env::current_exe()") &&
-      credentialSource.includes('Some(PathBuf::from("explorer.exe"))') &&
+      credentialSource.includes('command.env_remove("BROWSER")') &&
+      credentialSource.includes('cmd.env_remove("BROWSER")') &&
       credentialSource.includes('PathBuf::from("/usr/bin/open")') &&
       !credentialSource.includes('join("atelier-oauth-browser")') &&
       !credentialSource.includes('join("open-url.sh")'),
-    message: "OAuth browser helpers must reuse the signed Atelier executable or trusted system binaries instead of generated scripts",
+    message: "Windows OAuth must leave the provider browser unmodified while Unix uses trusted system launchers",
   },
   {
     ok: (() => {
@@ -428,9 +453,14 @@ const sourceInvariants = [
   },
   {
     ok:
-      connectionsSource.includes("if (!loginState.browser_opened)") &&
-      connectionsSource.includes("if (!result.browser_opened)"),
-    message: "OAuth browser handoff must not reopen a URL already opened by the native backend",
+      connectionsSource.includes("openLoginUrlWithRetry") &&
+      connectionsSource.includes("openingLoginUrlsRef") &&
+      connectionsSource.includes("attempt.count >= 3") &&
+      connectionsSource.includes("if (nextUrl && loginState.browser_opened)") &&
+      connectionsSource.includes("if (result.browser_opened) openedLoginUrlsRef.current") &&
+      connectionsSource.includes("else void openLoginUrlWithRetry"),
+    message:
+      "OAuth browser handoff must preserve native success, retry bounded failures, and prevent concurrent duplicate opens",
   },
   {
     ok: unpinnedWorkflowUses.length === 0,

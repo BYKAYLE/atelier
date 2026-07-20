@@ -11,20 +11,17 @@ import {
   type LinearWorkflowSnapshot,
 } from "../../lib/tauri";
 import { cls } from "../../lib/tokens";
+import type { SourceControlFeatureProps } from "../../features/featureRegistry";
+import { useFeatureSetting } from "../../features/featureSettings";
 import { I } from "../Icons";
 import {
   emptyLinearActionDraft,
   linearActionInput,
+  linearIssueWorkItem,
   searchLinearIssues,
   statesForDraft,
   type LinearActionDraft,
 } from "./linearWorkflow";
-
-interface Props {
-  dark: boolean;
-  language: "ko" | "en";
-  onClose: () => void;
-}
 
 async function openLinearUrl(url: string) {
   const parsed = new URL(url);
@@ -33,7 +30,19 @@ async function openLinearUrl(url: string) {
   await open(parsed.toString());
 }
 
-const LinearWorkflowPanel: React.FC<Props> = ({ dark, language, onClose }) => {
+const LinearWorkflowPanel: React.FC<SourceControlFeatureProps> = ({
+  dark,
+  language,
+  rootPath,
+  onStartWorkItem,
+  onClose,
+}) => {
+  const [featureEnabled] = useFeatureSetting<boolean>("linear-workflows", "enabled", true);
+  const [refreshIntervalSeconds] = useFeatureSetting<number>(
+    "linear-workflows",
+    "refreshIntervalSeconds",
+    0,
+  );
   const [snapshot, setSnapshot] = useState<LinearWorkflowSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -55,6 +64,7 @@ const LinearWorkflowPanel: React.FC<Props> = ({ dark, language, onClose }) => {
         newIssue: "새 이슈",
         comment: "댓글",
         status: "상태 변경",
+        startWork: "작업 시작",
         team: "팀",
         issue: "이슈",
         state: "새 상태",
@@ -83,6 +93,7 @@ const LinearWorkflowPanel: React.FC<Props> = ({ dark, language, onClose }) => {
         newIssue: "New issue",
         comment: "Comment",
         status: "Change status",
+        startWork: "Start task",
         team: "Team",
         issue: "Issue",
         state: "New status",
@@ -102,6 +113,7 @@ const LinearWorkflowPanel: React.FC<Props> = ({ dark, language, onClose }) => {
       };
 
   const load = useCallback(async () => {
+    if (!featureEnabled) return;
     setLoading(true);
     setError(null);
     try {
@@ -111,7 +123,7 @@ const LinearWorkflowPanel: React.FC<Props> = ({ dark, language, onClose }) => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [featureEnabled]);
 
   useEffect(() => {
     setDraft(null);
@@ -119,6 +131,14 @@ const LinearWorkflowPanel: React.FC<Props> = ({ dark, language, onClose }) => {
     setReceipt(null);
     load().catch(console.error);
   }, [load]);
+
+  useEffect(() => {
+    if (!featureEnabled || refreshIntervalSeconds <= 0) return;
+    const timer = window.setInterval(() => {
+      load().catch(console.error);
+    }, refreshIntervalSeconds * 1_000);
+    return () => window.clearInterval(timer);
+  }, [featureEnabled, load, refreshIntervalSeconds]);
 
   const filteredIssues = useMemo(
     () => searchLinearIssues(snapshot?.issues || [], query),
@@ -195,6 +215,18 @@ const LinearWorkflowPanel: React.FC<Props> = ({ dark, language, onClose }) => {
   const states = snapshot && draft ? statesForDraft(snapshot, draft) : [];
   const canWrite = Boolean(snapshot?.connected && snapshot.viewer);
 
+  if (!featureEnabled) {
+    return (
+      <section className={cls("atelier-github-panel atelier-linear-panel border-b", dark ? "border-dline bg-dbg" : "border-line bg-cream")}>
+        <header className="atelier-github-header">
+          <div className="atelier-github-identity"><span className="atelier-github-mark atelier-linear-mark">LN</span><strong>{copy.title}</strong></div>
+          <button type="button" className="atelier-code-icon-button" onClick={onClose} title={copy.close} aria-label={copy.close}>{I.x}</button>
+        </header>
+        <div className="atelier-github-state">{isKorean ? "설정에서 Linear 워크플로를 켜세요." : "Enable Linear workflows in Settings."}</div>
+      </section>
+    );
+  }
+
   return (
     <section className={cls("atelier-github-panel atelier-linear-panel border-b", dark ? "border-dline bg-dbg" : "border-line bg-cream")}>
       <header className="atelier-github-header">
@@ -232,6 +264,9 @@ const LinearWorkflowPanel: React.FC<Props> = ({ dark, language, onClose }) => {
                   <small>{issue.state?.name || "—"}{issue.assignee ? ` · ${issue.assignee.name}` : ""}</small>
                 </button>
                 <div className="atelier-github-row-actions">
+                  <button type="button" onClick={() => Promise.resolve(
+                    onStartWorkItem(linearIssueWorkItem(issue, rootPath, language)),
+                  ).catch((nextError) => setError(String(nextError)))}>{copy.startWork}</button>
                   <button type="button" onClick={() => startAction("issue.comment", issue)}>{copy.comment}</button>
                   <button type="button" onClick={() => startAction("issue.status", issue)}>{copy.status}</button>
                 </div>

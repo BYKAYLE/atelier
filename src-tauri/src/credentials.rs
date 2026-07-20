@@ -235,7 +235,7 @@ fn oauth_browser_probe_url(provider: &str) -> Option<&'static str> {
 fn oauth_browser_handoff_contract() -> &'static str {
     #[cfg(target_os = "windows")]
     {
-        "signed Atelier browser helper -> WinRT Launcher -> COM STA / ShellExecuteExW -> explorer.exe -> FileProtocolHandler"
+        "provider default browser + Atelier URL watcher -> WinRT Launcher -> COM STA / ShellExecuteExW -> explorer.exe -> FileProtocolHandler"
     }
     #[cfg(target_os = "macos")]
     {
@@ -741,20 +741,6 @@ fn windows_shell_execute_url(url: &str) -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(target_os = "windows")]
-fn oauth_browser_helper_path() -> Option<PathBuf> {
-    // Reuse the signed Atelier executable as BROWSER. Provider CLIs invoke it
-    // with the OAuth URL as the only argument; main.rs validates the provider
-    // host, opens the URL through the native Windows chain, and exits before
-    // constructing a webview. This avoids transient .cmd/.ps1 helpers that
-    // Smart App Control can block. explorer.exe remains a last-resort fallback
-    // only when Windows cannot report the current executable.
-    std::env::current_exe()
-        .ok()
-        .filter(|path| path.is_file())
-        .or_else(|| Some(PathBuf::from("explorer.exe")))
-}
-
 #[cfg(target_os = "macos")]
 fn oauth_browser_helper_path() -> Option<PathBuf> {
     let helper = PathBuf::from("/usr/bin/open");
@@ -770,6 +756,9 @@ fn oauth_browser_helper_path() -> Option<PathBuf> {
 }
 
 fn configure_login_browser_env_for_command(command: &mut Command) {
+    #[cfg(target_os = "windows")]
+    command.env_remove("BROWSER");
+    #[cfg(not(target_os = "windows"))]
     if let Some(helper) = oauth_browser_helper_path() {
         command.env("BROWSER", helper);
     }
@@ -777,6 +766,9 @@ fn configure_login_browser_env_for_command(command: &mut Command) {
 }
 
 fn configure_login_browser_env_for_pty(cmd: &mut CommandBuilder) {
+    #[cfg(target_os = "windows")]
+    cmd.env_remove("BROWSER");
+    #[cfg(not(target_os = "windows"))]
     if let Some(helper) = oauth_browser_helper_path() {
         cmd.env("BROWSER", helper.to_string_lossy().into_owned());
     }
@@ -2920,9 +2912,13 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn windows_oauth_browser_helper_reuses_the_signed_process() {
-        let helper = oauth_browser_helper_path().expect("browser helper path");
-        assert!(helper.is_file() || helper == Path::new("explorer.exe"));
+    fn windows_oauth_does_not_override_the_provider_browser() {
+        let mut command = Command::new("claude");
+        command.env("BROWSER", "recursive-atelier-launcher");
+        configure_login_browser_env_for_command(&mut command);
+        assert!(command
+            .get_envs()
+            .any(|(key, value)| key == "BROWSER" && value.is_none()));
     }
 
     #[cfg(target_os = "macos")]

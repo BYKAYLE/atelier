@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useFeatureSetting } from "../../features/featureSettings";
 import { providerUsageSnapshot, type ProviderUsageSnapshot } from "../../lib/tauri";
 import { cls, type Tweaks } from "../../lib/tokens";
 import { I } from "../Icons";
@@ -9,14 +10,19 @@ interface Props {
 }
 
 const ProviderUsagePanel: React.FC<Props> = ({ tw }) => {
+  const [featureEnabled] = useFeatureSetting<boolean>("provider-usage", "enabled", true);
+  const [autoRefreshMinutes] = useFeatureSetting<number>("provider-usage", "autoRefreshMinutes", 0);
   const [snapshot, setSnapshot] = useState<ProviderUsageSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
+  const loadingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const ko = tw.language === "ko";
   const dark = tw.dark;
 
-  async function refresh() {
-    if (loading) return;
+  const refresh = useCallback(async () => {
+    if (!featureEnabled) return;
+    if (loadingRef.current) return;
+    loadingRef.current = true;
     setLoading(true);
     setError(null);
     try {
@@ -24,9 +30,19 @@ const ProviderUsagePanel: React.FC<Props> = ({ tw }) => {
     } catch (nextError) {
       setError(String(nextError));
     } finally {
+      loadingRef.current = false;
       setLoading(false);
     }
-  }
+  }, [featureEnabled]);
+
+  useEffect(() => {
+    if (!featureEnabled || autoRefreshMinutes <= 0) return;
+    refresh().catch(console.error);
+    const timer = window.setInterval(() => {
+      refresh().catch(console.error);
+    }, autoRefreshMinutes * 60_000);
+    return () => window.clearInterval(timer);
+  }, [autoRefreshMinutes, featureEnabled, refresh]);
 
   return (
     <section className={cls("rounded-lg border p-4", dark ? "border-dline bg-dpanel" : "border-line bg-panel")}>
@@ -45,7 +61,7 @@ const ProviderUsagePanel: React.FC<Props> = ({ tw }) => {
         <button
           type="button"
           onClick={() => void refresh()}
-          disabled={loading}
+          disabled={loading || !featureEnabled}
           className={cls(
             "h-8 shrink-0 rounded-md border px-3 text-[12px] font-medium disabled:opacity-50",
             dark ? "border-dline text-dsub hover:text-dink" : "border-line text-sub hover:text-ink",
@@ -55,7 +71,13 @@ const ProviderUsagePanel: React.FC<Props> = ({ tw }) => {
         </button>
       </div>
 
-      {snapshot && (
+      {!featureEnabled && (
+        <div className={cls("mt-3 text-[11.5px]", dark ? "text-dsub" : "text-sub")}>
+          {ko ? "기능 설정에서 공급자 사용량을 켜세요." : "Enable provider usage in Feature settings."}
+        </div>
+      )}
+
+      {featureEnabled && snapshot && (
         <div className="mt-3 grid gap-2 md:grid-cols-2">
           {snapshot.entries.map((entry) => {
             const tone = providerUsageTone(entry);
@@ -90,7 +112,7 @@ const ProviderUsagePanel: React.FC<Props> = ({ tw }) => {
         </div>
       )}
 
-      {!snapshot && !error && (
+      {featureEnabled && !snapshot && !error && (
         <div className={cls("mt-3 text-[11.5px]", dark ? "text-dsub" : "text-sub")}>
           {ko
             ? "외부 조회는 버튼을 누를 때만 실행됩니다."

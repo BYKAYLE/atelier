@@ -13,11 +13,15 @@ mod agent_rich_preview;
 mod agent_worktree;
 #[cfg(feature = "orca-atelier-cli")]
 mod atelier_cli;
+#[cfg(feature = "orca-automations")]
+mod automations;
 mod clipboard;
 #[cfg(feature = "orca-computer-use")]
 mod computer_use;
 mod control_plane;
 mod credentials;
+#[cfg(feature = "orca-dev-services")]
+mod dev_services;
 #[cfg(feature = "orca-github-workflows")]
 mod github_workflows;
 #[cfg(feature = "orca-linear-workflows")]
@@ -718,69 +722,116 @@ fn home_dir() -> String {
     std::env::var("HOME").unwrap_or_else(|_| "/".into())
 }
 
-pub(crate) fn augmented_cli_path() -> String {
+fn cli_path_extras() -> Vec<std::path::PathBuf> {
     #[cfg(target_os = "windows")]
     {
-        let userprofile = std::env::var("USERPROFILE")
-            .or_else(|_| std::env::var("HOME"))
+        let userprofile = std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(std::path::PathBuf::from)
             .unwrap_or_default();
-        let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
-        let programfiles = std::env::var("ProgramFiles").unwrap_or_default();
-        let programfiles_x86 = std::env::var("ProgramFiles(x86)").unwrap_or_default();
-        let existing = std::env::var("PATH").unwrap_or_default();
-        let mut extras = vec![
-            format!("{up}\\AppData\\Roaming\\npm", up = userprofile),
-            format!("{up}\\.claude\\local", up = userprofile),
-            format!("{up}\\.claude\\local\\bin", up = userprofile),
-            format!("{up}\\.local\\bin", up = userprofile),
-        ];
-        if !localappdata.is_empty() {
-            extras.push(format!("{localappdata}\\Programs\\nodejs"));
-            extras.push(format!("{localappdata}\\hermes\\hermes-agent"));
-            extras.push(format!(
-                "{localappdata}\\hermes\\hermes-agent\\venv\\Scripts"
-            ));
-            extras.push(format!("{localappdata}\\hermes\\node"));
+        let localappdata = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from);
+        let programfiles = std::env::var_os("ProgramFiles").map(std::path::PathBuf::from);
+        let programfiles_x86 = std::env::var_os("ProgramFiles(x86)").map(std::path::PathBuf::from);
+        let mut extras = Vec::new();
+        if !userprofile.as_os_str().is_empty() {
+            extras.extend([
+                userprofile.join("AppData").join("Roaming").join("npm"),
+                userprofile.join(".claude").join("local"),
+                userprofile.join(".claude").join("local").join("bin"),
+                userprofile.join(".local").join("bin"),
+            ]);
         }
-        if !programfiles.is_empty() {
-            extras.push(format!("{programfiles}\\nodejs"));
-            extras.push(format!("{programfiles}\\Git\\bin"));
-            extras.push(format!("{programfiles}\\Git\\cmd"));
+        if let Some(path) = localappdata {
+            extras.extend([
+                path.join("Programs").join("nodejs"),
+                path.join("hermes").join("hermes-agent"),
+                path.join("hermes")
+                    .join("hermes-agent")
+                    .join("venv")
+                    .join("Scripts"),
+                path.join("hermes").join("node"),
+            ]);
         }
-        if !programfiles_x86.is_empty() {
-            extras.push(format!("{programfiles_x86}\\nodejs"));
-            extras.push(format!("{programfiles_x86}\\Git\\bin"));
-            extras.push(format!("{programfiles_x86}\\Git\\cmd"));
+        if let Some(path) = programfiles {
+            extras.extend([
+                path.join("nodejs"),
+                path.join("Git").join("bin"),
+                path.join("Git").join("cmd"),
+            ]);
         }
-        let extra = extras.join(";");
-        if existing.is_empty() {
-            extra
-        } else {
-            format!("{extra};{existing}")
+        if let Some(path) = programfiles_x86 {
+            extras.extend([
+                path.join("nodejs"),
+                path.join("Git").join("bin"),
+                path.join("Git").join("cmd"),
+            ]);
         }
+        extras
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let existing = std::env::var("PATH").unwrap_or_default();
-        let base = if cfg!(target_os = "macos") {
-            "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        } else {
-            "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        };
-        let extra = if home.is_empty() {
-            base.to_string()
-        } else {
-            format!(
-                "{home}/.claude/local:{home}/.local/bin:{home}/.npm-global/bin:{home}/bin:{base}"
-            )
-        };
-        if existing.is_empty() {
-            extra
-        } else {
-            format!("{extra}:{existing}")
+        let mut extras = Vec::new();
+        if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+            extras.extend([
+                home.join(".claude").join("local"),
+                home.join(".local").join("bin"),
+                home.join(".npm-global").join("bin"),
+                home.join("bin"),
+            ]);
         }
+        if cfg!(target_os = "macos") {
+            extras.extend([
+                std::path::PathBuf::from("/opt/homebrew/bin"),
+                std::path::PathBuf::from("/opt/homebrew/sbin"),
+            ]);
+        }
+        extras.extend([
+            std::path::PathBuf::from("/usr/local/bin"),
+            std::path::PathBuf::from("/usr/local/sbin"),
+            std::path::PathBuf::from("/usr/bin"),
+            std::path::PathBuf::from("/bin"),
+            std::path::PathBuf::from("/usr/sbin"),
+            std::path::PathBuf::from("/sbin"),
+        ]);
+        extras
     }
+}
+
+fn path_dedup_key(path: &std::path::Path) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        path.to_string_lossy().replace('/', "\\").to_lowercase()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        path.to_string_lossy().into_owned()
+    }
+}
+
+fn merged_cli_path(existing: Option<std::ffi::OsString>) -> std::ffi::OsString {
+    let mut seen = std::collections::HashSet::new();
+    let mut paths = Vec::new();
+    for path in cli_path_extras().into_iter().chain(
+        existing
+            .as_deref()
+            .into_iter()
+            .flat_map(std::env::split_paths),
+    ) {
+        if path.as_os_str().is_empty() || !seen.insert(path_dedup_key(&path)) {
+            continue;
+        }
+        paths.push(path);
+    }
+    std::env::join_paths(paths).unwrap_or_else(|error| {
+        log::warn!("Could not construct augmented CLI PATH: {error}");
+        existing.unwrap_or_default()
+    })
+}
+
+pub(crate) fn augmented_cli_path() -> String {
+    merged_cli_path(std::env::var_os("PATH"))
+        .to_string_lossy()
+        .into_owned()
 }
 
 #[cfg(target_os = "windows")]
@@ -1240,40 +1291,41 @@ async fn design_claude_call(
     Ok(stdout.trim().to_string())
 }
 
-/// macOS/Linux GUI 앱은 로그인 셸 PATH 를 상속받지 못해 /opt/homebrew/bin 같은
-/// 사용자 도구(npm, node, git, claude, codex …)를 못 찾는다. 표준 설치 위치를 PATH 앞에
-/// prepend 해 모든 subprocess 호출이 동작하도록 한다.
+/// Desktop GUI apps inherit an incomplete PATH on every supported platform.
+/// Build it with the platform path API so Windows drive letters and separators
+/// are never interpreted as Unix PATH syntax.
 fn bootstrap_path() {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let mut extras: Vec<String> = vec![
-        "/opt/homebrew/bin".into(),
-        "/opt/homebrew/sbin".into(),
-        "/usr/local/bin".into(),
-        "/usr/local/sbin".into(),
-    ];
-    if !home.is_empty() {
-        // npm 글로벌 prefix 와 사용자 로컬 bin. ~/.npm-global/bin 은 npm config 가
-        // 표준 /usr/local 외부를 가리킬 때 codex/claude-code CLI 가 떨어지는 곳.
-        extras.push(format!("{home}/.npm-global/bin"));
-        extras.push(format!("{home}/.local/bin"));
-    }
-    let current = std::env::var("PATH").unwrap_or_default();
-    let mut prefix = String::new();
-    for p in &extras {
-        if !current.split(':').any(|s| s == p) {
-            if !prefix.is_empty() {
-                prefix.push(':');
-            }
-            prefix.push_str(p);
+    std::env::set_var("PATH", merged_cli_path(std::env::var_os("PATH")));
+}
+
+#[cfg(test)]
+mod cli_path_tests {
+    use super::{merged_cli_path, path_dedup_key};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn augmented_path_preserves_existing_entries_and_removes_duplicates() {
+        let existing_entries = [
+            PathBuf::from("/tmp/atelier-a"),
+            PathBuf::from("/tmp/atelier-b"),
+        ];
+        let existing = std::env::join_paths(existing_entries.clone()).expect("test PATH");
+        let merged = merged_cli_path(Some(existing));
+        let paths = std::env::split_paths(&merged).collect::<Vec<_>>();
+
+        for expected in existing_entries {
+            assert!(paths.iter().any(|path| path == &expected));
         }
+        let keys = paths
+            .iter()
+            .map(|path| path_dedup_key(path))
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(keys.len(), paths.len());
     }
-    if !prefix.is_empty() {
-        let new_path = if current.is_empty() {
-            prefix
-        } else {
-            format!("{prefix}:{current}")
-        };
-        std::env::set_var("PATH", new_path);
+
+    #[test]
+    fn path_keys_are_stable_for_platform_paths() {
+        assert!(!path_dedup_key(Path::new("/tmp/atelier")).is_empty());
     }
 }
 
@@ -1336,18 +1388,40 @@ pub fn run() {
             control_plane::control_requests_pending,
             control_plane::control_request_claim,
             control_plane::control_request_complete,
+            #[cfg(feature = "orca-automations")]
+            automations::automations_snapshot,
+            #[cfg(feature = "orca-automations")]
+            automations::automation_upsert,
+            #[cfg(feature = "orca-automations")]
+            automations::automation_set_enabled,
+            #[cfg(feature = "orca-automations")]
+            automations::automation_run_now,
+            #[cfg(feature = "orca-automations")]
+            automations::automations_tick,
             #[cfg(feature = "orca-computer-use")]
             computer_use::computer_use_status,
+            #[cfg(feature = "orca-computer-use")]
+            computer_use::computer_use_prepared,
             #[cfg(feature = "orca-computer-use")]
             computer_use::computer_use_set_enabled,
             #[cfg(feature = "orca-computer-use")]
             computer_use::computer_use_prepare,
+            #[cfg(feature = "orca-computer-use")]
+            computer_use::computer_use_authorize,
+            #[cfg(feature = "orca-computer-use")]
+            computer_use::computer_use_complete,
             #[cfg(feature = "orca-computer-use")]
             computer_use::computer_use_execute,
             #[cfg(feature = "orca-computer-use")]
             computer_use::computer_use_discard,
             #[cfg(feature = "orca-computer-use")]
             computer_use::computer_use_receipts,
+            #[cfg(feature = "orca-dev-services")]
+            dev_services::dev_services_scan,
+            #[cfg(feature = "orca-dev-services")]
+            dev_services::dev_service_stop_prepare,
+            #[cfg(feature = "orca-dev-services")]
+            dev_services::dev_service_stop_execute,
             list_dir,
             search_workspace_files,
             read_text_file,
@@ -1441,7 +1515,21 @@ pub fn run() {
             #[cfg(feature = "orca-ssh-workspaces")]
             ssh_workspaces::ssh_connection_probe,
             #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::ssh_remote_directory_list,
+            #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::ssh_remote_file_read,
+            #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::ssh_remote_file_write_prepare,
+            #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::ssh_remote_file_write_execute,
+            #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::ssh_terminal_launch,
+            #[cfg(feature = "orca-ssh-workspaces")]
             ssh_workspaces::ssh_tunnel_start,
+            #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::ssh_tunnel_list,
+            #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::ssh_tunnel_retry,
             #[cfg(feature = "orca-ssh-workspaces")]
             ssh_workspaces::ssh_tunnel_stop,
             #[cfg(feature = "orca-ssh-workspaces")]

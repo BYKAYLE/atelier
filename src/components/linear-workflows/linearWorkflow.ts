@@ -6,6 +6,7 @@ import type {
   LinearWorkflowSnapshot,
   LinearWorkflowStateSummary,
 } from "../../lib/tauri";
+import type { SourceControlWorkItem } from "../../features/featureRegistry";
 
 export interface LinearActionDraft {
   kind: LinearActionKind;
@@ -70,4 +71,22 @@ export function searchLinearIssues(
       .toLocaleLowerCase()
       .includes(needle),
   );
+}
+
+export function linearIssueWorkItem(
+  issue: LinearIssueSummary,
+  workspace: string,
+  language: "ko" | "en",
+): SourceControlWorkItem {
+  return {
+    source: "linear",
+    kind: "issue",
+    externalId: issue.identifier,
+    title: issue.title,
+    url: issue.url,
+    workspace,
+    prompt: language === "ko"
+      ? `Linear 이슈 ${issue.identifier} \"${issue.title}\"를 분석하고 격리된 worktree에서 구현, 테스트, 검증까지 완료하세요. 원문: ${issue.url}`
+      : `Analyze Linear issue ${issue.identifier} \"${issue.title}\" and complete the implementation, tests, and verification in an isolated worktree. Source: ${issue.url}`,
+  };
 }

@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "automations",
+  "rustFeature": "orca-automations",
+  "rustModule": "automations",
+  "smokeScript": "smoke:automations",
+  "dependencies": []
+}

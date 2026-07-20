@@ -468,6 +468,13 @@ export interface SshTunnelSummary {
   localPort: number;
   remotePort: number;
   startedAtUnixMs: number;
+  state: "starting" | "connected" | "reconnecting" | "failed";
+  autoReconnect: boolean;
+  maxReconnectAttempts: number;
+  restartCount: number;
+  lastCheckedAtUnixMs: number;
+  nextRetryAtUnixMs?: number | null;
+  lastError?: string | null;
 }
 
 export interface SshWorkspaceStatus {
@@ -502,6 +509,66 @@ export interface SshRemoteWorktreeReceipt {
   summary: string;
 }
 
+export type SshRemoteEntryKind = "file" | "directory" | "symlink" | "other";
+
+export interface SshRemoteEntry {
+  path: string;
+  name: string;
+  kind: SshRemoteEntryKind;
+  size: number;
+}
+
+export interface SshRemoteDirectory {
+  profileId: string;
+  path: string;
+  parentPath?: string | null;
+  entries: SshRemoteEntry[];
+  truncated: boolean;
+}
+
+export interface SshRemoteFile {
+  profileId: string;
+  path: string;
+  content: string;
+  size: number;
+  sha256: string;
+}
+
+export interface SshRemoteFileWriteInput {
+  profileId: string;
+  path: string;
+  content: string;
+  expectedSha256: string;
+}
+
+export interface SshPreparedFileWrite {
+  actionId: string;
+  approvalHash: string;
+  expiresAtUnixMs: number;
+  profileId: string;
+  path: string;
+  expectedSha256: string;
+  contentSha256: string;
+  byteLength: number;
+  preview: string;
+}
+
+export interface SshRemoteFileWriteReceipt {
+  actionId: string;
+  profileId: string;
+  path: string;
+  sha256: string;
+  bytesWritten: number;
+  finishedAtUnixMs: number;
+  summary: string;
+}
+
+export interface SshTerminalLaunch {
+  profileId: string;
+  label: string;
+  command: string;
+}
+
 export interface ProviderUsageEntry {
   provider: string;
   displayName: string;
@@ -521,6 +588,45 @@ export interface ProviderUsageEntry {
 export interface ProviderUsageSnapshot {
   capturedAtUnixMs: number;
   entries: ProviderUsageEntry[];
+}
+
+export interface DevService {
+  host: string;
+  port: number;
+  pid?: number | null;
+  processName?: string | null;
+  command?: string | null;
+  cwd?: string | null;
+  workspaceMatch: boolean;
+  url: string;
+}
+
+export interface DevServicesSnapshot {
+  platform: string;
+  scannedAtMs: number;
+  workspace?: string | null;
+  services: DevService[];
+  unavailableReason?: string | null;
+}
+
+export interface DevServicePreparedStop {
+  actionId: string;
+  approvalHash: string;
+  pid: number;
+  port: number;
+  processName?: string | null;
+  preview: string;
+  expiresAtMs: number;
+}
+
+export interface DevServiceStopReceipt {
+  receiptId: string;
+  actionId: string;
+  pid: number;
+  port: number;
+  status: string;
+  summary: string;
+  completedAtMs: number;
 }
 
 export interface AgentWorktreeInfo {
@@ -902,12 +1008,56 @@ export async function sshConnectionProbe(profileId: string): Promise<SshConnecti
   return invoke("ssh_connection_probe", { profileId });
 }
 
+export async function sshRemoteDirectoryList(
+  profileId: string,
+  path: string,
+): Promise<SshRemoteDirectory> {
+  return invoke("ssh_remote_directory_list", { profileId, path });
+}
+
+export async function sshRemoteFileRead(profileId: string, path: string): Promise<SshRemoteFile> {
+  return invoke("ssh_remote_file_read", { profileId, path });
+}
+
+export async function sshRemoteFileWritePrepare(
+  input: SshRemoteFileWriteInput,
+): Promise<SshPreparedFileWrite> {
+  return invoke("ssh_remote_file_write_prepare", { input });
+}
+
+export async function sshRemoteFileWriteExecute(
+  actionId: string,
+  approvalHashValue: string,
+): Promise<SshRemoteFileWriteReceipt> {
+  return invoke("ssh_remote_file_write_execute", { actionId, approvalHashValue });
+}
+
+export async function sshTerminalLaunch(profileId: string): Promise<SshTerminalLaunch> {
+  return invoke("ssh_terminal_launch", { profileId });
+}
+
 export async function sshTunnelStart(
   profileId: string,
   localPort: number,
   remotePort: number,
+  autoReconnect = true,
+  maxReconnectAttempts = 5,
 ): Promise<SshTunnelSummary> {
-  return invoke("ssh_tunnel_start", { profileId, localPort, remotePort });
+  return invoke("ssh_tunnel_start", {
+    profileId,
+    localPort,
+    remotePort,
+    autoReconnect,
+    maxReconnectAttempts,
+  });
+}
+
+export async function sshTunnelList(): Promise<SshTunnelSummary[]> {
+  return invoke("ssh_tunnel_list");
+}
+
+export async function sshTunnelRetry(tunnelId: string): Promise<SshTunnelSummary> {
+  return invoke("ssh_tunnel_retry", { tunnelId });
 }
 
 export async function sshTunnelStop(tunnelId: string): Promise<void> {
@@ -927,6 +1077,24 @@ export async function sshRemoteWorktreeExecute(
 
 export async function providerUsageSnapshot(): Promise<ProviderUsageSnapshot> {
   return invoke("provider_usage_snapshot");
+}
+
+export async function devServicesScan(workspace?: string | null): Promise<DevServicesSnapshot> {
+  return invoke("dev_services_scan", { workspace: workspace?.trim() || null });
+}
+
+export async function devServiceStopPrepare(
+  pid: number,
+  port: number,
+): Promise<DevServicePreparedStop> {
+  return invoke("dev_service_stop_prepare", { input: { pid, port } });
+}
+
+export async function devServiceStopExecute(
+  actionId: string,
+  approvalHashValue: string,
+): Promise<DevServiceStopReceipt> {
+  return invoke("dev_service_stop_execute", { actionId, approvalHashValue });
 }
 
 export async function agentUndoChanges(cwd: string, patch: string): Promise<void> {
@@ -1333,7 +1501,7 @@ export async function gajecodeUpdate(): Promise<void> {
 export interface AtelierControlRequest {
   schemaVersion: number;
   requestId: string;
-  action: "task.dispatch" | "worktree.create";
+  action: "task.dispatch" | "worktree.create" | "computer.use";
   source: string;
   createdAtUnixMs: number;
   workspace?: string | null;
@@ -1371,6 +1539,94 @@ export async function controlRequestComplete(
     summary,
     detail: detail ?? null,
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 독립 자동화 작업 — automations.rs
+
+export type AutomationSchedule =
+  | { kind: "manual"; intervalMinutes?: never; localTime?: never }
+  | { kind: "interval"; intervalMinutes: number; localTime?: never }
+  | { kind: "daily"; intervalMinutes?: never; localTime: string };
+
+export interface AutomationDefinition {
+  schemaVersion: number;
+  automationId: string;
+  name: string;
+  prompt: string;
+  workspace: string;
+  provider: AgentProvider;
+  model?: string | null;
+  effort?: string | null;
+  permissionMode: Exclude<AgentPermissionMode, "full">;
+  stellaMode: boolean;
+  enabled: boolean;
+  schedule: AutomationSchedule;
+  missedRunGraceMinutes: number;
+  createdAtUnixMs: number;
+  updatedAtUnixMs: number;
+  lastDispatchedAtUnixMs?: number | null;
+  nextRunAtUnixMs?: number | null;
+}
+
+export interface AutomationRun {
+  schemaVersion: number;
+  runId: string;
+  automationId: string;
+  automationName: string;
+  trigger: "manual" | "scheduled" | "missed";
+  status: "queued" | "succeeded" | "failed" | "cancelled" | "skipped";
+  requestId?: string | null;
+  createdAtUnixMs: number;
+  finishedAtUnixMs?: number | null;
+  summary: string;
+}
+
+export interface AutomationSnapshot {
+  schemaVersion: number;
+  automations: AutomationDefinition[];
+  runs: AutomationRun[];
+  lastTickAtUnixMs?: number | null;
+}
+
+export interface AutomationUpsertInput {
+  automationId?: string | null;
+  name: string;
+  prompt: string;
+  workspace: string;
+  provider: AgentProvider;
+  model?: string | null;
+  effort?: string | null;
+  permissionMode: Exclude<AgentPermissionMode, "full">;
+  stellaMode: boolean;
+  enabled: boolean;
+  schedule: AutomationSchedule;
+  missedRunGraceMinutes: number;
+}
+
+export async function automationsSnapshot(): Promise<AutomationSnapshot> {
+  return invoke("automations_snapshot");
+}
+
+export async function automationUpsert(
+  input: AutomationUpsertInput,
+): Promise<AutomationDefinition> {
+  return invoke("automation_upsert", { input });
+}
+
+export async function automationSetEnabled(
+  automationId: string,
+  enabled: boolean,
+): Promise<AutomationDefinition> {
+  return invoke("automation_set_enabled", { automationId, enabled });
+}
+
+export async function automationRunNow(automationId: string): Promise<AutomationRun> {
+  return invoke("automation_run_now", { automationId });
+}
+
+export async function automationsTick(): Promise<AutomationSnapshot> {
+  return invoke("automations_tick");
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1523,7 +1779,16 @@ export async function remoteFollowupReject(
 // ─────────────────────────────────────────────────────────────────────────
 // 승인 기반 Computer Use — computer_use.rs
 
-export type ComputerUseAction = "atelier.focus" | "browser.open" | "preview.open";
+export type ComputerUseAction =
+  | "atelier.focus"
+  | "browser.open"
+  | "preview.open"
+  | "preview.screenshot"
+  | "preview.snapshot"
+  | "preview.click"
+  | "preview.type"
+  | "preview.key"
+  | "preview.resize";
 
 export interface ComputerUseStatus {
   enabled: boolean;
@@ -1535,6 +1800,12 @@ export interface ComputerUseStatus {
 export interface ComputerUseInput {
   action: ComputerUseAction;
   target?: string | null;
+  value?: string | null;
+  host?: string | null;
+  port?: number | null;
+  windowLabel?: string | null;
+  width?: number | null;
+  height?: number | null;
 }
 
 export interface ComputerUsePreparedAction {
@@ -1543,6 +1814,12 @@ export interface ComputerUsePreparedAction {
   actionHash: string;
   action: ComputerUseAction;
   target: string | null;
+  value: string | null;
+  host: string | null;
+  port: number | null;
+  windowLabel: string | null;
+  width: number | null;
+  height: number | null;
   preview: string;
   expiresAtMs: number;
 }
@@ -1564,6 +1841,10 @@ export async function computerUseStatus(): Promise<ComputerUseStatus> {
   return invoke("computer_use_status");
 }
 
+export async function computerUsePrepared(): Promise<ComputerUsePreparedAction[]> {
+  return invoke("computer_use_prepared");
+}
+
 export async function computerUseSetEnabled(enabled: boolean): Promise<ComputerUseStatus> {
   return invoke("computer_use_set_enabled", { enabled });
 }
@@ -1579,6 +1860,22 @@ export async function computerUseExecute(
   expectedHash: string,
 ): Promise<ComputerUseReceipt> {
   return invoke("computer_use_execute", { actionId, expectedHash });
+}
+
+export async function computerUseAuthorize(
+  actionId: string,
+  expectedHash: string,
+): Promise<ComputerUsePreparedAction> {
+  return invoke("computer_use_authorize", { actionId, expectedHash });
+}
+
+export async function computerUseComplete(
+  actionId: string,
+  expectedHash: string,
+  succeeded: boolean,
+  summary: string,
+): Promise<ComputerUseReceipt> {
+  return invoke("computer_use_complete", { actionId, expectedHash, succeeded, summary });
 }
 
 export async function computerUseDiscard(actionId: string): Promise<void> {

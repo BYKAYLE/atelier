@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
-import { emptySshProfile, sshProfileDraft, sshTargetLabel } from "../src/components/ssh-workspaces/sshWorkspace.ts";
+import {
+  emptySshProfile,
+  sshProfileDraft,
+  sshTargetLabel,
+  sshTunnelStateLabel,
+  sshTunnelStateTone,
+} from "../src/components/ssh-workspaces/sshWorkspace.ts";
 
 assert.deepEqual(emptySshProfile(), {
   name: "",
@@ -31,5 +38,28 @@ assert.deepEqual(sshProfileDraft(profile), {
   user: "atelier",
   remoteRoot: "/srv/atelier",
 });
+
+assert.equal(sshTunnelStateLabel("reconnecting", true), "재연결 중");
+assert.equal(sshTunnelStateLabel("connected", false), "Connected");
+assert.equal(sshTunnelStateTone("failed"), "text-red-500");
+
+const backend = readFileSync("src-tauri/src/ssh_workspaces.rs", "utf8");
+const frontend = readFileSync("src/components/ssh-workspaces/RemoteFilesPanel.tsx", "utf8");
+const bridge = readFileSync("src/lib/terminalLaunch.ts", "utf8");
+
+for (const command of [
+  "ssh_remote_directory_list",
+  "ssh_remote_file_read",
+  "ssh_remote_file_write_prepare",
+  "ssh_remote_file_write_execute",
+  "ssh_terminal_launch",
+]) {
+  assert.match(backend, new RegExp(`pub async fn ${command}\\b`));
+}
+assert.match(backend, /REMOTE_FILE_MAX_BYTES: usize = 1024 \* 1024/);
+assert.match(backend, /Remote file changed after approval/);
+assert.match(frontend, /Approve and save/);
+assert.match(frontend, /dispatchTerminalLaunch/);
+assert.match(bridge, /atelier:terminal-launch/);
 
 console.log("ssh workspaces smoke passed");

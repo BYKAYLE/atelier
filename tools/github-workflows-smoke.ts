@@ -4,7 +4,9 @@ import {
   emptyGithubActionDraft,
   githubActionInput,
   githubChecksLabel,
+  githubIssueWorkItem,
   githubIssueSearchText,
+  githubPullWorkItem,
   githubPullSearchText,
 } from "../src/components/github-workflows/githubWorkflow.ts";
 
@@ -75,5 +77,33 @@ assert.match(
   }),
   /feature\/ssh main/,
 );
+
+const issueWorkItem = githubIssueWorkItem({
+  number: 31,
+  title: "Create isolated task",
+  state: "OPEN",
+  url: "https://github.com/example/repo/issues/31",
+  labels: ["enhancement"],
+}, "/workspace/repo", "ko");
+assert.equal(issueWorkItem.source, "github");
+assert.equal(issueWorkItem.kind, "issue");
+assert.equal(issueWorkItem.workspace, "/workspace/repo");
+assert.match(issueWorkItem.prompt, /격리된 worktree/);
+
+const pullWorkItem = githubPullWorkItem({
+  number: 32,
+  title: "Fix release gate",
+  state: "OPEN",
+  url: "https://github.com/example/repo/pull/32",
+  headRefName: "fix/release",
+  baseRefName: "main",
+  isDraft: false,
+  reviewers: [],
+  checksTotal: 1,
+  checksSuccess: 0,
+  checksFailure: 1,
+}, "/workspace/repo", "en");
+assert.equal(pullWorkItem.kind, "pull_request");
+assert.match(pullWorkItem.prompt, /check failures/);
 
 console.log("github workflows smoke passed");

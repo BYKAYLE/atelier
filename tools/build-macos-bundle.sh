@@ -27,4 +27,8 @@ else
   exit 1
 fi
 
-npm run tauri:trust
+if [[ "$MODE" == "local" ]]; then
+  ATELIER_ALLOW_LOCAL_SIGNING=1 npm run tauri:trust
+else
+  npm run tauri:trust
+fi

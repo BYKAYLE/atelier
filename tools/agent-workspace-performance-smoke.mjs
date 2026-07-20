@@ -45,10 +45,46 @@ assert(
     css.includes('data-streaming="true"'),
   "transcript CSS must defer offscreen messages while keeping streaming visible",
 );
+assert(
+  source.includes("isActive?: boolean") &&
+    source.includes("if (!isActiveRef.current) return") &&
+    source.includes("isActive ? 2200 : 10000") &&
+    source.includes("isActive ? 750 : 4000"),
+  "hidden workspace screens must release shortcuts and reduce polling without stopping background sessions",
+);
+assert(
+  source.includes("if (model.trim()) return model") &&
+    source.includes("`현재 선택: ${trimmed}`"),
+  "runtime model refresh must not silently replace the model selected for a session",
+);
+assert(
+  source.includes("function composerMinHeight()") &&
+    source.includes("window.innerHeight <= 600") &&
+    source.includes('composerHeight <= 230 ? "atelier-composer-compact"') &&
+    css.includes("@media (max-width: 640px)") &&
+    css.includes("min-height: 180px") &&
+    css.includes("@media (max-height: 600px)") &&
+    css.includes(".atelier-factory-status") &&
+    css.includes("display: none !important") &&
+    css.includes(".atelier-composer-compact .atelier-composer-hint") &&
+    css.includes(".atelier-composer-control-label") &&
+    css.includes("grid-template-columns: repeat(auto-fit, minmax(92px, 1fr))") &&
+    css.includes("grid-template-columns: repeat(2, minmax(0, 1fr))"),
+  "composer controls must remain usable while secondary status detail compacts in short windows",
+);
+assert(
+  css.includes("@media (max-width: 1080px)") &&
+    css.includes(".atelier-preview-pane") &&
+    css.includes("position: absolute"),
+  "preview must overlay narrow workspaces instead of squeezing the composer",
+);
 
 console.log(JSON.stringify({
   ok: true,
   composer: "ref-backed",
   elapsedTimer: "activity-row-only",
   transcript: "content-visibility",
+  hiddenWorkspace: "low-frequency-background",
+  modelSelection: "preserved",
+  narrowLayout: "bounded",
 }));

@@ -428,6 +428,39 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
 
   const pollRef = useRef<number | null>(null);
   const openedLoginUrlsRef = useRef<Record<string, string | null>>({});
+  const openingLoginUrlsRef = useRef<Record<string, string | null>>({});
+  const loginUrlAttemptsRef = useRef<Record<string, { url: string; count: number; lastAt: number }>>({});
+  const openLoginUrlWithRetry = useCallback(async (
+    provider: ProviderId,
+    url: string,
+    force = false,
+  ) => {
+    if (openedLoginUrlsRef.current[provider] === url) return true;
+    if (openingLoginUrlsRef.current[provider] === url) return false;
+
+    const now = Date.now();
+    const previous = loginUrlAttemptsRef.current[provider];
+    const attempt = previous?.url === url
+      ? previous
+      : { url, count: 0, lastAt: 0 };
+    if (!force && (attempt.count >= 3 || now - attempt.lastAt < 2_000)) return false;
+
+    loginUrlAttemptsRef.current[provider] = {
+      url,
+      count: attempt.count + 1,
+      lastAt: now,
+    };
+    openingLoginUrlsRef.current[provider] = url;
+    try {
+      const opened = await openExternalUrl(provider, url);
+      if (opened) openedLoginUrlsRef.current[provider] = url;
+      return opened;
+    } finally {
+      if (openingLoginUrlsRef.current[provider] === url) {
+        openingLoginUrlsRef.current[provider] = null;
+      }
+    }
+  }, []);
   const loginProvider = loginModal?.provider ?? null;
   useEffect(() => {
     if (!loginProvider) return;
@@ -444,11 +477,10 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
       if (cancelled) return;
       if (loginState) {
         const nextUrl = loginState.login_url || null;
-        if (nextUrl && openedLoginUrlsRef.current[loginProvider] !== nextUrl) {
+        if (nextUrl && loginState.browser_opened) {
           openedLoginUrlsRef.current[loginProvider] = nextUrl;
-          if (!loginState.browser_opened) {
-            void openExternalUrl(loginProvider, nextUrl);
-          }
+        } else if (nextUrl && openedLoginUrlsRef.current[loginProvider] !== nextUrl) {
+          void openLoginUrlWithRetry(loginProvider, nextUrl);
         }
         setLoginModal((m) =>
           m?.provider === loginProvider
@@ -489,7 +521,7 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
       cancelled = true;
       stopPolling();
     };
-  }, [copy.loginModalTimeout, loginProvider]);
+  }, [copy.loginModalTimeout, loginProvider, openLoginUrlWithRetry]);
 
   function loginNoticeForResult(p: ProviderDef, result: ProviderLoginOauthResult) {
     if (result.already_logged_in) return copy.loginAlreadyConnected(p.name);
@@ -513,6 +545,8 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
     setPanelError(null);
     setPanelNotice(null);
     openedLoginUrlsRef.current[p.id] = null;
+    openingLoginUrlsRef.current[p.id] = null;
+    delete loginUrlAttemptsRef.current[p.id];
     try {
       const result = await providerLoginOauth(p.id, force);
       const notice = loginNoticeForResult(p, result);
@@ -527,10 +561,8 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
         failed: null,
       });
       if (result.login_url) {
-        openedLoginUrlsRef.current[p.id] = result.login_url;
-        if (!result.browser_opened) {
-          void openExternalUrl(p.id, result.login_url);
-        }
+        if (result.browser_opened) openedLoginUrlsRef.current[p.id] = result.login_url;
+        else void openLoginUrlWithRetry(p.id, result.login_url);
       }
       void refresh(p.id);
       if (result.completed || result.already_logged_in) {

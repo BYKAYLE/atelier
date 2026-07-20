@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "computer-use",
+  "rustFeature": "orca-computer-use",
+  "rustModule": "computer_use",
+  "smokeScript": "smoke:computer-use",
+  "dependencies": []
+}

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useFeatureSetting } from "../../features/featureSettings";
 import {
   mobileControlDeviceFollowupsSet,
   mobileControlDeviceRevoke,
@@ -28,12 +29,14 @@ interface Props {
 type Busy = "server" | "pair" | "device" | null;
 
 const RemoteAccessSection: React.FC<Props> = ({ tw }) => {
+  const [featureEnabled] = useFeatureSetting<boolean>("mobile-control", "enabled", true);
+  const [allowLanDefault] = useFeatureSetting<boolean>("mobile-control", "allowLanDefault", false);
   const dark = tw.dark;
   const ko = tw.language === "ko";
   const [status, setStatus] = useState<MobileServerStatus | null>(null);
   const [devices, setDevices] = useState<MobileDevice[]>([]);
   const [pairing, setPairing] = useState<MobilePairing | null>(null);
-  const [allowLan, setAllowLan] = useState(false);
+  const [allowLan, setAllowLan] = useState(allowLanDefault);
   const [now, setNow] = useState(Date.now());
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState<string | null>(null);
@@ -45,13 +48,17 @@ const RemoteAccessSection: React.FC<Props> = ({ tw }) => {
       mobileControlDevices(),
     ]);
     setStatus(nextStatus);
-    setAllowLan(nextStatus.allowLan);
+    if (nextStatus.running) setAllowLan(nextStatus.allowLan);
     setDevices(nextDevices);
   }, []);
 
   useEffect(() => {
     void load().catch((nextError) => setError(String(nextError)));
   }, [load]);
+
+  useEffect(() => {
+    if (!status?.running) setAllowLan(allowLanDefault);
+  }, [allowLanDefault, status?.running]);
 
   useEffect(() => {
     if (!pairing) return;
@@ -107,6 +114,13 @@ const RemoteAccessSection: React.FC<Props> = ({ tw }) => {
       </div>
 
       <section className={cls("border-y py-5", dark ? "border-dline" : "border-line")}>
+        {!featureEnabled && (
+          <div className="mb-4 rounded-md border border-amber-500/30 px-3 py-2 text-[12px] text-amber-500">
+            {status?.running
+              ? (ko ? "모바일 제어가 꺼져 있습니다. 현재 실행 중인 서버는 중지할 수 있습니다." : "Mobile control is disabled. You can still stop the running server.")
+              : (ko ? "기능 설정에서 모바일 제어를 켜세요." : "Enable mobile control in Feature settings.")}
+          </div>
+        )}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="flex items-center gap-2 text-[14px] font-medium">
@@ -126,6 +140,7 @@ const RemoteAccessSection: React.FC<Props> = ({ tw }) => {
                 <input
                   type="checkbox"
                   checked={allowLan}
+                  disabled={!featureEnabled}
                   onChange={(event) => setAllowLan(event.target.checked)}
                 />
                 {ko ? "같은 네트워크에 공개" : "Share on local network"}
@@ -134,13 +149,14 @@ const RemoteAccessSection: React.FC<Props> = ({ tw }) => {
             <button
               type="button"
               className={buttonClass}
-              disabled={busy !== null}
+              disabled={busy !== null || (!featureEnabled && !status?.running)}
               onClick={() => void run("server", async () => {
                 if (status?.running) {
                   if (pairing) await mobileControlPairingDiscard(pairing.pairingId);
                   setPairing(null);
                   setStatus(await mobileControlServerStop());
                 } else {
+                  if (!featureEnabled) return;
                   setStatus(await mobileControlServerStart(allowLan));
                 }
                 await load();
@@ -180,7 +196,7 @@ const RemoteAccessSection: React.FC<Props> = ({ tw }) => {
           <button
             type="button"
             className={buttonClass}
-            disabled={!status?.running || busy !== null}
+              disabled={!featureEnabled || !status?.running || busy !== null}
             onClick={() => void run("pair", async () => {
               if (pairing) await mobileControlPairingDiscard(pairing.pairingId);
               setNow(Date.now());
@@ -224,7 +240,7 @@ const RemoteAccessSection: React.FC<Props> = ({ tw }) => {
       <section className="py-5">
         <div className="flex items-center justify-between gap-3">
           <div className="text-[14px] font-medium">{ko ? "연결된 기기" : "Paired devices"}</div>
-          <button type="button" className={buttonClass} disabled={busy !== null} onClick={() => void load()}>
+          <button type="button" className={buttonClass} disabled={!featureEnabled || busy !== null} onClick={() => void load()}>
             {ko ? "새로고침" : "Refresh"}
           </button>
         </div>
@@ -257,7 +273,7 @@ const RemoteAccessSection: React.FC<Props> = ({ tw }) => {
                     {ko ? "마지막 접속" : "Last seen"}: {formatMobileTime(device.lastSeenAtMs, tw.language)}
                   </div>
                 </div>
-                {state === "active" && (
+                {featureEnabled && state === "active" && (
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"

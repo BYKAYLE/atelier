@@ -10,20 +10,20 @@ import {
   type GithubWorkflowSnapshot,
 } from "../../lib/tauri";
 import { cls } from "../../lib/tokens";
+import type {
+  SourceControlFeatureProps,
+  SourceControlWorkItem,
+} from "../../features/featureRegistry";
+import { useFeatureSetting } from "../../features/featureSettings";
 import { I } from "../Icons";
 import {
   emptyGithubActionDraft,
   githubActionInput,
   githubChecksLabel,
+  githubIssueWorkItem,
+  githubPullWorkItem,
   type GithubActionDraft,
 } from "./githubWorkflow";
-
-interface Props {
-  dark: boolean;
-  language: "ko" | "en";
-  rootPath: string;
-  onClose: () => void;
-}
 
 type GithubTab = "issues" | "pulls";
 
@@ -33,7 +33,19 @@ async function openExternalUrl(url: string) {
   await open(url);
 }
 
-const GithubWorkflowPanel: React.FC<Props> = ({ dark, language, rootPath, onClose }) => {
+const GithubWorkflowPanel: React.FC<SourceControlFeatureProps> = ({
+  dark,
+  language,
+  rootPath,
+  onStartWorkItem,
+  onClose,
+}) => {
+  const [featureEnabled] = useFeatureSetting<boolean>("github-workflows", "enabled", true);
+  const [refreshIntervalSeconds] = useFeatureSetting<number>(
+    "github-workflows",
+    "refreshIntervalSeconds",
+    0,
+  );
   const [snapshot, setSnapshot] = useState<GithubWorkflowSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -78,6 +90,7 @@ const GithubWorkflowPanel: React.FC<Props> = ({ dark, language, rootPath, onClos
         open: "GitHub에서 열기",
         checks: "체크",
         reviewRequired: "리뷰 필요",
+        startWork: "작업 시작",
         loading: "GitHub 상태 확인 중...",
       }
     : {
@@ -114,11 +127,12 @@ const GithubWorkflowPanel: React.FC<Props> = ({ dark, language, rootPath, onClos
         open: "Open on GitHub",
         checks: "Checks",
         reviewRequired: "Review required",
+        startWork: "Start task",
         loading: "Checking GitHub...",
       };
 
   const load = useCallback(async () => {
-    if (!rootPath) return;
+    if (!featureEnabled || !rootPath) return;
     setLoading(true);
     setError(null);
     try {
@@ -128,7 +142,7 @@ const GithubWorkflowPanel: React.FC<Props> = ({ dark, language, rootPath, onClos
     } finally {
       setLoading(false);
     }
-  }, [rootPath]);
+  }, [featureEnabled, rootPath]);
 
   useEffect(() => {
     setSnapshot(null);
@@ -137,6 +151,14 @@ const GithubWorkflowPanel: React.FC<Props> = ({ dark, language, rootPath, onClos
     setReceipt(null);
     load().catch(console.error);
   }, [load]);
+
+  useEffect(() => {
+    if (!featureEnabled || refreshIntervalSeconds <= 0) return;
+    const timer = window.setInterval(() => {
+      load().catch(console.error);
+    }, refreshIntervalSeconds * 1_000);
+    return () => window.clearInterval(timer);
+  }, [featureEnabled, load, refreshIntervalSeconds]);
 
   const startAction = useCallback((kind: GithubActionKind, number?: number) => {
     setDraft(emptyGithubActionDraft(kind, number));
@@ -219,6 +241,25 @@ const GithubWorkflowPanel: React.FC<Props> = ({ dark, language, rootPath, onClos
     setPrepared(null);
   };
 
+  const startWorkItem = useCallback((item: SourceControlWorkItem) => {
+    setError(null);
+    return Promise.resolve(onStartWorkItem(item)).catch((nextError) => {
+      setError(String(nextError));
+    });
+  }, [onStartWorkItem]);
+
+  if (!featureEnabled) {
+    return (
+      <section className={cls("atelier-github-panel border-b", dark ? "border-dline bg-dbg" : "border-line bg-cream")}>
+        <header className="atelier-github-header">
+          <div className="atelier-github-identity"><span className="atelier-github-mark">GH</span><strong>{copy.title}</strong></div>
+          <button type="button" className="atelier-code-icon-button" onClick={onClose} title={copy.close} aria-label={copy.close}>{I.x}</button>
+        </header>
+        <div className="atelier-github-state">{isKorean ? "설정에서 GitHub 워크플로를 켜세요." : "Enable GitHub workflows in Settings."}</div>
+      </section>
+    );
+  }
+
   return (
     <section className={cls("atelier-github-panel border-b", dark ? "border-dline bg-dbg" : "border-line bg-cream")}>
       <header className="atelier-github-header">
@@ -258,7 +299,10 @@ const GithubWorkflowPanel: React.FC<Props> = ({ dark, language, rootPath, onClos
                   <strong>{issue.title}</strong>
                   <small>{issue.state}{issue.author ? ` · @${issue.author}` : ""}</small>
                 </button>
-                <button type="button" onClick={() => startAction("issue.comment", issue.number)}>{copy.comment}</button>
+                <div className="atelier-github-row-actions">
+                  <button type="button" onClick={() => startWorkItem(githubIssueWorkItem(issue, rootPath, language))}>{copy.startWork}</button>
+                  <button type="button" onClick={() => startAction("issue.comment", issue.number)}>{copy.comment}</button>
+                </div>
               </article>
             )) : <div className="atelier-github-empty">{copy.emptyIssues}</div>)}
 
@@ -270,6 +314,7 @@ const GithubWorkflowPanel: React.FC<Props> = ({ dark, language, rootPath, onClos
                   <small>{pull.headRefName} → {pull.baseRefName} · {githubChecksLabel(pull, language)}</small>
                 </button>
                 <div className="atelier-github-row-actions">
+                  <button type="button" onClick={() => startWorkItem(githubPullWorkItem(pull, rootPath, language))}>{copy.startWork}</button>
                   <button type="button" onClick={() => startAction("pr.comment", pull.number)}>{copy.comment}</button>
                   <button type="button" onClick={() => startAction("pr.review", pull.number)}>{copy.review}</button>
                   <button type="button" onClick={() => startAction("pr.reviewers", pull.number)}>{copy.reviewers}</button>

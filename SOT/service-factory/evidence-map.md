@@ -1,6 +1,6 @@
 # Evidence Map
 
-updated_at: 2026-07-17T20:39:00+09:00
+updated_at: 2026-07-20T20:14:15+09:00
 
 | Capability | Source evidence | Runtime/package evidence | Status |
 |---|---|---|---|
@@ -8,7 +8,8 @@ updated_at: 2026-07-17T20:39:00+09:00
 | Packaged renderer readiness | `src-tauri/src/runtime_receipt.rs`, `src/main.tsx` | exact executable/PID/version/window/status receipt; signed package and installed-app probes pass | ready |
 | Long-session typing and transcript rendering | `src/components/AgentWorkspace.tsx`, `src/index.css` | `npm run smoke:agent-performance`; all release workflows enforce contract | ready |
 | Persistent terminal pane tree | `src/lib/terminalLayout.ts`, `src/components/Main.tsx` | module smoke plus browser right/down, drag, keyboard, reload, and close-collapse checks | ready |
-| Normalized provider lifecycle and cancel | `src-tauri/src/agent_lifecycle.rs`, `src-tauri/src/agent_registry.rs` | 86 Rust tests; fixture harness | ready |
+| Normalized provider lifecycle and cancel | `src-tauri/src/agent_lifecycle.rs`, `src-tauri/src/agent_registry.rs` | 157-test all-feature Rust suite; fixture harness | ready |
+| Session-scoped agent execution lifecycle | `src/components/agent-runtime/sessionRunRegistry.ts`, `src/components/agent-runtime/useSessionRunRegistry.ts` | concurrent-session, exact-turn finalize, stale-finalizer, and stop-precedence smoke enforced by `gate:orca-features` | ready |
 | Optional task isolation | `src-tauri/src/agent_worktree.rs` | overlap/refusal and non-overlap adoption tests | ready |
 | Candidate comparison and adoption | `src/components/AgentWorkspace.tsx`, `agent_worktree.rs` | alternate-index conflict tests; explicit UI action | ready |
 | Line-level change review | `src/lib/diffReview.ts`, `src/components/AgentWorkspace.tsx` | parser smoke; desktop/compact add, persist, send, resolve, reload checks | ready |
@@ -23,7 +24,10 @@ updated_at: 2026-07-17T20:39:00+09:00
 | Mobile pairing and monitoring | `src-tauri/src/mobile_control.rs`, `src/components/mobile-control/` | actual LAN HTTPS `/health` test, one-use pairing, revocation, focused smoke | ready_local |
 | Remote follow-up | `src-tauri/src/remote_followup.rs`, `src/components/remote-followup/` | proposal-only mobile path, exact desktop approval, existing task queue dispatch | ready_local |
 | Approval-based Computer Use | `src-tauri/src/computer_use.rs`, `src/components/computer-use/` | disabled default, three-action allowlist, expiry/one-use approval and receipts | ready_local |
-| macOS package/install reflection | `tools/build-macos-bundle.sh`, `tools/verify-macos-bundle.sh` | `Atelier_0.2.9_aarch64.dmg`; executable SHA-256 `a8eb9f13f9d85d11c392292f48dd53f81dbf8ed16b19db4ecee8798888dc67c8`; strict local signature, renderer receipt, cold launch, and close/relaunch visible-window probes pass | ready_local |
+| Development-service ownership | `src-tauri/src/dev_services.rs`, `src/components/dev-services/` | macOS, Windows, and Linux parser fixtures; PID-bound stop approval | ready_source |
+| In-process automations | `src-tauri/src/automations.rs`, `src/components/automations/` | manual, interval, and daily schedules; bounded missed-run handling; queue dispatch and receipts | ready_local |
+| Removable feature packages | `src/components/*/feature.manifest.json`, `vite.config.ts`, `src-tauri/Cargo.toml` | 10 isolated frontend/backend builds plus declared dependency-expansion smoke | ready |
+| macOS package/install reflection | `tools/build-macos-bundle.sh`, `tools/verify-macos-bundle.sh` | `Atelier_0.2.11_aarch64.dmg`; packaged and installed executable SHA-256 `ea828514cb964113da658e07024e9cc9ec3ebdc5665b19422009c0446dbc6b50`; DMG SHA-256 `8419ed9658fe74ecd982e7caebb016fd6f91bfbacc78624364810a93dbbf5589`; strict local signature and installed renderer receipt pass | ready_local |
 | Windows normal/Store source and link | workflows, `tools/windows-provider-smoke.ps1` | two PE32+ x86-64 links and strict cargo-xwin Clippy | ready_cross_target |
 | Physical Windows OAuth/Smart App Control/update survival | hosted process-observation and manual visible-window workflows | source contract passes; no registered physical runner or Windows execution receipt | validation_required |
 | Public signing and notarization | release workflows | SignPath/Developer ID credentials not available locally | external_gate |
@@ -45,6 +49,6 @@ updated_at: 2026-07-17T20:39:00+09:00
 - A generated file name is not package reflection unless version, signature,
   hash, and installed executable are checked separately.
 - A renderer-ready receipt from an already-running process is not proof that a
-  newly replaced bundle created a visible window. The 0.2.9 receipt therefore
-  includes a clean process launch plus a macOS window-count and screenshot
-  observation.
+  newly replaced bundle created a visible window. The current `0.2.11` receipt
+  was produced from the newly copied `/Applications/Atelier.app` executable;
+  the app was then relaunched from that installed path for visual reflection.

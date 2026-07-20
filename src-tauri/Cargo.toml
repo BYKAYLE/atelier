@@ -1,6 +1,6 @@
 [package]
 name = "atelier"
-version = "0.2.9"
+version = "0.2.11"
 description = "Atelier — 이미지 붙여넣기가 되는 GUI 터미널"
 authors = ["BYKAYLE <indra850@gmail.com>"]
 edition = "2021"
@@ -66,6 +66,8 @@ default = [
   "orca-remote-followup",
   "orca-mobile-control",
   "orca-computer-use",
+  "orca-dev-services",
+  "orca-automations",
 ]
 custom-protocol = ["tauri/custom-protocol"]
 store-build = []
@@ -77,3 +79,5 @@ orca-provider-usage = []
 orca-remote-followup = []
 orca-mobile-control = ["orca-remote-followup"]
 orca-computer-use = []
+orca-dev-services = []
+orca-automations = []

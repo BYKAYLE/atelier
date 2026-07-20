@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "dev-services",
+  "rustFeature": "orca-dev-services",
+  "rustModule": "dev_services",
+  "smokeScript": "smoke:dev-services",
+  "dependencies": []
+}

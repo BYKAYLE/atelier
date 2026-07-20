@@ -6,7 +6,44 @@ continuation_verified_at: 2026-07-14T14:40:43+09:00
 
 orca_module_gate_verified_at: 2026-07-18T01:59:32+09:00
 
-> Orca module update: eight optional capabilities now register through the
+orca_runtime_settings_installed_at: 2026-07-20T02:00:00+09:00
+
+orca_modular_automations_installed_at: 2026-07-20T19:16:27+09:00
+
+execution_lifecycle_stabilization_installed_at: 2026-07-20T20:14:15+09:00
+
+> Modular feature-package update: the ten adopted Orca-informed capabilities
+> now own `feature.manifest.json` contracts that drive frontend inclusion,
+> Cargo features, declared dependencies, and focused smoke tests. The release
+> gate passes 16 contract smokes and all ten backend features in isolation.
+> Agent turn ownership is now session-scoped through a dedicated registry, so
+> concurrent background sessions, exact-turn finalization, stale-finalizer
+> rejection, and explicit-stop precedence are release-gated instead of being
+> coupled to the active React session. Failed OAuth browser handoffs are no
+> longer recorded as successful and receive bounded, duplicate-safe retries.
+> The Rust suite passes 157 tests in both native and Store configurations,
+> strict Clippy passes for both, Windows normal and Store configurations pass
+> `cargo-xwin check`, and the release audit reports zero RustSec
+> vulnerabilities. The locally signed macOS `0.2.11` bundle is installed at
+> `/Applications/Atelier.app`; the installed and packaged executable SHA-256
+> values both equal
+> `ea828514cb964113da658e07024e9cc9ec3ebdc5665b19422009c0446dbc6b50`,
+> the DMG SHA-256 is
+> `8419ed9658fe74ecd982e7caebb016fd6f91bfbacc78624364810a93dbbf5589`,
+> and the installed renderer receipt reports the main window ready. Public
+> notarization and physical Windows login/browser proof remain external gates.
+
+> Prior runtime-settings install evidence (`0.2.10`): the nine detachable Orca-informed modules
+> now expose versioned settings that are consumed by their runtime paths. The
+> full feature gate passes 13 contract smokes and all nine isolated Rust
+> features; the Rust suite passes 153 tests. The signed macOS `0.2.10` bundle
+> is installed at `/Applications/Atelier.app`, the installed and packaged
+> executable SHA-256 values both equal
+> `edb92b0eb95ac7f8348619599cc933c7d0d3ed7314e57c36cf6b6b00b40144f0`,
+> and the installed renderer receipt reports the main window ready. Physical
+> Windows login/browser behavior remains a separate unclaimed evidence surface.
+
+> Prior Orca module evidence (`0.2.9`): eight optional capabilities now register through the
 > frontend feature registry and matching Cargo feature flags. The shared
 > `gate:orca-features` command passes ten contract smokes, a restricted
 > frontend build, the backend with all optional modules removed, and every

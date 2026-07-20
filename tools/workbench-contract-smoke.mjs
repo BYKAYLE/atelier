@@ -92,6 +92,7 @@ const checks = [
   ["workspace no longer owns Codex menu popover state", !sources.workspace.includes("showModelMenu") && !sources.workspace.includes("codexMenuPanel")],
   ["Codex menu resets state across session contexts", sources.codexModelMenu.includes("[contextKey]")],
   ["Codex menu constrains popover to available viewport", sources.codexModelMenu.includes("Math.min(480, Math.max(96, available))")],
+  ["hidden code workbench releases global shortcuts", sources.editor.includes("isActive?: boolean") && sources.editor.includes("if (!isActive) return")],
   ["session inbox is an independent UI module", sources.workspace.includes('from "./session-inbox"') && sources.sessionInbox.includes("SessionInboxToolbar")],
   ["session inbox owns durable read state", sources.sessionInboxState.includes("SessionInboxReadState") && sources.sessionInboxState.includes("markSessionInboxItemUnread")],
   ["desktop notifications are independently owned", sources.workspace.includes('from "./desktop-notifications"') && sources.desktopNotifications.includes("useDesktopNotifications")],

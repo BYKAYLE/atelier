@@ -10,7 +10,10 @@ import {
   type AgentGitState,
 } from "../../lib/tauri";
 import { cls } from "../../lib/tokens";
-import { sourceControlFeatures } from "../../features/featureRegistry";
+import {
+  sourceControlFeatures,
+  type SourceControlWorkItem,
+} from "../../features/featureRegistry";
 import { I } from "../Icons";
 
 const SOURCE_CONTROL_FEATURES = sourceControlFeatures();
@@ -24,6 +27,7 @@ interface Props {
   error: string | null;
   onRefresh: () => void | Promise<void>;
   onOpenFile: (path: string) => void;
+  onStartWorkItem: (item: SourceControlWorkItem) => void | Promise<void>;
 }
 
 const ChangesWorkbench: React.FC<Props> = ({
@@ -35,6 +39,7 @@ const ChangesWorkbench: React.FC<Props> = ({
   error,
   onRefresh,
   onOpenFile,
+  onStartWorkItem,
 }) => {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [gitState, setGitState] = useState<AgentGitState | null>(null);
@@ -206,6 +211,7 @@ const ChangesWorkbench: React.FC<Props> = ({
           dark={dark}
           language={language}
           rootPath={rootPath}
+          onStartWorkItem={onStartWorkItem}
           onClose={() => setExternalPanel(null)}
         />
       )}

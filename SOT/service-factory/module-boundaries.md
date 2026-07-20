@@ -1,7 +1,7 @@
 # Atelier module boundary contract
 
 Status: active architecture contract
-Baseline: installed/runtime version 0.2.9
+Source target: 0.2.11
 
 ## Purpose
 
@@ -75,8 +75,12 @@ does not require editing the core composition implementation or leaving the
 disabled feature code in the shipped frontend/backend binaries.
 
 Orca-benchmark capabilities are mounted through a generated feature manifest.
-`vite.config.ts` discovers `src/components/<feature>/feature.tsx` descriptors at
-build time and emits static imports through `virtual:atelier-feature-modules`.
+Every package owns both `src/components/<feature>/feature.tsx` and
+`src/components/<feature>/feature.manifest.json`. The package manifest declares
+its stable id, matching Rust feature/module, smoke test, and explicit package
+dependencies. `vite.config.ts` discovers these package-owned files at build time,
+expands declared dependencies, and emits static imports through
+`virtual:atelier-feature-modules`.
 `src/features/featureRegistry.tsx` consumes only that generated manifest. Each
 removable frontend package contributes through a declared slot, source-control
 integration, or control-task adapter; composition roots must not import those
@@ -97,18 +101,22 @@ merely hiding its UI.
 | `remote-followup` | remote settings panel | `orca-remote-followup` |
 | `mobile-control` | remote settings panel | `orca-mobile-control` |
 | `computer-use` | remote settings panel | `orca-computer-use` |
+| `dev-services` | local service settings and workspace panel | `orca-dev-services` |
+| `automations` | settings navigation page and scheduler | `orca-automations` |
 
-`orca-mobile-control` explicitly depends on `orca-remote-followup`; no other
-package in this set has a private cross-feature dependency.
+`orca-mobile-control` explicitly depends on `orca-remote-followup`; the build
+automatically includes that dependency when a mobile-only distribution is
+requested. No other package in this set has a private cross-feature dependency.
 
 Removal rules:
 
-1. Remove or omit a frontend feature directory/descriptor, or exclude its id
+1. Remove or omit a frontend feature directory/descriptor/manifest, or exclude its id
    with `VITE_ATELIER_FEATURES`. The generated manifest then omits the static
    import without editing a composition root.
 2. Disable the matching Cargo feature. The Rust module, commands, and cleanup
    hooks are excluded at compile time.
-3. Run `npm run gate:orca-features`. The restricted production build fails if
+3. Run `npm run gate:orca-features`. The gate discovers every package and its
+   smoke/Rust feature from package-owned manifests. The restricted production build fails if
    an excluded feature directory leaks into any output chunk, and emits
    `dist/atelier-feature-manifest.json` as inclusion evidence.
 
@@ -120,7 +128,7 @@ does not leave an unused backend command set, or vice versa.
 generated imports, so excluded frontend feature implementations are physically
 absent from the bundle rather than merely hidden at registration time.
 
-This contract currently covers the eight packages above. Core session,
+This contract currently covers the ten packages above. Core session,
 conversation, composer, preview, terminal, and older workspace modules are not
 yet claimed as independently removable packages.
 

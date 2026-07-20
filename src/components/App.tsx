@@ -2,24 +2,18 @@ import React, { lazy, Suspense, useEffect, useState } from "react";
 import { useTweaks } from "../lib/useTweaks";
 import { ACCENTS, cls } from "../lib/tokens";
 import { safeLocalStorageGet, safeLocalStorageSet } from "../lib/storage";
+import { TERMINAL_LAUNCH_EVENT } from "../lib/terminalLaunch";
 import Welcome from "./Welcome";
 import Main from "./Main";
 import Settings from "./Settings";
 import AgentWorkspace from "./AgentWorkspace";
 import PluginSkillsPage from "./PluginSkillsPage";
 import { I } from "./Icons";
+import { FeatureBackgrounds, featureSettingsPages } from "../features/featureRegistry";
 const DesignPage = lazy(() => import("./DesignPage"));
 
 type AppScreen = "agent" | "main" | "settings" | "design" | "plugins" | "welcome";
-type SettingsSection =
-  | "terminal"
-  | "appearance"
-  | "profiles"
-  | "shortcuts"
-  | "preview"
-  | "connections"
-  | "remote"
-  | "updates";
+type SettingsSection = string;
 
 type NavItem = {
   id: string;
@@ -128,6 +122,16 @@ const NAV_GROUPS: NavGroup[] = [
         hintEn: "Pairing · Monitoring",
       },
       {
+        id: "feature-settings",
+        screen: "settings",
+        settingsSection: "features",
+        icon: I.gear,
+        labelKo: "기능 설정",
+        labelEn: "Feature settings",
+        hintKo: "독립 모듈 · 동작 정책",
+        hintEn: "Modules · Behavior",
+      },
+      {
         id: "preview-settings",
         screen: "settings",
         settingsSection: "preview",
@@ -160,6 +164,40 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
 ];
+
+const BUILT_IN_SETTINGS_SECTIONS = new Set([
+  "terminal",
+  "appearance",
+  "profiles",
+  "shortcuts",
+  "preview",
+  "connections",
+  "remote",
+  "features",
+  "updates",
+]);
+
+function isAvailableSettingsSection(value: string | null): value is SettingsSection {
+  if (!value) return false;
+  return BUILT_IN_SETTINGS_SECTIONS.has(value)
+    || featureSettingsPages().some((page) => page.id === value);
+}
+
+function navigationGroups(): NavGroup[] {
+  const featureItems: NavItem[] = featureSettingsPages().map((page) => ({
+    id: `feature-page:${page.id}`,
+    screen: "settings",
+    settingsSection: page.id,
+    icon: page.icon,
+    labelKo: page.title.ko,
+    labelEn: page.title.en,
+    hintKo: page.hint.ko,
+    hintEn: page.hint.en,
+  }));
+  return NAV_GROUPS.map((group) => group.id === "system"
+    ? { ...group, items: [...featureItems, ...group.items] }
+    : group);
+}
 
 const App: React.FC = () => {
   const [tw, setTw] = useTweaks();
@@ -196,14 +234,7 @@ const App: React.FC = () => {
   });
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(() => {
     const saved = safeLocalStorageGet("atelier.settingsSection");
-    return saved === "appearance" ||
-      saved === "profiles" ||
-      saved === "shortcuts" ||
-      saved === "preview" ||
-      saved === "connections" ||
-      saved === "updates"
-      ? saved
-      : "appearance";
+    return isAvailableSettingsSection(saved) ? saved : "appearance";
   });
 
   const language = tw.language;
@@ -219,6 +250,15 @@ const App: React.FC = () => {
   useEffect(() => {
     safeLocalStorageSet("atelier.settingsSection", settingsSection);
   }, [settingsSection]);
+
+  useEffect(() => {
+    const openTerminal = () => {
+      setActiveNav("terminal");
+      setScreen("main");
+    };
+    window.addEventListener(TERMINAL_LAUNCH_EVENT, openTerminal);
+    return () => window.removeEventListener(TERMINAL_LAUNCH_EVENT, openTerminal);
+  }, []);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -281,7 +321,7 @@ const App: React.FC = () => {
         </button>
 
         <nav className="atelier-shell-nav flex-1 overflow-y-auto px-3 pb-3">
-          {NAV_GROUPS.map((group) => (
+          {navigationGroups().map((group) => (
             <div key={group.id} className="atelier-shell-nav-group mb-5">
               <div
                 className={cls(
@@ -399,6 +439,8 @@ const App: React.FC = () => {
         </div>
       </aside>
 
+      <FeatureBackgrounds tw={tw} />
+
       <div className="flex-1 min-h-0 relative">
         {/* Main과 Settings는 mount 유지 + display 토글. 화면 전환 시 탭/xterm
             상태(채팅 내역, 실행 중 claude 세션 등)가 초기화되는 현상 방지. */}
@@ -408,6 +450,7 @@ const App: React.FC = () => {
         >
           <AgentWorkspace
             tw={tw}
+            isActive={screen === "agent"}
             onOpenTerminal={() => {
               setActiveNav("terminal");
               setScreen("main");

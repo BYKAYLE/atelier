@@ -10,7 +10,8 @@ import {
   WELCOME_COPY,
 } from "../lib/tokens";
 import { runtimeInstallInfo, type RuntimeInstallInfo } from "../lib/tauri";
-import { FeaturePanels } from "../features/featureRegistry";
+import { FeaturePanels, FeatureSettingsPage } from "../features/featureRegistry";
+import FeatureSettingsPanel from "../features/FeatureSettingsPanel";
 import ComposerSelectMenu from "./ComposerSelectMenu";
 import ConnectionsPanel from "./ConnectionsPanel";
 
@@ -22,11 +23,7 @@ interface Props {
 
 const Settings: React.FC<Props> = ({ tw, setTw, initialSection }) => {
   const dark = tw.dark;
-  const [section, setSection] = useState<string>(initialSection || "appearance");
-
-  useEffect(() => {
-    if (initialSection) setSection(initialSection);
-  }, [initialSection]);
+  const section = initialSection || "appearance";
 
   return (
     <div
@@ -35,7 +32,7 @@ const Settings: React.FC<Props> = ({ tw, setTw, initialSection }) => {
         dark ? "bg-dbg" : "bg-cream",
       )}
     >
-      <div className="max-w-[780px] px-10 pt-10 pb-16">
+      <div className="w-full max-w-[1120px] px-[clamp(20px,4vw,48px)] pt-10 pb-16">
         {section === "terminal" && <TerminalSection tw={tw} setTw={setTw} />}
         {section === "appearance" && <AppearanceSection tw={tw} setTw={setTw} />}
         {section === "profiles" && <ProfilesSection tw={tw} setTw={setTw} />}
@@ -43,7 +40,9 @@ const Settings: React.FC<Props> = ({ tw, setTw, initialSection }) => {
         {section === "preview" && <PreviewSection dark={dark} language={tw.language} />}
         {section === "connections" && <ConnectionsPanel tw={tw} />}
         {section === "remote" && <FeaturePanels slot="settings.remote" tw={tw} />}
+        {section === "features" && <FeatureSettingsPanel tw={tw} />}
         {section === "updates" && <UpdatesSection dark={dark} language={tw.language} />}
+        <FeatureSettingsPage section={section} tw={tw} />
       </div>
     </div>
   );
@@ -1364,10 +1363,8 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
           setStatus(copy.installed);
         }
       });
-      if (!isWindowsRuntime()) {
-        const { relaunch } = await import("@tauri-apps/plugin-process");
-        await relaunch();
-      }
+      const { relaunch } = await import("@tauri-apps/plugin-process");
+      await relaunch();
     } catch (e) {
       setError(copy.installFailed(String(e)));
       setStatus("");

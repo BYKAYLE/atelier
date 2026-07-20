@@ -317,9 +317,10 @@ function Invoke-ProviderInteractive {
   $previousBrowser = $env:BROWSER
   $previousAtelierBrowser = $env:ATELIER_OAUTH_BROWSER
   try {
-    # This mirrors the packaged app's trusted Windows browser helper and keeps
-    # transient cmd/PowerShell browser scripts out of Smart App Control.
-    $env:BROWSER = if ($script:AtelierBrowserHelper) { $script:AtelierBrowserHelper } else { "explorer.exe" }
+    # Match the packaged app: leave browser launch ownership with the provider
+    # CLI and observe the URL as a native Atelier fallback. A BROWSER override
+    # can recursively launch the app or be rejected by Smart App Control.
+    Remove-Item Env:BROWSER -ErrorAction SilentlyContinue
     $env:ATELIER_OAUTH_BROWSER = "1"
     & $path @Arguments
     return ($LASTEXITCODE -eq 0)
@@ -775,7 +776,6 @@ try {
 
   Write-Section "Installed Atelier runtime"
   $atelierExecutable = Find-AtelierExecutable
-  $script:AtelierBrowserHelper = $atelierExecutable
   $summary.installedApp = Test-AtelierInstalledRuntime $atelierExecutable
   if ($summary.installedApp.found) {
     Write-Host "Atelier executable: $($summary.installedApp.path)"
@@ -904,7 +904,7 @@ try {
     }
     if ($Login -or $ProbeBrowserHandoff) {
       if (-not $summary.atelierBrowserProbeExe -or $summary.browserProbe -ne $true -or $summary.browserHelperProbe -ne $true) {
-        throw "Windows provider smoke did not prove Atelier's native and signed-helper browser handoff"
+        throw "Windows provider smoke did not prove Atelier's native browser handoff and URL fallback"
       }
     }
     if ($Login) {

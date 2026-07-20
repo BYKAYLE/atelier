@@ -1,32 +1,31 @@
 import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { resolve } from "node:path";
 
 const cargo = process.platform === "win32" ? "cargo.exe" : "cargo";
 const manifest = "src-tauri/Cargo.toml";
 const npmEntrypoint = process.env.npm_execpath;
 
-const smokeScripts = [
+const coreSmokeScripts = [
   "smoke:feature-boundaries",
-  "smoke:atelier-cli",
-  "smoke:github-workflows",
-  "smoke:linear-workflows",
-  "smoke:ssh-workspaces",
-  "smoke:provider-usage",
-  "smoke:mobile-control",
-  "smoke:remote-followup",
-  "smoke:computer-use",
+  "smoke:feature-settings",
+  "smoke:session-runs",
   "smoke:workbench",
 ];
 
-const cargoFeatures = [
-  "orca-atelier-cli",
-  "orca-github-workflows",
-  "orca-linear-workflows",
-  "orca-ssh-workspaces",
-  "orca-provider-usage",
-  "orca-remote-followup",
-  "orca-mobile-control",
-  "orca-computer-use",
+const componentsRoot = resolve(process.cwd(), "src", "components");
+const featurePackages = readdirSync(componentsRoot, { withFileTypes: true })
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => entry.name)
+  .filter((id) => existsSync(resolve(componentsRoot, id, "feature.tsx")))
+  .sort()
+  .map((id) => JSON.parse(readFileSync(resolve(componentsRoot, id, "feature.manifest.json"), "utf8")));
+const smokeScripts = [
+  ...coreSmokeScripts.slice(0, 2),
+  ...featurePackages.map((feature) => feature.smokeScript),
+  ...coreSmokeScripts.slice(2),
 ];
+const cargoFeatures = featurePackages.map((feature) => feature.rustFeature);
 
 function run(command, args, options = {}) {
   const label = [command, ...args].join(" ");
@@ -65,6 +64,11 @@ runNpm(["run", "build"], {
 });
 runNpm(["run", "smoke:feature-bundle"]);
 
+runNpm(["run", "build"], {
+  env: { VITE_ATELIER_FEATURES: "mobile-control" },
+});
+runNpm(["run", "smoke:feature-dependency-bundle"]);
+
 run(cargo, ["check", "--manifest-path", manifest, "--no-default-features"]);
 for (const feature of cargoFeatures) {
   run(cargo, [
@@ -77,4 +81,4 @@ for (const feature of cargoFeatures) {
   ]);
 }
 
-console.log(`\nOrca feature release gate passed (${smokeScripts.length + 1} contract smokes, ${cargoFeatures.length} removable backend features).`);
+console.log(`\nOrca feature release gate passed (${smokeScripts.length + 2} contract smokes, ${cargoFeatures.length} removable backend features).`);

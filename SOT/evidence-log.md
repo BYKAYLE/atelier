@@ -1,5 +1,42 @@
 # Evidence Log
 
+## 2026-07-20 Session Execution and OAuth Stabilization (0.2.11)
+
+- Extracted per-session turn ownership from the monolithic workspace into
+  `sessionRunRegistry.ts` and `useSessionRunRegistry.ts`. Independent sessions
+  can remain live concurrently, an old finalizer cannot clear a newer turn,
+  and an explicit user stop takes precedence over interruption cleanup.
+- Added `smoke:session-runs` and wired it into the shared Orca feature release
+  gate plus release-security audit. The combined gate passes 16 contract
+  smokes and ten removable backend features.
+- Corrected the provider-login frontend so a failed browser handoff is not
+  marked as opened. OAuth URLs now receive bounded, duplicate-safe retries
+  while preserving a successful native backend handoff.
+- Fresh source verification:
+  - frontend production build passes;
+  - native and Store Rust suites pass 157/157 each;
+  - native and Store strict Clippy pass;
+  - normal and Store Windows targets pass `cargo-xwin check`;
+  - PTY supervisor reconnects three parallel sessions and measures 1.297 ms
+    median / 1.386 ms p95 across 100 writes;
+  - updater contract covers macOS, Windows MSI, and Windows NSIS; npm reports
+    zero vulnerabilities and the release audit reports zero RustSec
+    vulnerabilities.
+- Fresh macOS package and installed truth:
+  - DMG: `Atelier_0.2.11_aarch64.dmg`, SHA-256
+    `8419ed9658fe74ecd982e7caebb016fd6f91bfbacc78624364810a93dbbf5589`;
+  - packaged and installed executable SHA-256
+    `ea828514cb964113da658e07024e9cc9ec3ebdc5665b19422009c0446dbc6b50`;
+  - `/Applications/Atelier.app` reports version `0.2.11`, passes strict local
+    signature verification, and emits a renderer receipt for the installed
+    executable with window `main` and status `ready`;
+  - the previous installed bundle is preserved under
+    `/tmp/atelier-preinstall.BZh4Xz/Atelier.app`.
+- Physical Windows browser visibility, provider acceptance, Smart App Control,
+  public Windows signing, and macOS notarization remain external gates. No
+  database, user data, provider credential store, or production deployment was
+  modified.
+
 ## 2026-07-14 Workbench Shell Stabilization Release Candidate (0.2.8)
 
 - Resumed from the interrupted dirty-worktree state rather than repeating the

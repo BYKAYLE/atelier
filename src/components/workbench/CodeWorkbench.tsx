@@ -38,6 +38,7 @@ import {
 interface Props {
   dark: boolean;
   language: "ko" | "en";
+  isActive?: boolean;
   rootPath: string;
   initialPath?: string | null;
   initialLine?: number | null;
@@ -56,7 +57,7 @@ interface EditorTab {
   externalConflict: AgentEditorSnapshot | null;
 }
 
-const CodeWorkbench: React.FC<Props> = ({ dark, language, rootPath, initialPath, initialLine, onSaved }) => {
+const CodeWorkbench: React.FC<Props> = ({ dark, language, isActive = true, rootPath, initialPath, initialLine, onSaved }) => {
   const [tabs, setTabs] = useState<EditorTab[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -492,6 +493,7 @@ const CodeWorkbench: React.FC<Props> = ({ dark, language, rootPath, initialPath,
   }, [rootPath, searchQuery]);
 
   useEffect(() => {
+    if (!isActive) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
@@ -508,7 +510,7 @@ const CodeWorkbench: React.FC<Props> = ({ dark, language, rootPath, initialPath,
       window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("atelier:code-quick-open", onQuickOpen);
     };
-  }, [saveFile]);
+  }, [isActive, saveFile]);
 
   return (
     <section className={cls("atelier-code-workbench", dark ? "bg-dbg" : "bg-cream")} data-testid="code-workbench">

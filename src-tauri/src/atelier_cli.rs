@@ -38,10 +38,20 @@ Usage:\n\
   atelier task status <request-id> [--json]\n\
   atelier task cancel <request-id> [--reason <text>] [--json]\n\
   atelier worktree create --workspace <path> --task <name> [--json]\n\n\
+  atelier ui focus\n\
+  atelier ui browser --url <https-url>\n\
+  atelier ui open --url <loopback-url>\n\
+  atelier ui screenshot|snapshot [bridge options]\n\
+  atelier ui click --selector <css> [bridge options]\n\
+  atelier ui fill --selector <css> --text <text> [bridge options]\n\
+  atelier ui key --key <key> [bridge options]\n\
+  atelier ui resize --width <px> --height <px> [bridge options]\n\n\
 Task options:\n\
   --model <model> --effort <level> --permission <mode> --stella\n\n\
+Bridge options:\n\
+  --host <localhost> --port <port> --window <label>\n\n\
 The CLI never accepts arbitrary shell commands. Mutating requests are queued for\n\
-the running Atelier app and use the same provider, permission, and audit paths.",
+the running Atelier app and use the same provider, permission, approval, and audit paths.",
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -59,6 +69,24 @@ fn flag(args: &[String], name: &str) -> bool {
 
 fn required_option(args: &[String], name: &str) -> Result<String, String> {
     option(args, name).ok_or_else(|| format!("Missing required option {name}."))
+}
+
+fn positive_u16_option(args: &[String], name: &str) -> Result<Option<u16>, String> {
+    option(args, name)
+        .map(|value| {
+            value
+                .parse::<u16>()
+                .ok()
+                .filter(|parsed| *parsed > 0)
+                .ok_or_else(|| format!("{name} must be between 1 and 65535."))
+        })
+        .transpose()
+}
+
+fn required_u32_option(args: &[String], name: &str) -> Result<u32, String> {
+    required_option(args, name)?
+        .parse::<u32>()
+        .map_err(|_| format!("{name} must be a positive integer."))
 }
 
 fn canonical_workspace(args: &[String]) -> Result<PathBuf, String> {
@@ -269,6 +297,84 @@ fn run_worktree(args: &[String]) -> Result<(), String> {
     print_json(&json!({ "queued": true, "request": request }))
 }
 
+fn run_ui(args: &[String]) -> Result<(), String> {
+    let subcommand = args.get(2).map(String::as_str).unwrap_or("");
+    let (action, target, value, width, height) = match subcommand {
+        "focus" => ("atelier.focus", None, None, None, None),
+        "browser" => (
+            "browser.open",
+            Some(required_option(args, "--url")?),
+            None,
+            None,
+            None,
+        ),
+        "open" => (
+            "preview.open",
+            Some(required_option(args, "--url")?),
+            None,
+            None,
+            None,
+        ),
+        "screenshot" => ("preview.screenshot", None, None, None, None),
+        "snapshot" => ("preview.snapshot", None, None, None, None),
+        "click" => (
+            "preview.click",
+            Some(required_option(args, "--selector")?),
+            None,
+            None,
+            None,
+        ),
+        "fill" => (
+            "preview.type",
+            Some(required_option(args, "--selector")?),
+            Some(required_option(args, "--text")?),
+            None,
+            None,
+        ),
+        "key" => (
+            "preview.key",
+            None,
+            Some(required_option(args, "--key")?),
+            None,
+            None,
+        ),
+        "resize" => (
+            "preview.resize",
+            None,
+            None,
+            Some(required_u32_option(args, "--width")?),
+            Some(required_u32_option(args, "--height")?),
+        ),
+        _ => {
+            return Err(
+                "Usage: atelier ui <focus|browser|open|screenshot|snapshot|click|fill|key|resize> [options]"
+                    .to_string(),
+            )
+        }
+    };
+    let request = crate::control_plane::enqueue_request(
+        "computer.use",
+        None,
+        json!({
+            "action": action,
+            "target": target,
+            "value": value,
+            "host": option(args, "--host"),
+            "port": positive_u16_option(args, "--port")?,
+            "windowLabel": option(args, "--window"),
+            "width": width,
+            "height": height,
+        }),
+        "atelier-cli",
+    )?;
+    print_json(&json!({
+        "queued": true,
+        "approvalRequired": true,
+        "request": request,
+        "next": format!("atelier task status {}", request.request_id),
+    }))
+}
+
 pub(crate) fn try_run(args: &[String]) -> Option<Result<(), String>> {
     let command = args.get(1).map(String::as_str)?;
     let handled = matches!(
@@ -284,6 +390,7 @@ pub(crate) fn try_run(args: &[String]) -> Option<Result<(), String>> {
             | "verify"
             | "task"
             | "worktree"
+            | "ui"
     );
     if !handled {
         return None;
@@ -299,6 +406,7 @@ pub(crate) fn try_run(args: &[String]) -> Option<Result<(), String>> {
         "verify" => run_snapshot(args, true),
         "task" => run_task(args),
         "worktree" => run_worktree(args),
+        "ui" => run_ui(args),
         _ => unreachable!(),
     };
     Some(result)

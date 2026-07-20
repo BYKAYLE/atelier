@@ -178,7 +178,7 @@ pub(crate) fn enqueue_request(
     payload: Value,
     source: &str,
 ) -> Result<ControlRequest, String> {
-    if !matches!(action, "task.dispatch" | "worktree.create") {
+    if !matches!(action, "task.dispatch" | "worktree.create" | "computer.use") {
         return Err(format!("Unsupported Atelier control action: {action}"));
     }
     let root = control_root()?;

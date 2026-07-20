@@ -8,6 +8,7 @@ const fixtureRoot = mkdtempSync(join(tmpdir(), "atelier-updater-contract-"));
 const signedDir = join(fixtureRoot, "signed");
 const latestPath = join(fixtureRoot, "latest.json");
 const script = join(root, ".github", "scripts", "update-tauri-latest-json.mjs");
+const settingsSource = readFileSync(join(root, "src", "components", "Settings.tsx"), "utf8");
 const signatureMsi = "A".repeat(96);
 const signatureNsis = "B".repeat(96);
 
@@ -70,12 +71,25 @@ try {
   if (rejected.status === 0 || !`${rejected.stderr}${rejected.stdout}`.includes("Missing updater signature")) {
     throw new Error("unsigned Windows updater fixture was not rejected");
   }
+  const installStart = settingsSource.indexOf("async function installAndRestart()")
+  const installEnd = settingsSource.indexOf("return (", installStart);
+  const installBlock = settingsSource.slice(installStart, installEnd);
+  if (
+    installStart < 0 ||
+    !installBlock.includes("await update.downloadAndInstall") ||
+    !installBlock.includes('import("@tauri-apps/plugin-process")') ||
+    !installBlock.includes("await relaunch()") ||
+    installBlock.includes("if (!isWindowsRuntime())")
+  ) {
+    throw new Error("successful in-app updates must relaunch the installed bundle on every platform");
+  }
 
   console.log(JSON.stringify({
     ok: true,
     platforms: Object.keys(platforms).sort(),
     genericWindowsBundle: "msi",
     unsignedFixtureRejected: true,
+    relaunchAfterInstall: true,
   }));
 } finally {
   rmSync(fixtureRoot, { recursive: true, force: true });

@@ -114,6 +114,7 @@ import { cls, Profile, Tweaks } from "../lib/tokens";
 import ComposerSelectMenu from "./ComposerSelectMenu";
 import { I } from "./Icons";
 import CodexModelMenu from "./agent-composer/CodexModelMenu";
+import { useSessionRunRegistry } from "./agent-runtime/useSessionRunRegistry";
 import {
   AgentFleetLauncher,
   AgentFleetPanel,
@@ -140,7 +141,11 @@ import {
   ReviewWorkflowStatus,
   transitionReviewWorkflow,
 } from "./review-workflow";
-import { normalizeFeatureControlTask } from "../features/featureRegistry";
+import {
+  handleFeatureControlRequest,
+  normalizeFeatureControlTask,
+  type SourceControlWorkItem,
+} from "../features/featureRegistry";
 import type {
   ChangeReviewWorkflowState,
   ReviewDispatchContext,
@@ -751,14 +756,23 @@ function clampNumber(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
 
+function composerMinHeight() {
+  if (typeof window === "undefined") return 150;
+  // Short windows wrap the action controls onto multiple rows. Keep those
+  // controls usable before yielding more space to the transcript/workbench.
+  if (window.innerHeight <= 600) return 180;
+  if (window.innerHeight <= 720) return 156;
+  return 150;
+}
+
 function composerMaxHeight() {
   if (typeof window === "undefined") return 460;
-  return clampNumber(window.innerHeight - 180, 220, 560);
+  return clampNumber(window.innerHeight - 150, composerMinHeight(), 560);
 }
 
 function initialComposerHeight() {
   const saved = Number(safeLocalStorageGet(COMPOSER_HEIGHT_KEY));
-  return clampNumber(Number.isFinite(saved) && saved > 0 ? saved : 260, 150, composerMaxHeight());
+  return clampNumber(Number.isFinite(saved) && saved > 0 ? saved : 260, composerMinHeight(), composerMaxHeight());
 }
 
 function initialWorkspaceView(): WorkspaceView {
@@ -1514,8 +1528,7 @@ function modelOptionsFor(
             : MODEL_OPTIONS[provider] || [];
   const trimmed = selected?.trim();
   if (!trimmed || options.some((option) => option.value === trimmed)) return options;
-  if (provider === "claude" || provider === "codex" || provider === "gajecode" || (provider === "hermes" && (hermesProvider === "openai-codex" || hermesProvider === "openrouter"))) return options;
-  return [{ value: trimmed, label: `사용자 지정: ${trimmed}` }, ...options];
+  return [{ value: trimmed, label: `현재 선택: ${trimmed}` }, ...options];
 }
 
 function labelForOption(options: ModelOption[], value: string) {
@@ -1542,9 +1555,8 @@ function sanitizeModelOptions(options: ModelOption[]) {
 }
 
 function coerceModelToOptions(model: string, options: ModelOption[]) {
-  return options.some((option) => !option.disabled && option.value === model)
-    ? model
-    : options.find((option) => !option.disabled)?.value || model;
+  if (model.trim()) return model;
+  return options.find((option) => !option.disabled)?.value || model;
 }
 
 function normalizeCodexEffort(value?: unknown): CodexEffort {
@@ -3076,7 +3088,11 @@ const AgentActivityView = React.memo(function AgentActivityView({
   );
 });
 
-const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({ tw, onOpenTerminal }) => {
+const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActive?: boolean }> = ({
+  tw,
+  onOpenTerminal,
+  isActive = true,
+}) => {
   const dark = tw.dark;
   const [sessions, setSessions] = useState<AgentSession[]>(() => loadSessions());
   const [activeId, setActiveId] = useState<string | null>(() => safeLocalStorageGet(ACTIVE_KEY));
@@ -3094,6 +3110,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
   const [workbenchFilePath, setWorkbenchFilePath] = useState<string | null>(null);
   const [workbenchInitialLine, setWorkbenchInitialLine] = useState<number | null>(null);
   const [showQuickOpen, setShowQuickOpen] = useState(false);
+  const isActiveRef = useRef(isActive);
   const [quickOpenQuery, setQuickOpenQuery] = useState("");
   const [quickOpenIndex, setQuickOpenIndex] = useState(0);
   const [quickOpenFiles, setQuickOpenFiles] = useState<FsEntry[]>([]);
@@ -3188,6 +3205,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
   }, []);
 
   useEffect(() => {
+    isActiveRef.current = isActive;
+    if (!isActive) setShowQuickOpen(false);
+  }, [isActive]);
+
+  useEffect(() => {
+    if (!isActive) return;
     refreshClaudeRuntimeModels().catch(console.error);
     refreshCodexRuntimeModels().catch(console.error);
     refreshOpenRouterRuntimeModels().catch(console.error);
@@ -3197,36 +3220,24 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
       refreshOpenRouterRuntimeModels().catch(console.error);
     }, 5 * 60 * 1000);
     return () => window.clearInterval(timer);
-  }, [refreshClaudeRuntimeModels, refreshCodexRuntimeModels, refreshOpenRouterRuntimeModels]);
+  }, [isActive, refreshClaudeRuntimeModels, refreshCodexRuntimeModels, refreshOpenRouterRuntimeModels]);
 
   useEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
-  // 세션별 busy turn 추적 — 한 세션에서 진행 중이어도 다른 세션은 입력 가능.
-  const [busyTurnIdsBySession, setBusyTurnIdsBySession] = useState<Record<string, string>>({});
-  const [stoppingTurnId, setStoppingTurnId] = useState<string | null>(null);
-  const busyTurnIdsRef = useRef<Record<string, string>>({});
-  const setBusyForSession = (sessionId: string, turnId: string | null) => {
-    setBusyTurnIdsBySession((prev) => {
-      if (turnId === null) {
-        if (!(sessionId in prev)) return prev;
-        const next = { ...prev };
-        delete next[sessionId];
-        busyTurnIdsRef.current = next;
-        return next;
-      }
-      const next = { ...prev, [sessionId]: turnId };
-      busyTurnIdsRef.current = next;
-      return next;
-    });
-  };
-  // active 세션의 turnId (있으면 입력 가드 적용, 없으면 다른 세션이 바빠도 입력 가능)
-  // 아래에서 active를 사용하지만 여기선 미선언이라 effect에서 사용 시 별도로 참조.
-  useEffect(() => {
-    if (!stoppingTurnId) return;
-    if (Object.values(busyTurnIdsBySession).includes(stoppingTurnId)) return;
-    setStoppingTurnId(null);
-  }, [busyTurnIdsBySession, stoppingTurnId]);
+  const {
+    busyTurnIdsBySession,
+    busyTurnIdsRef,
+    stoppingTurnId,
+    beginRunForSession,
+    finishRunForSession,
+    markTurnInterrupted,
+    markTurnStopped,
+    markStoppingTurn,
+    clearStoppingTurn,
+    turnTerminationIntent,
+    clearTurnIntent,
+  } = useSessionRunRegistry();
   const [visibleTextById, setVisibleTextById] = useState<Record<string, string>>({});
   const [reviewOpenById, setReviewOpenById] = useState<Record<string, boolean>>({});
   const [expandedDiffByKey, setExpandedDiffByKey] = useState<Record<string, boolean>>({});
@@ -3253,8 +3264,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
   const previewHydratingSessionRef = useRef<string | null>(null);
   const pendingStreamRef = useRef<Record<string, PendingAgentStream>>({});
   const providerCooldownRetryTimersRef = useRef<Record<string, number>>({});
-  const interruptedTurnIdsRef = useRef<Set<string>>(new Set());
-  const stoppedTurnIdsRef = useRef<Set<string>>(new Set());
   const animatedAssistantIdsRef = useRef<Set<string>>(new Set());
   const backgroundedAssistantIdsRef = useRef<Set<string>>(new Set());
   const smoothTargetsRef = useRef<Record<string, string>>({});
@@ -4586,7 +4595,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
     const onPointerMove = (event: PointerEvent) => {
       const state = composerResizeRef.current;
       if (!state) return;
-      setComposerHeight(clampNumber(state.startH + state.startY - event.clientY, 150, composerMaxHeight()));
+      setComposerHeight(clampNumber(state.startH + state.startY - event.clientY, composerMinHeight(), composerMaxHeight()));
     };
     const onPointerUp = () => {
       composerResizeRef.current = null;
@@ -4602,7 +4611,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
 
   useEffect(() => {
     const clampComposerToViewport = () => {
-      setComposerHeight((height) => clampNumber(height, 150, composerMaxHeight()));
+      setComposerHeight((height) => clampNumber(height, composerMinHeight(), composerMaxHeight()));
     };
     clampComposerToViewport();
     window.addEventListener("resize", clampComposerToViewport);
@@ -5063,6 +5072,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
 
   useEffect(() => {
     const onQuickOpenKey = (event: KeyboardEvent) => {
+      if (!isActiveRef.current) return;
       const key = event.key.toLocaleLowerCase();
       if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && key === "p") {
         event.preventDefault();
@@ -5081,7 +5091,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
   }, [requestQuickOpen, showQuickOpen]);
 
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!isTauri() || !isActive) return;
     let unlisten: (() => void) | undefined;
     let disposed = false;
     onQuickOpenRequested(requestQuickOpen)
@@ -5094,7 +5104,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
       disposed = true;
       unlisten?.();
     };
-  }, [requestQuickOpen]);
+  }, [isActive, requestQuickOpen]);
 
   useEffect(() => {
     if (!showQuickOpen) return;
@@ -5389,12 +5399,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
         });
     };
     syncStatus();
-    const timer = window.setInterval(syncStatus, 2200);
+    const timer = window.setInterval(syncStatus, isActive ? 2200 : 10000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [previewUrl]);
+  }, [isActive, previewUrl]);
 
   useEffect(() => {
     if (!previewUrl || !isLocalPreviewUrl(previewUrl) || previewServiceBusy) return;
@@ -7512,7 +7522,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
 
     backgroundedAssistantIdsRef.current.delete(assistantId);
     autoScrollRef.current = true;
-    setBusyForSession(sessionId, turnId);
+    if (!beginRunForSession(sessionId, turnId)) return;
 	  updateReviewWorkflowStatus(sessionId, payload.reviewRequest, "running", {
 	    responseMessageId: assistantId,
 	  });
@@ -7583,8 +7593,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
         });
 	        flushAgentStream(assistantId);
 	        delete pendingStreamRef.current[assistantId];
-	        const wasInterrupted = interruptedTurnIdsRef.current.has(turnId);
-	        const wasStopped = stoppedTurnIdsRef.current.has(turnId);
+	        const terminationIntent = turnTerminationIntent(turnId);
+	        const wasInterrupted = terminationIntent === "interrupted";
+	        const wasStopped = terminationIntent === "stopped";
 	        let finalTextForReveal = "";
 	        const fallbackRawEvents = result.raw_events.slice(-MAX_RAW_EVENTS).map(clipRawEvent);
         const cooldownSeconds = result.is_error && !wasInterrupted && !wasStopped
@@ -7731,8 +7742,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
     } catch (err) {
       flushAgentStream(assistantId);
       delete pendingStreamRef.current[assistantId];
-      const wasInterrupted = interruptedTurnIdsRef.current.has(turnId);
-      const wasStopped = stoppedTurnIdsRef.current.has(turnId);
+      const terminationIntent = turnTerminationIntent(turnId);
+      const wasInterrupted = terminationIntent === "interrupted";
+      const wasStopped = terminationIntent === "stopped";
       let finalTextForReveal = "";
       patchSession(sessionId, (s) => ({
         ...s,
@@ -7796,9 +7808,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
       unlistenLifecycle?.();
       flushAgentStream(assistantId);
       delete pendingStreamRef.current[assistantId];
-      interruptedTurnIdsRef.current.delete(turnId);
-      stoppedTurnIdsRef.current.delete(turnId);
-      setBusyForSession(sessionId, null);
+      clearTurnIntent(turnId);
+      finishRunForSession(sessionId, turnId);
       startNextQueuedTurn(sessionId);
     }
   };
@@ -7945,7 +7956,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
       if (!shouldQueue) {
         const activeTurnId = busyTurnIdsRef.current[session.id];
         if (activeTurnId && isTauri()) {
-          interruptedTurnIdsRef.current.add(activeTurnId);
+          markTurnInterrupted(activeTurnId);
           agentCancel(activeTurnId).catch(console.warn);
         }
       }
@@ -7954,9 +7965,83 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
     await runAgentTurn(session.id, payload);
   };
 
+  const startSourceControlWorkItem = async (item: SourceControlWorkItem) => {
+    const workspace = item.workspace.trim() || activeExecutionCwd.trim() || cwd.trim();
+    if (!workspace) {
+      throw new Error(
+        tw.language === "en"
+          ? "Choose a Git working folder before starting this work item."
+          : "이 작업 항목을 시작하려면 먼저 Git 작업 폴더를 선택하세요.",
+      );
+    }
+
+    const sourceSession = active;
+    const provider = sourceSession?.provider || fallbackProvider;
+    const profile = sourceSession
+      ? agentProfiles.find(({ profile: candidate, provider: candidateProvider }) =>
+          candidateProvider === provider && candidate.id === sourceSession.profileId,
+        )?.profile
+      : fallbackProfile;
+    const title = `${item.externalId} ${item.title}`.slice(0, 48);
+    const session = makeSession(profile, provider, title);
+    if (sourceSession && sourceSession.provider === provider) {
+      session.model = sourceSession.model;
+      session.hermesProvider = sourceSession.hermesProvider;
+      session.stellaOntologyMode = sourceSession.stellaOntologyMode;
+      session.codexEffort = sourceSession.codexEffort;
+      session.codexSpeed = sourceSession.codexSpeed;
+      session.permissionMode = sourceSession.permissionMode;
+    }
+    session.cwd = workspace;
+    session.worktreeEnabled = true;
+
+    const createdAt = Date.now();
+    const payload: QueuedAgentTurn = {
+      id: nowId("queued-turn"),
+      userMessageId: nowId("user"),
+      text: item.prompt,
+      displayText: item.prompt,
+      attachments: [],
+      cwd: workspace,
+      createdAt,
+    };
+    session.messages = [{
+      id: payload.userMessageId,
+      role: "user",
+      text: item.prompt,
+      createdAt,
+      status: "done",
+      attachments: [],
+    }];
+    session.updatedAt = createdAt;
+
+    const nextSessions = [session, ...sessionsRef.current];
+    sessionsRef.current = nextSessions;
+    persistSessionsNow(nextSessions);
+    setSessions(nextSessions);
+    activeIdRef.current = session.id;
+    setActiveId(session.id);
+    setCwd(workspace);
+    setWorkspaceView("conversation");
+    setShowProfilePicker(false);
+    resetComposer();
+    await runAgentTurn(session.id, payload);
+  };
+
   controlRequestHandlerRef.current = async (pendingRequest) => {
     const request = await controlRequestClaim(pendingRequest.requestId);
     try {
+      const featureResult = await handleFeatureControlRequest(request);
+      if (featureResult) {
+        await controlRequestComplete(
+          request.requestId,
+          "succeeded",
+          featureResult.summary,
+          featureResult.detail,
+        );
+        return;
+      }
+
       if (request.action === "worktree.create") {
         const workspace = typeof request.workspace === "string" ? request.workspace : "";
         const taskId = typeof request.payload.taskId === "string" ? request.payload.taskId.trim() : "";
@@ -8087,12 +8172,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
       }
     };
     poll().catch(console.warn);
-    const timer = window.setInterval(() => poll().catch(console.warn), 750);
+    const timer = window.setInterval(() => poll().catch(console.warn), isActive ? 750 : 4000);
     return () => {
       disposed = true;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [isActive]);
 
   const launchParallelRun = async () => {
     if (parallelLaunching || isPastingImage) return;
@@ -8199,7 +8284,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
 
     setStoppingParallelBatchId(batchId);
     setPasteError(null);
-    runningTurns.forEach(({ turnId }) => stoppedTurnIdsRef.current.add(turnId));
+    runningTurns.forEach(({ turnId }) => markTurnStopped(turnId));
     const results = await Promise.allSettled(
       runningTurns.map(({ turnId }) => agentCancel(turnId)),
     );
@@ -8207,7 +8292,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
     results.forEach((result, index) => {
       if (result.status === "rejected" || result.value === false) {
         failed += 1;
-        stoppedTurnIdsRef.current.delete(runningTurns[index].turnId);
+        clearTurnIntent(runningTurns[index].turnId);
       }
     });
     if (failed > 0) {
@@ -8290,17 +8375,18 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
       return;
     }
     const turnId = busyTurnId;
-    stoppedTurnIdsRef.current.add(turnId);
-    setStoppingTurnId(turnId);
+    markStoppingTurn(turnId);
     setPasteError(null);
     try {
       const stopped = await agentCancel(turnId);
       if (!stopped) {
+        clearTurnIntent(turnId);
+        clearStoppingTurn(turnId);
         setPasteError(copy.stopFailed(tw.language === "en" ? "No running process was found." : "실행 중인 프로세스를 찾지 못했습니다."));
       }
     } catch (err) {
-      stoppedTurnIdsRef.current.delete(turnId);
-      setStoppingTurnId((current) => current === turnId ? null : current);
+      clearTurnIntent(turnId);
+      clearStoppingTurn(turnId);
       setPasteError(copy.stopFailed(String(err)));
     }
   }
@@ -8986,6 +9072,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
               <CodeWorkbench
                 dark={dark}
                 language={tw.language}
+                isActive={isActive && workspaceView === "code"}
                 rootPath={activeExecutionCwd}
                 initialPath={workbenchFilePath}
                 initialLine={workbenchInitialLine}
@@ -9002,6 +9089,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
                 loading={workspaceChangesLoading}
                 error={workspaceChangesError}
                 onRefresh={refreshWorkspaceChanges}
+                onStartWorkItem={startSourceControlWorkItem}
                 onOpenFile={(path) => {
                   setWorkbenchFilePath(resolveWorkspaceFilePath(activeExecutionCwd, path));
                   setWorkspaceView("code");
@@ -9012,7 +9100,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
             <form
               onSubmit={onSubmit}
               onPaste={handleAttachmentPaste}
-              className={cls("atelier-composer-shell border-t p-3", dark ? "border-dline" : "border-line")}
+              className={cls(
+                "atelier-composer-shell border-t p-3",
+                composerHeight <= 230 ? "atelier-composer-compact" : "",
+                dark ? "border-dline" : "border-line",
+              )}
               style={{ height: composerHeight }}
             >
               <div className={cls("atelier-composer-panel relative w-full max-w-[920px] mx-auto rounded-[9px] border p-2", dark ? "bg-dmuted border-dline" : "bg-surface border-line")}>
@@ -9116,7 +9208,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
                 )}
                 {activeProvider !== "gajecode" && (
                   <>
-                    <div className={cls("mb-2 flex items-center gap-2 border-b pb-2", dark ? "border-dline" : "border-line")}>
+                    <div className={cls("atelier-factory-launcher mb-2 flex items-center gap-2 border-b pb-2", dark ? "border-dline" : "border-line")}>
                       <button
                         type="button"
                         onClick={applyFactoryLauncher}
@@ -9137,7 +9229,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
                         <span className="text-[#e26f4f]">{I.zap}</span>
                         <span>{copy.factoryLabel}</span>
                       </button>
-                      <span className={cls("min-w-0 truncate text-[11px]", dark ? "text-dsub" : "text-sub")}>
+                      <span className={cls("atelier-factory-launcher-copy min-w-0 truncate text-[11px]", dark ? "text-dsub" : "text-sub")}>
                         {tw.language === "en"
                           ? "One launcher for goal, analysis, verification, security, and final audit."
                           : "목표만 입력하면 계획, 실행, 검증, 보안, 최종감사까지 자동 진행합니다."}
@@ -9145,6 +9237,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
                     </div>
                     <div
                       className={cls(
+                        "atelier-factory-status",
                         "mb-2 grid grid-cols-[minmax(0,1fr)_auto] gap-2 rounded-[8px] border px-2.5 py-2 text-[11px]",
                         factoryStatusTone === "ready"
                           ? dark
@@ -9305,13 +9398,13 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
                   )}
                 />
                 <div className="atelier-composer-controls mt-2 flex items-center gap-2">
-                  <div className={cls("flex-1 text-[12px] leading-[1.45]", dark ? "text-dsub" : "text-sub")}>
+                  <div className={cls("atelier-composer-hint flex-1 text-[12px] leading-[1.45]", dark ? "text-dsub" : "text-sub")}>
                     {busyTurnId ? copy.draftHint : "⌘/Ctrl + Enter"}
                   </div>
                   <div className="atelier-composer-actions shrink-0 flex items-center gap-1.5">
                     {(activeProvider === "hermes" || activeProvider === "gajecode") && (
                       <>
-                        <span className={cls("text-[11px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
+                        <span className={cls("atelier-composer-control-label text-[11px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
                           {copy.providerLabel}
                         </span>
                         <ComposerSelectMenu
@@ -9328,7 +9421,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
                           disabled={!active || !!busyTurnId}
                           ariaLabel={copy.providerLabel}
                           title={activeProvider === "hermes" ? "Hermes provider" : "Gajae Code provider"}
-                          triggerClassName="h-8 min-w-[116px] max-w-[142px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2"
+                          triggerClassName="atelier-provider-trigger h-8 min-w-[116px] max-w-[142px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2"
                           menuWidth={180}
                           testId={activeProvider === "hermes" ? "hermes-provider-menu" : "gajecode-provider-menu"}
                         />
@@ -9346,7 +9439,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
                             : `격리 worktree 켜짐${active.worktreeInfo?.branch ? ` · ${active.worktreeInfo.branch}` : ""}`)
                         : (tw.language === "en" ? "Run in an isolated Git worktree" : "격리 Git worktree에서 실행")}
                       className={cls(
-                        "atelier-icon-tooltip relative",
+                        "atelier-composer-secondary-action atelier-icon-tooltip relative",
                         "h-8 w-8 shrink-0 rounded-[7px] border grid place-items-center transition-colors disabled:opacity-45",
                         active?.worktreeEnabled
                           ? dark
@@ -9369,7 +9462,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
                       aria-label={copy.parallelTitle}
                       title={copy.parallelDescription}
                       className={cls(
-                        "atelier-icon-tooltip relative",
+                        "atelier-composer-secondary-action atelier-icon-tooltip relative",
                         "h-8 w-8 shrink-0 rounded-[7px] border grid place-items-center transition-colors disabled:opacity-45",
                         showParallelLauncher
                           ? dark
@@ -9396,11 +9489,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
                       onChange={(value) => updateActivePermissionMode(value as AgentPermissionMode)}
                       disabled={!active || !!busyTurnId}
                       ariaLabel={copy.permissionLabel}
-                      triggerClassName="h-8 min-w-[112px] max-w-[148px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2"
+                      triggerClassName="atelier-permission-trigger h-8 min-w-[112px] max-w-[148px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2"
                       menuWidth={218}
                       testId="permission-menu"
                     />
-                    <span className={cls("text-[11px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
+                    <span className={cls("atelier-composer-control-label text-[11px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
                       {copy.modelLabel}
                     </span>
                     {activeCodexModelSurface ? (
@@ -9458,12 +9551,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
                         disabled={!active || !!busyTurnId}
                         ariaLabel={copy.modelLabel}
                         title={activeProviderMeta.label}
-                        triggerClassName="h-8 min-w-[134px] max-w-[190px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2"
+                        triggerClassName="atelier-model-trigger h-8 min-w-[134px] max-w-[190px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2"
                         menuWidth={292}
                         testId="agent-model-menu"
                       />
                     )}
-                    <span className={cls("text-[11px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
+                    <span className={cls("atelier-composer-control-label text-[11px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
                       {copy.workloadLabel}
                     </span>
                     <ComposerSelectMenu
@@ -9476,7 +9569,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
                       onChange={(value) => updateActiveWorkload(value as WorkloadLevel)}
                       disabled={!active || !!busyTurnId}
                       ariaLabel={copy.workloadLabel}
-                      triggerClassName="h-8 min-w-[94px] max-w-[132px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2"
+                      triggerClassName="atelier-workload-trigger h-8 min-w-[94px] max-w-[132px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2"
                       menuWidth={164}
                       testId="workload-menu"
                     />
@@ -9610,6 +9703,18 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
                   )}
                 >
                   {copy.devScreen}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowPreview(false)}
+                  className={cls(
+                    "shrink-0 h-6 w-6 rounded-[4px] inline-grid place-items-center",
+                    dark ? "text-dsub hover:bg-[#3d3d3b] hover:text-dink" : "text-sub hover:bg-line hover:text-ink",
+                  )}
+                  title={tw.language === "en" ? "Close preview" : "프리뷰 닫기"}
+                  aria-label={tw.language === "en" ? "Close preview" : "프리뷰 닫기"}
+                >
+                  {I.x}
                 </button>
               </div>
               {previewUrl && (
@@ -9984,7 +10089,15 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void }> = ({
                     </div>
                   )
                 ) : (
-                  <div className="absolute inset-0 bg-black" aria-label={copy.noPreview} />
+                  <div
+                    className={cls(
+                      "absolute inset-0 grid place-items-center px-6 text-center text-[13px]",
+                      dark ? "bg-[#151513] text-dsub" : "bg-muted text-sub",
+                    )}
+                    aria-label={copy.noPreview}
+                  >
+                    {copy.noPreview}
+                  </div>
                 )}
               </div>
             </aside>

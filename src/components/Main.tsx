@@ -22,6 +22,10 @@ import {
   type TerminalSplitDirection,
 } from "../lib/terminalLayout";
 import { cls, MOD_KEY, Tweaks } from "../lib/tokens";
+import {
+  TERMINAL_LAUNCH_EVENT,
+  terminalLaunchRequest,
+} from "../lib/terminalLaunch";
 import { I } from "./Icons";
 import {
   clipboardSaveImage,
@@ -1174,6 +1178,21 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
     }
     return { id: uiId, logId };
   }
+
+  useEffect(() => {
+    const launchTerminal = (event: Event) => {
+      const request = terminalLaunchRequest(event);
+      const fallbackProfile = tw.profiles[0];
+      if (!request || !fallbackProfile) return;
+      void spawnTab(fallbackProfile.id, {
+        customName: request.label,
+        cmdOverride: request.command,
+        autoConnect: true,
+      });
+    };
+    window.addEventListener(TERMINAL_LAUNCH_EVENT, launchTerminal);
+    return () => window.removeEventListener(TERMINAL_LAUNCH_EVENT, launchTerminal);
+  }, [tw.profiles]);
 
   async function launchProfile(profileId: string, opts?: SpawnTabOptions): Promise<SpawnedTab | null> {
     const p = tw.profiles.find((x) => x.id === profileId) || tw.profiles[0];

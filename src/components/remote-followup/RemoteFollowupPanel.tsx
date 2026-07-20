@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
+import { useFeatureSetting } from "../../features/featureSettings";
 import {
   homeDir,
   remoteFollowupDiscard,
@@ -28,32 +29,46 @@ const PROVIDERS: Array<{ value: Provider; label: string }> = [
 ];
 
 const RemoteFollowupPanel: React.FC<Props> = ({ tw }) => {
+  const [featureEnabled] = useFeatureSetting<boolean>("remote-followup", "enabled", true);
+  const [defaultProvider] = useFeatureSetting<Provider>("remote-followup", "defaultProvider", "codex");
+  const [defaultEffort] = useFeatureSetting<Effort>("remote-followup", "defaultEffort", "high");
+  const [defaultPermission] = useFeatureSetting<Permission>("remote-followup", "defaultPermission", "auto");
+  const [defaultStellaMode] = useFeatureSetting<boolean>("remote-followup", "defaultStellaMode", false);
   const dark = tw.dark;
   const ko = tw.language === "ko";
   const [proposals, setProposals] = useState<RemoteFollowupProposal[]>([]);
   const [workspace, setWorkspace] = useState("");
-  const [provider, setProvider] = useState<Provider>("codex");
+  const [provider, setProvider] = useState<Provider>(defaultProvider);
   const [model, setModel] = useState("");
-  const [effort, setEffort] = useState<Effort>("high");
-  const [permission, setPermission] = useState<Permission>("auto");
-  const [stellaMode, setStellaMode] = useState(false);
+  const [effort, setEffort] = useState<Effort>(defaultEffort);
+  const [permission, setPermission] = useState<Permission>(defaultPermission);
+  const [stellaMode, setStellaMode] = useState(defaultStellaMode);
   const [prepared, setPrepared] = useState<RemoteFollowupPreparedAction | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    if (!featureEnabled) return;
     setProposals(await remoteFollowupProposals());
-  }, []);
+  }, [featureEnabled]);
 
   useEffect(() => {
+    if (!featureEnabled) return;
     void Promise.all([load(), homeDir()])
       .then(([, root]) => setWorkspace((current) => current || root))
       .catch((nextError) => setError(String(nextError)));
-  }, [load]);
+  }, [featureEnabled, load]);
+
+  useEffect(() => {
+    setProvider(defaultProvider);
+    setEffort(defaultEffort);
+    setPermission(defaultPermission);
+    setStellaMode(defaultStellaMode);
+  }, [defaultEffort, defaultPermission, defaultProvider, defaultStellaMode]);
 
   async function run(action: () => Promise<void>) {
-    if (busy) return;
+    if (!featureEnabled || busy) return;
     setBusy(true);
     setError(null);
     setMessage(null);
@@ -90,12 +105,18 @@ const RemoteFollowupPanel: React.FC<Props> = ({ tw }) => {
               : "Phones can only propose work. Review the exact prompt and execution settings here before approving it."}
           </p>
         </div>
-        <button type="button" className={buttonClass} disabled={busy} onClick={() => void load()}>
+        <button type="button" className={buttonClass} disabled={!featureEnabled || busy} onClick={() => void load()}>
           {ko ? "새로고침" : "Refresh"}
         </button>
       </div>
 
-      <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+      {!featureEnabled && (
+        <div className={cls("mt-4 rounded-md border px-3 py-2 text-[12px]", dark ? "border-dline text-dsub" : "border-line text-sub")}>
+          {ko ? "기능 설정에서 후속 지시 승인을 켜세요." : "Enable follow-up approvals in Feature settings."}
+        </div>
+      )}
+
+      {featureEnabled && <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
         <input
           className={cls(controlClass, "md:col-span-2")}
           value={workspace}
@@ -129,9 +150,9 @@ const RemoteFollowupPanel: React.FC<Props> = ({ tw }) => {
           <input type="checkbox" checked={stellaMode} onChange={(event) => setStellaMode(event.target.checked)} />
           {ko ? "스텔라 모드" : "Stella mode"}
         </label>
-      </div>
+      </div>}
 
-      <div className="mt-4 space-y-3">
+      {featureEnabled && <div className="mt-4 space-y-3">
         {pending.length === 0 && (
           <p className={cls("py-3 text-[12.5px]", dark ? "text-dsub" : "text-sub")}>
             {ko ? "승인을 기다리는 후속 지시가 없습니다." : "No follow-up instructions are waiting for approval."}
@@ -182,9 +203,9 @@ const RemoteFollowupPanel: React.FC<Props> = ({ tw }) => {
             <p className="mt-3 whitespace-pre-wrap break-words text-[13px] leading-6">{proposal.prompt}</p>
           </article>
         ))}
-      </div>
+      </div>}
 
-      {prepared && (
+      {featureEnabled && prepared && (
         <div className={cls("mt-4 rounded-md border p-4", dark ? "border-orange-400/45 bg-orange-500/5" : "border-orange-500/35 bg-orange-50")}>
           <div className="text-[13px] font-semibold">{ko ? "정확한 실행 내용 확인" : "Confirm exact execution"}</div>
           <pre className={cls("mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md p-3 text-[11.5px] leading-5", dark ? "bg-dbase text-dink" : "bg-white text-ink")}>

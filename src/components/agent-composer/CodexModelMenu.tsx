@@ -144,7 +144,7 @@ const CodexModelMenu: React.FC<CodexModelMenuProps> = ({
   }, [open, panel]);
 
   return (
-    <div ref={rootRef} className="relative">
+    <div ref={rootRef} className="atelier-model-menu relative min-w-0">
       <button
         ref={triggerRef}
         type="button"
@@ -159,7 +159,7 @@ const CodexModelMenu: React.FC<CodexModelMenuProps> = ({
         }}
         disabled={disabled}
         className={cls(
-          "h-8 min-w-[134px] max-w-[190px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2",
+          "atelier-model-trigger h-8 min-w-[134px] max-w-[190px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2",
           dark
             ? "bg-dsurf border-dline text-dink disabled:text-dsub"
             : "bg-surface border-line text-ink disabled:text-sub",

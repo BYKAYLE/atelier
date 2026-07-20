@@ -19,6 +19,18 @@ pub(crate) struct ComputerUseInput {
     action: String,
     #[serde(default)]
     target: Option<String>,
+    #[serde(default)]
+    value: Option<String>,
+    #[serde(default)]
+    host: Option<String>,
+    #[serde(default)]
+    port: Option<u16>,
+    #[serde(default)]
+    window_label: Option<String>,
+    #[serde(default)]
+    width: Option<u32>,
+    #[serde(default)]
+    height: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -29,6 +41,12 @@ pub(crate) struct ComputerUsePreparedAction {
     action_hash: String,
     action: String,
     target: Option<String>,
+    value: Option<String>,
+    host: Option<String>,
+    port: Option<u16>,
+    window_label: Option<String>,
+    width: Option<u32>,
+    height: Option<u32>,
     preview: String,
     expires_at_ms: u64,
 }
@@ -67,6 +85,7 @@ struct PreparedActionRecord {
 struct RuntimeState {
     enabled: bool,
     prepared: HashMap<String, PreparedActionRecord>,
+    authorized: HashMap<String, PreparedActionRecord>,
 }
 
 fn runtime_state() -> &'static Mutex<RuntimeState> {
@@ -146,18 +165,148 @@ fn validate_url(value: &str, loopback_only: bool) -> Result<String, String> {
     Ok(parsed.to_string())
 }
 
+fn validate_selector(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() || value.chars().count() > 360 || value.chars().any(char::is_control) {
+        return Err("Computer Use selector is invalid.".to_string());
+    }
+    Ok(value.to_string())
+}
+
+fn validate_text(value: &str) -> Result<String, String> {
+    if value.chars().count() > 4_000
+        || value
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return Err("Computer Use text is invalid.".to_string());
+    }
+    Ok(value.to_string())
+}
+
+fn validate_key(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.chars().count() > 32
+        || value.chars().any(char::is_control)
+        || !value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, ' ' | '_' | '-')
+        })
+    {
+        return Err("Computer Use key is invalid.".to_string());
+    }
+    Ok(value.to_string())
+}
+
+fn normalize_bridge(input: &mut ComputerUseInput) -> Result<(), String> {
+    let host = input.host.as_deref().unwrap_or("127.0.0.1").trim();
+    if !matches!(host, "localhost" | "127.0.0.1" | "::1") {
+        return Err("Computer Use can connect only to a loopback preview bridge.".to_string());
+    }
+    let window_label = input.window_label.as_deref().unwrap_or("main").trim();
+    if window_label.is_empty()
+        || window_label.chars().count() > 80
+        || !window_label.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+        })
+    {
+        return Err("Computer Use window label is invalid.".to_string());
+    }
+    input.host = Some(host.to_string());
+    input.window_label = Some(window_label.to_string());
+    Ok(())
+}
+
+fn is_frontend_action(action: &str) -> bool {
+    matches!(
+        action,
+        "preview.screenshot"
+            | "preview.snapshot"
+            | "preview.click"
+            | "preview.type"
+            | "preview.key"
+            | "preview.resize"
+    )
+}
+
 fn normalize_input(mut input: ComputerUseInput) -> Result<ComputerUseInput, String> {
     input.action = input.action.trim().to_ascii_lowercase();
-    input.target = match input.action.as_str() {
-        "atelier.focus" => None,
-        "browser.open" => Some(validate_url(
-            input.target.as_deref().unwrap_or_default(),
-            false,
-        )?),
-        "preview.open" => Some(validate_url(
-            input.target.as_deref().unwrap_or_default(),
-            true,
-        )?),
+    match input.action.as_str() {
+        "atelier.focus" => {
+            input.target = None;
+            input.value = None;
+            input.host = None;
+            input.port = None;
+            input.window_label = None;
+            input.width = None;
+            input.height = None;
+        }
+        "browser.open" => {
+            input.target = Some(validate_url(
+                input.target.as_deref().unwrap_or_default(),
+                false,
+            )?);
+            input.value = None;
+            input.host = None;
+            input.port = None;
+            input.window_label = None;
+            input.width = None;
+            input.height = None;
+        }
+        "preview.open" => {
+            input.target = Some(validate_url(
+                input.target.as_deref().unwrap_or_default(),
+                true,
+            )?);
+            input.value = None;
+            input.host = None;
+            input.port = None;
+            input.window_label = None;
+            input.width = None;
+            input.height = None;
+        }
+        "preview.screenshot" | "preview.snapshot" => {
+            normalize_bridge(&mut input)?;
+            input.target = None;
+            input.value = None;
+            input.width = None;
+            input.height = None;
+        }
+        "preview.click" => {
+            normalize_bridge(&mut input)?;
+            input.target = Some(validate_selector(
+                input.target.as_deref().unwrap_or_default(),
+            )?);
+            input.value = None;
+            input.width = None;
+            input.height = None;
+        }
+        "preview.type" => {
+            normalize_bridge(&mut input)?;
+            input.target = Some(validate_selector(
+                input.target.as_deref().unwrap_or_default(),
+            )?);
+            input.value = Some(validate_text(input.value.as_deref().unwrap_or_default())?);
+            input.width = None;
+            input.height = None;
+        }
+        "preview.key" => {
+            normalize_bridge(&mut input)?;
+            input.target = None;
+            input.value = Some(validate_key(input.value.as_deref().unwrap_or_default())?);
+            input.width = None;
+            input.height = None;
+        }
+        "preview.resize" => {
+            normalize_bridge(&mut input)?;
+            let width = input.width.unwrap_or_default();
+            let height = input.height.unwrap_or_default();
+            if !(320..=5_120).contains(&width) || !(240..=3_200).contains(&height) {
+                return Err("Computer Use preview size is invalid.".to_string());
+            }
+            input.target = None;
+            input.value = None;
+        }
         _ => return Err("Unsupported Computer Use action.".to_string()),
     };
     Ok(input)
@@ -173,6 +322,42 @@ fn action_preview(input: &ComputerUseInput) -> String {
         "preview.open" => format!(
             "Open this loopback preview in the system browser:\n{}",
             input.target.as_deref().unwrap_or_default()
+        ),
+        "preview.screenshot" => format!(
+            "Capture a screenshot from the local preview bridge at {}{} (window {}).",
+            input.host.as_deref().unwrap_or("127.0.0.1"),
+            input
+                .port
+                .map(|port| format!(":{port}"))
+                .unwrap_or_default(),
+            input.window_label.as_deref().unwrap_or("main")
+        ),
+        "preview.snapshot" => format!(
+            "Read the bounded DOM snapshot from the local preview bridge at {}{} (window {}).",
+            input.host.as_deref().unwrap_or("127.0.0.1"),
+            input
+                .port
+                .map(|port| format!(":{port}"))
+                .unwrap_or_default(),
+            input.window_label.as_deref().unwrap_or("main")
+        ),
+        "preview.click" => format!(
+            "Click this selector in the local preview after approval:\n{}",
+            input.target.as_deref().unwrap_or_default()
+        ),
+        "preview.type" => format!(
+            "Replace the value of this selector in the local preview:\n{}\n\nExact text:\n{}",
+            input.target.as_deref().unwrap_or_default(),
+            input.value.as_deref().unwrap_or_default()
+        ),
+        "preview.key" => format!(
+            "Send this key to the focused local preview element:\n{}",
+            input.value.as_deref().unwrap_or_default()
+        ),
+        "preview.resize" => format!(
+            "Resize the local preview window to {} × {} logical pixels.",
+            input.width.unwrap_or_default(),
+            input.height.unwrap_or_default()
         ),
         _ => "Unsupported action.".to_string(),
     }
@@ -200,6 +385,9 @@ fn constant_time_equal(left: &str, right: &str) -> bool {
 fn cleanup_prepared(now: u64, state: &mut RuntimeState) {
     state
         .prepared
+        .retain(|_, record| record.prepared.expires_at_ms >= now);
+    state
+        .authorized
         .retain(|_, record| record.prepared.expires_at_ms >= now);
 }
 
@@ -239,8 +427,34 @@ pub(crate) fn computer_use_status() -> Result<ComputerUseStatus, String> {
         enabled: state.enabled,
         prepared_actions: state.prepared.len(),
         receipts: receipt_count(),
-        supported_actions: vec!["atelier.focus", "browser.open", "preview.open"],
+        supported_actions: vec![
+            "atelier.focus",
+            "browser.open",
+            "preview.open",
+            "preview.screenshot",
+            "preview.snapshot",
+            "preview.click",
+            "preview.type",
+            "preview.key",
+            "preview.resize",
+        ],
     })
+}
+
+#[tauri::command]
+pub(crate) fn computer_use_prepared() -> Result<Vec<ComputerUsePreparedAction>, String> {
+    let now = now_ms()?;
+    let mut state = runtime_state()
+        .lock()
+        .map_err(|_| "Computer Use state is unavailable.".to_string())?;
+    cleanup_prepared(now, &mut state);
+    let mut actions = state
+        .prepared
+        .values()
+        .map(|record| (record.created_at_ms, record.prepared.clone()))
+        .collect::<Vec<_>>();
+    actions.sort_by_key(|(created_at_ms, _)| *created_at_ms);
+    Ok(actions.into_iter().map(|(_, prepared)| prepared).collect())
 }
 
 #[tauri::command]
@@ -252,6 +466,7 @@ pub(crate) fn computer_use_set_enabled(enabled: bool) -> Result<ComputerUseStatu
         state.enabled = enabled;
         if !enabled {
             state.prepared.clear();
+            state.authorized.clear();
         }
     }
     computer_use_status()
@@ -278,6 +493,12 @@ pub(crate) fn computer_use_prepare(
         action_hash: action_hash(&action_id, &input)?,
         action: input.action,
         target: input.target,
+        value: input.value,
+        host: input.host,
+        port: input.port,
+        window_label: input.window_label,
+        width: input.width,
+        height: input.height,
         preview,
         expires_at_ms: now.saturating_add(APPROVAL_TTL_MS),
     };
@@ -323,30 +544,30 @@ fn perform(app: &AppHandle, prepared: &ComputerUsePreparedAction) -> Result<Stri
     }
 }
 
-#[tauri::command]
-pub(crate) fn computer_use_execute(
-    app: AppHandle,
-    action_id: String,
-    expected_hash: String,
+fn take_prepared_action(
+    state: &mut RuntimeState,
+    action_id: &str,
+    expected_hash: &str,
+    now: u64,
+) -> Result<PreparedActionRecord, String> {
+    if !state.enabled {
+        return Err("Computer Use is disabled by the global stop switch.".to_string());
+    }
+    cleanup_prepared(now, state);
+    let record = state
+        .prepared
+        .remove(action_id.trim())
+        .ok_or_else(|| "Computer Use approval is missing, expired, or already used.".to_string())?;
+    if !constant_time_equal(&record.prepared.action_hash, expected_hash.trim()) {
+        return Err("Computer Use approval hash does not match.".to_string());
+    }
+    Ok(record)
+}
+
+fn persist_receipt(
+    record: &PreparedActionRecord,
+    execution: Result<String, String>,
 ) -> Result<ComputerUseReceipt, String> {
-    let now = now_ms()?;
-    let record = {
-        let mut state = runtime_state()
-            .lock()
-            .map_err(|_| "Computer Use state is unavailable.".to_string())?;
-        if !state.enabled {
-            return Err("Computer Use is disabled by the global stop switch.".to_string());
-        }
-        cleanup_prepared(now, &mut state);
-        let record = state.prepared.remove(action_id.trim()).ok_or_else(|| {
-            "Computer Use approval is missing, expired, or already used.".to_string()
-        })?;
-        if !constant_time_equal(&record.prepared.action_hash, expected_hash.trim()) {
-            return Err("Computer Use approval hash does not match.".to_string());
-        }
-        record
-    };
-    let execution = perform(&app, &record.prepared);
     let receipt = ComputerUseReceipt {
         schema_version: SCHEMA_VERSION,
         receipt_id: Uuid::new_v4().to_string(),
@@ -372,12 +593,90 @@ pub(crate) fn computer_use_execute(
 }
 
 #[tauri::command]
-pub(crate) fn computer_use_discard(action_id: String) -> Result<(), String> {
-    runtime_state()
+pub(crate) fn computer_use_authorize(
+    action_id: String,
+    expected_hash: String,
+) -> Result<ComputerUsePreparedAction, String> {
+    let now = now_ms()?;
+    let mut state = runtime_state()
         .lock()
-        .map_err(|_| "Computer Use state is unavailable.".to_string())?
-        .prepared
-        .remove(action_id.trim());
+        .map_err(|_| "Computer Use state is unavailable.".to_string())?;
+    let record = take_prepared_action(&mut state, &action_id, &expected_hash, now)?;
+    if !is_frontend_action(&record.prepared.action) {
+        return Err("This Computer Use action must execute in the native backend.".to_string());
+    }
+    let prepared = record.prepared.clone();
+    state.authorized.insert(prepared.action_id.clone(), record);
+    Ok(prepared)
+}
+
+#[tauri::command]
+pub(crate) fn computer_use_complete(
+    action_id: String,
+    expected_hash: String,
+    succeeded: bool,
+    summary: String,
+) -> Result<ComputerUseReceipt, String> {
+    let now = now_ms()?;
+    let record = {
+        let mut state = runtime_state()
+            .lock()
+            .map_err(|_| "Computer Use state is unavailable.".to_string())?;
+        if !state.enabled {
+            return Err("Computer Use is disabled by the global stop switch.".to_string());
+        }
+        cleanup_prepared(now, &mut state);
+        let record = state.authorized.remove(action_id.trim()).ok_or_else(|| {
+            "Computer Use authorization is missing, expired, or already completed.".to_string()
+        })?;
+        if !constant_time_equal(&record.prepared.action_hash, expected_hash.trim()) {
+            return Err("Computer Use authorization hash does not match.".to_string());
+        }
+        record
+    };
+    let summary = summary.trim();
+    let summary = if summary.is_empty() {
+        if succeeded {
+            "Completed the approved local preview action."
+        } else {
+            "The approved local preview action failed."
+        }
+        .to_string()
+    } else {
+        summary.chars().take(2_000).collect::<String>()
+    };
+    persist_receipt(&record, if succeeded { Ok(summary) } else { Err(summary) })
+}
+
+#[tauri::command]
+pub(crate) fn computer_use_execute(
+    app: AppHandle,
+    action_id: String,
+    expected_hash: String,
+) -> Result<ComputerUseReceipt, String> {
+    let now = now_ms()?;
+    let record = {
+        let mut state = runtime_state()
+            .lock()
+            .map_err(|_| "Computer Use state is unavailable.".to_string())?;
+        take_prepared_action(&mut state, &action_id, &expected_hash, now)?
+    };
+    if is_frontend_action(&record.prepared.action) {
+        return Err(
+            "This Computer Use action must execute through the preview bridge.".to_string(),
+        );
+    }
+    let execution = perform(&app, &record.prepared);
+    persist_receipt(&record, execution)
+}
+
+#[tauri::command]
+pub(crate) fn computer_use_discard(action_id: String) -> Result<(), String> {
+    let mut state = runtime_state()
+        .lock()
+        .map_err(|_| "Computer Use state is unavailable.".to_string())?;
+    state.prepared.remove(action_id.trim());
+    state.authorized.remove(action_id.trim());
     Ok(())
 }
 
@@ -397,6 +696,12 @@ mod tests {
         assert!(normalize_input(ComputerUseInput {
             action: "shell.run".to_string(),
             target: Some("rm -rf /".to_string()),
+            value: None,
+            host: None,
+            port: None,
+            window_label: None,
+            width: None,
+            height: None,
         })
         .is_err());
     }
@@ -416,6 +721,12 @@ mod tests {
         let input = normalize_input(ComputerUseInput {
             action: "atelier.focus".to_string(),
             target: None,
+            value: None,
+            host: None,
+            port: None,
+            window_label: None,
+            width: None,
+            height: None,
         })
         .unwrap();
         let hash = action_hash("action", &input).unwrap();
@@ -424,5 +735,34 @@ mod tests {
             &action_hash("action", &input).unwrap()
         ));
         assert!(!constant_time_equal(&hash, "different"));
+    }
+
+    #[test]
+    fn preview_actions_are_loopback_and_bounded() {
+        let click = normalize_input(ComputerUseInput {
+            action: "preview.click".to_string(),
+            target: Some("button[data-testid='save']".to_string()),
+            value: None,
+            host: Some("127.0.0.1".to_string()),
+            port: Some(4321),
+            window_label: Some("main".to_string()),
+            width: None,
+            height: None,
+        })
+        .unwrap();
+        assert_eq!(click.host.as_deref(), Some("127.0.0.1"));
+        assert!(is_frontend_action(&click.action));
+
+        assert!(normalize_input(ComputerUseInput {
+            action: "preview.snapshot".to_string(),
+            target: None,
+            value: None,
+            host: Some("example.com".to_string()),
+            port: Some(4321),
+            window_label: Some("main".to_string()),
+            width: None,
+            height: None,
+        })
+        .is_err());
     }
 }
