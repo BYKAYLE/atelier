@@ -1,6 +1,100 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
+export function validateReleaseWorkflowPublicationGate(workflowText) {
+  if (!workflowText.includes("build-macos:") || !workflowText.includes("sign-windows:")) {
+    return {
+      ok: false,
+      message: "Release workflow must retain both macOS artifact creation and Windows signing jobs",
+    };
+  }
+
+  const macosUploadIndex = workflowText.indexOf("- name: Build and upload macOS bundle");
+  if (macosUploadIndex < 0) {
+    return {
+      ok: false,
+      message: "Release workflow must upload macOS assets before Windows publication gates run",
+    };
+  }
+
+  const macosUploadBlock = workflowText.slice(
+    macosUploadIndex,
+    workflowText.indexOf("\n  build-windows-unsigned:", macosUploadIndex) >= 0
+      ? workflowText.indexOf("\n  build-windows-unsigned:", macosUploadIndex)
+      : workflowText.length,
+  );
+  if (!macosUploadBlock.includes("releaseDraft: true")) {
+    return {
+      ok: false,
+      message: "Release workflow must create the GitHub release as a draft during macOS artifact upload",
+    };
+  }
+  if (macosUploadBlock.includes("releaseDraft: false")) {
+    return {
+      ok: false,
+      message: "Release workflow must not publish the GitHub release from the macOS artifact job",
+    };
+  }
+
+  if (/gh\s+release\s+create\b/.test(workflowText)) {
+    return {
+      ok: false,
+      message: "Release workflow must not create an additional GitHub release outside the draft macOS upload path",
+    };
+  }
+
+  const signWindowsIndex = workflowText.indexOf("\n  sign-windows:");
+  const signWindowsBlock = signWindowsIndex >= 0 ? workflowText.slice(signWindowsIndex) : "";
+  const publishMatches = [...workflowText.matchAll(/gh\s+release\s+edit\b[\s\S]*?--draft=false/g)];
+  if (publishMatches.length !== 1) {
+    return {
+      ok: false,
+      message: "Release workflow must publish exactly one draft release after the Windows gates finish",
+    };
+  }
+
+  const publishIndex = signWindowsBlock.search(/gh\s+release\s+edit\b[\s\S]*?--draft=false/);
+  if (publishIndex < 0) {
+    return {
+      ok: false,
+      message: "Release workflow must publish the draft release from the Windows signing job",
+    };
+  }
+
+  const uploadAssetsIndex = signWindowsBlock.indexOf("gh release upload $env:GITHUB_REF_NAME");
+  const mergeUpdaterIndex = signWindowsBlock.indexOf("node .github/scripts/update-tauri-latest-json.mjs");
+  const validateUpdaterIndex = signWindowsBlock.indexOf("windows-x86_64 must point to MSI for legacy updater compatibility");
+  if (uploadAssetsIndex < 0 || mergeUpdaterIndex < 0 || validateUpdaterIndex < 0) {
+    return {
+      ok: false,
+      message: "Release workflow must merge and validate the Windows updater manifest before publishing",
+    };
+  }
+  if (!(mergeUpdaterIndex < validateUpdaterIndex && validateUpdaterIndex < uploadAssetsIndex && uploadAssetsIndex < publishIndex)) {
+    return {
+      ok: false,
+      message: "Release workflow must publish only after Windows manifest merge, MSI validation, and asset upload succeed",
+    };
+  }
+
+  return { ok: true };
+}
+
+if (process.env.RELEASE_SECURITY_AUDIT_TEST_MODE === "publication-gate") {
+  const fixturePath = process.env.RELEASE_SECURITY_AUDIT_WORKFLOW_FIXTURE;
+  if (!fixturePath) {
+    console.error("Missing RELEASE_SECURITY_AUDIT_WORKFLOW_FIXTURE for publication-gate test mode");
+    process.exit(1);
+  }
+  const result = validateReleaseWorkflowPublicationGate(readFileSync(fixturePath, "utf8"));
+  if (!result.ok) {
+    console.error(result.message);
+    process.exit(1);
+  }
+  console.log("publication gate fixture passed");
+  process.exit(0);
+}
+
 const manifest = "src-tauri/Cargo.toml";
 const lockfile = "src-tauri/Cargo.lock";
 const excludedVersion = "quick-xml@0.39.2";
@@ -57,11 +151,13 @@ const reviewWorkflowSource = readFileSync("src/components/review-workflow/review
 const reviewWorkflowViewSource = readFileSync("src/components/review-workflow/ReviewWorkflowStatus.tsx", "utf8");
 const devScreenSource = readFileSync("src/lib/devScreen.ts", "utf8");
 const devScreenPickerSmokeSource = readFileSync("tools/devscreen-element-picker-smoke.ts", "utf8");
+const releaseWorkflowSource = readFileSync(".github/workflows/release.yml", "utf8");
 const workflowSource = [
-  readFileSync(".github/workflows/release.yml", "utf8"),
+  releaseWorkflowSource,
   readFileSync(".github/workflows/windows-store.yml", "utf8"),
   windowsProviderWorkflowSource,
 ].join("\n");
+const releaseWorkflowPublicationGate = validateReleaseWorkflowPublicationGate(releaseWorkflowSource);
 const openLoginBrowserSource = credentialSource
   .split("fn open_login_url_in_browser", 2)[1]
   ?.split("fn watch_and_open_login_url", 1)[0] || "";
@@ -477,6 +573,12 @@ const sourceInvariants = [
       packageSource.includes('"smoke:updater-contract"') &&
       workflowSource.includes("npm run smoke:updater-contract"),
     message: "Release workflows must verify the signed Windows updater platform contract",
+  },
+  {
+    ok: releaseWorkflowPublicationGate.ok,
+    message:
+      releaseWorkflowPublicationGate.message
+      ?? "Release workflow must keep the GitHub release draft until Windows signing, asset merge, and MSI validation succeed",
   },
 ];
 for (const invariant of sourceInvariants) {

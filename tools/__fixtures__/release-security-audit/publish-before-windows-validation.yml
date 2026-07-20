@@ -1,0 +1,20 @@
+name: Release
+
+jobs:
+  build-macos:
+    steps:
+      - name: Build and upload macOS bundle
+        with:
+          releaseDraft: true
+  build-windows-unsigned:
+    steps: []
+  sign-windows:
+    steps:
+      - name: Publish GitHub release after Windows gates
+        run: gh release edit $env:GITHUB_REF_NAME --draft=false
+      - name: Merge Windows entries into updater JSON
+        run: node .github/scripts/update-tauri-latest-json.mjs
+      - name: Validate Windows updater compatibility target
+        run: node -e "console.error('windows-x86_64 must point to MSI for legacy updater compatibility')"
+      - name: Upload Windows assets
+        run: gh release upload $env:GITHUB_REF_NAME --clobber
