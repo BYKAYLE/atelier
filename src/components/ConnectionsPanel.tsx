@@ -7,10 +7,12 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { cls, Tweaks } from "../lib/tokens";
 import { safeLocalStorageGet, safeLocalStorageSet } from "../lib/storage";
 import { FeaturePanels } from "../features/featureRegistry";
+import { cliInstallErrorMessage, cliInstallOutcome, isCliInstallActive } from "./connections/installState";
 import {
   GajecodeUpdateStatus,
   HermesUpdateStatus,
   ProviderBrowserProbeResult,
+  ProviderCliInstallState,
   ProviderLoginOauthResult,
   ProviderStatus,
   gajecodeCheckUpdate,
@@ -340,6 +342,46 @@ const COPY = {
 } as const;
 
 type CopyT = typeof COPY[keyof typeof COPY];
+type CliInstallPollResult = {
+  outcome: "succeeded" | "failed" | "timed_out";
+  status: ProviderStatus | null;
+  error?: string | null;
+};
+
+const CLI_INSTALL_POLL_INTERVAL_MS = 1000;
+const CLI_INSTALL_TIMEOUT_MS = 5 * 60 * 1000;
+
+function setProviderStatusEntry(
+  setStatuses: React.Dispatch<React.SetStateAction<Record<ProviderId, ProviderStatus | null>>>,
+  provider: ProviderId,
+  status: ProviderStatus | null,
+) {
+  setStatuses((prev) => ({ ...prev, [provider]: status }));
+}
+
+async function pollCliInstallStatus(
+  provider: ProviderId,
+  onStatusObserved: (status: ProviderStatus | null) => void,
+): Promise<CliInstallPollResult> {
+  const started = Date.now();
+  while (Date.now() - started < CLI_INSTALL_TIMEOUT_MS) {
+    await new Promise((resolve) => window.setTimeout(resolve, CLI_INSTALL_POLL_INTERVAL_MS));
+    const next = await providerStatus(provider).catch(() => null);
+    onStatusObserved(next);
+    const outcome = cliInstallOutcome(next);
+    if (outcome === "succeeded") {
+      return { outcome: "succeeded", status: next };
+    }
+    if (outcome === "failed") {
+      return {
+        outcome: "failed",
+        status: next,
+        error: cliInstallErrorMessage(next?.install_state),
+      };
+    }
+  }
+  return { outcome: "timed_out", status: null };
+}
 
 async function openExternalUrl(provider: ProviderId, url: string): Promise<boolean> {
   const allowedRoots = provider === "claude"
@@ -406,6 +448,9 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
   const [browserProbeBusy, setBrowserProbeBusy] = useState<"claude" | "codex" | null>(null);
   const [browserProbeResult, setBrowserProbeResult] = useState<ProviderBrowserProbeResult | null>(null);
   const [browserProbeError, setBrowserProbeError] = useState<string | null>(null);
+  const observeStatus = useCallback((provider: ProviderId, status: ProviderStatus | null) => {
+    setProviderStatusEntry(setStatuses, provider, status);
+  }, []);
 
   const refresh = useCallback(async (only?: ProviderId) => {
     const targets = only ? [only] : (["claude", "codex", "openrouter", "linear", "hermes", "gajecode"] as ProviderId[]);
@@ -651,25 +696,19 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
             tw={tw}
             status={statuses[p.id]}
             busy={busyId === p.id}
+            onStatusObserved={(status) => observeStatus(p.id, status)}
             onStartLogin={(force) => void startLogin(p, force)}
             onSaved={() => void refresh(p.id)}
             onCleared={() => void refresh(p.id)}
-            onInstalled={() => {
-              setBusyId(p.id);
-              setTimeout(() => {
-                setBusyId(null);
-                void refresh(p.id);
-              }, 4000);
-            }}
+            onInstalled={() => void refresh(p.id)}
           />
         ))}
 
         <HermesCard
           tw={tw}
           statuses={statuses}
-          onInstalled={() => {
-            setTimeout(() => void refresh("hermes"), 1000);
-          }}
+          onStatusObserved={(status) => observeStatus("hermes", status)}
+          onInstalled={() => void refresh("hermes")}
         />
 
         <GajecodeCard
@@ -742,6 +781,7 @@ interface CardProps {
   tw: Tweaks;
   status: ProviderStatus | null;
   busy: boolean;
+  onStatusObserved: (status: ProviderStatus | null) => void;
   onStartLogin: (force?: boolean) => void;
   onSaved: () => void;
   onCleared: () => void;
@@ -753,6 +793,7 @@ const ProviderCard: React.FC<CardProps> = ({
   tw,
   status,
   busy,
+  onStatusObserved,
   onStartLogin,
   onSaved,
   onCleared,
@@ -764,12 +805,16 @@ const ProviderCard: React.FC<CardProps> = ({
   const [keyInput, setKeyInput] = useState("");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [installing, setInstalling] = useState(false);
+  const [observedInstallState, setObservedInstallState] = useState<ProviderCliInstallState | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const supportsOauth = status?.supports_oauth ?? !!def.oauthCta[lang];
   const supportsApi = status?.supports_api ?? !!def.apiHelp[lang];
   const supportsInstall = !!def.installHelp;
   const cliInstalled = status?.cli_installed ?? false;
+  const installState = status?.install_state ?? observedInstallState;
+  const installActive = isCliInstallActive(installState);
+  const installError = cliInstallErrorMessage(installState) ?? errorMsg;
   const oauthLoggedIn = status?.oauth_logged_in ?? false;
   const apiKeyPresent = status?.api_key_present ?? false;
   const connected = oauthLoggedIn || apiKeyPresent;
@@ -824,22 +869,32 @@ const ProviderCard: React.FC<CardProps> = ({
     setInstalling(true);
     setErrorMsg(null);
     try {
-      await providerInstallCli(def.id);
-      const started = Date.now();
-      while (Date.now() - started < 5 * 60 * 1000) {
-        await new Promise((resolve) => window.setTimeout(resolve, 3000));
-        const next = await providerStatus(def.id).catch(() => null);
-        if (next?.cli_installed) {
+      const startedState = await providerInstallCli(def.id);
+      setObservedInstallState(startedState);
+      if (!isCliInstallActive(startedState)) {
+        const immediateError = cliInstallErrorMessage(startedState);
+        if (immediateError) setErrorMsg(immediateError);
+        if (startedState.phase === "succeeded") {
           onInstalled();
-          setInstalling(false);
-          return;
         }
+        return;
       }
-      onInstalled();
+      const result = await pollCliInstallStatus(def.id, (next) => {
+        onStatusObserved(next);
+        setObservedInstallState(next?.install_state ?? null);
+      });
+      if (result.outcome === "succeeded") {
+        onInstalled();
+        return;
+      }
+      if (result.outcome === "failed") {
+        setErrorMsg(result.error ?? copy.installTimeout);
+        return;
+      }
       setErrorMsg(copy.installTimeout);
-      setInstalling(false);
     } catch (e) {
       setErrorMsg(String(e));
+    } finally {
       setInstalling(false);
     }
   }
@@ -890,7 +945,7 @@ const ProviderCard: React.FC<CardProps> = ({
             )}
             <button
               onClick={() => void handleAutoInstall()}
-              disabled={installing || cliInstalled}
+              disabled={installing || installActive || cliInstalled}
               className={cls(
                 "text-[12.5px] h-8 px-3 rounded-md border font-medium transition-colors",
                 cliInstalled
@@ -901,7 +956,7 @@ const ProviderCard: React.FC<CardProps> = ({
                 "disabled:opacity-60 disabled:cursor-not-allowed",
               )}
             >
-              {cliInstalled ? copy.statusCliReady : installing ? copy.installing : `+ ${copy.installAuto}`}
+              {cliInstalled ? copy.statusCliReady : installing || installActive ? copy.installing : `+ ${copy.installAuto}`}
             </button>
             {connected && (
               <button
@@ -991,14 +1046,14 @@ const ProviderCard: React.FC<CardProps> = ({
         </div>
       )}
 
-      {errorMsg && (
+      {installError && (
         <div
           className={cls(
             "mt-3 text-[12px] px-3 py-2 rounded-md border",
             dark ? "border-red-700/40 bg-red-900/20 text-red-300" : "border-red-200 bg-red-50 text-red-700",
           )}
         >
-          {errorMsg}
+          {installError}
         </div>
       )}
     </div>
@@ -1008,8 +1063,9 @@ const ProviderCard: React.FC<CardProps> = ({
 const HermesCard: React.FC<{
   tw: Tweaks;
   statuses: Record<ProviderId, ProviderStatus | null>;
+  onStatusObserved: (status: ProviderStatus | null) => void;
   onInstalled: () => void;
-}> = ({ tw, statuses, onInstalled }) => {
+}> = ({ tw, statuses, onStatusObserved, onInstalled }) => {
   const dark = tw.dark;
   const lang = tw.language;
   const copy = COPY[lang];
@@ -1032,7 +1088,11 @@ const HermesCard: React.FC<{
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [installing, setInstalling] = useState(false);
+  const [observedInstallState, setObservedInstallState] = useState<ProviderCliInstallState | null>(null);
   const [installError, setInstallError] = useState<string | null>(null);
+  const installState = hermes?.install_state ?? observedInstallState;
+  const installActive = isCliInstallActive(installState);
+  const effectiveInstallError = cliInstallErrorMessage(installState) ?? installError;
 
   const refreshUpdate = useCallback(async () => {
     setCheckingUpdate(true);
@@ -1087,22 +1147,32 @@ const HermesCard: React.FC<{
     setInstalling(true);
     setInstallError(null);
     try {
-      await providerInstallCli("hermes");
-      const started = Date.now();
-      while (Date.now() - started < 5 * 60 * 1000) {
-        await new Promise((resolve) => window.setTimeout(resolve, 3000));
-        const next = await providerStatus("hermes").catch(() => null);
-        if (next?.cli_installed) {
+      const startedState = await providerInstallCli("hermes");
+      setObservedInstallState(startedState);
+      if (!isCliInstallActive(startedState)) {
+        const immediateError = cliInstallErrorMessage(startedState);
+        if (immediateError) setInstallError(immediateError);
+        if (startedState.phase === "succeeded") {
           onInstalled();
-          setInstalling(false);
-          return;
         }
+        return;
       }
-      onInstalled();
+      const result = await pollCliInstallStatus("hermes", (next) => {
+        onStatusObserved(next);
+        setObservedInstallState(next?.install_state ?? null);
+      });
+      if (result.outcome === "succeeded") {
+        onInstalled();
+        return;
+      }
+      if (result.outcome === "failed") {
+        setInstallError(result.error ?? copy.installTimeout);
+        return;
+      }
       setInstallError(copy.installTimeout);
-      setInstalling(false);
     } catch (e) {
       setInstallError(String(e));
+    } finally {
       setInstalling(false);
     }
   }
@@ -1150,7 +1220,7 @@ const HermesCard: React.FC<{
         </div>
         <button
           onClick={() => void runInstall()}
-          disabled={installing || installed}
+          disabled={installing || installActive || installed}
           className={cls(
             "text-[12.5px] h-8 px-3 rounded-md border font-medium transition-colors",
             installed
@@ -1161,18 +1231,18 @@ const HermesCard: React.FC<{
             "disabled:opacity-60 disabled:cursor-not-allowed",
           )}
         >
-          {installed ? copy.statusCliReady : installing ? copy.installing : `+ ${copy.hermesCliInstall}`}
+          {installed ? copy.statusCliReady : installing || installActive ? copy.installing : `+ ${copy.hermesCliInstall}`}
         </button>
       </div>
 
-      {installError && (
+      {effectiveInstallError && (
         <div
           className={cls(
             "mt-3 text-[12px] px-3 py-2 rounded-md border",
             dark ? "border-red-700/40 bg-red-900/20 text-red-300" : "border-red-200 bg-red-50 text-red-700",
           )}
         >
-          {installError}
+          {effectiveInstallError}
         </div>
       )}
 

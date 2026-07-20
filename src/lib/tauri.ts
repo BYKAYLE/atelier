@@ -1382,11 +1382,23 @@ export async function exportDesignProjectZip(projectId: string): Promise<string>
 export interface ProviderStatus {
   provider: string;
   cli_installed: boolean;
+  install_state?: ProviderCliInstallState | null;
   oauth_logged_in: boolean;
   api_key_present: boolean;
   api_key_masked: string;
   supports_oauth: boolean;
   supports_api: boolean;
+}
+
+export type ProviderCliInstallPhase = "started" | "running" | "succeeded" | "failed";
+
+export interface ProviderCliInstallState {
+  provider: string;
+  phase: ProviderCliInstallPhase;
+  detail?: string | null;
+  exit_code?: number | null;
+  started_at_ms: number;
+  updated_at_ms: number;
 }
 
 export async function providerStatus(provider: string): Promise<ProviderStatus> {
@@ -1456,8 +1468,8 @@ export async function providerSubmitOauthCode(provider: string, code: string): P
   return invoke("provider_submit_oauth_code", { provider, code });
 }
 
-/** Claude/Codex/Hermes CLI 자동 설치. 백그라운드 실행, 즉시 반환. */
-export async function providerInstallCli(provider: string): Promise<void> {
+/** Claude/Codex/Hermes CLI 자동 설치. 백그라운드 실행 시작 상태를 즉시 반환. */
+export async function providerInstallCli(provider: string): Promise<ProviderCliInstallState> {
   return invoke("provider_install_cli", { provider });
 }
 

@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{ChildStdin, Command, Output, Stdio};
+use std::process::{ChildStdin, Command, ExitStatus, Output, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -47,6 +47,8 @@ struct OAuthLoginRuntimeState {
 }
 
 static OAUTH_LOGIN_RUNTIME: Lazy<Mutex<HashMap<String, OAuthLoginRuntimeState>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+static CLI_INSTALL_RUNTIME: Lazy<Mutex<HashMap<String, ProviderCliInstallState>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 #[cfg(target_os = "windows")]
 const HERMES_INSTALL_PS1: &str =
@@ -320,6 +322,144 @@ fn login_failure_detail_text(text: &str) -> String {
 
 fn oauth_runtime_now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
+}
+
+fn cli_install_runtime_now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
+fn cli_install_phase_is_active(phase: ProviderCliInstallPhase) -> bool {
+    matches!(
+        phase,
+        ProviderCliInstallPhase::Started | ProviderCliInstallPhase::Running
+    )
+}
+
+fn cli_install_runtime_snapshot(provider: &str) -> Option<ProviderCliInstallState> {
+    CLI_INSTALL_RUNTIME
+        .lock()
+        .ok()
+        .and_then(|map| map.get(provider).cloned())
+}
+
+fn begin_cli_install_runtime(
+    provider: &str,
+) -> Result<ProviderCliInstallState, ProviderCliInstallState> {
+    let mut map = CLI_INSTALL_RUNTIME
+        .lock()
+        .expect("cli install runtime lock poisoned");
+    if let Some(existing) = map.get(provider).cloned() {
+        if cli_install_phase_is_active(existing.phase) {
+            return Err(existing);
+        }
+    }
+    let now = cli_install_runtime_now_ms();
+    let state = ProviderCliInstallState {
+        provider: provider.to_string(),
+        phase: ProviderCliInstallPhase::Started,
+        detail: None,
+        exit_code: None,
+        started_at_ms: now,
+        updated_at_ms: now,
+    };
+    map.insert(provider.to_string(), state.clone());
+    Ok(state)
+}
+
+fn update_cli_install_runtime(
+    provider: &str,
+    phase: ProviderCliInstallPhase,
+    detail: Option<String>,
+    exit_code: Option<i32>,
+) -> ProviderCliInstallState {
+    let mut map = CLI_INSTALL_RUNTIME
+        .lock()
+        .expect("cli install runtime lock poisoned");
+    let now = cli_install_runtime_now_ms();
+    let started_at_ms = map
+        .get(provider)
+        .map(|state| state.started_at_ms)
+        .unwrap_or(now);
+    let state = ProviderCliInstallState {
+        provider: provider.to_string(),
+        phase,
+        detail,
+        exit_code,
+        started_at_ms,
+        updated_at_ms: now,
+    };
+    map.insert(provider.to_string(), state.clone());
+    state
+}
+
+fn cli_install_success_message(label: &str) -> String {
+    format!("{label} CLI install completed and the CLI is now available.")
+}
+
+fn cli_install_spawn_error_message(label: &str, error: &str) -> String {
+    format!("{label} installer could not start: {error}")
+}
+
+fn cli_install_wait_error_message(label: &str, error: &str) -> String {
+    format!("{label} installer wait failed: {error}")
+}
+
+fn cli_install_exit_message(label: &str, exit_code: Option<i32>) -> String {
+    match exit_code {
+        Some(code) => format!("{label} installer exited with code {code}."),
+        None => format!("{label} installer exited before reporting a code."),
+    }
+}
+
+fn cli_install_missing_binary_message(label: &str) -> String {
+    format!("{label} installer exited successfully but the CLI is still unavailable.")
+}
+
+fn cli_install_terminal_state_from_exit(
+    label: &str,
+    exited_successfully: bool,
+    exit_code: Option<i32>,
+    cli_available: bool,
+) -> (ProviderCliInstallPhase, Option<String>, Option<i32>) {
+    if exited_successfully && cli_available {
+        (
+            ProviderCliInstallPhase::Succeeded,
+            Some(cli_install_success_message(label)),
+            exit_code,
+        )
+    } else if exited_successfully {
+        (
+            ProviderCliInstallPhase::Failed,
+            Some(cli_install_missing_binary_message(label)),
+            exit_code,
+        )
+    } else {
+        (
+            ProviderCliInstallPhase::Failed,
+            Some(cli_install_exit_message(label, exit_code)),
+            exit_code,
+        )
+    }
+}
+
+fn cli_install_terminal_state_from_result(
+    label: &str,
+    wait_result: io::Result<ExitStatus>,
+    cli_available: bool,
+) -> (ProviderCliInstallPhase, Option<String>, Option<i32>) {
+    match wait_result {
+        Ok(status) => cli_install_terminal_state_from_exit(
+            label,
+            status.success(),
+            status.code(),
+            cli_available,
+        ),
+        Err(error) => (
+            ProviderCliInstallPhase::Failed,
+            Some(cli_install_wait_error_message(label, &error.to_string())),
+            None,
+        ),
+    }
 }
 
 fn start_oauth_login_runtime(provider: &str) {
@@ -1028,6 +1168,8 @@ pub struct ProviderStatus {
     pub provider: String,
     /// CLI binary 가 PATH 에 있나 (claude/codex/hermes)
     pub cli_installed: bool,
+    /// 최근 자동 설치 런타임 상태. 설치를 시도하지 않았으면 None.
+    pub install_state: Option<ProviderCliInstallState>,
     /// CLI 가 OAuth 로그인된 상태로 보이나 (가능한 경우만 검사)
     pub oauth_logged_in: bool,
     /// API 키가 keychain에 저장되어 있나 (값은 노출 X)
@@ -1070,6 +1212,25 @@ pub struct ProviderBrowserProbeResult {
     pub handoff: String,
     pub accepted: bool,
     pub checked_at_ms: i64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderCliInstallPhase {
+    Started,
+    Running,
+    Succeeded,
+    Failed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ProviderCliInstallState {
+    pub provider: String,
+    pub phase: ProviderCliInstallPhase,
+    pub detail: Option<String>,
+    pub exit_code: Option<i32>,
+    pub started_at_ms: i64,
+    pub updated_at_ms: i64,
 }
 
 fn keychain_entry(provider: &str, slot: &str) -> Result<Entry, String> {
@@ -1260,6 +1421,18 @@ pub fn gajecode_executable_path() -> Option<PathBuf> {
 
 fn gajecode_cli_installed() -> bool {
     gajecode_executable_path().is_some()
+}
+
+fn claude_cli_installed() -> bool {
+    cli_runs_for_provider("claude", "claude")
+}
+
+fn codex_cli_installed() -> bool {
+    cli_runs_for_provider("codex", "codex")
+}
+
+fn hermes_cli_installed() -> bool {
+    cli_runs_for_provider("hermes", "hermes")
 }
 
 pub fn gajecode_runtime_path_env() -> String {
@@ -1467,12 +1640,16 @@ fn cli_runs_for_provider(provider: &str, cli: &str) -> bool {
 }
 
 fn provider_cli_installed(provider: &str, meta: &ProviderMeta) -> bool {
-    if provider == "gajecode" {
-        return gajecode_cli_installed();
+    match provider {
+        "claude" => claude_cli_installed(),
+        "codex" => codex_cli_installed(),
+        "hermes" => hermes_cli_installed(),
+        "gajecode" => gajecode_cli_installed(),
+        _ => meta
+            .cli
+            .map(|cli| cli_runs_for_provider(provider, cli))
+            .unwrap_or(false),
     }
-    meta.cli
-        .map(|cli| cli_runs_for_provider(provider, cli))
-        .unwrap_or(false)
 }
 
 fn command_output_timeout(mut command: Command, timeout: Duration) -> io::Result<Option<Output>> {
@@ -1778,6 +1955,7 @@ pub fn prepare_gajecode_claude_subscription_token() -> Result<Option<String>, St
 pub async fn provider_status(provider: String) -> Result<ProviderStatus, String> {
     let meta = provider_meta(&provider).ok_or_else(|| format!("unknown provider: {provider}"))?;
     let cli_installed = provider_cli_installed(&provider, &meta);
+    let install_state = cli_install_runtime_snapshot(&provider);
     let oauth_logged_in = meta.supports_oauth && detect_oauth(&provider);
     let (api_key_present, api_key_masked) = if meta.supports_api {
         if let Some(key) = read_api_key(&provider) {
@@ -1800,6 +1978,7 @@ pub async fn provider_status(provider: String) -> Result<ProviderStatus, String>
     Ok(ProviderStatus {
         provider,
         cli_installed,
+        install_state,
         oauth_logged_in,
         api_key_present,
         api_key_masked,
@@ -2330,7 +2509,7 @@ pub async fn provider_submit_oauth_code(provider: String, code: String) -> Resul
 /// CLI 자동 설치 — npm 으로 claude-code / codex 를 글로벌 설치.
 /// 새 사용자가 터미널 없이 한 클릭으로 셋업할 수 있도록.
 #[tauri::command]
-pub async fn provider_install_cli(provider: String) -> Result<(), String> {
+pub async fn provider_install_cli(provider: String) -> Result<ProviderCliInstallState, String> {
     match provider.as_str() {
         "claude" => install_claude_cli(),
         "codex" => install_npm_cli("codex", "@openai/codex"),
@@ -2342,9 +2521,15 @@ pub async fn provider_install_cli(provider: String) -> Result<(), String> {
 
 fn spawn_cli_installer(
     mut command: Command,
+    provider: &'static str,
     label: &'static str,
+    verify_cli: fn() -> bool,
     after_success: Option<fn()>,
-) -> Result<(), String> {
+) -> Result<ProviderCliInstallState, String> {
+    let started_state = match begin_cli_install_runtime(provider) {
+        Ok(state) => state,
+        Err(existing) => return Ok(existing),
+    };
     configure_background_command(&mut command);
     let has_explicit_path = command
         .get_envs()
@@ -2359,23 +2544,43 @@ fn spawn_cli_installer(
             .stdin(Stdio::null())
             .spawn()
         {
-            Ok(mut child) => match child.wait() {
-                Ok(status) if status.success() => {
-                    log::info!("{label} install completed");
+            Ok(mut child) => {
+                update_cli_install_runtime(provider, ProviderCliInstallPhase::Running, None, None);
+                let wait_result = child.wait();
+                let cli_available = verify_cli();
+                let (phase, detail, exit_code) =
+                    cli_install_terminal_state_from_result(label, wait_result, cli_available);
+                let state = update_cli_install_runtime(provider, phase, detail.clone(), exit_code);
+                if state.phase == ProviderCliInstallPhase::Succeeded {
                     if let Some(callback) = after_success {
                         callback();
                     }
+                    if let Some(detail) = detail {
+                        log::info!("{detail}");
+                    }
+                } else if let Some(detail) = detail {
+                    log::warn!("{detail}");
                 }
-                Ok(status) => log::warn!("{label} install exited with {status}"),
-                Err(e) => log::warn!("{label} install wait: {e}"),
-            },
-            Err(e) => log::warn!("{label} install spawn: {e}"),
+            }
+            Err(error) => {
+                let detail = cli_install_spawn_error_message(label, &error.to_string());
+                update_cli_install_runtime(
+                    provider,
+                    ProviderCliInstallPhase::Failed,
+                    Some(detail.clone()),
+                    None,
+                );
+                log::warn!("{detail}");
+            }
         }
     });
-    Ok(())
+    Ok(started_state)
 }
 
-fn install_npm_cli(label: &'static str, pkg: &'static str) -> Result<(), String> {
+fn install_npm_cli(
+    label: &'static str,
+    pkg: &'static str,
+) -> Result<ProviderCliInstallState, String> {
     if !which("npm") {
         return Err("npm not found. install Node.js first.".into());
     }
@@ -2400,10 +2605,15 @@ fn install_npm_cli(label: &'static str, pkg: &'static str) -> Result<(), String>
         command.arg("install").arg("-g").arg(pkg);
         command
     };
-    spawn_cli_installer(command, label, None)
+    let verify_cli = match label {
+        "claude" => claude_cli_installed,
+        "codex" => codex_cli_installed,
+        _ => return Err(format!("no install verifier configured for {label}")),
+    };
+    spawn_cli_installer(command, label, label, verify_cli, None)
 }
 
-fn install_claude_cli() -> Result<(), String> {
+fn install_claude_cli() -> Result<ProviderCliInstallState, String> {
     #[cfg(target_os = "windows")]
     {
         let mut command = Command::new("powershell.exe");
@@ -2415,14 +2625,14 @@ fn install_claude_cli() -> Result<(), String> {
             .arg("Bypass")
             .arg("-Command")
             .arg(CLAUDE_INSTALL_PS1);
-        spawn_cli_installer(command, "claude", None)
+        spawn_cli_installer(command, "claude", "claude", claude_cli_installed, None)
     }
 
     #[cfg(not(target_os = "windows"))]
     install_npm_cli("claude", "@anthropic-ai/claude-code")
 }
 
-fn install_hermes_cli() -> Result<(), String> {
+fn install_hermes_cli() -> Result<ProviderCliInstallState, String> {
     #[cfg(target_os = "windows")]
     {
         let mut command = Command::new("powershell.exe");
@@ -2434,7 +2644,7 @@ fn install_hermes_cli() -> Result<(), String> {
             .arg("Bypass")
             .arg("-Command")
             .arg(HERMES_INSTALL_PS1);
-        spawn_cli_installer(command, "hermes", None)
+        spawn_cli_installer(command, "hermes", "hermes", hermes_cli_installed, None)
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -2447,11 +2657,11 @@ fn install_hermes_cli() -> Result<(), String> {
         }
         let mut command = Command::new("sh");
         command.arg("-c").arg(HERMES_INSTALL_SH);
-        spawn_cli_installer(command, "hermes", None)
+        spawn_cli_installer(command, "hermes", "hermes", hermes_cli_installed, None)
     }
 }
 
-fn install_gajecode_cli() -> Result<(), String> {
+fn install_gajecode_cli() -> Result<ProviderCliInstallState, String> {
     #[cfg(target_os = "windows")]
     let mut command = {
         let mut command = Command::new("powershell.exe");
@@ -2475,7 +2685,13 @@ fn install_gajecode_cli() -> Result<(), String> {
     };
 
     configure_gajecode_runtime_env(&mut command)?;
-    spawn_cli_installer(command, "gajecode", None)
+    spawn_cli_installer(
+        command,
+        "gajecode",
+        "gajecode",
+        gajecode_cli_installed,
+        None,
+    )
 }
 
 #[derive(Serialize)]
@@ -2588,7 +2804,7 @@ pub async fn gajecode_check_update() -> Result<GajecodeUpdateStatus, String> {
 
 #[tauri::command]
 pub async fn gajecode_update() -> Result<(), String> {
-    install_gajecode_cli()
+    install_gajecode_cli().map(|_| ())
 }
 
 #[derive(Serialize)]
@@ -2740,6 +2956,61 @@ pub fn env_var_for(provider: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cli_install_terminal_state_reports_success_only_after_cli_is_detectable() {
+        let (phase, detail, exit_code) =
+            cli_install_terminal_state_from_exit("codex", true, Some(0), true);
+        assert_eq!(phase, ProviderCliInstallPhase::Succeeded);
+        assert_eq!(exit_code, Some(0));
+        assert_eq!(
+            detail.as_deref(),
+            Some("codex CLI install completed and the CLI is now available.")
+        );
+    }
+
+    #[test]
+    fn cli_install_terminal_state_reports_nonzero_exit_with_sanitized_code() {
+        let (phase, detail, exit_code) =
+            cli_install_terminal_state_from_exit("claude", false, Some(23), false);
+        assert_eq!(phase, ProviderCliInstallPhase::Failed);
+        assert_eq!(exit_code, Some(23));
+        assert_eq!(
+            detail.as_deref(),
+            Some("claude installer exited with code 23.")
+        );
+    }
+
+    #[test]
+    fn cli_install_terminal_state_rejects_zero_exit_without_visible_cli() {
+        let (phase, detail, exit_code) =
+            cli_install_terminal_state_from_exit("hermes", true, Some(0), false);
+        assert_eq!(phase, ProviderCliInstallPhase::Failed);
+        assert_eq!(exit_code, Some(0));
+        assert_eq!(
+            detail.as_deref(),
+            Some("hermes installer exited successfully but the CLI is still unavailable.")
+        );
+    }
+
+    #[test]
+    fn cli_install_duplicate_guard_reuses_active_provider_state() {
+        let provider = "fixture-duplicate-guard";
+        let started = begin_cli_install_runtime(provider).expect("first install should start");
+        let duplicate =
+            begin_cli_install_runtime(provider).expect_err("active install must be reused");
+        assert_eq!(started.phase, ProviderCliInstallPhase::Started);
+        assert_eq!(duplicate.phase, ProviderCliInstallPhase::Started);
+        update_cli_install_runtime(
+            provider,
+            ProviderCliInstallPhase::Failed,
+            Some("fixture failure".to_string()),
+            Some(1),
+        );
+        let restarted =
+            begin_cli_install_runtime(provider).expect("failed install should allow retry");
+        assert_eq!(restarted.phase, ProviderCliInstallPhase::Started);
+    }
 
     #[test]
     fn subscription_oauth_wins_for_direct_agent_clis() {
