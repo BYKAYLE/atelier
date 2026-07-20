@@ -53,6 +53,7 @@
     "smoke:quick-open-index": "node --experimental-strip-types tools/quick-open-index-smoke.ts",
     "smoke:rich-preview": "node --experimental-strip-types tools/rich-preview-smoke.ts",
     "smoke:agent-performance": "node tools/agent-workspace-performance-smoke.mjs",
+    "smoke:session-drafts": "node --experimental-strip-types tools/session-draft-store-smoke.ts",
     "smoke:session-runs": "node --experimental-strip-types tools/session-run-registry-smoke.ts",
     "smoke:feature-boundaries": "node tools/feature-boundary-smoke.mjs",
     "smoke:feature-settings": "node --experimental-strip-types tools/feature-settings-smoke.ts",
