@@ -34,7 +34,7 @@ import {
 } from "../lib/stellaFactory";
 import type { StellaFactoryCommand } from "../lib/stellaFactory";
 import { safeLocalStorageGet, safeLocalStorageSet } from "../lib/storage";
-import { findAutoPreviewUrl, findUrl, isAutoReviewablePreviewUrl, restoreAutoPreviewUrl } from "../lib/previewUrl";
+import { findUrl, isAutoReviewablePreviewUrl, restoreAutoPreviewUrl } from "../lib/previewUrl";
 import {
   formatReviewAnnotationsPrompt,
   normalizeReviewAnnotations,
@@ -192,7 +192,7 @@ type ModelOption = {
 type WorkloadLevel = "low" | "medium" | "high" | "xhigh" | "ultra";
 type CodexEffort = WorkloadLevel;
 type CodexSpeed = "default" | "fast";
-type HermesInferenceProvider = "openai-codex" | "openrouter";
+type HermesInferenceProvider = "openai-codex" | "openrouter" | "alibaba";
 type GajaeInferenceProvider = "claude" | "codex";
 type SlashCommandScope = "atelier" | AgentProvider;
 
@@ -1338,6 +1338,14 @@ const OPENROUTER_MODELS: ModelOption[] = [
   { value: "anthropic/claude-haiku-4.5", label: "Claude Haiku 4.5" },
 ];
 
+const ALIBABA_TOKEN_PLAN_MODELS: ModelOption[] = [
+  { value: "qwen3.8-max-preview", label: "Qwen 3.8 Max (Preview)" },
+  { value: "qwen3.7-plus", label: "Qwen 3.7 Plus" },
+  { value: "qwen3.7-max", label: "Qwen 3.7 Max" },
+  { value: "qwen3.6-flash", label: "Qwen 3.6 Flash" },
+  { value: "glm-5.2", label: "GLM 5.2" },
+];
+
 const CODEX_MODELS: ModelOption[] = [
   { value: "gpt-5.5", label: "GPT-5.5" },
 ];
@@ -1371,6 +1379,7 @@ const MODEL_OPTIONS: Record<AgentProvider, ModelOption[]> = {
 const HERMES_PROVIDERS: Array<{ value: HermesInferenceProvider; label: string }> = [
   { value: "openai-codex", label: "Codex" },
   { value: "openrouter", label: "OpenRouter" },
+  { value: "alibaba", label: "Alibaba Cloud" },
 ];
 
 const GAJECODE_PROVIDERS: Array<{ value: GajaeInferenceProvider; label: string }> = [
@@ -1381,6 +1390,7 @@ const GAJECODE_PROVIDERS: Array<{ value: GajaeInferenceProvider; label: string }
 const HERMES_MODEL_OPTIONS: Record<HermesInferenceProvider, ModelOption[]> = {
   "openai-codex": OPENAI_CODEX_MODELS,
   openrouter: OPENROUTER_MODELS,
+  alibaba: ALIBABA_TOKEN_PLAN_MODELS,
 };
 
 const CODEX_EFFORTS: Array<{ value: CodexEffort; ko: string; en: string }> = [
@@ -1434,7 +1444,7 @@ const isProvider = (value: unknown): value is AgentProvider =>
   value === "claude" || value === "hermes" || value === "codex" || value === "gajecode";
 
 const isHermesProvider = (value: unknown): value is HermesInferenceProvider =>
-  value === "openai-codex" || value === "openrouter";
+  value === "openai-codex" || value === "openrouter" || value === "alibaba";
 
 const isGajaeProvider = (value: unknown): value is GajaeInferenceProvider =>
   value === "claude" || value === "codex";
@@ -1488,12 +1498,14 @@ function hermesProviderFromProfile(profile?: Profile) {
 
 function defaultHermesModel(hermesProvider: HermesInferenceProvider) {
   if (hermesProvider === "openrouter") return "openai/gpt-5.5";
+  if (hermesProvider === "alibaba") return "qwen3.8-max-preview";
   return "gpt-5.5";
 }
 
 function inferHermesProviderFromModel(model?: string | null) {
   const trimmed = model?.trim();
   if (!trimmed) return DEFAULT_HERMES_PROVIDER;
+  if (/^(?:qwen|glm)-?/i.test(trimmed)) return "alibaba";
   if (trimmed.includes("/")) return "openrouter";
   return DEFAULT_HERMES_PROVIDER;
 }
@@ -1789,7 +1801,7 @@ function slashCommandsFor(
         detailEn: "Run a Hermes CLI command",
       },
       {
-        command: "/provider openai-codex|openrouter",
+        command: "/provider openai-codex|openrouter|alibaba",
         insert: "/provider ",
         scope: "hermes",
         detailKo: `Hermes 하위 provider 변경 (현재 ${hermesProvider})`,
@@ -2131,6 +2143,19 @@ function normalizeModel(provider: AgentProvider, model?: string | null) {
 function normalizeHermesModel(hermesProvider: HermesInferenceProvider, model?: string | null) {
   const trimmed = normalizeModel("hermes", model);
   if (!trimmed || trimmed === providerMeta("hermes").defaultModel) return defaultHermesModel(hermesProvider);
+  if (hermesProvider === "alibaba") {
+    const aliases: Record<string, string> = {
+      "qwen3.8": "qwen3.8-max-preview",
+      "qwen-3.8": "qwen3.8-max-preview",
+      "qwen3.8-max": "qwen3.8-max-preview",
+      "glm5.2": "glm-5.2",
+      "glm-5-2": "glm-5.2",
+    };
+    const candidate = aliases[trimmed.toLowerCase()] || trimmed;
+    return ALIBABA_TOKEN_PLAN_MODELS.some((option) => option.value === candidate)
+      ? candidate
+      : defaultHermesModel(hermesProvider);
+  }
   if (hermesProvider === "openrouter") {
     if (/^gpt-5\.(?:2|3-codex|4|4-mini)$/.test(trimmed)) return "openai/gpt-5.5";
     const legacy: Record<string, string> = {
@@ -2486,16 +2511,6 @@ function stripAnsi(text: string) {
   );
 }
 
-function redactPreviewEvidenceText(text: string) {
-  return stripAnsi(text)
-    .replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+\/-]{8,}/gi, "<redacted>")
-    .replace(/\bsk-[A-Za-z0-9_-]{12,}/g, "<redacted>")
-    .replace(
-      /\b(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|authorization|password)\s*[:=]\s*["']?[^\s,"';}\]]+/gi,
-      "$1=<redacted>",
-    );
-}
-
 function parseCliTableRows(output: string) {
   const rows: string[][] = [];
   for (const rawLine of output.split(/\r?\n/)) {
@@ -2649,128 +2664,6 @@ function cleanStoredPreviewServiceCommand(text?: string | null) {
   return text.trim();
 }
 
-function formatPreviewPromptContext(
-  language: "ko" | "en",
-  previewUrl: string,
-  previewCheck: PreviewCheckResult | null,
-  diagnostics: PreviewDiagnostic[],
-  service: PreviewServiceStatus | null,
-) {
-  if (!previewUrl) return "";
-  const lines: string[] = [];
-  const label = language === "en"
-    ? {
-        url: "URL",
-        status: "Health",
-        error: "Error",
-        title: "Title",
-        body: "Visible server text",
-        service: "Managed service",
-        command: "Start command",
-        log: "Recent service log",
-        diagnostic: "Recent diagnostic",
-      }
-    : {
-        url: "URL",
-        status: "검토 상태",
-        error: "에러",
-        title: "제목",
-        body: "화면/서버 본문",
-        service: "관리 서비스",
-        command: "시동 명령",
-        log: "최근 서비스 로그",
-        diagnostic: "최근 진단",
-      };
-
-  lines.push(`${label.url}: ${previewUrl}`);
-  if (previewCheck) {
-    lines.push(`${label.status}: ${previewCheck.ok ? "ok" : "error"}${previewCheck.status ? ` HTTP ${previewCheck.status}` : ""}`);
-    if (previewCheck.error) lines.push(`${label.error}: ${clipActivityText(redactPreviewEvidenceText(previewCheck.error), 360)}`);
-    if (previewCheck.title) lines.push(`${label.title}: ${clipActivityText(redactPreviewEvidenceText(previewCheck.title), 220)}`);
-    if (previewCheck.body_text) lines.push(`${label.body}: ${clipActivityText(redactPreviewEvidenceText(previewCheck.body_text), 700)}`);
-  }
-  if (service?.managed) {
-    lines.push(`${label.service}: ${service.running ? "running" : "stopped"}${service.pid ? ` PID ${service.pid}` : ""}`);
-    if (service.command) lines.push(`${label.command}: ${clipActivityText(redactPreviewEvidenceText(service.command), 260)}`);
-    service.recent_output.slice(-3).forEach((line) => {
-      lines.push(`${label.log}: ${clipActivityText(redactPreviewEvidenceText(line), 300)}`);
-    });
-  }
-  diagnostics.slice(-3).forEach((diagnostic) => {
-    lines.push(`${label.diagnostic}: ${clipActivityText(redactPreviewEvidenceText(diagnostic.text), 360)}`);
-  });
-  return lines.join("\n");
-}
-
-function formatDevScreenPromptContext(
-  language: "ko" | "en",
-  status: DevScreenStatusResult | null,
-  snapshot: DevScreenSnapshotResult | null,
-  diagnostics: DevScreenDiagnosticsResult | null,
-  check: DevScreenCheckResult | null,
-  lastAction: DevScreenActionResult | null,
-  elementSelection: DevScreenElementSelection | null,
-  error: string | null,
-) {
-  const latestStatus = check?.status || status;
-  const latestSnapshot = check?.snapshot || snapshot;
-  const latestDiagnostics = check?.diagnostics || diagnostics;
-  if (!latestStatus && !latestSnapshot && !latestDiagnostics && !lastAction && !elementSelection && !error) return "";
-  const label = language === "en"
-    ? {
-        section: "Atelier Tauri dev screen:",
-        bridge: "Bridge",
-        window: "Window",
-        snapshot: "DOM snapshot",
-        console: "Browser console",
-        network: "Browser network",
-        action: "Last screen action",
-        error: "Screen error",
-      }
-    : {
-        section: "Atelier Tauri 개발 화면:",
-        bridge: "Bridge",
-        window: "창",
-        snapshot: "DOM 스냅샷",
-        console: "브라우저 콘솔",
-        network: "브라우저 네트워크",
-        action: "최근 화면 액션",
-        error: "화면 에러",
-      };
-  const lines = [label.section];
-  if (latestStatus) {
-    lines.push(`${label.bridge}: ${latestStatus.host}:${latestStatus.port}`);
-    lines.push(`${label.window}: ${latestStatus.windowLabel}`);
-  }
-  if (latestSnapshot?.text) {
-    lines.push(`${label.snapshot}:\n${clipActivityText(latestSnapshot.text, 1400)}`);
-  }
-  if (latestDiagnostics) {
-    const consoleLines = [
-      ...latestDiagnostics.runtimeErrors.map((entry) => `[runtime error] ${entry}`),
-      ...latestDiagnostics.consoleEntries.map((entry) => `[${entry.level}] ${entry.text}`),
-    ].slice(-10);
-    consoleLines.forEach((entry) => {
-      lines.push(`${label.console}: ${clipActivityText(redactPreviewEvidenceText(entry), 420)}`);
-    });
-    latestDiagnostics.networkFailures.slice(-6).forEach((entry) => {
-      lines.push(`${label.network}: ${clipActivityText(redactPreviewEvidenceText(entry), 420)}`);
-    });
-    latestDiagnostics.networkEntries.slice(-12).forEach((entry) => {
-      lines.push(`${label.network}: ${entry.initiatorType}${entry.status ? ` ${entry.status}` : ""} ${entry.durationMs}ms ${entry.url}`);
-    });
-  }
-  if (lastAction) {
-    lines.push(`${label.action}: ${clipActivityText(JSON.stringify(lastAction.data), 520)}`);
-  }
-  const elementContext = formatDevScreenElementSelectionPrompt(elementSelection, language);
-  if (elementContext) lines.push(elementContext);
-  if (error) {
-    lines.push(`${label.error}: ${clipActivityText(error, 520)}`);
-  }
-  return lines.join("\n");
-}
-
 function attachmentFileName(path: string) {
   return path.split(/[\\/]/).filter(Boolean).pop() || "pasted-image.png";
 }
@@ -2884,13 +2777,13 @@ function formatFastPatchPrompt(text: string, language: "ko" | "en") {
 function formatAgentPrompt(
   text: string,
   language: "ko" | "en",
-  previewContext?: string | null,
+  explicitContext?: string | null,
   attachments: ChatAttachment[] = [],
 ) {
-  const context = previewContext
+  const context = explicitContext
     ? language === "en"
-      ? ["", "", "---", "Atelier preview diagnostics:", previewContext].join("\n")
-      : ["", "", "---", "Atelier 프리뷰 진단:", previewContext].join("\n")
+      ? ["", "", "---", "Atelier bounded context:", explicitContext].join("\n")
+      : ["", "", "---", "Atelier 제한 컨텍스트:", explicitContext].join("\n")
     : "";
   const attachmentContext = formatAttachmentPrompt(attachments, language);
   const fastPatchContext = formatFastPatchPrompt(text, language);
@@ -2925,14 +2818,14 @@ function formatAgentPrompt(
 function formatOntologyAgentPrompt(
   text: string,
   language: "ko" | "en",
-  previewContext: string | null,
+  explicitContext: string | null,
   attachments: ChatAttachment[],
   mode: StellaOntologyMode,
   provider: AgentProvider,
   factoryEnabled: boolean,
   cwd?: string | null,
 ) {
-  const base = formatAgentPrompt(text, language, previewContext, attachments);
+  const base = formatAgentPrompt(text, language, explicitContext, attachments);
   const ontology = formatStellaOntologyInstruction({
     mode,
     language,
@@ -3278,8 +3171,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   const activeIdRef = useRef<string | null>(activeId);
   const previewResizeRef = useRef<{ startX: number; startW: number } | null>(null);
   const composerResizeRef = useRef<{ startY: number; startH: number } | null>(null);
-  const previewAutoStartRef = useRef<Record<string, number>>({});
-  const lastPreviewCommandRef = useRef<string | null>(null);
   const controlRequestHandlerRef = useRef<(request: AtelierControlRequest) => Promise<void>>(
     async () => undefined,
   );
@@ -3486,7 +3377,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
           "/model <model> - change the current CLI model",
           "/workload low|medium|high|xhigh|ultra - change workload",
           "/permission basic|auto|full - change CLI permission mode",
-          "/provider openai-codex|openrouter - change Hermes provider",
+          "/provider openai-codex|openrouter|alibaba - change Hermes provider",
           "/effort low|medium|high|xhigh - change Codex reasoning effort",
           "/speed default|fast - change Codex speed tier",
         ].join("\n"),
@@ -3696,7 +3587,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
           "/model <model> - 현재 CLI 모델 변경",
           "/workload low|medium|high|xhigh|ultra - 작업량 변경",
           "/permission basic|auto|full - CLI 실행 권한 변경",
-          "/provider openai-codex|openrouter - Hermes provider 변경",
+          "/provider openai-codex|openrouter|alibaba - Hermes provider 변경",
           "/effort low|medium|high|xhigh - Codex 추론 강도 변경",
           "/speed default|fast - Codex 속도 tier 변경",
         ].join("\n"),
@@ -4031,7 +3922,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     ? normalizeHermesModel(activeHermesProvider, rawActiveModel)
     : normalizeModel(activeProvider, rawActiveModel);
   const activeModelOptions = modelOptionsFor(activeProvider, normalizedActiveModel, activeHermesProvider, claudeRuntimeModels, codexRuntimeModels, openRouterRuntimeModels);
-  const activeModel = (activeProvider === "claude" || activeProvider === "codex" || activeProvider === "gajecode" || (activeProvider === "hermes" && (activeHermesProvider === "openai-codex" || activeHermesProvider === "openrouter")))
+  const activeModel = (activeProvider === "claude" || activeProvider === "codex" || activeProvider === "gajecode" || (activeProvider === "hermes" && isHermesProvider(activeHermesProvider)))
     ? coerceModelToOptions(normalizedActiveModel, activeModelOptions)
     : normalizedActiveModel;
   const activeModelLabel = labelForOption(activeModelOptions, activeModel);
@@ -5126,7 +5017,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       ? normalizeHermesModel(hermesProvider || DEFAULT_HERMES_PROVIDER, rawModel)
       : normalizeModel(provider, rawModel);
     const modelOptions = modelOptionsFor(provider, normalizedModel, hermesProvider || DEFAULT_HERMES_PROVIDER, claudeRuntimeModels, codexRuntimeModels, openRouterRuntimeModels);
-    const initialModel = (provider === "claude" || provider === "codex" || provider === "gajecode" || (provider === "hermes" && (hermesProvider === "openai-codex" || hermesProvider === "openrouter")))
+    const initialModel = (provider === "claude" || provider === "codex" || provider === "gajecode" || (provider === "hermes" && isHermesProvider(hermesProvider)))
       ? coerceModelToOptions(normalizedModel, modelOptions)
       : normalizedModel;
     const defaultTitle = tw.language === "en"
@@ -5310,24 +5201,14 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     });
   };
 
-  const rememberPreviewStartCommand = (event: AgentStreamEvent) => {
-    const command = commandFromValue(parseRawJson(event.raw)) || event.text || event.status || "";
-    const clean = normalizePreviewStartCommand(clipActivityText(command, 220));
-    if (!clean || !isPreviewStartCommand(clean)) return;
-    lastPreviewCommandRef.current = clean;
-    if (!previewServiceCommand) setPreviewServiceCommand(clean);
-  };
-
-  const startManagedPreviewService = async (silent = false) => {
+  const startManagedPreviewService = async () => {
     if (!previewUrl || !isLocalPreviewUrl(previewUrl) || previewServiceBusy || !isTauri()) return;
     setPreviewServiceBusy(true);
-    if (!silent) {
-      pushPreviewDiagnostic({
-        source: "preview",
-        level: "info",
-        text: copy.previewServiceStarting,
-      });
-    }
+    pushPreviewDiagnostic({
+      source: "preview",
+      level: "info",
+      text: copy.previewServiceStarting,
+    });
     try {
       let serviceCwd = activeExecutionCwd || null;
       if (active?.worktreeEnabled) {
@@ -5338,14 +5219,14 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         url: previewUrl,
         cwd: serviceCwd,
         command: previewServiceCommand || null,
-        autoRestart: true,
+        autoRestart: false,
       });
       setPreviewService(status);
       if (status.command && !previewServiceCommand) setPreviewServiceCommand(status.command);
       pushPreviewDiagnostic({
         source: "preview",
         level: "ok",
-        text: silent ? copy.previewServiceRestarting : copy.previewServiceStarted(status.pid),
+        text: copy.previewServiceStarted(status.pid),
       });
       setPreviewReloadKey((n) => n + 1);
     } catch (err) {
@@ -5406,27 +5287,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     };
   }, [isActive, previewUrl]);
 
-  useEffect(() => {
-    if (!previewUrl || !isLocalPreviewUrl(previewUrl) || previewServiceBusy) return;
-    const error = previewCheck?.error || "";
-    const needsStart = Boolean(previewCheck && !previewCheck.ok && /connect|ECONN|refused|연결/i.test(error));
-    if (!needsStart) return;
-    const now = Date.now();
-    if (now - (previewAutoStartRef.current[previewUrl] || 0) < 30000) return;
-    if (previewService?.running) return;
-    previewAutoStartRef.current[previewUrl] = now;
-    startManagedPreviewService(true);
-  }, [previewCheck?.checked_at, previewUrl, previewService?.running, previewServiceBusy]);
-
-  useEffect(() => {
-    if (!previewUrl || !isLocalPreviewUrl(previewUrl) || previewServiceBusy) return;
-    if (!previewService?.managed || !previewService.auto_restart || previewService.running || !previewService.command) return;
-    const now = Date.now();
-    if (now - (previewAutoStartRef.current[previewUrl] || 0) < 8000) return;
-    previewAutoStartRef.current[previewUrl] = now;
-    startManagedPreviewService(true);
-  }, [previewService?.running, previewService?.managed, previewService?.last_error, previewUrl, previewServiceBusy]);
-
   const updateActiveModel = (model: string) => {
     if (!active) return;
     patchSession(active.id, (session) => {
@@ -5437,7 +5297,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         ? normalizeHermesModel(hermesProvider, model)
         : normalizeModel(session.provider, model);
       const options = modelOptionsFor(session.provider, normalizedModel, hermesProvider, claudeRuntimeModels, codexRuntimeModels, openRouterRuntimeModels);
-      const nextModel = (session.provider === "claude" || session.provider === "codex" || session.provider === "gajecode" || (session.provider === "hermes" && (hermesProvider === "openai-codex" || hermesProvider === "openrouter")))
+      const nextModel = (session.provider === "claude" || session.provider === "codex" || session.provider === "gajecode" || (session.provider === "hermes" && isHermesProvider(hermesProvider)))
         ? coerceModelToOptions(normalizedModel, options)
         : normalizedModel;
       const changed = nextModel !== session.model;
@@ -5478,31 +5338,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     patchSession(active.id, (session) => ({
       ...session,
       worktreeEnabled: enabling,
-      updatedAt: Date.now(),
-    }));
-  };
-
-  const maybeAutoPreview = (event: AgentStreamEvent) => {
-    const url = findAutoPreviewUrl(event.text) || findAutoPreviewUrl(event.raw);
-    if (url) {
-      if (!previewServiceCommand && lastPreviewCommandRef.current) {
-        setPreviewServiceCommand(lastPreviewCommandRef.current);
-      }
-      loadPreviewUrl(url);
-    }
-  };
-
-  const rememberInactiveSessionPreview = (sessionId: string, event: AgentStreamEvent) => {
-    const command = commandFromValue(parseRawJson(event.raw)) || event.text || event.status || "";
-    const previewCommand = normalizePreviewStartCommand(clipActivityText(command, 220));
-    const url = findAutoPreviewUrl(event.text) || findAutoPreviewUrl(event.raw);
-    if (!previewCommand && !url) return;
-
-    patchSession(sessionId, (session) => ({
-      ...session,
-      previewUrl: url || session.previewUrl,
-      previewVisible: session.previewVisible,
-      previewServiceCommand: session.previewServiceCommand || previewCommand || undefined,
       updatedAt: Date.now(),
     }));
   };
@@ -5701,11 +5536,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
 
   const handleAgentEvent = (sessionId: string, assistantId: string, event: AgentStreamEvent) => {
     if (sessionId === activeIdRef.current) {
-      rememberPreviewStartCommand(event);
-      maybeAutoPreview(event);
       noteTerminalIssue(event);
-    } else {
-      rememberInactiveSessionPreview(sessionId, event);
     }
     if (event.kind === "status" || event.kind === "tool" || event.kind === "raw") {
       pushActivity(sessionId, assistantId, event);
@@ -5891,125 +5722,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         updatedAt: Date.now(),
       }));
     }
-  };
-
-  const captureMessagePreviewEvidence = async (
-    sessionId: string,
-    assistantId: string,
-    url?: string | null,
-  ) => {
-    if (!isTauri() || !url || !isLocalPreviewUrl(url)) return;
-    const check = await previewHealthCheck(url);
-    const targetUrl = cleanStoredPreviewUrl(url);
-    let recentBridgeCheck = devScreenCheckResult
-      && Date.now() - devScreenCheckResult.checkedAt < 10 * 60 * 1000
-      && cleanStoredPreviewUrl(devScreenCheckUrlRef.current) === targetUrl
-      && devScreenMatchesPreview(devScreenCheckResult.diagnostics, targetUrl)
-      ? devScreenCheckResult
-      : null;
-    const armedDiagnostics = devScreenMatchesPreview(devScreenDiagnosticsResult, targetUrl)
-      ? devScreenDiagnosticsResult
-      : null;
-    if (!recentBridgeCheck) {
-      try {
-        const trimmedPort = devScreenPort.trim();
-        const automaticCheck = await devScreenCheck({
-          host: armedDiagnostics?.host || devScreenHost.trim() || "127.0.0.1",
-          port: armedDiagnostics?.port || (trimmedPort ? Number(trimmedPort) : null),
-          windowLabel: armedDiagnostics?.windowLabel || devScreenWindow.trim() || "main",
-          timeoutMs: armedDiagnostics?.port || trimmedPort ? 900 : 1600,
-        });
-        if (devScreenMatchesPreview(automaticCheck.diagnostics, targetUrl)) {
-          recentBridgeCheck = automaticCheck;
-          devScreenCheckUrlRef.current = targetUrl;
-          setDevScreenCheckResult(automaticCheck);
-          setDevScreenDiagnosticsResult(automaticCheck.diagnostics);
-          setDevScreenStatusResult(automaticCheck.status);
-          setDevScreenScreenshotResult(automaticCheck.screenshot);
-          setDevScreenSnapshotResult(automaticCheck.snapshot);
-          recordDevScreenSuccess(automaticCheck);
-        }
-      } catch {
-        // A normal web preview may not expose a Tauri dev-screen bridge.
-      }
-    }
-    const snapshotData = recentBridgeCheck?.snapshot.data as { nodes?: unknown[] } | undefined;
-    const browserDiagnostics = recentBridgeCheck?.diagnostics || armedDiagnostics;
-    const browserErrorCount = browserDiagnostics
-      ? browserDiagnostics.runtimeErrors.length
-        + browserDiagnostics.consoleEntries.filter((entry) => entry.level === "error").length
-      : 0;
-    const browserWarningCount = browserDiagnostics
-      ? browserDiagnostics.consoleEntries.filter((entry) => entry.level === "warn").length
-      : 0;
-    const consoleEvidence = browserDiagnostics
-      ? [
-          ...browserDiagnostics.runtimeErrors.map((entry) => `[runtime error] ${entry}`),
-          ...browserDiagnostics.consoleEntries.map((entry) => `[${entry.level}] ${entry.text}`),
-        ].slice(-12).map((entry) => clipActivityText(redactPreviewEvidenceText(entry), 600))
-      : [];
-    const networkFailures = browserDiagnostics
-      ? browserDiagnostics.networkFailures
-        .slice(-8)
-        .map((entry) => `[failed] ${clipActivityText(redactPreviewEvidenceText(entry), 560)}`)
-      : [];
-    const failedNetworkEntries = browserDiagnostics
-      ? browserDiagnostics.networkEntries.filter((entry) => Number(entry.status || 0) >= 400)
-      : [];
-    const networkFailureCount = networkFailures.length + failedNetworkEntries.length;
-    const networkEvidence = browserDiagnostics
-      ? [
-          ...networkFailures,
-          ...browserDiagnostics.networkEntries.slice(-20).map((entry) => [
-            `[${entry.initiatorType}]`,
-            entry.status ? String(entry.status) : "status n/a",
-            `${entry.durationMs}ms`,
-            entry.transferSize ? `${entry.transferSize}B` : "",
-            entry.url,
-          ].filter(Boolean).join(" ")),
-        ]
-      : [];
-    let serviceStatus: PreviewServiceStatus | null = null;
-    try {
-      serviceStatus = await previewServiceStatus(url);
-    } catch {
-      serviceStatus = null;
-    }
-    const previewEvidence: TaskPreviewEvidence = {
-      url: check.url,
-      ok: check.ok && browserErrorCount === 0 && networkFailureCount === 0,
-      status: check.status,
-      title: check.title ? clipActivityText(redactPreviewEvidenceText(check.title), 220) : null,
-      error: check.error ? clipActivityText(redactPreviewEvidenceText(check.error), 420) : null,
-      checkedAt: check.checked_at,
-      bodyText: check.body_text ? clipActivityText(redactPreviewEvidenceText(check.body_text), 700) : undefined,
-      networkMethod: "GET",
-      serviceRunning: serviceStatus?.running,
-      servicePid: serviceStatus?.pid || undefined,
-      serviceRestarts: serviceStatus?.restarts,
-      serviceError: serviceStatus?.last_error
-        ? clipActivityText(redactPreviewEvidenceText(serviceStatus.last_error), 420)
-        : undefined,
-      serviceOutput: serviceStatus?.recent_output
-        .slice(-6)
-        .map((line) => clipActivityText(redactPreviewEvidenceText(line), 300)),
-      domNodes: Array.isArray(snapshotData?.nodes) ? snapshotData.nodes.length : undefined,
-      screenshotCaptured: Boolean(recentBridgeCheck?.screenshot.dataUrl),
-      diagnosticsArmedAt: browserDiagnostics?.armedAt,
-      browserErrorCount: browserDiagnostics ? browserErrorCount : undefined,
-      browserWarningCount: browserDiagnostics ? browserWarningCount : undefined,
-      consoleEvidence: consoleEvidence.length ? consoleEvidence : undefined,
-      networkRequestCount: browserDiagnostics?.networkEntries.length,
-      networkFailureCount: browserDiagnostics ? networkFailureCount : undefined,
-      networkEvidence: networkEvidence.length ? networkEvidence : undefined,
-    };
-    patchSession(sessionId, (session) => ({
-      ...session,
-      messages: session.messages.map((message) =>
-        message.id === assistantId ? { ...message, previewEvidence } : message,
-      ),
-      updatedAt: Date.now(),
-    }));
   };
 
   const undoMessageChanges = async (sessionId: string, messageId: string, summary: AgentChangeSummary) => {
@@ -7058,7 +6770,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         ? normalizeHermesModel(nextHermesProvider, requested)
         : normalizeModel(session.provider, requested);
       const nextOptions = modelOptionsFor(session.provider, normalizedModel, nextHermesProvider, claudeRuntimeModels, codexRuntimeModels, openRouterRuntimeModels);
-      const nextModel = (session.provider === "claude" || session.provider === "codex" || session.provider === "gajecode" || (session.provider === "hermes" && (nextHermesProvider === "openai-codex" || nextHermesProvider === "openrouter")))
+      const nextModel = (session.provider === "claude" || session.provider === "codex" || session.provider === "gajecode" || (session.provider === "hermes" && isHermesProvider(nextHermesProvider)))
         ? coerceModelToOptions(normalizedModel, nextOptions)
         : normalizedModel;
       patchSession(session.id, (current) => ({
@@ -7320,15 +7032,13 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
           session.id,
           rawText,
           tw.language === "en"
-            ? "Usage: /provider openai-codex|openrouter"
-            : "사용법: /provider openai-codex|openrouter",
+            ? "Usage: /provider openai-codex|openrouter|alibaba"
+            : "사용법: /provider openai-codex|openrouter|alibaba",
         );
         return true;
       }
       const providerOptions = modelOptionsFor("hermes", defaultHermesModel(arg), arg, claudeRuntimeModels, codexRuntimeModels, openRouterRuntimeModels);
-      const nextModel = arg === "openai-codex" || arg === "openrouter"
-        ? providerOptions[0]?.value || defaultHermesModel(arg)
-        : defaultHermesModel(arg);
+      const nextModel = providerOptions[0]?.value || defaultHermesModel(arg);
       patchSession(session.id, (current) => ({
         ...current,
         hermesProvider: arg,
@@ -7486,7 +7196,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
 	      codexRuntimeModels,
 	      openRouterRuntimeModels,
 	    );
-    const runModel = (session.provider === "claude" || session.provider === "codex" || session.provider === "gajecode" || (session.provider === "hermes" && (hermesProvider === "openai-codex" || hermesProvider === "openrouter")))
+    const runModel = (session.provider === "claude" || session.provider === "codex" || session.provider === "gajecode" || (session.provider === "hermes" && isHermesProvider(hermesProvider)))
       ? coerceModelToOptions(normalizedRunModel, runModelOptions)
       : normalizedRunModel;
     const useHermesCodexFastPath = session.provider === "hermes" && hermesProvider === "openai-codex";
@@ -7500,25 +7210,19 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       : (!modelChangedForRun && (!session.providerSessionModel || session.providerSessionModel === runModel)
           ? session.providerSessionId || null
           : null);
-    const previewContext = sessionId === activeIdRef.current
-      ? formatPreviewPromptContext(tw.language, previewUrl, previewCheck, previewDiagnostics, previewService)
-      : null;
-    const devScreenContext = sessionId === activeIdRef.current
-      ? formatDevScreenPromptContext(
-          tw.language,
-          devScreenStatusResult,
-          devScreenSnapshotResult,
-          devScreenDiagnosticsResult,
-          devScreenCheckResult,
-          devScreenActionResult,
-          payload.elementSelection || null,
-          devScreenError,
-        )
-      : formatDevScreenElementSelectionPrompt(payload.elementSelection, tw.language);
+    const explicitlySelectedElementContext = formatDevScreenElementSelectionPrompt(
+      payload.elementSelection,
+      tw.language,
+    );
     const compactContext = useHermesCodexFastPath
       ? formatCompactAgentContext(session.messages, tw.language, payload.userMessageId)
       : null;
-    const visualContext = [previewContext, devScreenContext, compactContext].filter(Boolean).join("\n\n") || null;
+    // Preview URL, health/body, service stdout, DOM snapshots, and browser
+    // diagnostics are local-only UI state. Only a user's explicit element
+    // selection may cross this boundary into a provider request.
+    const visualContext = [explicitlySelectedElementContext, compactContext]
+      .filter(Boolean)
+      .join("\n\n") || null;
 
     backgroundedAssistantIdsRef.current.delete(assistantId);
     autoScrollRef.current = true;
@@ -7697,18 +7401,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
           revealMessageImmediately(assistantId, finalTextForReveal);
         }
         backgroundedAssistantIdsRef.current.delete(assistantId);
-        const completedSession = sessionsRef.current.find((item) => item.id === sessionId);
-        const completedPreviewUrl = sessionId === activeIdRef.current
-          ? previewUrlRef.current
-          : completedSession?.previewUrl;
-        // A failed provider/tool turn can still leave the preview in the most
-        // useful diagnostic state. Capture it unless the user explicitly
-        // stopped or interrupted the turn; cancellation should remain cheap.
-        if (!wasInterrupted && !wasStopped && completedPreviewUrl) {
-          captureMessagePreviewEvidence(sessionId, assistantId, completedPreviewUrl).catch((err) =>
-            console.warn("preview evidence capture failed", err),
-          );
-        }
         if (payload.factoryCommand) {
           stellaRecordEvidence({
             cwd: runCwd || null,
@@ -9744,7 +9436,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                         />
                         <button
                           type="button"
-                          onClick={() => startManagedPreviewService(false)}
+                          onClick={startManagedPreviewService}
                           disabled={previewServiceBusy}
                           className={cls(
                             "atelier-preview-service-button",

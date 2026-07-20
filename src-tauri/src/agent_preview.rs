@@ -239,12 +239,25 @@ fn refresh_preview_service(service: &mut ManagedPreviewService) {
 }
 
 fn preview_service_port(url: &str) -> Result<u16, String> {
-    parse_local_preview_url(url).map(|parsed| parsed.port)
+    let port = parse_local_preview_url(url)?.port;
+    validate_preview_service_port(port)?;
+    Ok(port)
+}
+
+fn validate_preview_service_port(port: u16) -> Result<(), String> {
+    if port < 1024 {
+        return Err(
+            "Managed preview services must use an unprivileged port (1024 or higher)".into(),
+        );
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
 struct PreviewCommandPlan {
     cwd: String,
+    program: String,
+    args: Vec<String>,
     command: String,
 }
 
@@ -288,12 +301,19 @@ fn preview_script_uses(value: &Value, script_command: &str, needle: &str) -> boo
         || package_dep_names(value).contains(&needle)
 }
 
-fn preview_command_extra_args(value: &Value, script_command: &str, port: u16) -> String {
-    if preview_script_uses(value, script_command, "next") {
-        format!("--hostname 127.0.0.1 --port {port}")
+fn preview_command_extra_args(value: &Value, script_command: &str, port: u16) -> Vec<String> {
+    let host_flag = if preview_script_uses(value, script_command, "next") {
+        "--hostname"
     } else {
-        format!("--host 127.0.0.1 --port {port}")
-    }
+        "--host"
+    };
+    vec![
+        "--".to_string(),
+        host_flag.to_string(),
+        "127.0.0.1".to_string(),
+        "--port".to_string(),
+        port.to_string(),
+    ]
 }
 
 fn detect_preview_package_manager(cwd: &Path, root: &Path) -> &'static str {
@@ -316,22 +336,141 @@ fn detect_preview_package_manager(cwd: &Path, root: &Path) -> &'static str {
     "npm"
 }
 
-fn build_preview_command(
-    root: &Path,
+fn build_preview_command_plan(
     cwd: &Path,
+    manager: &str,
     script: &str,
     script_command: &str,
     value: &Value,
     port: u16,
-) -> String {
-    let manager = detect_preview_package_manager(cwd, root);
-    let extra = preview_command_extra_args(value, script_command, port);
-    match manager {
-        "bun" => format!("bun run {script} -- {extra}"),
-        "pnpm" => format!("pnpm run {script} -- {extra}"),
-        "yarn" => format!("yarn run {script} -- {extra}"),
-        _ => format!("npm run {script} -- {extra}"),
+) -> PreviewCommandPlan {
+    let mut args = vec!["run".to_string(), script.to_string()];
+    if manager == "npm" {
+        // npm 11 keeps the explicitly requested script runnable while this
+        // flag suppresses implicit pre<script>/post<script> lifecycle hooks.
+        args.push("--ignore-scripts".to_string());
     }
+    args.extend(preview_command_extra_args(value, script_command, port));
+    let command = std::iter::once(manager)
+        .chain(args.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(" ");
+    PreviewCommandPlan {
+        cwd: cwd.to_string_lossy().into_owned(),
+        program: manager.to_string(),
+        args,
+        command,
+    }
+}
+
+fn canonical_preview_directory(path: &Path, label: &str) -> Result<PathBuf, String> {
+    let canonical = fs::canonicalize(path).map_err(|e| format!("resolve {label}: {e}"))?;
+    if !canonical.is_dir() {
+        return Err(format!("{label} is not a directory"));
+    }
+    Ok(canonical)
+}
+
+fn canonical_preview_path_within(root: &Path, path: &Path, label: &str) -> Result<PathBuf, String> {
+    let canonical = fs::canonicalize(path).map_err(|e| format!("resolve {label}: {e}"))?;
+    if !canonical.starts_with(root) {
+        return Err(format!(
+            "{label} resolves outside the selected preview folder"
+        ));
+    }
+    Ok(canonical)
+}
+
+fn read_preview_package_json(root: &Path, cwd: &Path) -> Result<Value, String> {
+    let package_json = cwd.join("package.json");
+    let canonical_package = canonical_preview_path_within(root, &package_json, "package.json")?;
+    let text = fs::read_to_string(&canonical_package).map_err(|e| {
+        format!(
+            "read package.json at {}: {e}",
+            canonical_package.to_string_lossy()
+        )
+    })?;
+    serde_json::from_str(&text).map_err(|e| {
+        format!(
+            "parse package.json at {}: {e}",
+            canonical_package.to_string_lossy()
+        )
+    })
+}
+
+fn preview_package_script_command<'a>(value: &'a Value, script: &str) -> Option<&'a str> {
+    if !matches!(script, "dev" | "start" | "preview") {
+        return None;
+    }
+    value
+        .get("scripts")
+        .and_then(Value::as_object)
+        .and_then(|scripts| scripts.get(script))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|command| !command.is_empty())
+}
+
+fn provided_preview_command_tokens(command: &str) -> Result<Vec<&str>, String> {
+    if command.trim().is_empty() {
+        return Err("Preview command is empty".into());
+    }
+    if command.chars().any(|character| {
+        !(character.is_ascii_alphanumeric()
+            || character == ' '
+            || matches!(character, '-' | '_' | '.'))
+    }) {
+        return Err(
+            "Preview command contains shell syntax, quoting, expansion, or unsupported characters"
+                .into(),
+        );
+    }
+    Ok(command.split_ascii_whitespace().collect())
+}
+
+fn validate_provided_preview_command(
+    cwd: &str,
+    command: &str,
+    port: u16,
+) -> Result<PreviewCommandPlan, String> {
+    validate_preview_service_port(port)?;
+    let cwd = canonical_preview_directory(Path::new(cwd), "preview folder")?;
+
+    let tokens = provided_preview_command_tokens(command)?;
+    if tokens.len() < 3 {
+        return Err("Preview command must be '<npm|pnpm|yarn|bun> run <script>'".into());
+    }
+    let manager = tokens[0];
+    if !matches!(manager, "npm" | "pnpm" | "yarn" | "bun") || tokens[1] != "run" {
+        return Err("Only npm, pnpm, yarn, or bun package scripts are allowed".into());
+    }
+    let script = tokens[2];
+    if !matches!(script, "dev" | "start" | "preview") {
+        return Err("Only dev, start, or preview package scripts are allowed".into());
+    }
+
+    let value = read_preview_package_json(&cwd, &cwd)?;
+    let script_command = preview_package_script_command(&value, script).ok_or_else(|| {
+        format!("package.json does not define the requested '{script}' preview script")
+    })?;
+    let expected_manager = detect_preview_package_manager(&cwd, &cwd);
+    if manager != expected_manager {
+        return Err(format!(
+            "Preview command package manager must match the project lockfile ({expected_manager})"
+        ));
+    }
+    let plan = build_preview_command_plan(&cwd, manager, script, script_command, &value, port);
+
+    let canonical_tokens = std::iter::once(plan.program.as_str())
+        .chain(plan.args.iter().map(String::as_str))
+        .collect::<Vec<_>>();
+    if tokens.len() != 3 && tokens != canonical_tokens {
+        return Err(
+            "Preview command arguments must be omitted or match Atelier's canonical loopback command"
+                .into(),
+        );
+    }
+    Ok(plan)
 }
 
 fn push_preview_candidate_dir(
@@ -345,7 +484,7 @@ fn push_preview_candidate_dir(
     }
 }
 
-fn preview_candidate_dirs(root: &Path) -> Vec<(PathBuf, usize)> {
+fn preview_candidate_dirs(root: &Path) -> Result<Vec<(PathBuf, usize)>, String> {
     let mut dirs = Vec::new();
     let mut seen = BTreeSet::new();
     push_preview_candidate_dir(&mut dirs, &mut seen, root.to_path_buf(), 0);
@@ -364,6 +503,7 @@ fn preview_candidate_dirs(root: &Path) -> Vec<(PathBuf, usize)> {
     ] {
         let candidate = root.join(rel);
         if candidate.is_dir() {
+            let candidate = canonical_preview_path_within(root, &candidate, "preview candidate")?;
             let depth = rel.matches('/').count() + 1;
             push_preview_candidate_dir(&mut dirs, &mut seen, candidate, depth);
         }
@@ -397,16 +537,33 @@ fn preview_candidate_dirs(root: &Path) -> Vec<(PathBuf, usize)> {
             ) {
                 continue;
             }
+            let file_type = entry
+                .file_type()
+                .map_err(|e| format!("inspect preview candidate {}: {e}", path.display()))?;
+            if !file_type.is_dir() && !file_type.is_symlink() {
+                continue;
+            }
+            let canonical = fs::canonicalize(&path)
+                .map_err(|e| format!("resolve preview candidate {}: {e}", path.display()))?;
+            if !canonical.is_dir() {
+                continue;
+            }
+            if !canonical.starts_with(root) {
+                return Err(format!(
+                    "preview candidate {} resolves outside the selected preview folder",
+                    path.display()
+                ));
+            }
             let next_depth = depth + 1;
-            push_preview_candidate_dir(&mut dirs, &mut seen, path.clone(), next_depth);
-            queue.push_back((path, next_depth));
+            push_preview_candidate_dir(&mut dirs, &mut seen, canonical.clone(), next_depth);
+            queue.push_back((canonical, next_depth));
             if dirs.len() >= 80 {
-                return dirs;
+                return Ok(dirs);
             }
         }
     }
 
-    dirs
+    Ok(dirs)
 }
 
 fn read_preview_package_candidate(
@@ -418,18 +575,7 @@ fn read_preview_package_candidate(
     if !package_json.exists() {
         return Ok(None);
     }
-    let text = fs::read_to_string(&package_json).map_err(|e| {
-        format!(
-            "read package.json at {}: {e}",
-            package_json.to_string_lossy()
-        )
-    })?;
-    let value: Value = serde_json::from_str(&text).map_err(|e| {
-        format!(
-            "parse package.json at {}: {e}",
-            package_json.to_string_lossy()
-        )
-    })?;
+    let value = read_preview_package_json(root, cwd)?;
     let Some((script, script_command)) = preview_package_script(&value) else {
         return Ok(None);
     };
@@ -480,10 +626,10 @@ fn read_preview_package_candidate(
 
 fn infer_preview_command(cwd: &str, url: &str) -> Result<PreviewCommandPlan, String> {
     let port = preview_service_port(url)?;
-    let root = PathBuf::from(cwd);
+    let root = canonical_preview_directory(Path::new(cwd), "preview root")?;
     let mut candidates = Vec::new();
     let mut saw_package_json = false;
-    for (candidate_dir, depth) in preview_candidate_dirs(&root) {
+    for (candidate_dir, depth) in preview_candidate_dirs(&root)? {
         if candidate_dir.join("package.json").exists() {
             saw_package_json = true;
         }
@@ -506,33 +652,204 @@ fn infer_preview_command(cwd: &str, url: &str) -> Result<PreviewCommandPlan, Str
         );
     };
 
-    let command = build_preview_command(
-        &root,
+    let manager = detect_preview_package_manager(&candidate.cwd, &root);
+    Ok(build_preview_command_plan(
         &candidate.cwd,
+        manager,
         &candidate.script,
         &candidate.script_command,
         &candidate.value,
         port,
-    );
-    Ok(PreviewCommandPlan {
-        cwd: candidate.cwd.to_string_lossy().into_owned(),
-        command,
+    ))
+}
+
+fn create_preview_sandbox_home() -> Result<PathBuf, String> {
+    let root = std::env::temp_dir().join("atelier-preview-sandbox");
+    fs::create_dir_all(&root).map_err(|e| format!("create preview sandbox root: {e}"))?;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let sandbox_home = root.join(format!("{}-{}", std::process::id(), nonce));
+    fs::create_dir(&sandbox_home).map_err(|e| format!("create preview sandbox home: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&sandbox_home, fs::Permissions::from_mode(0o700))
+            .map_err(|e| format!("secure preview sandbox home: {e}"))?;
+    }
+    canonical_preview_directory(&sandbox_home, "preview sandbox home")
+}
+
+fn configure_preview_process_environment(command: &mut Command, sandbox_home: &Path) {
+    command
+        .env_clear()
+        .env("PATH", crate::augmented_cli_path())
+        .env("HOME", sandbox_home)
+        .env("TMPDIR", sandbox_home)
+        .env("BROWSER", "none")
+        .env("NO_PROXY", "localhost,127.0.0.1,::1");
+}
+
+#[cfg(target_os = "macos")]
+fn sbpl_string_literal(value: &str) -> Result<String, String> {
+    if value.chars().any(char::is_control) {
+        return Err("Sandbox paths must not contain control characters".into());
+    }
+    Ok(format!(
+        "\"{}\"",
+        value.replace('\\', "\\\\").replace('"', "\\\"")
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn sbpl_path_literal(path: &Path) -> Result<String, String> {
+    let value = path
+        .to_str()
+        .ok_or_else(|| "Sandbox path must be valid UTF-8".to_string())?;
+    sbpl_string_literal(value)
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_preview_program(program: &str) -> Result<PathBuf, String> {
+    let path = Path::new(program);
+    if path.is_absolute() {
+        return fs::canonicalize(path).map_err(|e| format!("resolve preview executable: {e}"));
+    }
+    if path.components().count() != 1 {
+        return Err("Preview executable must be an allowlisted program name".into());
+    }
+    for directory in std::env::split_paths(&crate::augmented_cli_path()) {
+        let candidate = directory.join(program);
+        if candidate.is_file() {
+            return fs::canonicalize(&candidate)
+                .map_err(|e| format!("resolve preview executable: {e}"));
+        }
+    }
+    Err(format!("Preview executable '{program}' was not found"))
+}
+
+#[cfg(target_os = "macos")]
+fn preview_node_module_root(path: &Path) -> Option<PathBuf> {
+    path.ancestors().find_map(|ancestor| {
+        (ancestor
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|name| name == "node_modules"))
+        .then(|| ancestor.to_path_buf())
     })
 }
 
-#[cfg(target_os = "windows")]
-fn preview_shell_command(command: &str) -> Command {
-    let mut cmd = Command::new("cmd.exe");
-    cmd.args(["/D", "/Q", "/S", "/C", command]);
-    configure_windows_background_command(&mut cmd);
-    cmd
+#[cfg(target_os = "macos")]
+fn preview_runtime_root(path: &Path) -> PathBuf {
+    path.parent()
+        .and_then(Path::parent)
+        .filter(|_| {
+            path.parent()
+                .and_then(Path::file_name)
+                .is_some_and(|name| name == "bin")
+        })
+        .unwrap_or_else(|| path.parent().unwrap_or(path))
+        .to_path_buf()
 }
 
-#[cfg(not(target_os = "windows"))]
-fn preview_shell_command(command: &str) -> Command {
-    let mut cmd = Command::new("sh");
-    cmd.arg("-lc").arg(command);
-    cmd
+#[cfg(target_os = "macos")]
+fn build_macos_preview_sandbox_profile(
+    cwd: &Path,
+    sandbox_home: &Path,
+    program: &Path,
+) -> Result<String, String> {
+    let actual_home = std::env::var_os("HOME")
+        .ok_or_else(|| "HOME is required to build the preview sandbox".to_string())?;
+    let actual_home = canonical_preview_directory(Path::new(&actual_home), "user home")?;
+    let protected_roots = [
+        actual_home,
+        PathBuf::from("/Users"),
+        PathBuf::from("/Volumes"),
+        PathBuf::from("/private/tmp"),
+        PathBuf::from("/private/var/folders"),
+        PathBuf::from("/var/tmp"),
+    ];
+    if protected_roots.iter().any(|root| root.starts_with(cwd)) {
+        return Err("Preview folder is too broad to isolate from user data".into());
+    }
+
+    let mut read_exceptions = BTreeSet::from([cwd.to_path_buf(), sandbox_home.to_path_buf()]);
+    let canonical_program = fs::canonicalize(program)
+        .map_err(|e| format!("resolve sandboxed preview executable: {e}"))?;
+    read_exceptions.insert(
+        preview_node_module_root(&canonical_program).unwrap_or_else(|| {
+            canonical_program
+                .parent()
+                .unwrap_or(&canonical_program)
+                .to_path_buf()
+        }),
+    );
+    if let Ok(node) = resolve_preview_program("node") {
+        read_exceptions.insert(preview_runtime_root(&node));
+    }
+
+    let denied_reads = protected_roots
+        .iter()
+        .filter(|root| root.exists())
+        .map(|root| Ok(format!("(subpath {})", sbpl_path_literal(root)?)))
+        .collect::<Result<Vec<_>, String>>()?
+        .join(" ");
+    let allowed_reads = read_exceptions
+        .iter()
+        .map(|root| Ok(format!("(subpath {})", sbpl_path_literal(root)?)))
+        .collect::<Result<Vec<_>, String>>()?
+        .join(" ");
+    let allowed_writes = [sandbox_home]
+        .iter()
+        .map(|root| Ok(format!("(subpath {})", sbpl_path_literal(root)?)))
+        .collect::<Result<Vec<_>, String>>()?
+        .join(" ");
+
+    Ok(format!(
+        "(version 1) (allow default) (deny mach-lookup) \
+         (deny network-inbound) (deny network-bind) (deny network-outbound) \
+         (deny file-read* {denied_reads}) (deny file-write*) \
+         (allow file-read-metadata) \
+         (allow file-read* {allowed_reads}) (allow file-write* {allowed_writes})"
+    ))
+}
+
+fn ensure_managed_preview_execution_enabled() -> Result<(), String> {
+    Err(
+        "Managed package-script preview is disabled by Atelier's hardened security policy. Start only a separately trusted loopback service, then inspect its URL in the preview panel."
+            .into(),
+    )
+}
+
+fn preview_process_command(plan: &PreviewCommandPlan) -> Result<Command, String> {
+    let sandbox_home = create_preview_sandbox_home()?;
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let sandbox_exec = Path::new("/usr/bin/sandbox-exec");
+        if !sandbox_exec.is_file() {
+            return Err("macOS sandbox-exec is unavailable; preview start was blocked".into());
+        }
+        let cwd = canonical_preview_directory(Path::new(&plan.cwd), "preview folder")?;
+        let program = resolve_preview_program(&plan.program)?;
+        let profile = build_macos_preview_sandbox_profile(&cwd, &sandbox_home, &program)?;
+        let mut command = Command::new(sandbox_exec);
+        command.arg("-p").arg(profile).arg(program).args(&plan.args);
+        command
+    };
+
+    #[cfg(not(target_os = "macos"))]
+    let mut command = {
+        let mut command = Command::new(&plan.program);
+        command.args(&plan.args);
+        command
+    };
+
+    configure_preview_process_environment(&mut command, &sandbox_home);
+    #[cfg(target_os = "windows")]
+    configure_windows_background_command(&mut command);
+    Ok(command)
 }
 
 fn redact_preview_assignment_value(text: &mut String, key: &str) {
@@ -677,13 +994,10 @@ fn spawn_preview_child<R: Runtime>(
     app: &AppHandle<R>,
     id: &str,
     url: &str,
-    cwd: &str,
-    command: &str,
+    plan: &PreviewCommandPlan,
 ) -> Result<(Arc<Mutex<Child>>, u32), String> {
-    let mut cmd = preview_shell_command(command);
-    cmd.current_dir(cwd)
-        .env("PATH", crate::augmented_cli_path())
-        .env("BROWSER", "none")
+    let mut cmd = preview_process_command(plan)?;
+    cmd.current_dir(&plan.cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -723,24 +1037,25 @@ fn start_preview_service<R: Runtime>(
     auto_restart: bool,
 ) -> Result<PreviewServiceStatus, String> {
     let parsed = parse_local_preview_url(&url)?;
+    validate_preview_service_port(parsed.port)?;
+    // A workspace-controlled package script cannot be constrained to a
+    // loopback-only listener by macOS SBPL: its `localhost` filter also admits
+    // wildcard and other local-interface binds. Fail closed before parsing or
+    // spawning any workspace command until Atelier owns the listener/socket.
+    ensure_managed_preview_execution_enabled()?;
     let cwd = cwd.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| {
         std::env::current_dir()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_else(|_| ".".into())
     });
-    let provided_command = command
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
+    let provided_command = command.filter(|value| !value.trim().is_empty());
     let plan = if let Some(command) = provided_command {
-        PreviewCommandPlan {
-            cwd: cwd.clone(),
-            command,
-        }
+        validate_provided_preview_command(&cwd, &command, parsed.port)?
     } else {
         infer_preview_command(&cwd, &parsed.url)?
     };
-    let cwd = plan.cwd;
-    let command = plan.command;
+    let cwd = plan.cwd.clone();
+    let command = plan.command.clone();
     let id = preview_service_id(&parsed.url);
 
     {
@@ -753,7 +1068,7 @@ fn start_preview_service<R: Runtime>(
         }
     }
 
-    let (child, pid) = spawn_preview_child(&app, &id, &parsed.url, &cwd, &command)?;
+    let (child, pid) = spawn_preview_child(&app, &id, &parsed.url, &plan)?;
     let mut services = preview_services().lock().map_err(|e| e.to_string())?;
     let restarts = services
         .get(&id)
@@ -1099,7 +1414,8 @@ pub async fn preview_service_start<R: Runtime>(
     auto_restart: Option<bool>,
 ) -> Result<PreviewServiceStatus, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        start_preview_service(app, url, cwd, command, auto_restart.unwrap_or(true))
+        let _ = auto_restart;
+        start_preview_service(app, url, cwd, command, false)
     })
     .await
     .map_err(|e| format!("preview service start join: {e}"))?
@@ -1267,7 +1583,24 @@ mod tests {
         let plan =
             infer_preview_command(root.to_str().unwrap(), "http://127.0.0.1:8787/admin/").unwrap();
 
-        assert_eq!(PathBuf::from(&plan.cwd), dashboard);
+        assert_eq!(
+            PathBuf::from(&plan.cwd),
+            fs::canonicalize(&dashboard).unwrap()
+        );
+        assert_eq!(plan.program, "npm");
+        assert_eq!(
+            plan.args,
+            [
+                "run",
+                "dev",
+                "--ignore-scripts",
+                "--",
+                "--hostname",
+                "127.0.0.1",
+                "--port",
+                "8787"
+            ]
+        );
         assert!(plan.command.contains("npm run dev"));
         assert!(plan.command.contains("--hostname 127.0.0.1"));
         assert!(plan.command.contains("--port 8787"));
@@ -1291,7 +1624,10 @@ mod tests {
 
         let plan = infer_preview_command(root.to_str().unwrap(), "http://localhost:5173/").unwrap();
 
-        assert_eq!(PathBuf::from(&plan.cwd), dashboard);
+        assert_eq!(
+            PathBuf::from(&plan.cwd),
+            fs::canonicalize(&dashboard).unwrap()
+        );
         assert!(plan.command.contains("npm run dev"));
         assert!(plan.command.contains("--hostname 127.0.0.1"));
         assert!(plan.command.contains("--port 5173"));
@@ -1311,8 +1647,503 @@ mod tests {
 
         let plan = infer_preview_command(root.to_str().unwrap(), "http://localhost:5173/").unwrap();
 
-        assert_eq!(PathBuf::from(&plan.cwd), dashboard);
+        assert_eq!(
+            PathBuf::from(&plan.cwd),
+            fs::canonicalize(&dashboard).unwrap()
+        );
+        assert_eq!(plan.program, "pnpm");
         assert!(plan.command.starts_with("pnpm run dev"));
         assert!(plan.command.contains("--host 127.0.0.1"));
+    }
+
+    #[test]
+    fn provided_preview_command_is_rebuilt_as_direct_process_arguments() {
+        let root = preview_test_root("provided-npm");
+        fs::write(
+            root.join("package.json"),
+            r#"{"scripts":{"dev":"vite --host 0.0.0.0"},"devDependencies":{"vite":"^5.0.0"}}"#,
+        )
+        .unwrap();
+
+        let plan =
+            validate_provided_preview_command(root.to_str().unwrap(), "npm run dev", 5173).unwrap();
+        assert_eq!(plan.program, "npm");
+        assert_eq!(
+            plan.args,
+            [
+                "run",
+                "dev",
+                "--ignore-scripts",
+                "--",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "5173"
+            ]
+        );
+        assert_eq!(
+            plan.command,
+            "npm run dev --ignore-scripts -- --host 127.0.0.1 --port 5173"
+        );
+
+        let process = preview_process_command(&plan).unwrap();
+        let process_args = process
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(process.get_program(), "/usr/bin/sandbox-exec");
+            assert!(process_args.ends_with(&plan.args));
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(process.get_program(), "npm");
+            assert_eq!(process_args, plan.args);
+        }
+    }
+
+    #[test]
+    fn provided_preview_command_accepts_allowlisted_pnpm_script() {
+        let root = preview_test_root("provided-pnpm");
+        fs::write(root.join("pnpm-lock.yaml"), "lockfileVersion: '9.0'\n").unwrap();
+        fs::write(
+            root.join("package.json"),
+            r#"{"scripts":{"preview":"vite preview"},"devDependencies":{"vite":"^5.0.0"}}"#,
+        )
+        .unwrap();
+
+        let plan =
+            validate_provided_preview_command(root.to_str().unwrap(), "pnpm run preview", 4173)
+                .unwrap();
+        assert_eq!(plan.program, "pnpm");
+        assert_eq!(
+            plan.command,
+            "pnpm run preview -- --host 127.0.0.1 --port 4173"
+        );
+    }
+
+    #[test]
+    fn provided_preview_command_rejects_shell_syntax_and_extra_executables() {
+        let root = preview_test_root("command-injection");
+        fs::write(
+            root.join("package.json"),
+            r#"{"scripts":{"dev":"vite"},"devDependencies":{"vite":"^5.0.0"}}"#,
+        )
+        .unwrap();
+        let marker = root.join("preview-command-injection-marker");
+        let attacks = [
+            "npm run dev; touch preview-command-injection-marker",
+            "npm run dev && touch preview-command-injection-marker",
+            "npm run dev | touch preview-command-injection-marker",
+            "npm run dev > preview-command-injection-marker",
+            "npm run dev `touch preview-command-injection-marker`",
+            "npm run dev $(touch preview-command-injection-marker)",
+            "npm run dev\ntouch preview-command-injection-marker",
+            "npm run dev\n",
+            "npm run dev touch preview-command-injection-marker",
+            "npm run dev 'touch preview-command-injection-marker'",
+            "npm run dev \"touch preview-command-injection-marker\"",
+        ];
+
+        for attack in attacks {
+            let error = validate_provided_preview_command(root.to_str().unwrap(), attack, 5173)
+                .expect_err(attack);
+            assert!(!error.is_empty());
+            assert!(!marker.exists(), "marker was created for payload: {attack}");
+        }
+    }
+
+    #[test]
+    fn provided_preview_command_rejects_script_and_manager_mismatch() {
+        let root = preview_test_root("command-mismatch");
+        fs::write(root.join("pnpm-lock.yaml"), "lockfileVersion: '9.0'\n").unwrap();
+        fs::write(
+            root.join("package.json"),
+            r#"{"scripts":{"dev":"vite"},"devDependencies":{"vite":"^5.0.0"}}"#,
+        )
+        .unwrap();
+
+        let script_error =
+            validate_provided_preview_command(root.to_str().unwrap(), "pnpm run preview", 5173)
+                .unwrap_err();
+        assert!(script_error.contains("does not define"));
+
+        let manager_error =
+            validate_provided_preview_command(root.to_str().unwrap(), "npm run dev", 5173)
+                .unwrap_err();
+        assert!(manager_error.contains("lockfile"));
+    }
+
+    #[test]
+    fn provided_preview_command_rejects_noncanonical_arguments() {
+        let root = preview_test_root("command-arguments");
+        fs::write(
+            root.join("package.json"),
+            r#"{"scripts":{"dev":"next dev"},"dependencies":{"next":"15.0.0"}}"#,
+        )
+        .unwrap();
+
+        for command in [
+            "npm run dev -- --hostname 0.0.0.0 --port 5173",
+            "npm run dev -- --hostname 127.0.0.1 --port 9999",
+            "npm run dev -- --host 127.0.0.1 --port 5173",
+            "npm run dev -- --hostname 127.0.0.1 --port 5173 extra",
+        ] {
+            assert!(
+                validate_provided_preview_command(root.to_str().unwrap(), command, 5173).is_err()
+            );
+        }
+
+        let canonical = validate_provided_preview_command(
+            root.to_str().unwrap(),
+            "npm run dev --ignore-scripts -- --hostname 127.0.0.1 --port 5173",
+            5173,
+        )
+        .unwrap();
+        assert_eq!(
+            canonical.command,
+            "npm run dev --ignore-scripts -- --hostname 127.0.0.1 --port 5173"
+        );
+    }
+
+    #[test]
+    fn managed_preview_rejects_privileged_ports() {
+        let error = preview_service_port("http://127.0.0.1:1023/").unwrap_err();
+        assert!(error.contains("1024"));
+        assert_eq!(
+            preview_service_port("http://127.0.0.1:1024/").unwrap(),
+            1024
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preview_candidate_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let root = preview_test_root("symlink-root");
+        let outside = preview_test_root("symlink-outside");
+        fs::write(
+            outside.join("package.json"),
+            r#"{"scripts":{"dev":"vite"},"devDependencies":{"vite":"^5.0.0"}}"#,
+        )
+        .unwrap();
+        symlink(&outside, root.join("web")).unwrap();
+
+        let error =
+            infer_preview_command(root.to_str().unwrap(), "http://127.0.0.1:5173/").unwrap_err();
+        assert!(error.contains("outside"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preview_package_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let root = preview_test_root("package-symlink-root");
+        let outside = preview_test_root("package-symlink-outside");
+        let outside_package = outside.join("package.json");
+        fs::write(
+            &outside_package,
+            r#"{"scripts":{"dev":"vite"},"devDependencies":{"vite":"^5.0.0"}}"#,
+        )
+        .unwrap();
+        symlink(&outside_package, root.join("package.json")).unwrap();
+
+        let error =
+            infer_preview_command(root.to_str().unwrap(), "http://127.0.0.1:5173/").unwrap_err();
+        assert!(error.contains("outside"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preview_process_receives_only_allowlisted_environment() {
+        let root = preview_test_root("process-environment");
+        let plan = PreviewCommandPlan {
+            cwd: root.to_string_lossy().into_owned(),
+            program: "/usr/bin/env".to_string(),
+            args: Vec::new(),
+            command: "/usr/bin/env".to_string(),
+        };
+        let output = preview_process_command(&plan).unwrap().output().unwrap();
+        assert!(output.status.success());
+        let environment = String::from_utf8(output.stdout).unwrap();
+        let keys = environment
+            .lines()
+            .filter_map(|line| line.split_once('=').map(|(key, _)| key))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            keys,
+            BTreeSet::from(["BROWSER", "HOME", "NO_PROXY", "PATH", "TMPDIR"])
+        );
+        for sensitive in [
+            "SSH_AUTH_SOCK",
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "GITHUB_TOKEN",
+            "AWS_SECRET_ACCESS_KEY",
+        ] {
+            assert!(!environment.contains(&format!("{sensitive}=")));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_preview_sandbox_escapes_sbpl_paths() {
+        assert_eq!(
+            sbpl_string_literal(r#"/tmp/preview-"quoted"-back\slash"#).unwrap(),
+            r#""/tmp/preview-\"quoted\"-back\\slash""#
+        );
+        assert!(sbpl_string_literal("/tmp/preview\npath").is_err());
+
+        let root = preview_test_root("sbpl-path");
+        let quoted = root.join("quoted-\"-back\\slash");
+        fs::create_dir_all(&quoted).unwrap();
+        let script = quoted.join("path-probe.js");
+        fs::write(
+            &script,
+            r#"const fs = require("node:fs");
+fs.readFileSync(__filename);
+console.log("quoted-path-read-allowed");"#,
+        )
+        .unwrap();
+        let node = resolve_preview_program("node").unwrap();
+        let plan = PreviewCommandPlan {
+            cwd: fs::canonicalize(&quoted)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            program: node.to_string_lossy().into_owned(),
+            args: vec![script.to_string_lossy().into_owned()],
+            command: "path probe".to_string(),
+        };
+        let mut command = preview_process_command(&plan).unwrap();
+        command.current_dir(&plan.cwd);
+        let output = command.output().unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "quoted-path-read-allowed"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_preview_sandbox_makes_workspace_read_only_and_blocks_all_network() {
+        let root = preview_test_root("macos-sandbox-probe");
+        fs::create_dir_all(root.join(".git/hooks")).unwrap();
+        let original_package = r#"{"name":"sandbox-probe","private":true}"#;
+        fs::write(root.join("package.json"), original_package).unwrap();
+        fs::write(root.join("source.ts"), "original source").unwrap();
+        let script = root.join("sandbox-probe.js");
+        fs::write(
+            &script,
+            r#"const fs = require("node:fs");
+const net = require("node:net");
+const [readTarget, ...writeTargets] = process.argv.slice(2);
+function writeCode(path) {
+  try { fs.writeFileSync(path, "blocked"); return "ALLOWED"; }
+  catch (error) { return error && error.code; }
+}
+function listenCode(host) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once("error", (error) => resolve(error && error.code));
+    server.listen(0, host, () => server.close(() => resolve("ALLOWED")));
+  });
+}
+function connectCode() {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: "203.0.113.1", port: 9 });
+    socket.once("connect", () => { socket.destroy(); resolve("ALLOWED"); });
+    socket.once("error", (error) => resolve(error && error.code));
+    setTimeout(() => { socket.destroy(); resolve("TIMEOUT"); }, 1200);
+  });
+}
+(async () => {
+  const result = {
+    homeReadCode: (() => { try { fs.readFileSync(readTarget); return "ALLOWED"; } catch (error) { return error && error.code; } })(),
+    workspaceRead: (() => { try { fs.readFileSync(__filename); return true; } catch { return false; } })(),
+    writeCodes: writeTargets.map(writeCode),
+    sandboxWriteCode: writeCode(process.env.HOME + "/sandbox-marker"),
+    loopbackBindCode: await listenCode("127.0.0.1"),
+    wildcardV4BindCode: await listenCode("0.0.0.0"),
+    wildcardV6BindCode: await listenCode("::"),
+    outboundCode: await connectCode(),
+    sandboxHome: process.env.HOME,
+  };
+  console.log(JSON.stringify(result));
+  const blocked = [result.homeReadCode, ...result.writeCodes,
+    result.loopbackBindCode, result.wildcardV4BindCode,
+    result.wildcardV6BindCode, result.outboundCode].every((code) => code === "EPERM");
+  process.exit(blocked && result.workspaceRead && result.sandboxWriteCode === "ALLOWED" ? 0 : 1);
+})().catch((error) => { console.error(error); process.exit(1); });
+"#,
+        )
+        .unwrap();
+
+        let actual_home = fs::canonicalize(std::env::var_os("HOME").unwrap()).unwrap();
+        let outside_read = fs::canonicalize(std::env::current_exe().unwrap()).unwrap();
+        assert!(outside_read.starts_with(&actual_home));
+        assert!(!outside_read.starts_with(fs::canonicalize(&root).unwrap()));
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let mut outside_writes = vec![
+            root.join(".git/hooks/blocked-hook"),
+            root.join("package.json"),
+            root.join("source.ts"),
+            actual_home.join(format!(".atelier-preview-denied-{nonce}")),
+        ];
+        for directory in [Path::new("/opt/homebrew"), Path::new("/Applications")] {
+            if directory.is_dir()
+                && Command::new("/usr/bin/test")
+                    .arg("-w")
+                    .arg(directory)
+                    .status()
+                    .is_ok_and(|status| status.success())
+            {
+                outside_writes.push(directory.join(format!(".atelier-preview-denied-{nonce}")));
+            }
+        }
+        assert!(outside_writes.len() >= 4);
+        for path in &outside_writes {
+            if path.ends_with("package.json") || path.ends_with("source.ts") {
+                continue;
+            }
+            assert!(!path.exists(), "{}", path.display());
+        }
+
+        let node = resolve_preview_program("node").unwrap();
+        let plan = PreviewCommandPlan {
+            cwd: fs::canonicalize(&root)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            program: node.to_string_lossy().into_owned(),
+            args: std::iter::once(script.to_string_lossy().into_owned())
+                .chain(std::iter::once(outside_read.to_string_lossy().into_owned()))
+                .chain(
+                    outside_writes
+                        .iter()
+                        .map(|path| path.to_string_lossy().into_owned()),
+                )
+                .collect(),
+            command: "sandbox probe".to_string(),
+        };
+        let mut command = preview_process_command(&plan).unwrap();
+        command.current_dir(&plan.cwd);
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            result.get("homeReadCode").and_then(Value::as_str),
+            Some("EPERM")
+        );
+        assert_eq!(
+            result.get("workspaceRead").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            result.get("sandboxWriteCode").and_then(Value::as_str),
+            Some("ALLOWED")
+        );
+        for key in [
+            "loopbackBindCode",
+            "wildcardV4BindCode",
+            "wildcardV6BindCode",
+            "outboundCode",
+        ] {
+            assert_eq!(
+                result.get(key).and_then(Value::as_str),
+                Some("EPERM"),
+                "{key}"
+            );
+        }
+        let write_codes = result.get("writeCodes").and_then(Value::as_array).unwrap();
+        assert_eq!(write_codes.len(), outside_writes.len());
+        assert!(write_codes
+            .iter()
+            .all(|code| code.as_str() == Some("EPERM")));
+        assert_eq!(
+            fs::read_to_string(root.join("package.json")).unwrap(),
+            original_package
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("source.ts")).unwrap(),
+            "original source"
+        );
+        for path in &outside_writes {
+            if path.ends_with("package.json") || path.ends_with("source.ts") {
+                continue;
+            }
+            assert!(!path.exists(), "{}", path.display());
+        }
+        let sandbox_home =
+            PathBuf::from(result.get("sandboxHome").and_then(Value::as_str).unwrap());
+        assert!(sandbox_home.join("sandbox-marker").is_file());
+    }
+
+    #[test]
+    fn managed_preview_execution_fails_closed_before_spawn() {
+        let error = ensure_managed_preview_execution_enabled().unwrap_err();
+        assert!(error.contains("disabled"));
+        assert!(error.contains("trusted loopback service"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_npm_preview_runs_target_without_pre_or_post_hooks() {
+        let root = preview_test_root("npm-lifecycle-sandbox");
+        fs::write(
+            root.join("package.json"),
+            r#"{
+  "name": "atelier-preview-lifecycle-test",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "predev": "node -e \"require('fs').writeFileSync(process.env.HOME + '/pre-marker', 'pre')\"",
+    "dev": "node server.js",
+    "postdev": "node -e \"require('fs').writeFileSync(process.env.HOME + '/post-marker', 'post')\""
+  }
+}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("server.js"),
+            r#"require("node:fs").writeFileSync(process.env.HOME + "/dev-marker", "dev");
+console.log("SANDBOX_HOME=" + process.env.HOME);"#,
+        )
+        .unwrap();
+
+        let plan =
+            validate_provided_preview_command(root.to_str().unwrap(), "npm run dev", 5173).unwrap();
+        assert!(plan.args.iter().any(|arg| arg == "--ignore-scripts"));
+        let mut command = preview_process_command(&plan).unwrap();
+        command.current_dir(&plan.cwd);
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let isolated_home = stdout
+            .lines()
+            .find_map(|line| line.strip_prefix("SANDBOX_HOME="))
+            .unwrap();
+        assert!(isolated_home.contains("atelier-preview-sandbox"));
+        assert_ne!(isolated_home, std::env::var("HOME").unwrap());
+        let isolated_home = Path::new(isolated_home);
+        assert!(isolated_home.join("dev-marker").exists());
+        assert!(!isolated_home.join("pre-marker").exists());
+        assert!(!isolated_home.join("post-marker").exists());
+        assert!(!root.join("dev-marker").exists());
     }
 }
