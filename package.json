@@ -55,6 +55,7 @@
     "smoke:agent-performance": "node tools/agent-workspace-performance-smoke.mjs",
     "smoke:session-runs": "node --experimental-strip-types tools/session-run-registry-smoke.ts",
     "smoke:feature-boundaries": "node tools/feature-boundary-smoke.mjs",
+    "smoke:feature-bundle-regression": "node tools/feature-bundle-smoke-regression.mjs",
     "smoke:feature-settings": "node --experimental-strip-types tools/feature-settings-smoke.ts",
     "smoke:feature-bundle": "node tools/frontend-feature-bundle-smoke.mjs",
     "smoke:feature-dependency-bundle": "node tools/feature-dependency-bundle-smoke.mjs",
