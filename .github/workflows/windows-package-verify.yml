@@ -33,6 +33,15 @@ jobs:
       - name: Install dependencies
         run: npm ci --legacy-peer-deps
 
+      - name: Audit installed-package verification contract
+        run: node tools/windows-installed-package-contract-smoke.mjs
+
+      - name: Prove Windows package verification logic
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File tools/windows-installed-package-smoke.ps1 -SelfTest
+          powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1 -SelfTest
+
       - name: Prove removable feature packages
         run: npm run gate:orca-features
 
@@ -44,26 +53,15 @@ jobs:
         shell: pwsh
         run: powershell -ExecutionPolicy Bypass -File tools/windows-package-smoke.ps1
 
-      - name: Install NSIS package and prove installed identity
+      - name: Install updater-primary MSI and prove restart and cleanup
         shell: pwsh
-        run: powershell -ExecutionPolicy Bypass -File tools/windows-installed-package-smoke.ps1
+        run: powershell -ExecutionPolicy Bypass -File tools/windows-installed-package-smoke.ps1 -BundleType msi -ProbeBrowserHandoff
 
-      - name: Prove native browser handoff from the installed package
+      - name: Install NSIS and prove restart and cleanup
         shell: pwsh
-        run: |
-          $installedExe = (Get-Content -LiteralPath "artifacts/windows-package-verification/installed-executable-path.txt" -Raw).Trim()
-          powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1 -SelfTest
-          powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1 `
-            -AtelierExe $installedExe `
-            -ProbeBrowserHandoff `
-            -RequireBrowserProcessEvidence
+        run: powershell -ExecutionPolicy Bypass -File tools/windows-installed-package-smoke.ps1 -BundleType nsis
 
-      - name: Collect browser-handoff evidence
-        if: always()
-        shell: pwsh
-        run: powershell -ExecutionPolicy Bypass -File tools/collect-windows-provider-evidence.ps1 -Destination artifacts/windows-package-verification
-
-      - name: Upload package and browser-handoff evidence
+      - name: Upload package verification evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
