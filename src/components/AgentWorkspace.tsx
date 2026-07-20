@@ -161,8 +161,8 @@ import type {
   QuickOpenItem,
   QuickOpenSessionCandidate,
 } from "./quick-open-index";
-import { SessionInboxToolbar, useSessionInbox } from "./session-inbox";
-import type { SessionInboxItem, SessionInboxPhase } from "./session-inbox";
+import { SessionInboxToolbar, sessionFreshnessAt, useSessionInbox } from "./session-inbox";
+import type { SessionFreshnessTimestamps, SessionInboxItem, SessionInboxPhase } from "./session-inbox";
 import ChangesWorkbench from "./workbench/ChangesWorkbench";
 import CodeWorkbench from "./workbench/CodeWorkbench";
 import WorkspaceModeBar from "./workbench/WorkspaceModeBar";
@@ -654,6 +654,8 @@ interface AgentSession {
   queuedTurns?: QueuedAgentTurn[];
   rawEvents: string[];
   updatedAt: number;
+  lastContentAt?: number;
+  lastAttentionAt?: number;
   // 세션별 프리뷰 상태 — 작업탭마다 독립적으로 유지된다.
   previewUrl?: string;
   previewVisible?: boolean;
@@ -754,6 +756,28 @@ function normalizeAgentDotColor(color?: string | null) {
 
 function clampNumber(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
+}
+
+function normalizeSessionTimestamp(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function stampSessionFreshness<T extends SessionFreshnessTimestamps>(
+  session: T,
+  options: { updatedAt?: number; contentAt?: number; attentionAt?: number } = {},
+): T {
+  const updatedAt = normalizeSessionTimestamp(options.updatedAt) ?? session.updatedAt;
+  const lastContentAt = normalizeSessionTimestamp(options.contentAt)
+    ?? normalizeSessionTimestamp(session.lastContentAt)
+    ?? updatedAt;
+  const lastAttentionAt = normalizeSessionTimestamp(options.attentionAt)
+    ?? normalizeSessionTimestamp(session.lastAttentionAt);
+  return {
+    ...session,
+    updatedAt,
+    lastContentAt,
+    lastAttentionAt,
+  };
 }
 
 function composerMinHeight() {
@@ -2288,6 +2312,7 @@ function loadSessions(): AgentSession[] {
       const shouldResetLegacyStellaDefault = safeLocalStorageGet(FACTORY_DEFAULT_OFF_MIGRATION_KEY) !== "1";
       if (shouldResetLegacyStellaDefault) safeLocalStorageSet(FACTORY_DEFAULT_OFF_MIGRATION_KEY, "1");
       return parsed.map((session: Partial<AgentSession>) => {
+        const updatedAt = normalizeSessionTimestamp(session.updatedAt) ?? Date.now();
         const provider = isProvider(session.provider) ? session.provider : DEFAULT_PROVIDER;
         const meta = providerMeta(provider);
         const hermesProvider = provider === "hermes"
@@ -2380,7 +2405,9 @@ function loadSessions(): AgentSession[] {
               : undefined,
           previewWidth: typeof session.previewWidth === "number" ? clampNumber(session.previewWidth, 320, 760) : undefined,
           previewServiceCommand: typeof session.previewServiceCommand === "string" ? session.previewServiceCommand : undefined,
-          updatedAt: session.updatedAt || Date.now(),
+          updatedAt,
+          lastContentAt: normalizeSessionTimestamp(session.lastContentAt) ?? updatedAt,
+          lastAttentionAt: normalizeSessionTimestamp(session.lastAttentionAt),
         };
       });
     }
@@ -3775,11 +3802,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         detail: values[1],
       }));
     const sessionCandidates: Array<QuickOpenSessionCandidate<AgentSession>> = [...sessions]
-      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .sort((a, b) => sessionFreshnessAt(b) - sessionFreshnessAt(a))
       .slice(0, 24)
       .map((session) => {
         const meta = providerMeta(session.provider);
         const sourceCwd = session.worktreeInfo?.source_cwd || session.cwd;
+        const freshnessAt = sessionFreshnessAt(session);
         return {
           session,
           key: `session:${session.id}`,
@@ -3796,7 +3824,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
             session.worktreeInfo?.worktree_cwd,
             session.worktreeInfo?.branch,
           ],
-          updatedAt: session.updatedAt,
+          updatedAt: freshnessAt,
         };
       });
     return buildQuickOpenResults({
@@ -4182,7 +4210,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         : isSessionDone(session)
           ? "done"
           : "idle";
-    return { id: session.id, updatedAt: session.updatedAt, phase };
+    return { id: session.id, freshnessAt: sessionFreshnessAt(session), phase };
   }), [busyTurnIdsBySession, sessions]);
   const {
     filter: sessionInboxFilter,
@@ -4201,12 +4229,18 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     () => new Map(sessionInboxItems.map((item) => [item.id, item.phase])),
     [sessionInboxItems],
   );
+  const sessionFreshnessById = useMemo(
+    () => new Map(sessionInboxItems.map((item) => [item.id, item.freshnessAt])),
+    [sessionInboxItems],
+  );
   const desktopNotificationTasks = useMemo<DesktopNotificationTask[]>(() => {
     const sessionById = new Map(sessions.map((session) => [session.id, session]));
     return sessionInboxItems.map((item) => {
       const session = sessionById.get(item.id);
       return {
-        ...item,
+        id: item.id,
+        updatedAt: item.freshnessAt,
+        phase: item.phase,
         title: session?.title || (session ? providerMeta(session.provider).label : "Atelier"),
       };
     });
@@ -4396,7 +4430,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       const messages = finalizeOrphanedStreamingMessages(session.messages);
       if (messages === session.messages) return session;
       changed = true;
-      return { ...session, messages, updatedAt: Date.now() };
+      const now = Date.now();
+      const hasAttention = messages.some((message) => message.role === "assistant" && message.status === "error");
+      return stampSessionFreshness(
+        { ...session, messages },
+        { updatedAt: now, attentionAt: hasAttention ? now : undefined },
+      );
     });
     if (!changed) return;
     sessionsRef.current = next;
@@ -5119,6 +5158,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   ): AgentSession => {
     const meta = providerMeta(provider);
     const id = nowId("agent");
+    const createdAt = Date.now();
     const profileName = profile?.name || meta.label;
     const hermesProvider = provider === "hermes" ? hermesProviderFromProfile(profile) : undefined;
     const rawModel = profile ? modelFromProfile(profile, provider) : meta.defaultModel;
@@ -5152,7 +5192,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       messages: [],
       queuedTurns: [],
       rawEvents: [],
-      updatedAt: Date.now(),
+      updatedAt: createdAt,
+      lastContentAt: createdAt,
     };
   };
 
@@ -5609,35 +5650,37 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
 
     if (!text && rawEvents.length === 0 && !providerSessionId) return;
     let nextVisibleText = "";
-    patchSession(pending.sessionId, (session) => ({
-      ...session,
-      providerSessionId: providerSessionId || session.providerSessionId,
-      rawEvents: session.rawEvents,
-      messages: text
-        ? session.messages.map((m) =>
-            m.id === pending.assistantId
-              ? {
-                  ...m,
-                  text: (() => {
-                    nextVisibleText = `${m.text}${text}`;
-                    return nextVisibleText;
-                  })(),
-                  status: "streaming" as const,
-                  rawEvents: rawEvents.length
-                    ? [...(m.rawEvents || []), ...rawEvents].slice(-MAX_RAW_EVENTS)
-                    : m.rawEvents,
-                }
-              : m,
-          )
-        : rawEvents.length
+    const now = Date.now();
+    patchSession(pending.sessionId, (session) =>
+      stampSessionFreshness({
+        ...session,
+        providerSessionId: providerSessionId || session.providerSessionId,
+        rawEvents: session.rawEvents,
+        messages: text
           ? session.messages.map((m) =>
               m.id === pending.assistantId
-                ? { ...m, rawEvents: [...(m.rawEvents || []), ...rawEvents].slice(-MAX_RAW_EVENTS) }
+                ? {
+                    ...m,
+                    text: (() => {
+                      nextVisibleText = `${m.text}${text}`;
+                      return nextVisibleText;
+                    })(),
+                    status: "streaming" as const,
+                    rawEvents: rawEvents.length
+                      ? [...(m.rawEvents || []), ...rawEvents].slice(-MAX_RAW_EVENTS)
+                      : m.rawEvents,
+                  }
                 : m,
             )
-          : session.messages,
-      updatedAt: Date.now(),
-    }));
+          : rawEvents.length
+            ? session.messages.map((m) =>
+                m.id === pending.assistantId
+                  ? { ...m, rawEvents: [...(m.rawEvents || []), ...rawEvents].slice(-MAX_RAW_EVENTS) }
+                  : m,
+              )
+            : session.messages,
+      }, { updatedAt: now, contentAt: text ? now : undefined }),
+    );
     if (revealImmediately && nextVisibleText) {
       backgroundedAssistantIdsRef.current.add(assistantId);
       revealMessageImmediately(assistantId, nextVisibleText);
@@ -5748,6 +5791,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       revealMessageImmediately(assistantId, finalVisibleText);
     }
     patchSession(sessionId, (session) => {
+      const now = Date.now();
+      const needsAttention = event.kind === "error" || event.is_error;
       const providerSessionId = event.provider_session_id || session.providerSessionId;
       const messages = session.messages.map((m) => {
         if (m.id !== assistantId) return m;
@@ -5768,7 +5813,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         }
         return m;
       });
-      return { ...session, providerSessionId, messages, updatedAt: Date.now() };
+      return stampSessionFreshness(
+        { ...session, providerSessionId, messages },
+        { updatedAt: now, contentAt: now, attentionAt: needsAttention ? now : undefined },
+      );
     });
     if (shouldRevealFinalNow) {
       backgroundedAssistantIdsRef.current.delete(assistantId);
@@ -5810,35 +5858,38 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     }
 
     if (event.terminal) finishActivities(sessionId, assistantId);
-    patchSession(sessionId, (session) => ({
-      ...session,
-      providerSessionId: event.provider_session_id || session.providerSessionId,
-      messages: session.messages.map((message) => {
-        if (message.id !== assistantId) return message;
-        const lifecyclePhase = event.phase;
-        if (event.phase === "cancelled") {
-          return {
-            ...message,
-            lifecyclePhase,
-            text: cleanAgentText(message.text) || copy.stoppedResponse,
-            status: "done" as const,
-          };
-        }
-        if (event.phase === "failed" && message.status === "streaming") {
-          return {
-            ...message,
-            lifecyclePhase,
-            text: cleanAgentText(message.text) || cleanAgentText(event.summary) || "Agent error",
-            status: "error" as const,
-          };
-        }
-        if (event.phase === "completed" && message.status === "streaming") {
-          return { ...message, lifecyclePhase, status: "done" as const };
-        }
-        return { ...message, lifecyclePhase };
-      }),
-      updatedAt: Date.now(),
-    }));
+    patchSession(sessionId, (session) => {
+      const now = Date.now();
+      const attentionAt = event.phase === "failed" || event.phase === "waiting_for_user" ? now : undefined;
+      return stampSessionFreshness({
+        ...session,
+        providerSessionId: event.provider_session_id || session.providerSessionId,
+        messages: session.messages.map((message) => {
+          if (message.id !== assistantId) return message;
+          const lifecyclePhase = event.phase;
+          if (event.phase === "cancelled") {
+            return {
+              ...message,
+              lifecyclePhase,
+              text: cleanAgentText(message.text) || copy.stoppedResponse,
+              status: "done" as const,
+            };
+          }
+          if (event.phase === "failed" && message.status === "streaming") {
+            return {
+              ...message,
+              lifecyclePhase,
+              text: cleanAgentText(message.text) || cleanAgentText(event.summary) || "Agent error",
+              status: "error" as const,
+            };
+          }
+          if (event.phase === "completed" && message.status === "streaming") {
+            return { ...message, lifecyclePhase, status: "done" as const };
+          }
+          return { ...message, lifecyclePhase };
+        }),
+      }, { updatedAt: now, attentionAt });
+    });
   };
 
   const loadMessageChanges = async (
@@ -6180,24 +6231,25 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       reviewRequest: dispatch.context,
     };
     const isBusy = Boolean(busyTurnIdsRef.current[sessionId]);
-    patchSession(sessionId, (session) => ({
-      ...session,
-      queuedTurns: isBusy ? [...(session.queuedTurns || []), payload] : (session.queuedTurns || []),
-      messages: [
-        ...(isBusy ? session.messages : finalizeOrphanedStreamingMessages(session.messages)).map((item) =>
-          item.id === message.id ? { ...item, reviewWorkflow: dispatch.state } : item,
-        ),
-        {
-          id: payload.userMessageId,
-          role: "user",
-          text: prompt,
-          createdAt,
-          status: isBusy ? "queued" : "done",
-          attachments: [],
-        },
-      ],
-      updatedAt: createdAt,
-    }));
+    patchSession(sessionId, (session) =>
+      stampSessionFreshness({
+        ...session,
+        queuedTurns: isBusy ? [...(session.queuedTurns || []), payload] : (session.queuedTurns || []),
+        messages: [
+          ...(isBusy ? session.messages : finalizeOrphanedStreamingMessages(session.messages)).map((item) =>
+            item.id === message.id ? { ...item, reviewWorkflow: dispatch.state } : item,
+          ),
+          {
+            id: payload.userMessageId,
+            role: "user",
+            text: prompt,
+            createdAt,
+            status: isBusy ? "queued" : "done",
+            attachments: [],
+          },
+        ],
+      }, { updatedAt: createdAt, contentAt: createdAt }),
+    );
     if (!isBusy) await runAgentTurn(sessionId, payload);
   };
 
@@ -6719,13 +6771,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   const localAssistantMessage = (sessionId: string, userText: string, assistantText: string) => {
     const createdAt = Date.now();
     patchSession(sessionId, (session) => ({
-      ...session,
+      ...stampSessionFreshness(session, { updatedAt: createdAt, contentAt: createdAt }),
       messages: [
         ...(busyTurnIdsRef.current[sessionId] ? session.messages : finalizeOrphanedStreamingMessages(session.messages)),
         { id: nowId("user"), role: "user", text: userText, createdAt, status: "done" },
         { id: nowId("assistant"), role: "assistant", text: assistantText, createdAt, status: "done" },
       ],
-      updatedAt: createdAt,
     }));
   };
 
@@ -7615,50 +7666,53 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
               notBefore: Date.now() + cooldownSeconds * 1000,
             }
           : null;
-        patchSession(sessionId, (s) => ({
-          ...s,
-          providerSessionId: result.provider_session_id || (resumeSessionId ? s.providerSessionId : undefined),
-          queuedTurns: retryPayload
-            ? [retryPayload, ...(s.queuedTurns || [])]
-            : s.queuedTurns,
-          providerSessionModel: result.provider_session_id
-            ? runModel
-            : (resumeSessionId ? s.providerSessionModel : undefined),
-          providerSessionHermesProvider: session.provider === "hermes"
-            ? (result.provider_session_id
-                ? hermesProvider || undefined
-                : (resumeSessionId ? s.providerSessionHermesProvider : undefined))
-            : s.providerSessionHermesProvider,
-          messages: s.messages.map((m) =>
-            {
-              if (m.id !== assistantId) return m;
-              const existingRawEvents = m.rawEvents || [];
-              const messageRawEvents = existingRawEvents.length ? existingRawEvents : fallbackRawEvents;
-              return {
-                  ...m,
-                  text: (() => {
-                    finalTextForReveal = cooldownSeconds !== null
-                      ? copy.providerCooldownRetry(meta.label, cooldownSeconds, shouldScheduleCooldownRetry)
-                      : cleanAgentText(result.text)
-                      || cleanAgentText(m.text)
-                      || (wasStopped ? copy.stoppedResponse : wasInterrupted ? copy.interruptedResponse : "")
-                      || cleanAgentText(result.error)
-                      || (result.is_error ? `실행 실패: ${result.error || "Agent error"}` : copy.noResponse);
-                    return finalTextForReveal;
-                  })(),
-                  status: wasStopped || wasInterrupted || shouldScheduleCooldownRetry ? "done" : result.is_error ? "error" : "done",
-                  rawEvents: messageRawEvents.length ? messageRawEvents.slice(-MAX_RAW_EVENTS) : m.rawEvents,
-                  changeBaselineId: !result.is_error && !wasInterrupted && !wasStopped ? changeBaseline?.id || null : null,
-                  changeCwd: !result.is_error && !wasInterrupted && !wasStopped ? runCwd : m.changeCwd,
-                  changes: !result.is_error && !wasInterrupted && !wasStopped ? null : m.changes,
-                  changesLoading: false,
-                  changesChecked: false,
-                  changesError: null,
-              };
-            },
-          ),
-          updatedAt: Date.now(),
-        }));
+        patchSession(sessionId, (s) => {
+          const now = Date.now();
+          const needsAttention = result.is_error && !wasInterrupted && !wasStopped && !shouldScheduleCooldownRetry;
+          return stampSessionFreshness({
+            ...s,
+            providerSessionId: result.provider_session_id || (resumeSessionId ? s.providerSessionId : undefined),
+            queuedTurns: retryPayload
+              ? [retryPayload, ...(s.queuedTurns || [])]
+              : s.queuedTurns,
+            providerSessionModel: result.provider_session_id
+              ? runModel
+              : (resumeSessionId ? s.providerSessionModel : undefined),
+            providerSessionHermesProvider: session.provider === "hermes"
+              ? (result.provider_session_id
+                  ? hermesProvider || undefined
+                  : (resumeSessionId ? s.providerSessionHermesProvider : undefined))
+              : s.providerSessionHermesProvider,
+            messages: s.messages.map((m) =>
+              {
+                if (m.id !== assistantId) return m;
+                const existingRawEvents = m.rawEvents || [];
+                const messageRawEvents = existingRawEvents.length ? existingRawEvents : fallbackRawEvents;
+                return {
+                    ...m,
+                    text: (() => {
+                      finalTextForReveal = cooldownSeconds !== null
+                        ? copy.providerCooldownRetry(meta.label, cooldownSeconds, shouldScheduleCooldownRetry)
+                        : cleanAgentText(result.text)
+                        || cleanAgentText(m.text)
+                        || (wasStopped ? copy.stoppedResponse : wasInterrupted ? copy.interruptedResponse : "")
+                        || cleanAgentText(result.error)
+                        || (result.is_error ? `실행 실패: ${result.error || "Agent error"}` : copy.noResponse);
+                      return finalTextForReveal;
+                    })(),
+                    status: wasStopped || wasInterrupted || shouldScheduleCooldownRetry ? "done" : result.is_error ? "error" : "done",
+                    rawEvents: messageRawEvents.length ? messageRawEvents.slice(-MAX_RAW_EVENTS) : m.rawEvents,
+                    changeBaselineId: !result.is_error && !wasInterrupted && !wasStopped ? changeBaseline?.id || null : null,
+                    changeCwd: !result.is_error && !wasInterrupted && !wasStopped ? runCwd : m.changeCwd,
+                    changes: !result.is_error && !wasInterrupted && !wasStopped ? null : m.changes,
+                    changesLoading: false,
+                    changesChecked: false,
+                    changesError: null,
+                };
+              },
+            ),
+          }, { updatedAt: now, contentAt: now, attentionAt: needsAttention ? now : undefined });
+        });
         updateReviewWorkflowStatus(
           sessionId,
           payload.reviewRequest,
@@ -7926,30 +7980,31 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     const isBusy = Boolean(busyTurnIdsRef.current[session.id]);
     const queueMode = Boolean(session.queueMode);
     const shouldQueue = isBusy && (queueMode || Boolean(quePrefixedText));
-    patchSession(session.id, (s) => ({
-      ...s,
-      title: s.messages.length === 0 && !s.titleEdited
-        ? (academicResearchRequest?.title || factoryRequest?.title || turnText).slice(0, 48)
-        : s.title,
-      cwd,
-      queuedTurns: isBusy
-        ? shouldQueue
-          ? [...(s.queuedTurns || []), payload]
-          : [payload, ...(s.queuedTurns || [])]
-        : (s.queuedTurns || []),
-      messages: [
-        ...(isBusy ? s.messages : finalizeOrphanedStreamingMessages(s.messages)),
-        {
-          id: payload.userMessageId,
-          role: "user",
-          text: payload.displayText || turnText,
-          createdAt,
-          status: shouldQueue ? "queued" : "done",
-          attachments,
-        },
-      ],
-      updatedAt: createdAt,
-    }));
+    patchSession(session.id, (s) =>
+      stampSessionFreshness({
+        ...s,
+        title: s.messages.length === 0 && !s.titleEdited
+          ? (academicResearchRequest?.title || factoryRequest?.title || turnText).slice(0, 48)
+          : s.title,
+        cwd,
+        queuedTurns: isBusy
+          ? shouldQueue
+            ? [...(s.queuedTurns || []), payload]
+            : [payload, ...(s.queuedTurns || [])]
+          : (s.queuedTurns || []),
+        messages: [
+          ...(isBusy ? s.messages : finalizeOrphanedStreamingMessages(s.messages)),
+          {
+            id: payload.userMessageId,
+            role: "user",
+            text: payload.displayText || turnText,
+            createdAt,
+            status: shouldQueue ? "queued" : "done",
+            attachments,
+          },
+        ],
+      }, { updatedAt: createdAt, contentAt: createdAt }),
+    );
     if (elementSelection) setDevScreenSelectionAttached(false);
 
     if (isBusy) {
@@ -8014,6 +8069,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       attachments: [],
     }];
     session.updatedAt = createdAt;
+    session.lastContentAt = createdAt;
 
     const nextSessions = [session, ...sessionsRef.current];
     sessionsRef.current = nextSessions;
@@ -8130,6 +8186,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         status: "done",
         attachments: [],
       }];
+      session.updatedAt = createdAt;
+      session.lastContentAt = createdAt;
       const nextSessions = [session, ...sessionsRef.current];
       sessionsRef.current = nextSessions;
       persistSessions(nextSessions);
@@ -8245,6 +8303,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
           attachments,
         }];
         session.updatedAt = createdAt;
+        session.lastContentAt = createdAt;
         return { session, payload };
       });
 
@@ -8902,7 +8961,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                   <div className={cls("mt-0.5 text-[9.5px] font-mono truncate", dark ? "text-dsub" : "text-sub")}>
                     {s.profileName || providerMeta(s.provider).label}
                     {s.parallelBatchId ? ` · ${s.parallelCandidateIndex || 1}/${s.parallelCandidateCount || 1}` : ""}
-                    {` · ${s.providerSessionId ? "resume" : "new"} · ${relTime(s.updatedAt)}`}
+                    {` · ${s.providerSessionId ? "resume" : "new"} · ${relTime(sessionFreshnessById.get(s.id) || s.updatedAt)}`}
                   </div>
                 </div>
                 {isSessionRunning(s) && (
