@@ -56,6 +56,8 @@ const checks = [
   ["Git stage action", sources.sourceControl.includes("agentGitStage")],
   ["Git unstage action", sources.sourceControl.includes("agentGitUnstage")],
   ["manual Git commit action", sources.sourceControl.includes("agentGitCommit")],
+  ["source-control features recompute from feature settings revision", sources.sourceControl.includes("useFeatureSettingsRevision") && sources.sourceControl.includes("availableSourceControlFeatures") && sources.sourceControl.includes("[featureSettingsRevision]")],
+  ["disabled external source-control panels close deterministically", sources.sourceControl.includes("resolveExternalPanel(availableSourceControlFeatures, current)") && sources.sourceControl.includes("findSourceControlFeature(availableSourceControlFeatures, externalPanel)")],
   ["quick-open result merge is independently owned", sources.workspace.includes('from "./quick-open-index"') && sources.quickOpenIndex.includes("buildQuickOpenResults")],
   ["quick-open workspace file search", sources.workspace.includes("searchWorkspaceFiles(activeExecutionCwd")],
   ["quick-open symbol and Git index is bounded", sources.quickOpenBackend.includes("MAX_SOURCE_BYTES") && sources.quickOpenBackend.includes("MAX_SOURCE_FILES")],

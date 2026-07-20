@@ -11,6 +11,7 @@ const coreSmokeScripts = [
   "smoke:feature-settings",
   "smoke:session-runs",
   "smoke:workbench",
+  "smoke:workbench-toggle",
 ];
 
 const componentsRoot = resolve(process.cwd(), "src", "components");

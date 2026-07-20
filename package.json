@@ -59,6 +59,7 @@
     "smoke:feature-bundle": "node tools/frontend-feature-bundle-smoke.mjs",
     "smoke:feature-dependency-bundle": "node tools/feature-dependency-bundle-smoke.mjs",
     "smoke:workbench": "node tools/workbench-contract-smoke.mjs",
+    "smoke:workbench-toggle": "node --experimental-strip-types tools/changes-workbench-toggle-smoke.ts",
     "gate:orca-features": "node tools/orca-feature-release-gate.mjs",
     "smoke:renderer-ready:mac": "bash tools/renderer-ready-smoke.sh",
     "smoke:updater-contract": "node tools/updater-contract-smoke.mjs",
