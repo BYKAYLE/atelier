@@ -14,9 +14,9 @@ import {
   sourceControlFeatures,
   type SourceControlWorkItem,
 } from "../../features/featureRegistry";
+import { useFeatureSettingsRevision } from "../../features/featureSettings";
 import { I } from "../Icons";
-
-const SOURCE_CONTROL_FEATURES = sourceControlFeatures();
+import { findSourceControlFeature, resolveExternalPanel } from "./sourceControlPanels";
 
 interface Props {
   dark: boolean;
@@ -41,6 +41,7 @@ const ChangesWorkbench: React.FC<Props> = ({
   onOpenFile,
   onStartWorkItem,
 }) => {
+  const featureSettingsRevision = useFeatureSettingsRevision();
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [gitState, setGitState] = useState<AgentGitState | null>(null);
   const [gitError, setGitError] = useState<string | null>(null);
@@ -148,13 +149,22 @@ const ChangesWorkbench: React.FC<Props> = ({
     setSelectedPath(files[0]?.path || null);
   }, [files, selectedPath]);
 
+  const availableSourceControlFeatures = useMemo(
+    () => sourceControlFeatures(),
+    [featureSettingsRevision],
+  );
+
+  useEffect(() => {
+    setExternalPanel((current) => resolveExternalPanel(availableSourceControlFeatures, current));
+  }, [availableSourceControlFeatures]);
+
   const diffLines = useMemo(() => {
     if (!selectedFile?.diff) return [];
     return selectedFile.diff.split("\n").slice(0, 5000);
   }, [selectedFile]);
   const diffTruncated = Boolean(selectedFile?.diff && selectedFile.diff.split("\n").length > diffLines.length);
   const busy = loading || gitLoading || Boolean(operation);
-  const activeSourceControl = SOURCE_CONTROL_FEATURES.find((feature) => feature.id === externalPanel);
+  const activeSourceControl = findSourceControlFeature(availableSourceControlFeatures, externalPanel);
   const ActiveSourceControlPanel = activeSourceControl?.component;
 
   return (
@@ -179,7 +189,7 @@ const ChangesWorkbench: React.FC<Props> = ({
           )}
         </div>
         <div className="atelier-changes-toolbar-actions">
-          {SOURCE_CONTROL_FEATURES.map((feature) => (
+          {availableSourceControlFeatures.map((feature) => (
             <button
               key={feature.id}
               type="button"
