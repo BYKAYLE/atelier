@@ -114,6 +114,15 @@ import { cls, Profile, Tweaks } from "../lib/tokens";
 import ComposerSelectMenu from "./ComposerSelectMenu";
 import { I } from "./Icons";
 import CodexModelMenu from "./agent-composer/CodexModelMenu";
+import {
+  clearSessionComposerDraft,
+  createSessionComposerDraft,
+  normalizeSessionComposerDraft,
+  readSessionComposerDraft,
+  upsertSessionComposerDraft,
+  type ChatAttachment,
+  type SessionComposerDraft,
+} from "./agent-composer/sessionDraftStore";
 import { useSessionRunRegistry } from "./agent-runtime/useSessionRunRegistry";
 import {
   AgentFleetLauncher,
@@ -505,15 +514,6 @@ function sameComposerUiState(left: ComposerUiState, right: ComposerUiState): boo
     && left.factoryCommand === right.factoryCommand;
 }
 
-type ChatAttachment = {
-  id: string;
-  kind: "image";
-  name: string;
-  path: string;
-  size?: number;
-  mime?: string;
-};
-
 interface ChatMessage {
   id: string;
   role: Role;
@@ -652,6 +652,7 @@ interface AgentSession {
   providerSessionHermesProvider?: HermesInferenceProvider;
   messages: ChatMessage[];
   queuedTurns?: QueuedAgentTurn[];
+  draft?: SessionComposerDraft;
   rawEvents: string[];
   updatedAt: number;
   // 세션별 프리뷰 상태 — 작업탭마다 독립적으로 유지된다.
@@ -2250,6 +2251,7 @@ function compactSessionForPersistence(session: AgentSession, fallback = false): 
     queuedTurns: Array.isArray(session.queuedTurns)
       ? session.queuedTurns.slice(-MAX_PERSISTED_QUEUED_TURNS).map(compactQueuedTurnForPersistence)
       : [],
+    draft: normalizeSessionComposerDraft(session.draft, MAX_PERSISTED_ATTACHMENTS),
     rawEvents: compactRawEventsForPersistence(session.rawEvents),
   };
 }
@@ -2371,6 +2373,7 @@ function loadSessions(): AgentSession[] {
                   notBefore: typeof turn.notBefore === "number" ? turn.notBefore : undefined,
                 }))
             : [],
+          draft: normalizeSessionComposerDraft(session.draft, MAX_PERSISTED_ATTACHMENTS),
           rawEvents: Array.isArray(session.rawEvents) ? session.rawEvents : [],
           previewUrl: restoreAutoPreviewUrl(session.previewUrl),
           previewVisible: typeof session.previewVisible === "boolean" ? session.previewVisible : undefined,
@@ -3225,6 +3228,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   useEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
+  useEffect(() => {
+    pendingAttachmentsRef.current = pendingAttachments;
+  }, [pendingAttachments]);
   const {
     busyTurnIdsBySession,
     busyTurnIdsRef,
@@ -3258,6 +3264,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   const [slashSelection, setSlashSelection] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const inputDraftRef = useRef(input);
+  const pendingAttachmentsRef = useRef<ChatAttachment[]>(pendingAttachments);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const slashMenuPopoverRef = useRef<HTMLDivElement | null>(null);
   const skipRenameCommitRef = useRef(false);
@@ -3290,6 +3297,22 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     setComposerUi((current) => sameComposerUiState(current, nextUi) ? current : nextUi);
   };
 
+  const setComposerAttachments = (
+    next: ChatAttachment[] | ((current: ChatAttachment[]) => ChatAttachment[]),
+  ) => {
+    setPendingAttachments((current) => {
+      const resolved = typeof next === "function" ? next(current) : next;
+      pendingAttachmentsRef.current = resolved;
+      return resolved;
+    });
+  };
+
+  const syncComposerDraft = (next: SessionComposerDraft | undefined) => {
+    setComposerInput(next?.text || "");
+    setComposerAttachments(next?.attachments.map((attachment) => ({ ...attachment })) || []);
+    setPasteError(null);
+  };
+
   const setComposerInput = (next: string) => {
     inputDraftRef.current = next;
     const el = inputRef.current;
@@ -3313,6 +3336,23 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       persistSessions(next);
     }, SESSION_PERSIST_DEBOUNCE_MS);
   };
+
+  const currentComposerDraft = () =>
+    createSessionComposerDraft(
+      inputDraftRef.current,
+      pendingAttachmentsRef.current,
+      MAX_PERSISTED_ATTACHMENTS,
+    );
+
+  const flushComposerDraftToSession = (
+    sessionId: string | null | undefined,
+    currentSessions: AgentSession[] = sessionsRef.current,
+  ) => upsertSessionComposerDraft(currentSessions, sessionId, currentComposerDraft());
+
+  const clearComposerDraftFromSession = (
+    sessionId: string | null | undefined,
+    currentSessions: AgentSession[] = sessionsRef.current,
+  ) => clearSessionComposerDraft(currentSessions, sessionId);
 
   const copy = tw.language === "en"
     ? {
@@ -3740,6 +3780,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     () => sessions.find((s) => s.id === activeId) || sessions[0] || null,
     [activeId, sessions],
   );
+  useEffect(() => {
+    syncComposerDraft(readSessionComposerDraft(sessionsRef.current, activeId));
+  }, [activeId]);
   const activeExecutionCwd = active?.worktreeEnabled && active.worktreeInfo?.worktree_cwd
     ? active.worktreeInfo.worktree_cwd
     : cwd;
@@ -4673,7 +4716,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       if (scrollFrameRef.current !== null) {
         window.cancelAnimationFrame(scrollFrameRef.current);
       }
-      persistSessionsNow(sessionsRef.current);
+      const draftState = flushComposerDraftToSession(activeIdRef.current, sessionsRef.current);
+      persistSessionsNow(draftState.sessions);
       pendingStreamRef.current = {};
       providerCooldownRetryTimersRef.current = {};
       smoothTargetsRef.current = {};
@@ -4993,13 +5037,23 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
 
   const resetComposer = () => {
     setComposerInput("");
-    setPendingAttachments([]);
+    setComposerAttachments([]);
     setPasteError(null);
   };
 
   const selectSession = (id: string) => {
-    if (id !== activeId) resetComposer();
-    const nextSession = sessionsRef.current.find((session) => session.id === id);
+    const currentActiveId = activeIdRef.current;
+    let sessionList = sessionsRef.current;
+    if (id !== currentActiveId) {
+      const draftState = flushComposerDraftToSession(currentActiveId);
+      if (draftState.changed) {
+        sessionsRef.current = draftState.sessions;
+        persistSessionsSoon(draftState.sessions);
+        setSessions(draftState.sessions);
+      }
+      sessionList = draftState.sessions;
+    }
+    const nextSession = sessionList.find((session) => session.id === id);
     if (nextSession?.cwd) setCwd(nextSession.cwd);
     markSessionRead(id);
     activeIdRef.current = id;
@@ -5158,14 +5212,14 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
 
   const createSession = (profile: Profile | undefined, provider: AgentProvider, clearInput = true) => {
     const session = makeSession(profile, provider);
-    const nextSessions = [session, ...sessionsRef.current];
+    const draftState = clearInput ? flushComposerDraftToSession(activeIdRef.current) : { sessions: sessionsRef.current, changed: false };
+    const nextSessions = [session, ...draftState.sessions];
     sessionsRef.current = nextSessions;
     persistSessions(nextSessions);
     setSessions(nextSessions);
     activeIdRef.current = session.id;
     setActiveId(session.id);
     setShowProfilePicker(false);
-    if (clearInput) resetComposer();
     return session;
   };
 
@@ -6703,7 +6757,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         });
       }
       if (attachments.length > 0) {
-        setPendingAttachments((prev) => [...prev, ...attachments]);
+        setComposerAttachments((prev) => [...prev, ...attachments]);
       }
     } catch (err) {
       setPasteError(copy.imagePasteFailed(String(err)));
@@ -6713,7 +6767,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   };
 
   const removePendingAttachment = (id: string) => {
-    setPendingAttachments((prev) => prev.filter((attachment) => attachment.id !== id));
+    setComposerAttachments((prev) => prev.filter((attachment) => attachment.id !== id));
   };
 
   const localAssistantMessage = (sessionId: string, userText: string, assistantText: string) => {
@@ -7816,7 +7870,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
 
   const send = async () => {
     const text = inputDraftRef.current.trim();
-    const attachments = pendingAttachments;
+    const attachments = pendingAttachmentsRef.current;
     const userText = text || (attachments.length > 0 ? copy.imageOnlyPrompt : "");
     if ((!userText && attachments.length === 0) || isPastingImage) return;
     const quePrefixedText = attachments.length === 0 ? parseQuePrefixedMessage(userText) : null;
@@ -7843,8 +7897,14 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     })();
     if (factorySafetyBlock) {
       localAssistantMessage(session.id, userText, factorySafetyBlock.message);
+      const clearedDraftState = clearComposerDraftFromSession(session.id);
+      if (clearedDraftState.changed) {
+        sessionsRef.current = clearedDraftState.sessions;
+        persistSessionsSoon(clearedDraftState.sessions);
+        setSessions(clearedDraftState.sessions);
+      }
       setComposerInput("");
-      setPendingAttachments([]);
+      setComposerAttachments([]);
       setPasteError(null);
       return;
     }
@@ -7899,16 +7959,35 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       ? normalizeDevScreenElementSelection(devScreenElementSelection) || undefined
       : undefined;
 
-    setComposerInput("");
-    setPendingAttachments([]);
-    setPasteError(null);
-
     if (!quePrefixedText && !factoryRequest && !academicResearchRequest && gajaePrefixedInput.kind === "cli") {
       await runProviderCliSlashCommand(session, userText, gajaePrefixedInput.args);
+      const clearedDraftState = clearComposerDraftFromSession(session.id);
+      if (clearedDraftState.changed) {
+        sessionsRef.current = clearedDraftState.sessions;
+        persistSessionsSoon(clearedDraftState.sessions);
+        setSessions(clearedDraftState.sessions);
+      }
+      setComposerInput("");
+      setComposerAttachments([]);
+      setPasteError(null);
       return;
     }
 
-    if (!quePrefixedText && !factoryRequest && !academicResearchRequest && !gajaePromptText && attachments.length === 0 && await handleSlashCommand(session, userText)) return;
+    if (!quePrefixedText && !factoryRequest && !academicResearchRequest && !gajaePromptText && attachments.length === 0) {
+      const handled = await handleSlashCommand(session, userText);
+      if (handled) {
+        const clearedDraftState = clearComposerDraftFromSession(session.id);
+        if (clearedDraftState.changed) {
+          sessionsRef.current = clearedDraftState.sessions;
+          persistSessionsSoon(clearedDraftState.sessions);
+          setSessions(clearedDraftState.sessions);
+        }
+        setComposerInput("");
+        setComposerAttachments([]);
+        setPasteError(null);
+        return;
+      }
+    }
 
     const createdAt = Date.now();
     const payload: QueuedAgentTurn = {
@@ -7931,6 +8010,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       title: s.messages.length === 0 && !s.titleEdited
         ? (academicResearchRequest?.title || factoryRequest?.title || turnText).slice(0, 48)
         : s.title,
+      draft: undefined,
       cwd,
       queuedTurns: isBusy
         ? shouldQueue
@@ -7950,6 +8030,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       ],
       updatedAt: createdAt,
     }));
+    setComposerInput("");
+    setComposerAttachments([]);
+    setPasteError(null);
     if (elementSelection) setDevScreenSelectionAttached(false);
 
     if (isBusy) {
@@ -8015,7 +8098,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     }];
     session.updatedAt = createdAt;
 
-    const nextSessions = [session, ...sessionsRef.current];
+    const draftState = flushComposerDraftToSession(activeIdRef.current);
+    const nextSessions = [session, ...draftState.sessions];
     sessionsRef.current = nextSessions;
     persistSessionsNow(nextSessions);
     setSessions(nextSessions);
@@ -8024,7 +8108,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     setCwd(workspace);
     setWorkspaceView("conversation");
     setShowProfilePicker(false);
-    resetComposer();
     await runAgentTurn(session.id, payload);
   };
 
@@ -8182,7 +8265,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   const launchParallelRun = async () => {
     if (parallelLaunching || isPastingImage) return;
     const text = inputDraftRef.current.trim();
-    const attachments = pendingAttachments;
+    const attachments = pendingAttachmentsRef.current;
     const userText = text || (attachments.length > 0 ? copy.imageOnlyPrompt : "");
     if (!userText) {
       setParallelError(copy.parallelPromptRequired);
@@ -8248,7 +8331,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         return { session, payload };
       });
 
-      const nextSessions = [...candidates.map(({ session }) => session), ...sessionsRef.current];
+      const draftState = flushComposerDraftToSession(activeIdRef.current);
+      const nextSessions = [...candidates.map(({ session }) => session), ...draftState.sessions];
       sessionsRef.current = nextSessions;
       persistSessionsNow(nextSessions);
       setSessions(nextSessions);
@@ -8257,7 +8341,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       setActiveId(firstSession.id);
       setCwd(firstSession.cwd);
       setShowParallelLauncher(false);
-      resetComposer();
+      setComposerInput("");
+      setComposerAttachments([]);
+      setPasteError(null);
       if (elementSelection) setDevScreenSelectionAttached(false);
 
       candidates.forEach(({ session, payload }) => {
