@@ -30,6 +30,26 @@ use crate::credentials::{
 
 const RETURN_RAW_EVENT_LIMIT: usize = 120;
 const RETURN_RAW_EVENT_CHAR_LIMIT: usize = 12_000;
+const FAST_AGENT_CLI_TIMEOUT: Duration = Duration::from_secs(20);
+const STANDARD_AGENT_CLI_TIMEOUT: Duration = Duration::from_secs(120);
+const LONG_RUNNING_AGENT_CLI_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AgentCliTimeoutPolicy {
+    FastInspection,
+    Standard,
+    LongRunning,
+}
+
+impl AgentCliTimeoutPolicy {
+    const fn timeout(self) -> Duration {
+        match self {
+            Self::FastInspection => FAST_AGENT_CLI_TIMEOUT,
+            Self::Standard => STANDARD_AGENT_CLI_TIMEOUT,
+            Self::LongRunning => LONG_RUNNING_AGENT_CLI_TIMEOUT,
+        }
+    }
+}
 
 fn clip_return_raw_event(raw: &str) -> String {
     if raw.chars().count() <= RETURN_RAW_EVENT_CHAR_LIMIT {
@@ -148,6 +168,116 @@ fn command_for_gajecode() -> Result<Command, String> {
 fn is_help_request(args: &[String]) -> bool {
     args.iter()
         .any(|arg| matches!(arg.as_str(), "-h" | "--help" | "help"))
+}
+
+fn cli_subcommand_is(args: &[String], parent: &str, allowed: &[&str]) -> bool {
+    args.first().is_some_and(|arg| arg == parent)
+        && args
+            .get(1)
+            .is_some_and(|subcommand| allowed.contains(&subcommand.as_str()))
+}
+
+fn is_fast_agent_cli_inspection(provider: AgentProviderKind, args: &[String]) -> bool {
+    let Some(first) = args.first().map(String::as_str) else {
+        return false;
+    };
+    if matches!(first, "help" | "-h" | "--help")
+        || args
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "-h" | "--help"))
+    {
+        return true;
+    }
+
+    match provider {
+        AgentProviderKind::Hermes => {
+            matches!(first, "status" | "version" | "doctor" | "logs")
+                || cli_subcommand_is(args, "plugins", &["list", "ls"])
+                || cli_subcommand_is(args, "tools", &["list"])
+                || cli_subcommand_is(
+                    args,
+                    "skills",
+                    &[
+                        "list", "browse", "search", "inspect", "check", "audit", "config",
+                    ],
+                )
+                || cli_subcommand_is(args, "mcp", &["list", "ls", "test", "config", "configure"])
+                || cli_subcommand_is(args, "sessions", &["list", "stats", "browse"])
+        }
+        AgentProviderKind::Claude => {
+            first == "doctor"
+                || cli_subcommand_is(args, "auth", &["status"])
+                || cli_subcommand_is(
+                    args,
+                    "plugin",
+                    &["list", "details", "marketplace", "validate"],
+                )
+                || cli_subcommand_is(
+                    args,
+                    "plugins",
+                    &["list", "details", "marketplace", "validate"],
+                )
+                || cli_subcommand_is(args, "mcp", &["list", "get"])
+        }
+        AgentProviderKind::Codex => {
+            cli_subcommand_is(args, "mcp", &["list", "get"])
+                || cli_subcommand_is(args, "features", &["list"])
+                || cli_subcommand_is(args, "login", &["status"])
+                || cli_subcommand_is(args, "plugin", &["marketplace"])
+        }
+        AgentProviderKind::GajaeCode => {
+            matches!(first, "--version" | "-v" | "--smoke-test")
+                || first.starts_with("--list-models")
+                || cli_subcommand_is(args, "skills", &["list", "read", "browse", "search"])
+                || cli_subcommand_is(args, "session", &["list", "status"])
+                || (first == "setup"
+                    && args
+                        .iter()
+                        .any(|arg| matches!(arg.as_str(), "--check" | "--smoke")))
+                || cli_subcommand_is(args, "notify", &["status"])
+                || (first == "mcp-serve" && args.iter().any(|arg| arg == "--check"))
+        }
+    }
+}
+
+fn is_long_running_agent_cli_command(provider: AgentProviderKind, args: &[String]) -> bool {
+    let Some(first) = args.first().map(String::as_str) else {
+        return false;
+    };
+
+    match provider {
+        AgentProviderKind::Claude => first == "auto-mode",
+        AgentProviderKind::Codex => first == "review",
+        AgentProviderKind::Hermes => false,
+        AgentProviderKind::GajaeCode => {
+            matches!(
+                first,
+                "-p" | "--print"
+                    | "--continue"
+                    | "-c"
+                    | "--resume"
+                    | "-r"
+                    | "--worktree"
+                    | "rlm"
+                    | "web-search"
+                    | "q"
+            ) || (!first.starts_with('-') && !is_known_gajecode_cli_command(first))
+        }
+    }
+}
+
+fn agent_cli_timeout_policy(provider: AgentProviderKind, args: &[String]) -> AgentCliTimeoutPolicy {
+    let lowered = args
+        .iter()
+        .map(|arg| arg.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    if is_fast_agent_cli_inspection(provider, &lowered) {
+        AgentCliTimeoutPolicy::FastInspection
+    } else if is_long_running_agent_cli_command(provider, &lowered) {
+        AgentCliTimeoutPolicy::LongRunning
+    } else {
+        AgentCliTimeoutPolicy::Standard
+    }
 }
 
 fn allow_cli_subcommand(
@@ -443,6 +573,7 @@ fn run_agent_cli_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
+    let timeout_policy = agent_cli_timeout_policy(provider_kind, &args);
     let child = cmd.spawn().map_err(|e| {
         format!(
             "{} 실행 실패: {} ({e})",
@@ -450,7 +581,7 @@ fn run_agent_cli_command(
             describe_cli_command(&provider)
         )
     })?;
-    let (output, timed_out) = wait_with_timeout(child, Duration::from_secs(20))?;
+    let (output, timed_out) = wait_with_timeout(child, timeout_policy.timeout())?;
     let stdout = clip_cli_output(String::from_utf8_lossy(&output.stdout).to_string());
     let stderr = clip_cli_output(String::from_utf8_lossy(&output.stderr).to_string());
     let success = output.status.success() && !timed_out;
@@ -3513,6 +3644,79 @@ export ANTHROPIC_API_KEY="tc-example"
     }
 
     #[test]
+    fn agent_cli_timeout_policy_keeps_inspection_commands_fast() {
+        let cases = vec![
+            (AgentProviderKind::Hermes, vec!["status"]),
+            (AgentProviderKind::Hermes, vec!["skills", "check"]),
+            (AgentProviderKind::Claude, vec!["auth", "status"]),
+            (AgentProviderKind::Codex, vec!["features", "list"]),
+            (AgentProviderKind::GajaeCode, vec!["--version"]),
+            (AgentProviderKind::GajaeCode, vec!["session", "list"]),
+            (
+                AgentProviderKind::GajaeCode,
+                vec!["setup", "defaults", "--check"],
+            ),
+            (AgentProviderKind::GajaeCode, vec!["team", "--help"]),
+        ];
+
+        for (provider, args) in cases {
+            let args = args.into_iter().map(String::from).collect::<Vec<_>>();
+            let policy = agent_cli_timeout_policy(provider, &args);
+            assert_eq!(
+                policy,
+                AgentCliTimeoutPolicy::FastInspection,
+                "{provider:?} {args:?} should use the fast inspection timeout"
+            );
+            assert_eq!(policy.timeout(), Duration::from_secs(20));
+        }
+    }
+
+    #[test]
+    fn agent_cli_timeout_policy_extends_allowlisted_execution_commands() {
+        let cases = vec![
+            (AgentProviderKind::Claude, vec!["auto-mode"]),
+            (AgentProviderKind::Codex, vec!["review", "--uncommitted"]),
+            (
+                AgentProviderKind::GajaeCode,
+                vec!["rlm", "summarize", "this", "dataset"],
+            ),
+            (AgentProviderKind::GajaeCode, vec!["-p", "implement", "it"]),
+            (
+                AgentProviderKind::GajaeCode,
+                vec!["review", "this", "project"],
+            ),
+        ];
+
+        for (provider, args) in cases {
+            let args = args.into_iter().map(String::from).collect::<Vec<_>>();
+            let policy = agent_cli_timeout_policy(provider, &args);
+            assert_eq!(
+                policy,
+                AgentCliTimeoutPolicy::LongRunning,
+                "{provider:?} {args:?} should use the long-running timeout"
+            );
+            assert_eq!(policy.timeout(), Duration::from_secs(30 * 60));
+        }
+    }
+
+    #[test]
+    fn agent_cli_timeout_policy_keeps_other_commands_on_a_bounded_default() {
+        for (provider, args) in [
+            (AgentProviderKind::Hermes, vec!["plugins", "enable"]),
+            (
+                AgentProviderKind::GajaeCode,
+                vec!["--export", "session.jsonl"],
+            ),
+            (AgentProviderKind::GajaeCode, vec!["notify", "setup"]),
+        ] {
+            let args = args.into_iter().map(String::from).collect::<Vec<_>>();
+            let policy = agent_cli_timeout_policy(provider, &args);
+            assert_eq!(policy, AgentCliTimeoutPolicy::Standard);
+            assert_eq!(policy.timeout(), Duration::from_secs(120));
+        }
+    }
+
+    #[test]
     fn gajecode_cli_validation_matches_exposed_safe_commands() {
         for args in [
             vec!["--help"],
@@ -3541,7 +3745,12 @@ export ANTHROPIC_API_KEY="tc-example"
             vec!["update"],
             vec!["mcp-serve", "coordinator"],
             vec!["setup", "hermes", "--install"],
+            vec!["team", "3:executor", "finish the task"],
+            vec!["ultragoal", "ship the release"],
+            vec!["contribute-pr", "prepare the change"],
             vec!["daemon"],
+            vec!["harness", "run"],
+            vec!["contribution-prep", "prepare"],
             vec!["--unknown"],
         ] {
             let args = args.into_iter().map(String::from).collect::<Vec<_>>();
