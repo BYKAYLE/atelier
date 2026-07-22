@@ -43,13 +43,17 @@ version tag is pushed.
 Pushing the version tag starts `.github/workflows/release.yml`. The workflow
 must finish with all of these properties:
 
-- macOS app and DMG carry a Developer ID Application signature;
-- Gatekeeper accepts the app and notarization tickets are stapled to both app
-  and DMG;
+- `macos-release-evidence.json` proves that the built app, the app embedded in
+  the DMG, and the app embedded in the updater archive have the same version
+  and executable hash;
+- macOS app and DMG carry a Developer ID Application signature, Gatekeeper
+  accepts both packages, and notarization tickets are stapled to both;
 - Windows MSI and NSIS installers carry valid Authenticode signatures;
-- updater signatures and `latest.json` cover every supported platform;
-- `release-manifest.json` binds all assets to the exact tag, version, source
-  commit, byte length, and SHA-256 hash;
+- every `latest.json` platform entry uses the exact configured GitHub
+  repository, tag, asset URL, and matching updater signature;
+- schema 2 `release-manifest.json` binds the repository and every platform
+  mapping, plus all assets, to the exact tag, version, source commit, byte
+  length, and SHA-256 hash;
 - the GitHub release remains a private draft.
 
 No partial platform release is public if a later job fails.
@@ -64,10 +68,12 @@ The workflow installs the signed candidate rather than testing an unrelated
 pre-existing copy.
 
 Required proof includes the installer and installed-executable signatures,
-exact installed path and version, renderer-ready receipt, restart persistence,
-visible native browser handoff, and successful Claude and Codex CLI
-authentication. An existing older installation is required to prove update
-persistence, except for an explicitly approved first signed-channel waiver.
+exact installed path, version, and executable SHA-256, renderer-ready receipt,
+restart persistence, visible native browser handoff, and successful Claude and
+Codex CLI authentication. The installed executable hash must match in both the
+candidate and provider receipts. An existing older installation is required to
+prove update persistence, except for an explicitly approved first signed-channel
+waiver.
 
 The resulting artifact is named
 `atelier-windows-physical-release-gate-<tag>`. Preserve its run ID for the

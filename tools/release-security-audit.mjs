@@ -45,6 +45,10 @@ const releaseCandidateSealSource = readFileSync(
   ".github/scripts/seal-release-candidate.mjs",
   "utf8",
 );
+const releaseContractSource = readFileSync(
+  ".github/scripts/release-contract.mjs",
+  "utf8",
+);
 const releaseCandidateVerifySource = readFileSync(
   ".github/scripts/verify-release-candidate.mjs",
   "utf8",
@@ -78,6 +82,7 @@ const processTreeSource = readFileSync(
 const orcaFeatureGateSource = readFileSync("tools/orca-feature-release-gate.mjs", "utf8");
 const rendererReceiptSource = readFileSync("src-tauri/src/runtime_receipt.rs", "utf8");
 const rendererSmokeSource = readFileSync("tools/renderer-ready-smoke.sh", "utf8");
+const macosReleaseEvidenceSource = readFileSync("tools/macos-release-evidence.sh", "utf8");
 const terminalWorkspaceSource = readFileSync("src/components/Main.tsx", "utf8");
 const terminalLayoutSource = readFileSync("src/lib/terminalLayout.ts", "utf8");
 const diffReviewSource = readFileSync("src/lib/diffReview.ts", "utf8");
@@ -564,6 +569,13 @@ const sourceInvariants = [
   },
   {
     ok:
+      (releaseWorkflowSource.match(/npm run gate:orca-features\n\s+npm run build/g) || [])
+        .length === 2,
+    message:
+      "macOS and Windows release jobs must restore the full production bundle after restricted feature builds",
+  },
+  {
+    ok:
       packageSource.includes('"smoke:updater-contract"') &&
       workflowSource.includes("npm run smoke:updater-contract"),
     message: "Release workflows must verify the signed Windows updater platform contract",
@@ -572,12 +584,32 @@ const sourceInvariants = [
     ok:
       !releaseWorkflowSource.includes("workflow_dispatch:") &&
       releaseWorkflowSource.includes('tags:\n      - "v*"') &&
+      releaseWorkflowSource.includes("group: release-${{ github.ref_name }}") &&
+      releaseWorkflowSource.includes("release-preflight:") &&
+      releaseWorkflowSource.includes("git merge-base --is-ancestor") &&
+      releaseWorkflowSource.includes('test "$RELEASE_OWNER/$RELEASE_REPO" = "$GITHUB_REPOSITORY"') &&
+      (releaseWorkflowSource.match(/needs: release-preflight/g) || []).length === 2 &&
       releaseWorkflowSource.includes("releaseDraft: true") &&
       !releaseWorkflowSource.includes("releaseDraft: false") &&
       releaseWorkflowSource.includes("seal-release-candidate.mjs") &&
       releaseWorkflowSource.includes("release-manifest.json") &&
+      releaseContractSource.includes("assertExactReleaseAssetUrl") &&
+      releaseContractSource.includes('url.hostname !== "github.com"') &&
+      releaseContractSource.includes("Release asset URL mismatch") &&
+      releaseCandidateSealSource.includes("schemaVersion: 2") &&
+      releaseCandidateSealSource.includes("releaseRepository") &&
+      releaseCandidateSealSource.includes("macosEvidence") &&
+      releaseCandidateSealSource.includes("Object.entries(latest.platforms)") &&
+      releaseCandidateSealSource.includes("releaseAssetNameFromUrl(entry.url)") &&
+      releaseCandidateSealSource.includes("platformAssets[platform] = assetName") &&
       releaseCandidateSealSource.includes('status: "signed-draft-candidate"') &&
       releaseCandidateSealSource.includes('releaseChannel: "github-draft"') &&
+      releaseCandidateVerifySource.includes("manifest.schemaVersion !== 2") &&
+      releaseCandidateVerifySource.includes("manifest.releaseRepository !== releaseRepository") &&
+      releaseCandidateVerifySource.includes("const metadataPlatforms = Object.keys(latest.platforms).sort()") &&
+      releaseCandidateVerifySource.includes("const sealedPlatforms = Object.keys(manifest.platformAssets ?? {}).sort()") &&
+      releaseCandidateVerifySource.includes("for (const platform of metadataPlatforms)") &&
+      releaseCandidateVerifySource.includes("releaseAssetNameFromUrl(entry.url)") &&
       releaseCandidateVerifySource.includes('manifest.status !== "signed-draft-candidate"') &&
       releaseCandidateVerifySource.includes("signature changed after sealing"),
     message:
@@ -606,7 +638,11 @@ const sourceInvariants = [
       publishEvidenceSource.includes("package GitHub run ID") &&
       publishEvidenceSource.includes('["nsis", nsisAsset]') &&
       publishEvidenceSource.includes("${kind} package hash") &&
-      publishEvidenceSource.includes("provider/candidate installed executable path"),
+      publishEvidenceSource.includes("provider/candidate installed executable path") &&
+      publishEvidenceSource.includes("provider/candidate installed executable hash") &&
+      publishEvidenceSource.includes(
+        'assertEqual(manifest.releaseRepository, releaseRepository.slug, "release manifest repository")',
+      ),
     message:
       "Only the approval-gated publisher may make a release public after exact physical evidence validation",
   },
@@ -614,13 +650,22 @@ const sourceInvariants = [
     ok:
       releaseWorkflowSource.includes("TAURI_SIGNING_PRIVATE_KEY") &&
       releaseWorkflowSource.includes("TAURI_SIGNING_PRIVATE_KEY_PASSWORD") &&
-      releaseWorkflowSource.includes("codesign --verify --deep --strict") &&
-      releaseWorkflowSource.includes("Authority=Developer ID Application:") &&
-      releaseWorkflowSource.includes("spctl --assess --type execute") &&
-      releaseWorkflowSource.includes("hdiutil attach") &&
-      releaseWorkflowSource.includes('ditto "$mount_root/Atelier.app"') &&
-      releaseWorkflowSource.includes('tools/renderer-ready-smoke.sh "$installed_app"') &&
-      (releaseWorkflowSource.match(/xcrun stapler validate/g) || []).length >= 3,
+      releaseWorkflowSource.includes("tools/macos-release-evidence.sh") &&
+      releaseWorkflowSource.includes("macos-release-evidence.json") &&
+      macosReleaseEvidenceSource.includes("codesign --verify --deep --strict") &&
+      macosReleaseEvidenceSource.includes("Authority=Developer ID Application:") &&
+      macosReleaseEvidenceSource.includes("spctl --assess --type execute") &&
+      macosReleaseEvidenceSource.includes("spctl --assess --type open") &&
+      macosReleaseEvidenceSource.includes("hdiutil attach") &&
+      macosReleaseEvidenceSource.includes("tar -xzf") &&
+      macosReleaseEvidenceSource.includes('tools/renderer-ready-smoke.sh" "$BUILT_APP"') &&
+      (macosReleaseEvidenceSource.match(/xcrun stapler validate/g) || []).length >= 2 &&
+      releaseCandidateSealSource.includes("macosEvidence.artifacts?.updater?.embeddedApp") &&
+      releaseCandidateSealSource.includes("macosEvidence.consistency?.executableHashesMatch") &&
+      releaseCandidateSealSource.includes("new Set(executableHashes).size !== 1") &&
+      releaseCandidateSealSource.includes("macOS evidence does not bind one Developer ID Application team") &&
+      releaseCandidateSealSource.includes("app?.gatekeeperAccepted !== true") &&
+      releaseCandidateSealSource.includes("app?.notarizationStapled !== true"),
     message:
       "macOS candidates must prove updater signing, Developer ID, Gatekeeper, and stapled notarization receipts",
   },

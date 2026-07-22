@@ -1,5 +1,10 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
+import {
+  buildReleaseAssetUrl,
+  releaseAssetNameFromUrl,
+  resolveReleaseRepository,
+} from './release-contract.mjs';
 
 const latestJsonPath = process.env.LATEST_JSON_PATH ?? 'release-assets/latest.json';
 const signedAssetsDir = process.env.SIGNED_ASSETS_DIR ?? 'release-assets/windows';
@@ -17,6 +22,7 @@ const includeGenericWindowsTarget = process.env.INCLUDE_WINDOWS_GENERIC_TARGET !
 if (!releaseOwner || !releaseRepo || !releaseTag) {
   throw new Error('RELEASE_OWNER, RELEASE_REPO and RELEASE_TAG/GITHUB_REF_NAME are required');
 }
+const releaseRepository = resolveReleaseRepository();
 
 const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
 const fallbackVersion = releaseTag.replace(/^v/, '');
@@ -38,6 +44,12 @@ if (existsSync(latestJsonPath)) {
     pub_date: new Date().toISOString(),
     platforms: existing.platforms ?? {},
   };
+}
+
+for (const entry of Object.values(latest.platforms)) {
+  if (!entry?.url) continue;
+  const assetName = releaseAssetNameFromUrl(entry.url);
+  entry.url = buildReleaseAssetUrl(releaseRepository, releaseTag, assetName);
 }
 
 const files = readdirSync(signedAssetsDir, { withFileTypes: true })
@@ -74,12 +86,10 @@ for (const file of files) {
   }
 
   const bundle = extname(file).toLowerCase() === '.msi' ? 'msi' : 'nsis';
-  const encodedTag = encodeURIComponent(releaseTag);
-  const encodedFile = encodeURIComponent(basename(file));
   entries.push({
     bundle,
     signature: extractUpdaterSignature(readFileSync(signaturePath, 'utf8'), file),
-    url: `https://github.com/${releaseOwner}/${releaseRepo}/releases/download/${encodedTag}/${encodedFile}`,
+    url: buildReleaseAssetUrl(releaseRepository, releaseTag, basename(file)),
   });
 }
 

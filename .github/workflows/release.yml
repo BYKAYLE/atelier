@@ -5,6 +5,10 @@ on:
     tags:
       - "v*"
 
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
 env:
   RELEASE_OWNER: ${{ vars.RELEASE_OWNER || github.repository_owner }}
   RELEASE_REPO: ${{ vars.RELEASE_REPO || github.event.repository.name }}
@@ -13,8 +17,78 @@ env:
   SIGNPATH_WAIT_TIMEOUT_SECONDS: ${{ vars.SIGNPATH_WAIT_TIMEOUT_SECONDS || '3600' }}
 
 jobs:
+  release-preflight:
+    name: Verify release identity and signing configuration
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Reject an untrusted or unshippable tag before building
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN || github.token }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+        run: |
+          set -euo pipefail
+          expected_version="$(node -p "require('./package.json').version")"
+          test "$GITHUB_REF_NAME" = "v$expected_version" || {
+            echo "Tag $GITHUB_REF_NAME does not match package version $expected_version" >&2
+            exit 1
+          }
+          test "$RELEASE_OWNER/$RELEASE_REPO" = "$GITHUB_REPOSITORY" || {
+            echo "Release repository must remain bound to $GITHUB_REPOSITORY" >&2
+            exit 1
+          }
+          test "$(git rev-parse "$GITHUB_REF_NAME^{commit}")" = "$GITHUB_SHA" || {
+            echo "Checked-out tag does not resolve to GITHUB_SHA" >&2
+            exit 1
+          }
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "Release tag commit is not contained in origin/main" >&2
+            exit 1
+          }
+
+          required=(
+            APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY
+            APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+            TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+            SIGNPATH_API_TOKEN SIGNPATH_ORGANIZATION_ID SIGNPATH_PROJECT_SLUG
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            if [ -z "${!name}" ]; then missing+=("$name"); fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            printf 'Missing release credential(s): %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+          gh api "repos/$RELEASE_OWNER/$RELEASE_REPO/releases?per_page=100" > release-list.json
+          node - <<'NODE'
+          const releases = require("./release-list.json");
+          const release = releases.find((entry) => entry.tag_name === process.env.GITHUB_REF_NAME);
+          if (release && !release.draft) throw new Error("Release tag is already public");
+          if (release?.prerelease) throw new Error("Release candidate must not be a prerelease");
+          NODE
+
   build-macos:
     name: Build macOS release
+    needs: release-preflight
     permissions:
       contents: write
     runs-on: macos-latest
@@ -57,7 +131,10 @@ jobs:
           npm run smoke:editor-diagnostics
           npm run smoke:devscreen-picker
           npm run smoke:agent-performance
+          # The feature gate intentionally leaves a restricted bundle in dist.
+          # Rebuild the default product before any package is created.
           npm run gate:orca-features
+          npm run build
           npm audit --audit-level=low
           cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
           cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
@@ -122,41 +199,25 @@ jobs:
           updaterJsonPreferNsis: true
           args: "--target universal-apple-darwin"
 
-      - name: Verify Developer ID, Gatekeeper, and notarization receipts
-        run: |
-          app_path="$(find target/universal-apple-darwin/release/bundle -type d -name 'Atelier.app' -print -quit)"
-          dmg_path="$(find target/universal-apple-darwin/release/bundle -type f -name '*.dmg' -print -quit)"
-          test -n "$app_path" && test -d "$app_path"
-          test -n "$dmg_path" && test -f "$dmg_path"
-          codesign --verify --deep --strict --verbose=2 "$app_path"
-          codesign -dv --verbose=4 "$app_path" 2>&1 | tee codesign-evidence.txt
-          grep -q '^Authority=Developer ID Application:' codesign-evidence.txt
-          spctl --assess --type execute --verbose=4 "$app_path"
-          xcrun stapler validate "$app_path"
-          xcrun stapler validate "$dmg_path"
+      - name: Verify and bind macOS release packages
+        env:
+          MACOS_BUNDLE_ROOT: target/universal-apple-darwin/release/bundle
+          MACOS_EVIDENCE_OUTPUT: macos-release-evidence.json
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_SOURCE_SHA: ${{ github.sha }}
+        run: tools/macos-release-evidence.sh
 
-          mount_root="$(mktemp -d "${RUNNER_TEMP}/atelier-dmg.XXXXXX")"
-          install_root="$(mktemp -d "${RUNNER_TEMP}/atelier-install.XXXXXX")"
-          cleanup_dmg() {
-            hdiutil detach "$mount_root" -quiet 2>/dev/null || true
-          }
-          trap cleanup_dmg EXIT
-          hdiutil attach "$dmg_path" -nobrowse -readonly -mountpoint "$mount_root"
-          test -d "$mount_root/Atelier.app"
-          ditto "$mount_root/Atelier.app" "$install_root/Atelier.app"
-          installed_app="$install_root/Atelier.app"
-          installed_exe="$installed_app/Contents/MacOS/atelier"
-          codesign --verify --deep --strict --verbose=2 "$installed_app"
-          spctl --assess --type execute --verbose=4 "$installed_app"
-          xcrun stapler validate "$installed_app"
-          expected_version="$(node -p "require('./package.json').version")"
-          test "$("$installed_exe" --atelier-version-probe)" = "$expected_version"
-          tools/renderer-ready-smoke.sh "$installed_app"
-          cleanup_dmg
-          trap - EXIT
+      - name: Upload macOS verification evidence to the private draft
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN || github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" macos-release-evidence.json \
+            --repo "$RELEASE_OWNER/$RELEASE_REPO" \
+            --clobber
 
   build-windows-unsigned:
     name: Build unsigned Windows bundle
+    needs: release-preflight
     permissions:
       contents: read
     runs-on: windows-latest
@@ -199,7 +260,9 @@ jobs:
           npm run smoke:editor-diagnostics
           npm run smoke:devscreen-picker
           npm run smoke:agent-performance
+          # Restore the full production bundle after restricted feature builds.
           npm run gate:orca-features
+          npm run build
           npm audit --audit-level=low
           cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
           cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings

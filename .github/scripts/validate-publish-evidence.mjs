@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
+import { resolveReleaseRepository } from "./release-contract.mjs";
 
 const evidenceDir = resolve(process.env.EVIDENCE_DIR || "physical-evidence");
 const assetsDir = resolve(process.env.RELEASE_ASSETS_DIR || "candidate-assets");
@@ -13,6 +14,7 @@ const requireSmartAppControl = parseBoolean(
   process.env.REQUIRE_SMART_APP_CONTROL_EVIDENCE,
   true,
 );
+const releaseRepository = resolveReleaseRepository();
 
 if (!/^v\d+\.\d+\.\d+(?:[-+].+)?$/.test(releaseTag)) {
   fail(`invalid release tag: ${releaseTag}`);
@@ -67,9 +69,10 @@ if (candidate.upgradePersistenceProved !== true) {
   fail("candidate receipt cannot claim both a real upgrade proof and an initial-channel waiver");
 }
 
-assertEqual(manifest.schemaVersion, 1, "release manifest schema");
+assertEqual(manifest.schemaVersion, 2, "release manifest schema");
 assertEqual(manifest.status, "signed-draft-candidate", "release manifest status");
 assertEqual(manifest.releaseChannel, "github-draft", "release manifest channel");
+assertEqual(manifest.releaseRepository, releaseRepository.slug, "release manifest repository");
 assertEqual(manifest.releaseTag, releaseTag, "manifest release tag");
 assertEqual(String(manifest.sourceSha || "").toLowerCase(), sourceSha, "manifest source SHA");
 assertEqual(manifest.version, expectedVersion, "manifest version");
@@ -124,6 +127,15 @@ assertEqual(
   normalizeWindowsPath(provider.installedApp?.path),
   normalizeWindowsPath(candidate.installed?.path),
   "provider/candidate installed executable path",
+);
+assertTrue(
+  /^[0-9a-f]{64}$/i.test(String(candidate.installed?.sha256 || "")),
+  "candidate installed executable hash is missing or malformed",
+);
+assertEqual(
+  String(provider.installedApp?.sha256 || "").toLowerCase(),
+  String(candidate.installed?.sha256 || "").toLowerCase(),
+  "provider/candidate installed executable hash",
 );
 assertTrue(provider.browserProbe === true, "native OAuth browser probe failed");
 assertTrue(provider.browserHelperProbe === true, "signed OAuth browser helper probe failed");

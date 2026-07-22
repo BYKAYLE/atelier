@@ -514,6 +514,7 @@ function Test-AtelierInstalledRuntime {
     return [pscustomobject][ordered]@{
       found = $false
       path = $ExePath
+      sha256 = $null
       version = $null
       versionOk = $false
       signatureStatus = $null
@@ -534,6 +535,7 @@ function Test-AtelierInstalledRuntime {
   }
 
   $signature = Get-AuthenticodeSignature -LiteralPath $ExePath
+  $installedSha256 = (Get-FileHash -LiteralPath $ExePath -Algorithm SHA256).Hash.ToLowerInvariant()
   $signatureStatus = [string]$signature.Status
   $signatureOk = $signature.Status -eq [System.Management.Automation.SignatureStatus]::Valid
 
@@ -605,6 +607,7 @@ function Test-AtelierInstalledRuntime {
   return [pscustomobject][ordered]@{
     found = $true
     path = $ExePath
+    sha256 = $installedSha256
     version = $version
     versionOk = [bool]$versionOk
     signatureStatus = $signatureStatus

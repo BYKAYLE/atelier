@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
+import { join } from "node:path";
+import {
+  assertExactReleaseAssetUrl,
+  releaseAssetNameFromUrl,
+  resolveReleaseRepository,
+} from "./release-contract.mjs";
 
 const assetsDir = process.env.RELEASE_ASSETS_DIR ?? "candidate-assets";
 const expectedTag = process.env.RELEASE_TAG ?? "";
@@ -8,14 +13,20 @@ const expectedSourceSha = process.env.RELEASE_SOURCE_SHA ?? "";
 const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
 const expectedVersion = String(packageJson.version);
 const manifestPath = join(assetsDir, "release-manifest.json");
+const releaseRepository = resolveReleaseRepository();
 
 if (!existsSync(manifestPath)) {
   throw new Error(`Candidate manifest does not exist: ${manifestPath}`);
 }
 
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-if (manifest.schemaVersion !== 1 || manifest.status !== "signed-draft-candidate") {
+if (manifest.schemaVersion !== 2 || manifest.status !== "signed-draft-candidate") {
   throw new Error("Candidate manifest schema or status is not publishable");
+}
+if (manifest.releaseRepository !== releaseRepository.slug) {
+  throw new Error(
+    `Candidate repository mismatch: expected ${releaseRepository.slug}, found ${manifest.releaseRepository}`,
+  );
 }
 if (manifest.releaseChannel !== "github-draft") {
   throw new Error("Candidate must be sealed from the private GitHub draft channel");
@@ -67,6 +78,7 @@ const requiredPrimaryAssets = [
   "windowsMsi",
   "windowsNsis",
   "updaterMetadata",
+  "macosEvidence",
 ];
 for (const key of requiredPrimaryAssets) {
   const name = manifest.primaryAssets?.[key];
@@ -80,6 +92,52 @@ const latest = JSON.parse(readFileSync(latestPath, "utf8"));
 if (latest.version !== manifest.version) {
   throw new Error("Updater metadata version differs from the sealed candidate version");
 }
+if (
+  !latest.platforms ||
+  typeof latest.platforms !== "object" ||
+  Array.isArray(latest.platforms)
+) {
+  throw new Error("Updater metadata platforms must be an object");
+}
+const metadataPlatforms = Object.keys(latest.platforms).sort();
+const sealedPlatforms = Object.keys(manifest.platformAssets ?? {}).sort();
+if (JSON.stringify(metadataPlatforms) !== JSON.stringify(sealedPlatforms)) {
+  throw new Error("Updater platform set differs from the sealed candidate");
+}
+
+function normalizedSignature(path) {
+  const text = readFileSync(path, "utf8").trim();
+  return text.match(/Public signature:\s*([A-Za-z0-9+/=]+)/i)?.[1] ?? text;
+}
+
+for (const platform of metadataPlatforms) {
+  if (!/^[A-Za-z0-9_.-]+$/.test(platform)) {
+    throw new Error(`Updater metadata contains an unsafe platform key: ${platform}`);
+  }
+  const entry = latest.platforms[platform];
+  const sealedAsset = manifest.platformAssets[platform];
+  if (!entry?.url || !entry?.signature || !sealedAsset) {
+    throw new Error(`Updater metadata contains an unsigned ${platform} entry`);
+  }
+  const assetName = releaseAssetNameFromUrl(entry.url);
+  if (assetName !== sealedAsset || !actualFiles.includes(assetName)) {
+    throw new Error(`Updater platform ${platform} no longer matches its sealed asset`);
+  }
+  assertExactReleaseAssetUrl(
+    entry.url,
+    releaseRepository,
+    manifest.releaseTag,
+    assetName,
+  );
+  const signatureFile = `${assetName}.sig`;
+  if (!actualFiles.includes(signatureFile)) {
+    throw new Error(`Updater platform ${platform} is missing ${signatureFile}`);
+  }
+  if (String(entry.signature).trim() !== normalizedSignature(join(assetsDir, signatureFile)).trim()) {
+    throw new Error(`Updater platform ${platform} signature changed after sealing`);
+  }
+}
+
 const requiredPlatforms = [
   "darwin-aarch64",
   "darwin-aarch64-app",
@@ -95,16 +153,40 @@ for (const platform of requiredPlatforms) {
   if (!entry?.url || !entry.signature || !expectedAsset) {
     throw new Error(`Updater metadata is missing sealed platform ${platform}`);
   }
-  const actualAsset = decodeURIComponent(basename(new URL(entry.url).pathname));
-  if (actualAsset !== expectedAsset || !actualFiles.includes(actualAsset)) {
+  assertExactReleaseAssetUrl(
+    entry.url,
+    releaseRepository,
+    manifest.releaseTag,
+    expectedAsset,
+  );
+  if (!actualFiles.includes(expectedAsset)) {
     throw new Error(`Updater platform ${platform} no longer matches the sealed asset`);
   }
-  const signatureFile = `${actualAsset}.sig`;
-  const signatureText = readFileSync(join(assetsDir, signatureFile), "utf8").trim();
-  const signature =
-    signatureText.match(/Public signature:\s*([A-Za-z0-9+/=]+)/i)?.[1] ?? signatureText;
-  if (String(entry.signature).trim() !== signature.trim()) {
-    throw new Error(`Updater platform ${platform} signature changed after sealing`);
+}
+
+const macosEvidence = JSON.parse(
+  readFileSync(join(assetsDir, manifest.primaryAssets.macosEvidence), "utf8"),
+);
+if (
+  macosEvidence.schemaVersion !== 1 ||
+  macosEvidence.status !== "verified" ||
+  macosEvidence.releaseRepository !== manifest.releaseRepository ||
+  macosEvidence.releaseTag !== manifest.releaseTag ||
+  macosEvidence.version !== manifest.version ||
+  String(macosEvidence.sourceSha).toLowerCase() !== String(manifest.sourceSha).toLowerCase() ||
+  macosEvidence.consistency?.versionsMatch !== true ||
+  macosEvidence.consistency?.executableHashesMatch !== true
+) {
+  throw new Error("macOS release evidence no longer matches the sealed candidate");
+}
+for (const [key, primaryKey] of [["dmg", "macDmg"], ["updater", "macUpdater"]]) {
+  const evidence = macosEvidence.artifacts?.[key];
+  const expectedAsset = manifest.primaryAssets[primaryKey];
+  if (
+    evidence?.name !== expectedAsset ||
+    String(evidence.sha256).toLowerCase() !== sha256(join(assetsDir, expectedAsset))
+  ) {
+    throw new Error(`macOS ${key} evidence changed after sealing`);
   }
 }
 

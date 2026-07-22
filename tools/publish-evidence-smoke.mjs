@@ -9,11 +9,13 @@ const evidence = join(root, "evidence");
 mkdirSync(assets);
 mkdirSync(evidence);
 
-const tag = "v0.2.12";
-const version = "0.2.12";
+const version = String(JSON.parse(readFileSync("package.json", "utf8")).version);
+const tag = `v${version}`;
 const sourceSha = "a".repeat(40);
+const releaseRepository = "BYKAYLE/atelier";
 const msiSha = "b".repeat(64);
 const nsisSha = "c".repeat(64);
+const installedSha = "d".repeat(64);
 const runId = "123456789";
 const installedPath = "C:\\Program Files\\Atelier\\Atelier.exe";
 const candidatePath = join(evidence, "windows-release-candidate.json");
@@ -21,19 +23,20 @@ const providerPath = join(evidence, "atelier-provider-smoke-20260722-120000.json
 const packagePath = join(evidence, "windows-package-smoke.json");
 
 writeJson(join(assets, "release-manifest.json"), {
-  schemaVersion: 1,
+  schemaVersion: 2,
   status: "signed-draft-candidate",
   releaseChannel: "github-draft",
+  releaseRepository,
   releaseTag: tag,
   version,
   sourceSha,
   primaryAssets: {
-    windowsMsi: "Atelier_0.2.12_x64_en-US.msi",
-    windowsNsis: "Atelier_0.2.12_x64-setup.exe",
+    windowsMsi: `Atelier_${version}_x64_en-US.msi`,
+    windowsNsis: `Atelier_${version}_x64-setup.exe`,
   },
   assets: [
-    { name: "Atelier_0.2.12_x64_en-US.msi", bytes: 42, sha256: msiSha },
-    { name: "Atelier_0.2.12_x64-setup.exe", bytes: 43, sha256: nsisSha },
+    { name: `Atelier_${version}_x64_en-US.msi`, bytes: 42, sha256: msiSha },
+    { name: `Atelier_${version}_x64-setup.exe`, bytes: 43, sha256: nsisSha },
   ],
 });
 
@@ -57,6 +60,12 @@ try {
   provider.githubRunId = "987654321";
   writeJson(providerPath, provider);
   run(false, "provider receipt from another run");
+
+  resetValidUpgrade();
+  provider = readJson(providerPath);
+  provider.installedApp.sha256 = "f".repeat(64);
+  writeJson(providerPath, provider);
+  run(false, "provider receipt for a different installed executable");
 
   resetValidUpgrade();
   const candidate = candidateFixture();
@@ -109,6 +118,7 @@ function candidateFixture() {
     installer: { sha256: msiSha, signature: { status: "Valid" } },
     installed: {
       path: installedPath,
+      sha256: installedSha,
       version,
       signature: { status: "Valid" },
       resourcesPresent: true,
@@ -157,6 +167,7 @@ function providerFixture() {
     installedApp: {
       found: true,
       path: installedPath.toUpperCase(),
+      sha256: installedSha,
       version,
       versionOk: true,
       signatureOk: true,
@@ -184,6 +195,7 @@ function run(shouldPass, label, allowWaiver = false) {
       RELEASE_TAG: tag,
       EXPECTED_VERSION: version,
       RELEASE_SOURCE_SHA: sourceSha,
+      RELEASE_REPOSITORY: releaseRepository,
       PHYSICAL_GATE_RUN_ID: runId,
       ALLOW_INITIAL_SIGNED_CHANNEL: String(allowWaiver),
       REQUIRE_SMART_APP_CONTROL_EVIDENCE: "true",
