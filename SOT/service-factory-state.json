@@ -6590,10 +6590,10 @@
   ],
   "run_log": {
     "current_owner": "Stella",
-    "last_command": "service_factory.py assess",
-    "last_artifact": "/Users/kansic/Service/atelier/SOT/service-factory/antigravity-readiness.md",
-    "blocked_reason": null,
-    "next_step": "pilot_ready: use the managed Factory cycle for product-specific goals and attach specialist agents for real implementation work",
+    "last_command": "release-readiness final audit at efee003",
+    "last_artifact": "/Users/kansic/Service/atelier/SOT/service-factory/release-readiness-2026-07-23.md",
+    "blocked_reason": "external_release_evidence_required",
+    "next_step": "provision production signing identities and CI secrets, then attach macOS notarization/stapling and physical-Windows OAuth/signature/restart receipts before public release",
     "completion_claim_guard": {
       "probe_required": true,
       "probe_verified": true,
@@ -8169,7 +8169,7 @@
     }
   ],
   "status": "running",
-  "updated_at": "2026-07-13T09:35:39+09:00",
+  "updated_at": "2026-07-23T02:13:43+09:00",
   "elaboration": {
     "current_state": {
       "round": 0,
@@ -8285,7 +8285,7 @@
       "id": "local-runtime",
       "desc": "Detached PTY, normalized agent lifecycle, isolation, review, and cancellation pass automated regression gates.",
       "met": true,
-      "evidence": "SOT/evidence-log.md 0.2.5; cargo test 86/86 in native and store-build configurations; installed renderer-ready and signed OAuth helper allowlist probes; installed three-session PTY reconnect smoke; persistent terminal split, line-level review, and click-to-select preview release invariants"
+      "evidence": "SOT/service-factory/release-readiness-2026-07-23.md; frontend and release security gates passed; cargo test 188 passed, 0 failed, 1 ignored in native and store-feature configurations; installed renderer-ready probe passed"
     },
     {
       "id": "automatic-preview-evidence",
@@ -8297,37 +8297,37 @@
       "id": "windows-cross-target",
       "desc": "Normal and Store Windows configurations pass strict Clippy and link PE32+ x86-64 executables.",
       "met": true,
-      "evidence": "SOT/service-factory/deployment-readiness.md"
+      "evidence": "SOT/service-factory/deployment-readiness.md; release workflow and Windows provider evidence gates hardened at efee003"
     },
     {
       "id": "mac-installed-reflection",
-      "desc": "Signed macOS 0.2.5 package is installed and verified at /Applications/Atelier.app.",
+      "desc": "Locally signed macOS 0.2.12 package is installed and verified at /Applications/Atelier.app.",
       "met": true,
-      "evidence": "Atelier 0.2.5 version and renderer-ready probes; strict codesign; DMG and installed executable SHA-256 recorded; installed three-session PTY smoke"
+      "evidence": "SOT/service-factory/release-readiness-2026-07-23.md; installed and packaged signed executable SHA-256 match exactly at 009e3a0926524a4d6b70fff16ce9b59f1fe258d959d1e82bc686d3f898c11997; renderer-ready and strict codesign passed"
     },
     {
       "id": "physical-windows",
       "desc": "Physical Windows proves visible Claude/Codex browser login, authenticated CLI state, Smart App Control, and exact-version restart survival.",
       "met": false,
-      "evidence": "Browser-process and visible-window gates exist in source; no registered physical Windows runner or Windows execution receipt"
+      "evidence": "Browser-process, visible-window, installed-executable hash, and restart-survival gates exist in source; no registered physical Windows runner or execution receipt"
     },
     {
       "id": "windows-public-signing",
       "desc": "Final Windows installer is publicly signed and passes signed-package smoke.",
       "met": false,
-      "evidence": "SignPath/Store signing output not available locally"
+      "evidence": "SignPath API secret and organization/project configuration plus signed final installer receipt are absent"
     },
     {
       "id": "mac-public-notarization",
       "desc": "Public macOS package has Developer ID signature, notarization, and stapling.",
       "met": false,
-      "evidence": "Developer ID/notarization credentials not available locally"
+      "evidence": "Only Atelier Local Code Signing and Apple Development identities are available; Developer ID Application identity and notarization/stapling receipts are absent"
     },
     {
       "id": "safety-boundary",
       "desc": "No database or user-data deletion, credential mutation, production deployment, paid action, or external publication occurred.",
       "met": true,
-      "evidence": "SOT/service-factory/final-audit.md"
+      "evidence": "SOT/service-factory/final-audit.md; SOT/service-factory/release-readiness-2026-07-23.md"
     }
   ]
 }
