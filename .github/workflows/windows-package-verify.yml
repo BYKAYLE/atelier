@@ -1,0 +1,76 @@
+name: Windows Package Verification
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+
+jobs:
+  package-verification:
+    name: Build and inspect unsigned Windows packages
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    env:
+      ATELIER_PTY_SMOKE_WRITES: "300"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Prove removable feature packages
+        run: npm run gate:orca-features
+
+      - name: Build unsigned MSI and NSIS packages
+        shell: pwsh
+        run: npm run tauri -- build --ci --config src-tauri/tauri.windows-verify.conf.json
+
+      - name: Inspect packaged payloads
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File tools/windows-package-smoke.ps1
+
+      - name: Install NSIS package and prove installed identity
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File tools/windows-installed-package-smoke.ps1
+
+      - name: Prove native browser handoff from the installed package
+        shell: pwsh
+        run: |
+          $installedExe = (Get-Content -LiteralPath "artifacts/windows-package-verification/installed-executable-path.txt" -Raw).Trim()
+          powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1 -SelfTest
+          powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1 `
+            -AtelierExe $installedExe `
+            -ProbeBrowserHandoff `
+            -RequireBrowserProcessEvidence
+
+      - name: Collect browser-handoff evidence
+        if: always()
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File tools/collect-windows-provider-evidence.ps1 -Destination artifacts/windows-package-verification
+
+      - name: Upload package and browser-handoff evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: atelier-windows-package-verification
+          path: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
+            artifacts/windows-package-verification/*
+          if-no-files-found: warn
+          retention-days: 14

@@ -66,7 +66,7 @@ if ([string]::IsNullOrWhiteSpace($Description)) {
 }
 
 if (-not $SkipTauriBuild) {
-  npm run tauri -- build --ci --no-bundle
+  npm run tauri -- build --ci --no-bundle --features store-build
 }
 
 $releaseDir = Join-Path $repoRoot "src-tauri\target\release"

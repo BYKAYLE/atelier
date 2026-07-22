@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "mobile-control",
+  "rustFeature": "orca-mobile-control",
+  "rustModule": "mobile_control",
+  "smokeScript": "smoke:mobile-control",
+  "dependencies": ["remote-followup"]
+}

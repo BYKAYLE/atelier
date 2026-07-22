@@ -11,7 +11,21 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { CanvasAddon } from "@xterm/addon-canvas";
 import "@xterm/xterm/css/xterm.css";
 import { autoInstallExecutable } from "../lib/cliInstallers";
+import {
+  normalizeTerminalSplitRatio,
+  isTerminalSurfaceMeasurable,
+  parseTerminalLayout,
+  reconcileTerminalLayout,
+  splitTerminalLayout,
+  updateTerminalSplitRatio,
+  type TerminalLayoutNode,
+  type TerminalSplitDirection,
+} from "../lib/terminalLayout";
 import { cls, MOD_KEY, Tweaks } from "../lib/tokens";
+import {
+  TERMINAL_LAUNCH_EVENT,
+  terminalLaunchRequest,
+} from "../lib/terminalLaunch";
 import { I } from "./Icons";
 import {
   clipboardSaveImage,
@@ -19,13 +33,18 @@ import {
   isTauri,
   onPtyData,
   onPtyExit,
+  ptyAck,
   ptyKill,
+  ptyList,
+  ptyOutputSnapshot,
   ptyResize,
   ptySpawn,
   ptyWrite,
   readTextFile,
   sessionLogClear,
   sessionLogLoad,
+  type PtyOutputFrame,
+  type PtySessionInfo,
 } from "../lib/tauri";
 import FileTree from "./FileTree";
 
@@ -45,6 +64,8 @@ interface Tab {
   fit: FitAddon;
   // PTY 측 식별자. ptySpawn 완료 후 부착. autoConnect:false lazy 탭만 첫 입력 전까지 undefined.
   ptyId?: string;
+  // 백엔드 output journal에서 마지막으로 xterm에 반영한 sequence.
+  lastSequence?: number;
   // lazy 탭이 PTY 미시작 상태인지. 첫 입력 시 activatePty가 false로 갱신.
   pendingPtyActivation?: boolean;
   // IME bridge / 외부 호출자가 PTY 입력을 흘릴 때 사용. ptyId 부착 전엔 큐에 적재.
@@ -52,6 +73,7 @@ interface Tab {
   sendInput?: (data: string) => void;
   unlistenData?: () => void;
   unlistenExit?: () => void;
+  transportCleanup?: () => void;
   // 탭별 전용 DOM 컨테이너 — 생성 시 1회만 term.open()에 부착하고 이후
   // 탭 전환은 display 토글로 처리해 버퍼/스크롤백을 영구 보존한다.
   // (이전 구현은 매 activeId 변경마다 host.innerHTML="" + term.open 재호출로
@@ -172,6 +194,11 @@ function writeTerminalChunksCooperatively(
 
 const MAX_HIDDEN_PENDING_BYTES = 512 * 1024;
 
+// 분할 pane tree, 파일 탐색기, 내장 preview는 아직 하나의 렌더 경로에서 xterm DOM을
+// 재배치해 terminal viewport를 불안정하게 만든다. PTY/세션 기반은 그대로 유지하되,
+// 기본 Terminal 화면은 검증 가능한 단일 PTY 표면만 노출한다.
+const ENABLE_TERMINAL_WORKBENCH = false;
+
 // Ring buffer — IME 진단 로그. pty-recv/pty-write-err는 노이즈라 차단.
 const IME_LOG_MAX = 200;
 function imeLogPush(entry: unknown) {
@@ -195,23 +222,49 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
   const dark = tw.dark;
   const isActiveRef = useRef(isActive);
   const [tabs, setTabs] = useState<Tab[]>([]);
+  const tabsRef = useRef<Tab[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [showPicker, setShowPicker] = useState(false);
-  // Preview 기본 표시. 필요 시 Cmd+P로 토글해 터미널 전체 폭 사용 가능.
-  const [showPreview, setShowPreview] = useState(true);
+  // Workbench가 다시 검증되기 전에는 terminal viewport가 항상 전체 폭을 사용한다.
+  const [showPreview, setShowPreview] = useState(ENABLE_TERMINAL_WORKBENCH);
   const [previewWidth, setPreviewWidth] = useState(300);
   // 코드 모드 layout — single (1터미널 + 우측 프리뷰) vs grid (여러 터미널 정렬 + 프리뷰 없음)
   const CODE_LAYOUT_KEY = "atelier.codeLayout";
   type CodeLayout = "single" | "grid";
   const [codeLayout, setCodeLayout] = useState<CodeLayout>(() => {
+    if (!ENABLE_TERMINAL_WORKBENCH) return "single";
     try {
       const v = localStorage.getItem(CODE_LAYOUT_KEY) as CodeLayout | null;
       return v === "single" || v === "grid" ? v : "single";
     } catch { return "single"; }
   });
   useEffect(() => {
+    if (!ENABLE_TERMINAL_WORKBENCH) return;
     try { localStorage.setItem(CODE_LAYOUT_KEY, codeLayout); } catch {}
   }, [codeLayout]);
+  const TERMINAL_LAYOUT_KEY = "atelier.terminalLayout.v1";
+  const [terminalLayout, setTerminalLayout] = useState<TerminalLayoutNode | null>(() => {
+    if (!ENABLE_TERMINAL_WORKBENCH) return null;
+    try { return parseTerminalLayout(localStorage.getItem(TERMINAL_LAYOUT_KEY)); }
+    catch { return null; }
+  });
+  const [terminalLayoutReady, setTerminalLayoutReady] = useState(false);
+  const terminalTabKey = tabs.map((tab) => tab.logId).join("\u001f");
+  useEffect(() => {
+    if (!ENABLE_TERMINAL_WORKBENCH || !terminalLayoutReady) return;
+    const logIds = terminalTabKey ? terminalTabKey.split("\u001f") : [];
+    setTerminalLayout((current) => {
+      const next = reconcileTerminalLayout(current, logIds);
+      return JSON.stringify(current) === JSON.stringify(next) ? current : next;
+    });
+  }, [terminalTabKey, terminalLayoutReady]);
+  useEffect(() => {
+    if (!ENABLE_TERMINAL_WORKBENCH || !terminalLayoutReady) return;
+    try {
+      if (terminalLayout) localStorage.setItem(TERMINAL_LAYOUT_KEY, JSON.stringify(terminalLayout));
+      else localStorage.removeItem(TERMINAL_LAYOUT_KEY);
+    } catch {}
+  }, [terminalLayout, terminalLayoutReady]);
   const [isResizingPreview, setIsResizingPreview] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   // iframe 강제 재로드용 — 같은 URL이어도 ++하면 key 변경으로 iframe 재생성.
@@ -231,6 +284,18 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
   useEffect(() => {
     isActiveRef.current = isActive;
   }, [isActive]);
+  useEffect(() => {
+    tabsRef.current = tabs;
+  }, [tabs]);
+  useEffect(() => () => {
+    for (const tab of tabsRef.current) {
+      tab.transportCleanup?.();
+      tab.unlistenData?.();
+      tab.unlistenExit?.();
+      tab.cleanup?.();
+      try { tab.term.dispose(); } catch {}
+    }
+  }, []);
   // viewport 표준:
   //   mobile  390 × 844  — Chrome DevTools 표준 (iPhone 12 Pro / 13 / 14)
   //   tablet  834 × 1194 — iPad Pro 11"
@@ -304,6 +369,8 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
     firstPrompt?: string;
     lastSnippet?: string;
     lastActiveAt: number;
+    ptyId?: string;
+    lastSequence?: number;
   }
   const OPEN_TABS_KEY = "atelier.openTabs";
   const openTabsInitRef = useRef(false);
@@ -322,6 +389,8 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
         firstPrompt: t.firstPrompt,
         lastSnippet: t.lastSnippet,
         lastActiveAt: t.lastActiveAt,
+        ptyId: t.ptyId,
+        lastSequence: t.lastSequence,
       }));
       localStorage.setItem(OPEN_TABS_KEY, JSON.stringify(meta));
     } catch {}
@@ -341,16 +410,17 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
   }, []);
 
   const isTerminalHostMeasurable = useCallback((host: HTMLDivElement) => {
-    if (!isActive || !host.isConnected) return false;
     const rect = host.getBoundingClientRect();
     const style = window.getComputedStyle(host);
-    return (
-      style.display !== "none" &&
-      style.visibility !== "hidden" &&
-      rect.width > 200 &&
-      rect.height > 100
-    );
-  }, [isActive]);
+    return isTerminalSurfaceMeasurable({
+      active: isActiveRef.current,
+      connected: host.isConnected,
+      display: style.display,
+      visibility: style.visibility,
+      width: rect.width,
+      height: rect.height,
+    });
+  }, []);
 
   const fitVisibleTab = useCallback((tab: Tab, label: string, notifyPty = true) => {
     const host = tab.hostEl;
@@ -542,9 +612,13 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
     cmdOverride?: string;
     replayLogId?: string;
     autoConnect?: boolean;
+    existingSession?: PtySessionInfo;
+    lastSequence?: number;
   };
 
-  async function spawnTab(profileId: string, opts?: SpawnTabOptions) {
+  type SpawnedTab = { id: string; logId: string };
+
+  async function spawnTab(profileId: string, opts?: SpawnTabOptions): Promise<SpawnedTab | null> {
     const tauri = isTauri();
     const pending: Uint8Array[] = [];
     // listener closure가 참조할 가변 state.
@@ -562,17 +636,17 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
     const devBridge = !tauri && import.meta.env.DEV;
     if (!tauri && !devBridge) {
       console.warn("Tauri 환경 아님 — 프로토타입 모드");
-      return;
+      return null;
     }
     const p = tw.profiles.find((x) => x.id === profileId) || tw.profiles[0];
     if (!p) {
       console.warn("no profile available");
-      return;
+      return null;
     }
     const effectiveCmd = opts?.cmdOverride?.trim() || p.cmd.trim();
     if (!effectiveCmd) {
       console.warn("profile has empty cmd", p);
-      return;
+      return null;
     }
     const term = new Terminal({
       allowProposedApi: true,  // unicode11 addon (xterm.unicode.activeVersion="11") 사용 필수
@@ -626,12 +700,17 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
     // canvas는 viewport 전체를 한 번에 그려 ANSI cursor 이동/erase sequence 정확 처리.
     try { term.loadAddon(new CanvasAddon()); } catch (e) { console.warn("canvas addon", e); }
     (term as unknown as { unicode: { activeVersion: string } }).unicode.activeVersion = "11";
-    // URL 클릭 시 기본 브라우저로 나가지 않고 Atelier Preview 패널의 iframe에 로드.
-    // Claude Code가 artifact/서비스 URL을 프롬프트에 출력하고 "Preview에서 열어봐"
-    // 맥락으로 쓸 수 있도록.
+    // 검증 전 workbench에서는 링크를 preview로 보냈고, 안정화 모드에서는 OS 기본
+    // 브라우저로 연다. 숨겨진 preview state만 바뀌어 링크가 사라지는 상태를 막는다.
     term.loadAddon(new WebLinksAddon((_ev, uri) => {
-      setPreviewUrl(uri);
-      setShowPreview(true);
+      if (ENABLE_TERMINAL_WORKBENCH) {
+        setPreviewUrl(uri);
+        setShowPreview(true);
+        return;
+      }
+      void import("@tauri-apps/plugin-shell")
+        .then(({ open }) => open(uri))
+        .catch((err) => console.warn("terminal link open failed", err));
     }));
 
     // 일단 크기를 기본값으로 — mount 후 fit
@@ -644,8 +723,9 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
     // 접근 주체를 Atelier로 표시하므로, 버전업/재실행 직후 원치 않는 TCC 팝업이 뜰 수 있다.
     // 사용자가 새 작업을 직접 만들거나 복원 탭에 입력하면 그때 live PTY를 연결한다.
     const restoreMode = tauri && !!opts?.replayLogId;
+    const existingSession = opts?.existingSession;
     const autoConnect = opts?.autoConnect ?? true;
-    const lazyMode = tauri && !autoConnect;
+    const lazyMode = tauri && !autoConnect && !existingSession;
     const uiId = opts?.replayLogId
       ? opts.replayLogId
       : (tauri ? `tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -654,6 +734,7 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
     let logId: string = opts?.replayLogId || uiId;
     let unlistenData: (() => void) | undefined;
     let unlistenExit: (() => void) | undefined;
+    let transportCleanup: (() => void) | undefined;
     let activating = false;
     const inputQueue: string[] = [];
     // 복원 로그를 안전한 plain transcript로 pending에 적재했는지.
@@ -666,22 +747,62 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
       if (!tauri || ptyId || activating) return;
       activating = true;
       try {
-        if (restoreMode && !restoredTranscriptLoaded) {
+        if (restoreMode && !restoredTranscriptLoaded && !existingSession) {
           try { term.write("\x1b[0m\x1b[?25h\x1b[2J\x1b[H"); } catch {}
         }
-        const spawn = await ptySpawn(effectiveCmd, cols, rows, opts?.replayLogId);
+        const spawn = existingSession ?? await ptySpawn(effectiveCmd, cols, rows, opts?.replayLogId);
         ptyId = spawn.id;
         logId = spawn.log_id;
         const urlAccum = { text: "" };
         const URL_LIMIT = 8192;
         const snippetAccum = { text: "" };
         const SNIP_LIMIT = 4096;
+        const outputDecoder = new TextDecoder("utf-8", { fatal: false });
         let lastActiveBump = 0;
-        unlistenData = await onPtyData(ptyId, (bytes) => {
-          imeLogPush({ kind: "pty-recv", len: bytes.length, at: Date.now() });
+        let lastSequencePersist = 0;
+        let lastAppliedSequence = 0;
+        let outputSyncReady = false;
+        let outputSyncInFlight = false;
+        let ackTimer: number | undefined;
+        let bufferedFrames: Array<{ sequence: number; bytes: Uint8Array }> = [];
+
+        const decodeFrameData = (data: string) => {
+          const binary = atob(data);
+          const bytes = new Uint8Array(binary.length);
+          for (let index = 0; index < binary.length; index++) {
+            bytes[index] = binary.charCodeAt(index);
+          }
+          return bytes;
+        };
+
+        const scheduleAck = () => {
+          if (!ptyId || ackTimer !== undefined || lastAppliedSequence <= 0) return;
+          ackTimer = window.setTimeout(() => {
+            ackTimer = undefined;
+            if (ptyId && lastAppliedSequence > 0) {
+              ptyAck(ptyId, lastAppliedSequence).catch(() => {});
+            }
+          }, 200);
+        };
+
+        const writeTerminalBytes = (bytes: Uint8Array) => {
+          if (state.ready && isActiveRef.current) {
+            try {
+              term.write(bytes);
+            } catch (err) {
+              imeLogPush({ kind: "pty-write-err", msg: String(err), at: Date.now() });
+            }
+          } else {
+            pushPendingBytes(bytes);
+          }
+        };
+
+        const renderOutputBytes = (bytes: Uint8Array, sequence: number) => {
+          imeLogPush({ kind: "pty-recv", len: bytes.length, sequence, at: Date.now() });
           const now = Date.now();
+          let decoded = "";
           try {
-            const decoded = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+            decoded = outputDecoder.decode(bytes, { stream: true });
             snippetAccum.text = (snippetAccum.text + decoded).slice(-SNIP_LIMIT);
           } catch {}
           if (isActiveRef.current && now - lastActiveBump > 1000) {
@@ -693,39 +814,136 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
               prev.map((t) => (t.id === uiId ? { ...t, lastActiveAt: now, lastSnippet: snippet } : t)),
             );
           }
-          if (state.ready && isActiveRef.current) {
+          writeTerminalBytes(bytes);
+          if (ENABLE_TERMINAL_WORKBENCH) {
             try {
-              term.write(bytes);
+              urlAccum.text = (urlAccum.text + decoded).slice(-URL_LIMIT);
+              const url = detectServableUrl(urlAccum.text);
+              if (url) {
+                setPreviewUrl((prev) => {
+                  if (prev === url) return prev;
+                  imeLogPush({ kind: "preview-autoset", url, at: Date.now() });
+                  return url;
+                });
+                setShowPreview(true);
+              }
             } catch (err) {
-              imeLogPush({ kind: "pty-write-err", msg: String(err), at: Date.now() });
+              imeLogPush({ kind: "preview-detect-err", msg: String(err), at: Date.now() });
             }
-          } else {
-            pushPendingBytes(bytes);
           }
+        };
+
+        const commitFrame = (frame: { sequence: number; bytes: Uint8Array }) => {
+          if (frame.sequence <= lastAppliedSequence) return true;
+          if (frame.sequence !== lastAppliedSequence + 1) return false;
+          renderOutputBytes(frame.bytes, frame.sequence);
+          lastAppliedSequence = frame.sequence;
+          scheduleAck();
+          const now = Date.now();
+          if (now - lastSequencePersist > 500) {
+            lastSequencePersist = now;
+            setTabs((prev) => prev.map((tab) => (
+              tab.id === uiId ? { ...tab, lastSequence: lastAppliedSequence } : tab
+            )));
+          }
+          return true;
+        };
+
+        const mergeFrames = (frames: Array<{ sequence: number; bytes: Uint8Array }>) => {
+          const ordered = frames
+            .filter((frame) => Number.isFinite(frame.sequence) && frame.sequence > 0)
+            .sort((left, right) => left.sequence - right.sequence);
+          const waiting: typeof ordered = [];
+          for (const frame of ordered) {
+            if (!commitFrame(frame) && frame.sequence > lastAppliedSequence) waiting.push(frame);
+          }
+          bufferedFrames = waiting;
+        };
+
+        const synchronizeOutput = async (afterSequence: number, initial = false): Promise<void> => {
+          if (!ptyId || outputSyncInFlight) return;
+          outputSyncInFlight = true;
           try {
-            const chunk = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-            urlAccum.text = (urlAccum.text + chunk).slice(-URL_LIMIT);
-            const url = detectServableUrl(urlAccum.text);
-            if (url) {
-              setPreviewUrl((prev) => {
-                if (prev === url) return prev;
-                imeLogPush({ kind: "preview-autoset", url, at: Date.now() });
-                return url;
-              });
-              setShowPreview(true);
+            const snapshot = await ptyOutputSnapshot(ptyId, afterSequence);
+            if (snapshot.truncated && snapshot.first_available_sequence > lastAppliedSequence + 1) {
+              writeTerminalBytes(new TextEncoder().encode(
+                "\r\n\x1b[90m── 재연결 이전 출력 일부는 로컬 로그에만 보존됨 ──\x1b[0m\r\n",
+              ));
+              lastAppliedSequence = snapshot.first_available_sequence - 1;
+            } else if (initial && snapshot.first_available_sequence > 1) {
+              lastAppliedSequence = snapshot.first_available_sequence - 1;
             }
+            const snapshotFrames = snapshot.frames.map((frame: PtyOutputFrame) => ({
+              sequence: frame.sequence,
+              bytes: decodeFrameData(frame.data),
+            }));
+            const liveFrames = bufferedFrames;
+            bufferedFrames = [];
+            mergeFrames([...snapshotFrames, ...liveFrames]);
+            outputSyncReady = true;
           } catch (err) {
-            imeLogPush({ kind: "preview-detect-err", msg: String(err), at: Date.now() });
+            console.warn("PTY output synchronization failed", err);
+            if (bufferedFrames.length > 0) {
+              bufferedFrames.sort((left, right) => left.sequence - right.sequence);
+              const firstSequence = bufferedFrames[0]?.sequence;
+              if (firstSequence && firstSequence > lastAppliedSequence + 1) {
+                writeTerminalBytes(new TextEncoder().encode(
+                  "\r\n\x1b[90m── snapshot 복구 실패, 현재 live 출력부터 다시 연결함 ──\x1b[0m\r\n",
+                ));
+                lastAppliedSequence = firstSequence - 1;
+              }
+              const liveFrames = bufferedFrames;
+              bufferedFrames = [];
+              mergeFrames(liveFrames);
+            }
+            outputSyncReady = true;
+          } finally {
+            outputSyncInFlight = false;
+          }
+          if (bufferedFrames.some((frame) => frame.sequence > lastAppliedSequence + 1)) {
+            void synchronizeOutput(lastAppliedSequence);
+          } else if (bufferedFrames.length > 0) {
+            const readyFrames = bufferedFrames;
+            bufferedFrames = [];
+            mergeFrames(readyFrames);
+          }
+        };
+
+        unlistenData = await onPtyData(ptyId, (bytes, sequence) => {
+          const frame = { bytes, sequence };
+          if (!outputSyncReady || outputSyncInFlight) {
+            bufferedFrames.push(frame);
+            return;
+          }
+          if (!commitFrame(frame)) {
+            bufferedFrames.push(frame);
+            void synchronizeOutput(lastAppliedSequence);
           }
         });
         unlistenExit = await onPtyExit(ptyId, (code) => {
           term.writeln(`\r\n\x1b[90m[exit ${code ?? "?"}]\x1b[0m`);
         });
+        transportCleanup = () => {
+          if (ackTimer !== undefined) window.clearTimeout(ackTimer);
+          if (ptyId && lastAppliedSequence > 0) {
+            ptyAck(ptyId, lastAppliedSequence).catch(() => {});
+          }
+        };
+        await synchronizeOutput(0, true);
         // Tab 객체에 ptyId/listeners 부착 + pendingPtyActivation 해제.
         setTabs((prev) =>
           prev.map((t) =>
             t.id === uiId
-              ? { ...t, ptyId, logId, unlistenData, unlistenExit, pendingPtyActivation: false }
+              ? {
+                  ...t,
+                  ptyId,
+                  logId,
+                  lastSequence: lastAppliedSequence,
+                  unlistenData,
+                  unlistenExit,
+                  transportCleanup,
+                  pendingPtyActivation: false,
+                }
               : t,
           ),
         );
@@ -885,10 +1103,12 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
       term,
       fit,
       ptyId: undefined,
+      lastSequence: opts?.lastSequence,
       pendingPtyActivation: lazyMode,
       sendInput,
       unlistenData: undefined,
       unlistenExit: undefined,
+      transportCleanup: undefined,
       hostEl,
       logId,
       pending,
@@ -913,7 +1133,7 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
     // 재실행 복원 시 각 탭의 이전 터미널 로그를 raw TUI replay가 아니라 plain transcript로 적재한다.
     // Claude/Hermes의 alternate-screen/cursor repaint ANSI를 그대로 먹이면 화면 밀림/뒤늦은 로딩/자동응답
     // 회귀가 생기므로, tail-limited 로그를 텍스트 scrollback으로만 보여주고 live PTY 출력은 뒤에 이어 붙인다.
-    if (tauri && opts?.replayLogId) {
+    if (tauri && opts?.replayLogId && !existingSession) {
       try {
         const b64 = await sessionLogLoad(opts.replayLogId);
         if (b64) {
@@ -953,12 +1173,28 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
 
     // 신규 탭/복원 탭 모두 기본적으로 즉시 PTY spawn. macOS 권한 팝업은 승인되면
     // TCC에 저장되어야 하므로 여기서 막지 않는다. autoConnect:false는 긴급 회피 옵션이다.
-    if (tauri && autoConnect) {
+    if (tauri && (autoConnect || existingSession)) {
       await activatePty();
     }
+    return { id: uiId, logId };
   }
 
-  async function launchProfile(profileId: string, opts?: SpawnTabOptions) {
+  useEffect(() => {
+    const launchTerminal = (event: Event) => {
+      const request = terminalLaunchRequest(event);
+      const fallbackProfile = tw.profiles[0];
+      if (!request || !fallbackProfile) return;
+      void spawnTab(fallbackProfile.id, {
+        customName: request.label,
+        cmdOverride: request.command,
+        autoConnect: true,
+      });
+    };
+    window.addEventListener(TERMINAL_LAUNCH_EVENT, launchTerminal);
+    return () => window.removeEventListener(TERMINAL_LAUNCH_EVENT, launchTerminal);
+  }, [tw.profiles]);
+
+  async function launchProfile(profileId: string, opts?: SpawnTabOptions): Promise<SpawnedTab | null> {
     const p = tw.profiles.find((x) => x.id === profileId) || tw.profiles[0];
     const executable = p ? autoInstallExecutable(p) : null;
     if (p && executable && isTauri()) {
@@ -970,13 +1206,35 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
               ? `${p.name} CLI is not installed. Open Settings > Connections and click automatic install.`
               : `${p.name} CLI가 미설치 상태입니다. 설정 > 연결에서 자동 설치를 눌러주세요.`,
           );
-          return;
+          return null;
         }
       } catch (err) {
         console.warn("command exists check failed", err);
       }
     }
-    await spawnTab(profileId, opts);
+    return spawnTab(profileId, opts);
+  }
+
+  async function splitActiveTerminal(direction: TerminalSplitDirection) {
+    const activeTab = tabsRef.current.find((tab) => tab.id === activeId)
+      || tabsRef.current[0];
+    const profileId = activeTab?.profile || tw.profiles[0]?.id;
+    if (!profileId) {
+      showToast(
+        tw.language === "en"
+          ? "Add a CLI profile before splitting the terminal."
+          : "터미널을 분할하려면 먼저 CLI 프로필을 추가하세요.",
+      );
+      return;
+    }
+    const existingLogIds = tabsRef.current.map((tab) => tab.logId);
+    const created = await launchProfile(profileId);
+    if (!created) return;
+    setTerminalLayout((current) => {
+      const base = reconcileTerminalLayout(current, existingLogIds);
+      return splitTerminalLayout(base, activeTab?.logId || null, created.logId, direction);
+    });
+    setCodeLayout("grid");
   }
 
   // 윈도우 focus 시 활성 탭 helper-textarea 자동 focus.
@@ -1002,17 +1260,24 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
     if (!isTauri() && !import.meta.env.DEV) return;
     if (mountInitRef.current) return;
     mountInitRef.current = true;
-    let cancelled = false;
     (async () => {
       let restored: OpenTabMeta[] = [];
+      let liveSessions: PtySessionInfo[] = [];
       try {
         const raw = localStorage.getItem(OPEN_TABS_KEY);
         if (raw) restored = JSON.parse(raw) as OpenTabMeta[];
       } catch {}
-      if (!cancelled && Array.isArray(restored) && restored.length > 0) {
+      if (isTauri()) {
+        try {
+          liveSessions = (await ptyList()).filter((session) => session.running !== false);
+        } catch (err) {
+          console.warn("live PTY discovery failed", err);
+        }
+      }
+      if (Array.isArray(restored) && restored.length > 0) {
+        const claimedSessions = new Set<string>();
         // 같은 프로파일이라도 순서 유지. sequential spawn — 병렬 시 PTY/xterm init race 우려.
         for (const meta of restored) {
-          if (cancelled) break;
           try {
             // Claude 탭 자동 복원은 `--continue`를 붙이지 않는다.
             // `claude --continue`는 "마지막 Claude 대화" 하나로 붙기 때문에 Claude 탭 4개가
@@ -1026,109 +1291,253 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
               meta.profile === "claude"
                 ? normalizeClaudeCmd(meta.profile, baseCmd || "claude", "launch")
                 : baseCmd || undefined;
+            const existingSession = liveSessions.find((session) => {
+              if (claimedSessions.has(session.id)) return false;
+              if (meta.ptyId && session.id === meta.ptyId) return true;
+              return session.log_id === meta.logId;
+            });
+            if (existingSession) claimedSessions.add(existingSession.id);
             await spawnTab(meta.profile, {
               customName: meta.customName,
               cmdOverride,
               replayLogId: meta.logId,
               autoConnect: false,
+              existingSession,
+              lastSequence: meta.lastSequence,
             });
           } catch (err) {
             console.warn("restore tab failed", meta, err);
           }
         }
-      } else if (!cancelled && tabs.length === 0) {
+      } else if (tabs.length === 0) {
         await launchProfile("claude", { autoConnect: false }).catch(console.error);
       }
-      if (!cancelled) openTabsInitRef.current = true;
+      openTabsInitRef.current = true;
+      setTerminalLayoutReady(true);
     })();
-    return () => {
-      cancelled = true;
-    };
+    // Main은 App 수명 동안 mount를 유지한다. StrictMode의 합성 cleanup에서 이 초기화를
+    // 취소하면 두 번째 effect는 mountInitRef guard에 막혀 세션/레이아웃 저장이 영원히
+    // 준비되지 않으므로, 초기 복원 작업은 한 번 시작한 뒤 끝까지 완료한다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 탭 DOM은 한 번만 parent에 append + term.open. 이후 탭 전환은 display 토글로만 처리.
-  // host.innerHTML="" + term.open 재호출 구조였던 이전 구현은 viewport 리셋 +
-  // 스크롤백 소실("채팅 내역 사라짐")을 유발했다.
+  // Terminal DOM은 xterm host 자체를 보존하고, split wrapper만 다시 구성한다.
+  // 이 방식은 Orca의 pane tree처럼 방향/비율을 영속화하면서도 term.open()을 한 번만 호출해
+  // viewport와 scrollback을 잃지 않는다.
   useEffect(() => {
     const parent = termContainerRef.current;
     if (!parent) return;
-    // 새 탭 감지 → hostEl을 먼저 parent에 append만 한다.
-    // 중요: term.open/로그 flush는 아래에서 display 상태를 먼저 잡은 뒤 실행한다.
-    // hidden(display:none) 상태에서 xterm을 open하면 canvas/viewport가 0폭으로 잡혀
-    // 이전 채팅이 입력/포커스 이후에야 뒤늦게 그려지는 회귀가 생긴다.
-    for (const tab of tabs) {
-      if (parent.contains(tab.hostEl)) continue;
-      parent.appendChild(tab.hostEl);
-    }
-    // 닫힌 탭 DOM 제거.
-    for (const node of Array.from(parent.children)) {
-      if (!tabs.some((t) => t.hostEl === node)) parent.removeChild(node);
-    }
-    // layout=single: 활성 탭만 표시, 나머지 숨김 (기존 동작).
-    // layout=grid: 모든 탭 동시 표시. parent에 grid layout, 각 hostEl은 cell 채움.
-    if (codeLayout === "grid" && tabs.length > 0) {
-      // parent CSS grid 설정 (동적). N개에 따라 자동 분할.
-      const n = tabs.length;
-      const cols = n <= 1 ? 1 : n === 2 ? 2 : n <= 4 ? 2 : 3;
-      const rows = Math.ceil(n / cols);
-      parent.style.display = "grid";
-      parent.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
-      parent.style.gridTemplateRows = `repeat(${rows}, 1fr)`;
-      parent.style.gap = "6px";
-      parent.style.background = dark ? "#0e0e0c" : "#d8d6cf";  // gap 색 = 경계선 효과
+    const currentTabs = tabsRef.current;
+    const logIds = currentTabs.map((tab) => tab.logId);
+    const effectiveLayout = reconcileTerminalLayout(terminalLayout, logIds);
+    const tabByLogId = new Map(currentTabs.map((tab) => [tab.logId, tab]));
+    const fitSplitTabs = () => {
+      if (!isActiveRef.current) return;
+      for (const tab of tabsRef.current) fitVisibleTab(tab, "split-layout");
+    };
+
+    parent.replaceChildren();
+    parent.style.display = "block";
+    parent.style.gridTemplateColumns = "";
+    parent.style.gridTemplateRows = "";
+    parent.style.gap = "";
+    parent.style.background = codeLayout === "grid"
+      ? (dark ? "#0e0e0c" : "#d8d6cf")
+      : "";
+
+    const resetHostStyle = (tab: Tab) => {
+      const host = tab.hostEl;
+      host.dataset.terminalLogId = tab.logId;
+      host.style.minWidth = "0";
+      host.style.minHeight = "0";
+      host.style.width = "100%";
+      host.style.height = "100%";
+      host.style.boxSizing = "border-box";
+      host.style.flex = "1 1 0px";
+      host.style.boxShadow = "";
+    };
+
+    if (codeLayout === "grid" && effectiveLayout) {
       const borderColor = dark ? "#3a3a37" : "#c8c5bd";
       const activeColor = dark ? "#5a8ae0" : "#4b5fbd";
-      for (const tab of tabs) {
-        tab.hostEl.style.display = "block";
-        tab.hostEl.style.minWidth = "0";
-        tab.hostEl.style.minHeight = "0";
-        // 모든 cell에 명확한 경계선 + 활성 탭은 강조 색상으로
-        tab.hostEl.style.border = tab.id === activeId
-          ? `2px solid ${activeColor}`
-          : `1px solid ${borderColor}`;
-        tab.hostEl.style.borderRadius = "6px";
-        tab.hostEl.style.boxSizing = "border-box";
-        tab.hostEl.style.overflow = "hidden";
-      }
+      const dividerColor = dark ? "#242421" : "#cbc8c0";
+      const dividerHover = dark ? "#5a8ae0" : "#4b5fbd";
+
+      const buildNode = (node: TerminalLayoutNode): HTMLElement | null => {
+        if (node.type === "leaf") {
+          const tab = tabByLogId.get(node.logId);
+          if (!tab) return null;
+          resetHostStyle(tab);
+          tab.hostEl.style.display = "block";
+          tab.hostEl.style.border = tab.id === activeId
+            ? `2px solid ${activeColor}`
+            : `1px solid ${borderColor}`;
+          tab.hostEl.style.borderRadius = "6px";
+          tab.hostEl.style.overflow = "hidden";
+          return tab.hostEl;
+        }
+
+        const first = buildNode(node.first);
+        const second = buildNode(node.second);
+        if (!first) return second;
+        if (!second) return first;
+
+        const split = document.createElement("div");
+        split.dataset.terminalSplitId = node.id;
+        split.style.display = "flex";
+        split.style.flexDirection = node.direction === "vertical" ? "row" : "column";
+        split.style.width = "100%";
+        split.style.height = "100%";
+        split.style.minWidth = "0";
+        split.style.minHeight = "0";
+        split.style.overflow = "hidden";
+
+        const divider = document.createElement("div");
+        divider.dataset.terminalSplitDivider = node.id;
+        divider.tabIndex = 0;
+        divider.setAttribute("role", "separator");
+        divider.setAttribute(
+          "aria-orientation",
+          node.direction === "vertical" ? "vertical" : "horizontal",
+        );
+        divider.setAttribute("aria-valuemin", "15");
+        divider.setAttribute("aria-valuemax", "85");
+        divider.setAttribute("aria-valuenow", String(Math.round(node.ratio * 100)));
+        divider.title = tw.language === "en"
+          ? "Drag or use arrow keys to resize terminals"
+          : "드래그하거나 방향키로 터미널 크기 조절";
+        divider.style.flex = "0 0 6px";
+        divider.style.background = dividerColor;
+        divider.style.cursor = node.direction === "vertical" ? "col-resize" : "row-resize";
+        divider.style.touchAction = "none";
+        divider.style.outline = "none";
+        divider.addEventListener("mouseenter", () => { divider.style.background = dividerHover; });
+        divider.addEventListener("mouseleave", () => { divider.style.background = dividerColor; });
+        divider.addEventListener("focus", () => { divider.style.background = dividerHover; });
+        divider.addEventListener("blur", () => { divider.style.background = dividerColor; });
+
+        let liveRatio = normalizeTerminalSplitRatio(node.ratio);
+        const applyRatio = (ratio: number) => {
+          liveRatio = normalizeTerminalSplitRatio(ratio);
+          first.style.flex = `${liveRatio} 1 0px`;
+          second.style.flex = `${1 - liveRatio} 1 0px`;
+          divider.setAttribute("aria-valuenow", String(Math.round(liveRatio * 100)));
+        };
+        const commitRatio = (ratio: number) => {
+          const normalized = normalizeTerminalSplitRatio(ratio);
+          applyRatio(normalized);
+          setTerminalLayout((current) => updateTerminalSplitRatio(current, node.id, normalized));
+          window.setTimeout(fitSplitTabs, 0);
+        };
+        applyRatio(liveRatio);
+
+        divider.addEventListener("pointerdown", (event) => {
+          if (event.button !== 0) return;
+          event.preventDefault();
+          divider.setPointerCapture(event.pointerId);
+          const rect = split.getBoundingClientRect();
+          const updateFromPointer = (pointerEvent: PointerEvent) => {
+            const axisSize = node.direction === "vertical" ? rect.width : rect.height;
+            if (axisSize <= 0) return;
+            const offset = node.direction === "vertical"
+              ? pointerEvent.clientX - rect.left
+              : pointerEvent.clientY - rect.top;
+            applyRatio(offset / axisSize);
+          };
+          const finish = (pointerEvent: PointerEvent) => {
+            updateFromPointer(pointerEvent);
+            divider.removeEventListener("pointermove", updateFromPointer);
+            divider.removeEventListener("pointerup", finish);
+            divider.removeEventListener("pointercancel", finish);
+            if (divider.hasPointerCapture(pointerEvent.pointerId)) {
+              divider.releasePointerCapture(pointerEvent.pointerId);
+            }
+            commitRatio(liveRatio);
+          };
+          divider.addEventListener("pointermove", updateFromPointer);
+          divider.addEventListener("pointerup", finish);
+          divider.addEventListener("pointercancel", finish);
+        });
+        divider.addEventListener("dblclick", () => commitRatio(0.5));
+        divider.addEventListener("keydown", (event) => {
+          const decrement = node.direction === "vertical" ? "ArrowLeft" : "ArrowUp";
+          const increment = node.direction === "vertical" ? "ArrowRight" : "ArrowDown";
+          if (event.key !== decrement && event.key !== increment) return;
+          event.preventDefault();
+          commitRatio(liveRatio + (event.key === increment ? 0.05 : -0.05));
+        });
+
+        split.append(first, divider, second);
+        return split;
+      };
+
+      const root = buildNode(effectiveLayout);
+      if (root) parent.appendChild(root);
     } else {
-      // single layout — 기존 동작
-      parent.style.display = "block";
-      parent.style.gridTemplateColumns = "";
-      parent.style.gridTemplateRows = "";
-      parent.style.gap = "";
-      parent.style.background = "";
-      for (const tab of tabs) {
+      for (const tab of currentTabs) {
+        resetHostStyle(tab);
         tab.hostEl.style.display = tab.id === activeId ? "block" : "none";
         tab.hostEl.style.border = "";
         tab.hostEl.style.borderRadius = "";
         tab.hostEl.style.overflow = "";
-        tab.hostEl.style.boxShadow = "";
+        parent.appendChild(tab.hostEl);
       }
     }
-    // display/layout 확정 후 visible 탭만 xterm open + replay flush.
-    // inactive hidden 탭은 클릭되어 visible이 되는 effect에서 처음 initialize한다.
-    for (const tab of tabs) {
-      if (!parent.contains(tab.hostEl)) continue;
-      if (tab.hostEl.dataset.atelierInitialized === "1") continue;
-      const shouldInit = codeLayout === "grid" || tab.id === activeId;
-      if (!shouldInit) continue;
-      tab.hostEl.dataset.atelierInitialized = "1";
-      initializeTabDom(tab);
+
+    const visibleTabs = codeLayout === "grid"
+      ? currentTabs
+      : currentTabs.filter((tab) => tab.id === activeId);
+    for (const tab of visibleTabs) {
+      if (!isActiveRef.current) continue;
+      const initializationState = tab.hostEl.dataset.atelierInitialized;
+      if (initializationState === "1" || initializationState === "initializing") continue;
+      tab.hostEl.dataset.atelierInitialized = "initializing";
+      void initializeTabDom(tab)
+        .then((initialized) => {
+          tab.hostEl.dataset.atelierInitialized = initialized ? "1" : "";
+        })
+        .catch((err) => {
+          tab.hostEl.dataset.atelierInitialized = "";
+          console.warn("terminal DOM initialization failed", err);
+        });
     }
-    // 모든 탭 fit 재측정 (grid는 cell 크기 변동, single은 활성만).
-    // Main이 Settings/Home 뒤에서 display:none인 동안에는 절대 fit/PTY resize를 보내지 않는다.
-    const targets = codeLayout === "grid" ? tabs : tabs.filter((t) => t.id === activeId);
-    if (targets.length > 0 && isActive) {
-      window.setTimeout(() => {
-        for (const t of targets) {
-          fitVisibleTab(t, "tab-layout");
-        }
-        const active = tabs.find((t) => t.id === activeId);
-        if (active) try { active.term.focus(); } catch {}
-      }, 30);
+    const fitTimer = window.setTimeout(() => {
+      if (!isActiveRef.current) return;
+      for (const tab of visibleTabs) fitVisibleTab(tab, "tab-layout");
+      const active = currentTabs.find((tab) => tab.id === activeId);
+      if (active) try { active.term.focus(); } catch {}
+    }, 30);
+    return () => window.clearTimeout(fitTimer);
+  }, [terminalTabKey, terminalLayout, codeLayout, dark, isActive, fitVisibleTab, tw.language]);
+
+  // 단일 모드 탭 전환은 pane tree를 재구성하지 않고 display만 바꾼다.
+  useEffect(() => {
+    if (codeLayout !== "single") return;
+    const currentTabs = tabsRef.current;
+    for (const tab of currentTabs) {
+      tab.hostEl.style.display = tab.id === activeId ? "block" : "none";
     }
-  }, [activeId, tabs, codeLayout, dark, isActive, fitVisibleTab]);
+    if (!isActiveRef.current) return;
+    const active = currentTabs.find((tab) => tab.id === activeId);
+    if (!active) return;
+    const initializationState = active.hostEl.dataset.atelierInitialized;
+    if (initializationState !== "1" && initializationState !== "initializing") {
+      active.hostEl.dataset.atelierInitialized = "initializing";
+      void initializeTabDom(active)
+        .then((initialized) => {
+          active.hostEl.dataset.atelierInitialized = initialized ? "1" : "";
+        })
+        .catch((err) => {
+          active.hostEl.dataset.atelierInitialized = "";
+          console.warn("terminal DOM initialization failed", err);
+        });
+    }
+    const fitTimer = window.setTimeout(() => {
+      fitVisibleTab(active, "tab-activate");
+      try { active.term.focus(); } catch {}
+    }, 30);
+    return () => window.clearTimeout(fitTimer);
+  }, [activeId, codeLayout, isActive, fitVisibleTab]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -1178,8 +1587,12 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
   // 탭 hostEl 최초 부착 시 1회 실행되는 초기화 — term.open + fit + pending flush +
   // IME beforeinput bridge + composition 리스너. 이전에는 매 activeId 변경마다
   // 이 전체 로직이 재실행되며 xterm state가 깨졌다. 지금은 탭당 한 번만.
-  async function initializeTabDom(tab: Tab) {
+  async function initializeTabDom(tab: Tab): Promise<boolean> {
     const host = tab.hostEl;
+    // App은 Terminal 화면을 unmount하지 않고 display:none으로 보존한다. 재실행 직후
+    // Sessions 화면이 앞에 있으면 host가 0x0인데, 이때 xterm/canvas를 열면 이후 fit만으로
+    // 복구되지 않는 빈 화면과 깨진 glyph atlas가 생긴다. 실제 가시 크기에서만 open한다.
+    if (!isTerminalHostMeasurable(host)) return false;
     // 한글 cell 폭 안정화. term.open이 첫 cell metric을 측정하는데, 이 시점에
     // "Nanum Gothic Coding"이 미로드면 Menlo(영문) 기준으로 cell 폭이 굳고,
     // 한글 글리프는 시스템 fallback(AppleGothic, 1cell 폭)으로 그려져
@@ -1190,6 +1603,7 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
       const fontSize = (tab.term.options.fontSize as number | undefined) ?? 14;
       await document.fonts.load(`${fontSize}px "Nanum Gothic Coding"`);
     } catch {}
+    if (!isTerminalHostMeasurable(host)) return false;
     tab.term.open(host);
     imeLogPush({ kind: "term-open", tabId: tab.id, hostW: host.clientWidth, hostH: host.clientHeight, at: Date.now() });
     document.fonts.ready.then(() => {
@@ -1209,7 +1623,7 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
     const runFit = (label: string) => fitVisibleTab(tab, label, false);
     window.setTimeout(() => {
       runFit("first");
-      tab.term.focus();
+      if (isActiveRef.current) tab.term.focus();
       const flushPending = () => {
         if (tab.pending && tab.pending.length) {
           const pendingChunks = tab.pending.splice(0);
@@ -1242,6 +1656,14 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
       }
     };
     window.addEventListener("resize", onResize);
+    let resizeFrame = 0;
+    const resizeObserver = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(() => {
+          window.cancelAnimationFrame(resizeFrame);
+          resizeFrame = window.requestAnimationFrame(() => onResize());
+        });
+    resizeObserver?.observe(host);
 
     // 라운드 #5 fix — IME 자모 분리 차단.
     // 배경: xterm 6.0.0의 Terminal._inputEvent는 helper-textarea의 input 이벤트를 capture phase로 직접 listen,
@@ -1340,6 +1762,8 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
 
     tab.cleanup = () => {
       window.removeEventListener("resize", onResize);
+      resizeObserver?.disconnect();
+      window.cancelAnimationFrame(resizeFrame);
       window.clearTimeout(imeTimer);
       if (helper) {
         helper.removeEventListener("keydown", onTextareaKeyDown, true);
@@ -1348,6 +1772,7 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
       host.removeEventListener("input", onHostInputCapture, true);
       helper = null;
     };
+    return true;
   }
 
   // WKWebView IME 진단 — xterm buffer + __imeLog + IME 바 상태를 /tmp/atelier-debug.json에 덤프.
@@ -1508,6 +1933,7 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
       setClosedSessions((prev) => [meta, ...prev.filter((s) => s.id !== id)].slice(0, 20));
     }
     tab.cleanup?.();
+    tab.transportCleanup?.();
     tab.unlistenData?.();
     tab.unlistenExit?.();
     // ptyId가 부착됐을 때만 PTY kill (lazy 탭이 활성화 안 된 채 닫히면 skip).
@@ -1523,7 +1949,11 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
         console.warn("session log clear failed", err);
       }
     }
-    tab.term.dispose();
+    // Canvas renderer가 이미 DOM에서 분리된 직후 dispose될 때 내부 renderer 교체 중
+    // 예외를 던질 수 있다. 세션 정리 자체가 중단되면 남은 pane tree도 비어 보이므로
+    // dispose 오류는 격리하고 탭/레이아웃 상태 정리는 끝까지 진행한다.
+    try { tab.term.dispose(); }
+    catch (err) { console.warn("terminal dispose failed", err); }
     tab.hostEl.remove();
     setTabs((prev) => prev.filter((t) => t.id !== id));
     setActiveId((curr) => {
@@ -1563,6 +1993,21 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
       }
       if (!primary || e.altKey) return;
 
+      if (e.code === "Backslash" || e.key === "\\" || e.key === "|") {
+        if (!ENABLE_TERMINAL_WORKBENCH) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.repeat) return;
+        splitActiveTerminal(e.shiftKey ? "horizontal" : "vertical").catch((err) =>
+          showToast(
+            tw.language === "en"
+              ? `Terminal split failed: ${String(err)}`
+              : `터미널 분할 실패: ${String(err)}`,
+          ),
+        );
+        return;
+      }
+
       if (key === "t" && !e.shiftKey) {
         e.preventDefault();
         e.stopPropagation();
@@ -1593,6 +2038,7 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
       }
 
       if (key === "p" && !e.shiftKey) {
+        if (!ENABLE_TERMINAL_WORKBENCH) return;
         e.preventDefault();
         e.stopPropagation();
         setShowPreview((v) => !v);
@@ -1662,34 +2108,40 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
           dark ? "" : "",
         )}
       >
-        {/* 상단 탭 스위처 (엑셀 시트 느낌) */}
+        {/* 안정화된 기본 경로는 세션만 노출한다. 파일/preview workbench는 격리 상태다. */}
         <div
           className={cls(
             "h-10 px-1.5 flex items-center gap-1 border-b",
             dark ? "border-dline" : "border-line",
           )}
         >
-          {([
-            ["sessions", "세션"],
-            ["files", "파일"],
-          ] as const).map(([key, label]) => (
-            <button
-              key={key}
-              onClick={() => setLeftTab(key)}
-              className={cls(
-                "h-7 px-3 rounded-[6px] text-[12px] font-medium transition-colors",
-                leftTab === key
-                  ? dark
-                    ? "bg-dmuted text-dink"
-                    : "bg-surface text-ink shadow-[0_0_0_1px_#e5e3db]"
-                  : dark
-                    ? "text-dsub hover:text-dink hover:bg-[#2a2a28]"
-                    : "text-sub hover:text-ink hover:bg-muted",
-              )}
-            >
-              {label}
-            </button>
-          ))}
+          {ENABLE_TERMINAL_WORKBENCH ? (
+            ([
+              ["sessions", "세션"],
+              ["files", "파일"],
+            ] as const).map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setLeftTab(key)}
+                className={cls(
+                  "h-7 px-3 rounded-[6px] text-[12px] font-medium transition-colors",
+                  leftTab === key
+                    ? dark
+                      ? "bg-dmuted text-dink"
+                      : "bg-surface text-ink shadow-[0_0_0_1px_#e5e3db]"
+                    : dark
+                      ? "text-dsub hover:text-dink hover:bg-[#2a2a28]"
+                      : "text-sub hover:text-ink hover:bg-muted",
+                )}
+              >
+                {label}
+              </button>
+            ))
+          ) : (
+            <div className={cls("px-2 text-[13px] font-medium", dark ? "text-dink" : "text-ink")}>
+              터미널 세션
+            </div>
+          )}
           <button
             type="button"
             onClick={() => setLeftHidden(true)}
@@ -1704,7 +2156,7 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
         </div>
 
         {/* 파일 탭 */}
-        {leftTab === "files" && (
+        {ENABLE_TERMINAL_WORKBENCH && leftTab === "files" && (
           <div className="flex-1 min-h-0">
             <FileTree dark={dark} onOpenFile={openFileInPreview} />
           </div>
@@ -2033,42 +2485,132 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
               ? tabs.find((t) => t.id === activeId)?.name
               : "세션 없음"}
           </div>
-          {/* 코드 layout toggle — preview+code vs grid. 기존 코드 탭의 보기 전환을 유지한다. */}
-          <div className={cls(
-            "shrink-0 inline-flex items-center rounded-[6px] overflow-hidden border",
-            dark ? "border-dline" : "border-line",
-          )}>
-            {([
-              [
-                "single",
-                "▭",
-                tw.language === "en" ? "Code + Preview" : "코드+프리뷰",
-                tw.language === "en" ? "Code with preview" : "코드와 프리뷰만 보기",
-              ],
-              [
-                "grid",
-                "▦",
-                tw.language === "en" ? "Grid" : "그리드",
-                tw.language === "en" ? "Show code windows as a grid" : "창을 그리드로 보기",
-              ],
-            ] as const).map(([k, icon, label, t]) => (
+          {ENABLE_TERMINAL_WORKBENCH ? (
+          <div className="shrink-0 inline-flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                splitActiveTerminal("vertical").catch((err) =>
+                  showToast(
+                    tw.language === "en"
+                      ? `Terminal split failed: ${String(err)}`
+                      : `터미널 분할 실패: ${String(err)}`,
+                  ),
+                );
+              }}
+              disabled={tw.profiles.length === 0}
+              title={tw.language === "en"
+                ? "Split right with the current CLI profile (Cmd/Ctrl+\\)"
+                : "현재 CLI 프로필로 오른쪽 분할 (⌘/Ctrl+\\)"}
+              aria-label={tw.language === "en" ? "Split terminal right" : "터미널 오른쪽 분할"}
+              className={cls(
+                "h-7 w-7 inline-flex items-center justify-center rounded-[6px] border disabled:opacity-40 disabled:cursor-not-allowed",
+                dark
+                  ? "border-dline text-dsub hover:text-dink hover:bg-[#2a2a28]"
+                  : "border-line text-sub hover:text-ink hover:bg-muted",
+              )}
+            >
+              {I.splitRight}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                splitActiveTerminal("horizontal").catch((err) =>
+                  showToast(
+                    tw.language === "en"
+                      ? `Terminal split failed: ${String(err)}`
+                      : `터미널 분할 실패: ${String(err)}`,
+                  ),
+                );
+              }}
+              disabled={tw.profiles.length === 0}
+              title={tw.language === "en"
+                ? "Split down with the current CLI profile (Cmd/Ctrl+Shift+\\)"
+                : "현재 CLI 프로필로 아래 분할 (⌘/Ctrl+Shift+\\)"}
+              aria-label={tw.language === "en" ? "Split terminal down" : "터미널 아래 분할"}
+              className={cls(
+                "h-7 w-7 inline-flex items-center justify-center rounded-[6px] border disabled:opacity-40 disabled:cursor-not-allowed",
+                dark
+                  ? "border-dline text-dsub hover:text-dink hover:bg-[#2a2a28]"
+                  : "border-line text-sub hover:text-ink hover:bg-muted",
+              )}
+            >
+              {I.splitDown}
+            </button>
+            <div className={cls(
+              "inline-flex items-center rounded-[6px] overflow-hidden border",
+              dark ? "border-dline" : "border-line",
+            )}>
+              {([
+                [
+                  "single",
+                  "▭",
+                  tw.language === "en" ? "Code + Preview" : "코드+프리뷰",
+                  tw.language === "en" ? "Code with preview" : "코드와 프리뷰만 보기",
+                ],
+                [
+                  "grid",
+                  "▦",
+                  tw.language === "en" ? "Grid" : "그리드",
+                  tw.language === "en" ? "Show code windows as a grid" : "창을 그리드로 보기",
+                ],
+              ] as const).map(([k, icon, label, t]) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setCodeLayout(k)}
+                  title={t}
+                  className={cls(
+                    "h-7 px-2 inline-flex items-center justify-center gap-1 text-[11px]",
+                    codeLayout === k
+                      ? dark ? "bg-dline text-dink" : "bg-line text-ink"
+                      : dark ? "text-dsub hover:text-dink hover:bg-[#2a2a28]" : "text-sub hover:text-ink hover:bg-muted",
+                  )}
+                >
+                  <span className="text-[13px] leading-none">{icon}</span>
+                  <span className="leading-none">{label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          ) : (
+            <div className="shrink-0 inline-flex items-center gap-1.5">
               <button
-                key={k}
                 type="button"
-                onClick={() => setCodeLayout(k)}
-                title={t}
+                onClick={() => {
+                  setLeftHidden(false);
+                  setLeftTab("sessions");
+                  setShowPicker(true);
+                }}
                 className={cls(
-                  "h-7 px-2 inline-flex items-center justify-center gap-1 text-[11px]",
-                  codeLayout === k
-                    ? dark ? "bg-dline text-dink" : "bg-line text-ink"
-                    : dark ? "text-dsub hover:text-dink hover:bg-[#2a2a28]" : "text-sub hover:text-ink hover:bg-muted",
+                  "h-7 px-2.5 inline-flex items-center gap-1.5 rounded-[6px] border text-[11.5px] font-medium",
+                  dark
+                    ? "border-dline text-dsub hover:text-dink hover:bg-[#2a2a28]"
+                    : "border-line text-sub hover:text-ink hover:bg-muted",
                 )}
               >
-                <span className="text-[13px] leading-none">{icon}</span>
-                <span className="leading-none">{label}</span>
+                {I.plus}
+                새 터미널
               </button>
-            ))}
-          </div>
+              <button
+                type="button"
+                disabled={!activeId}
+                onClick={() => {
+                  if (!activeId) return;
+                  closeTab(activeId).catch((err) => showToast(`터미널 종료 실패: ${String(err)}`));
+                }}
+                className={cls(
+                  "h-7 px-2.5 inline-flex items-center gap-1.5 rounded-[6px] border text-[11.5px] font-medium disabled:opacity-40 disabled:cursor-not-allowed",
+                  dark
+                    ? "border-dline text-dsub hover:text-dink hover:bg-[#2a2a28]"
+                    : "border-line text-sub hover:text-ink hover:bg-muted",
+                )}
+              >
+                <span aria-hidden="true" className="text-[9px]">■</span>
+                종료
+              </button>
+            </div>
+          )}
           <div
             className={cls(
               "text-[11px] font-mono uppercase tracking-wider flex items-center gap-1.5 shrink-0",
@@ -2112,7 +2654,7 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
           </div>
 
           {/* Preview — grid 모드는 자동 숨김 (멀티 터미널 작업환경에 화면 공간 양보) */}
-          {showPreview && codeLayout === "single" && (
+          {ENABLE_TERMINAL_WORKBENCH && showPreview && codeLayout === "single" && (
           <>
             {/* 드래그 리사이즈 handle — 왼쪽 경계. 4px 폭 + hover/active 시각 표시. */}
             <div

@@ -12,10 +12,221 @@ const releaseTargets = [
 
 const credentialSource = readFileSync("src-tauri/src/credentials.rs", "utf8");
 const agentSource = readFileSync("src-tauri/src/agent.rs", "utf8");
+const agentModelsSource = readFileSync("src-tauri/src/agent_models.rs", "utf8");
+const agentPreviewSource = readFileSync("src-tauri/src/agent_preview.rs", "utf8");
+const lifecycleSource = readFileSync("src-tauri/src/agent_lifecycle.rs", "utf8");
+const supervisorSource = readFileSync("src-tauri/src/pty_supervisor.rs", "utf8");
+const worktreeSource = readFileSync("src-tauri/src/agent_worktree.rs", "utf8").split("#[cfg(test)]")[0];
+const libSource = readFileSync("src-tauri/src/lib.rs", "utf8");
+const mainSource = readFileSync("src-tauri/src/main.rs", "utf8");
+const cargoSource = readFileSync(manifest, "utf8");
+const packageSource = readFileSync("package.json", "utf8");
+const storeBuildSource = readFileSync("tools/windows-store/build-msix.ps1", "utf8");
+const windowsProviderSmokeSource = readFileSync("tools/windows-provider-smoke.ps1", "utf8");
+const windowsPackageSmokeSource = readFileSync("tools/windows-package-smoke.ps1", "utf8");
+const windowsProviderWorkflowSource = readFileSync(
+  ".github/workflows/windows-provider-smoke.yml",
+  "utf8",
+);
+const releaseWorkflowSource = readFileSync(".github/workflows/release.yml", "utf8");
+const windowsPhysicalGateSource = readFileSync(
+  ".github/workflows/windows-physical-release-gate.yml",
+  "utf8",
+);
+const publishReleaseWorkflowSource = readFileSync(
+  ".github/workflows/publish-release.yml",
+  "utf8",
+);
+const releaseCandidateGateSource = readFileSync(
+  "tools/windows-release-candidate-gate.ps1",
+  "utf8",
+);
+const releaseCandidateSealSource = readFileSync(
+  ".github/scripts/seal-release-candidate.mjs",
+  "utf8",
+);
+const releaseCandidateVerifySource = readFileSync(
+  ".github/scripts/verify-release-candidate.mjs",
+  "utf8",
+);
+const publishEvidenceSource = readFileSync(
+  ".github/scripts/validate-publish-evidence.mjs",
+  "utf8",
+);
+const ptySupervisorSmokeSource = readFileSync("tools/pty-supervisor-smoke.mjs", "utf8");
+const agentHarnessSource = readFileSync("tools/atelier-agent-harness.mjs", "utf8");
+const connectionsSource = readFileSync("src/components/ConnectionsPanel.tsx", "utf8");
+const settingsSource = readFileSync("src/components/Settings.tsx", "utf8");
+const agentWorkspaceSource = readFileSync("src/components/AgentWorkspace.tsx", "utf8");
+const indexCssSource = readFileSync("src/index.css", "utf8");
+const cliInstallersSource = readFileSync("src/lib/cliInstallers.ts", "utf8");
+const agentPerformanceSmokeSource = readFileSync("tools/agent-workspace-performance-smoke.mjs", "utf8");
+const sessionRunRegistrySource = readFileSync(
+  "src/components/agent-runtime/sessionRunRegistry.ts",
+  "utf8",
+);
+const sessionRunHookSource = readFileSync(
+  "src/components/agent-runtime/useSessionRunRegistry.ts",
+  "utf8",
+);
+const sessionRunSmokeSource = readFileSync("tools/session-run-registry-smoke.ts", "utf8");
+const parallelAgentHarnessSource = readFileSync("tools/parallel-agent-harness.mjs", "utf8");
+const processTreeSource = readFileSync(
+  "src-tauri/crates/atelier-process-tree/src/lib.rs",
+  "utf8",
+);
+const orcaFeatureGateSource = readFileSync("tools/orca-feature-release-gate.mjs", "utf8");
+const rendererReceiptSource = readFileSync("src-tauri/src/runtime_receipt.rs", "utf8");
+const rendererSmokeSource = readFileSync("tools/renderer-ready-smoke.sh", "utf8");
+const terminalWorkspaceSource = readFileSync("src/components/Main.tsx", "utf8");
+const terminalLayoutSource = readFileSync("src/lib/terminalLayout.ts", "utf8");
+const diffReviewSource = readFileSync("src/lib/diffReview.ts", "utf8");
+const reviewWorkflowSource = readFileSync("src/components/review-workflow/reviewWorkflow.ts", "utf8");
+const reviewWorkflowViewSource = readFileSync("src/components/review-workflow/ReviewWorkflowStatus.tsx", "utf8");
+const devScreenSource = readFileSync("src/lib/devScreen.ts", "utf8");
+const devScreenPickerSmokeSource = readFileSync("tools/devscreen-element-picker-smoke.ts", "utf8");
+const previewEvidenceSource = readFileSync("src/lib/previewEvidence.ts", "utf8");
+const previewEvidenceSmokeSource = readFileSync("tools/preview-evidence-smoke.ts", "utf8");
+const workflowSource = [
+  releaseWorkflowSource,
+  readFileSync(".github/workflows/windows-store.yml", "utf8"),
+  windowsProviderWorkflowSource,
+  windowsPhysicalGateSource,
+  publishReleaseWorkflowSource,
+].join("\n");
+const openLoginBrowserSource = credentialSource
+  .split("fn open_login_url_in_browser", 2)[1]
+  ?.split("fn watch_and_open_login_url", 1)[0] || "";
+const unpinnedWorkflowUses = [...workflowSource.matchAll(/\buses:\s*[^@\s]+@([^\s#]+)/g)]
+  .map((match) => match[1])
+  .filter((ref) => !/^[0-9a-f]{40}$/i.test(ref));
 const sourceInvariants = [
+  {
+    ok:
+      !credentialSource.includes("curl -fsSL") &&
+      !credentialSource.includes("Invoke-Expression") &&
+      !credentialSource.includes("[scriptblock]::Create") &&
+      !cliInstallersSource.includes("curl -fsSL") &&
+      !windowsProviderSmokeSource.includes("Invoke-Expression") &&
+      !windowsProviderSmokeSource.includes("[scriptblock]::Create") &&
+      credentialSource.includes("@anthropic-ai/claude-code@2.1.217") &&
+      credentialSource.includes("@openai/codex@0.145.0") &&
+      credentialSource.includes("bun@1.3.14") &&
+      credentialSource.includes("gajae-code@0.11.7") &&
+      credentialSource.includes("3ef6bbd201263d354fd83ec55b3c306ded2eb72a") &&
+      windowsProviderSmokeSource.includes("@anthropic-ai/claude-code@2.1.217") &&
+      windowsProviderSmokeSource.includes("@openai/codex@0.145.0") &&
+      credentialSource.includes("spawn_blocking") &&
+      credentialSource.includes("capture_installer_stream") &&
+      credentialSource.includes("CLI_INSTALL_CAPTURE_LIMIT") &&
+      credentialSource.includes("installer exited successfully, but the CLI could not be verified"),
+    message:
+      "CLI installers must use pinned package-manager or immutable Git sources, drain bounded output, and wait for verified completion",
+  },
   {
     ok: !credentialSource.includes("sync_gajecode_claude_subscription_credential"),
     message: "Gajae OAuth refresh tokens must not be copied into agent.db",
+  },
+  {
+    ok:
+      mainSource.includes('"--atelier-version-probe"') &&
+      mainSource.includes('"--atelier-renderer-ready-probe"') &&
+      rendererReceiptSource.includes("process_is_alive") &&
+      rendererReceiptSource.includes("receipt_path_for") &&
+      rendererReceiptSource.includes("Sha256::digest") &&
+      rendererReceiptSource.includes("renderer receipt belongs to a different executable") &&
+      rendererSmokeSource.includes('receipt["pid"] == expected_pid') &&
+      windowsProviderSmokeSource.includes("Test-AtelierInstalledRuntime") &&
+      windowsProviderSmokeSource.includes("RequireAuthenticode") &&
+      windowsProviderSmokeSource.includes("RequireSmartAppControlEvidence") &&
+      windowsProviderSmokeSource.includes("Convert-SmartAppControlRegistryValue") &&
+      windowsProviderSmokeSource.includes('1 { return "On" }') &&
+      windowsProviderSmokeSource.includes('2 { return "Evaluation" }') &&
+      windowsProviderSmokeSource.includes("SelfTest") &&
+      windowsPhysicalGateSource.includes("self-hosted") &&
+      windowsPhysicalGateSource.includes("windows") &&
+      windowsPhysicalGateSource.includes("-RestartApplication") &&
+      windowsPhysicalGateSource.includes("-RequireRendererReadyEvidence") &&
+      windowsPhysicalGateSource.includes("-RequireBrowserProcessEvidence") &&
+      windowsPhysicalGateSource.includes("-RequireVisibleBrowserWindowEvidence") &&
+      windowsPhysicalGateSource.includes("-SelfTest") &&
+      windowsPhysicalGateSource.includes("verify-release-candidate.mjs") &&
+      windowsPhysicalGateSource.includes("windows-release-candidate-gate.ps1") &&
+      windowsPhysicalGateSource.includes("gh release download") &&
+      releaseCandidateGateSource.includes("[Environment]::UserInteractive") &&
+      releaseCandidateGateSource.includes("Get-AuthenticodeSignature") &&
+      releaseCandidateGateSource.includes("--atelier-renderer-ready-probe") &&
+      releaseCandidateGateSource.includes("upgradePersistenceProved"),
+    message:
+      "Physical Windows release gate must prove installed version, signature, restart, browser auth, and Smart App Control evidence",
+  },
+  {
+    ok:
+      agentPreviewSource.includes("redact_preview_output_line") &&
+      agentPreviewSource.includes("preview_output_redacts_credentials_before_storage_and_events") &&
+      previewEvidenceSource.includes("redactPreviewEvidenceText") &&
+      previewEvidenceSource.includes("sanitizePreviewEvidenceUrl") &&
+      previewEvidenceSource.includes("serviceOutput?: string[]") &&
+      previewEvidenceSource.includes('networkMethod?: "GET"') &&
+      previewEvidenceSource.includes("MAX_EVIDENCE_LINES") &&
+      previewEvidenceSmokeSource.includes("ordinary diagnostics must remain readable") &&
+      previewEvidenceSmokeSource.includes("Authorization: Bearer") &&
+      agentWorkspaceSource.includes("captureMessagePreviewEvidence") &&
+      agentWorkspaceSource.includes("previewEvidence: evidence") &&
+      agentWorkspaceSource.includes("Local preview evidence capture failed"),
+    message:
+      "Preview task evidence must remain local-only, bounded, URL-sanitized, and credential-redacted",
+  },
+  {
+    ok:
+      devScreenSource.includes("__ATELIER_PREVIEW_DIAGNOSTICS_V1__") &&
+      devScreenSource.includes("performance.getEntriesByType('resource')") &&
+      devScreenSource.includes('url.search = ""') &&
+      devScreenSource.includes('url.hash = ""') &&
+      devScreenSource.includes("redactDiagnosticText") &&
+      !devScreenSource.includes("document.cookie") &&
+      !devScreenSource.includes("localStorage") &&
+      !devScreenSource.includes("sessionStorage") &&
+      !devScreenSource.includes("response.text()") &&
+      previewEvidenceSource.includes("browserErrorCount?: number") &&
+      previewEvidenceSource.includes("consoleEvidence?: string[]") &&
+      previewEvidenceSource.includes("networkEvidence?: string[]") &&
+      agentWorkspaceSource.includes("devScreenMatchesPreview") &&
+      agentWorkspaceSource.includes("Number(entry.status || 0) >= 400") &&
+      agentWorkspaceSource.includes('completionIntent !== "interrupted" && completionIntent !== "stopped"') &&
+      agentWorkspaceSource.includes("Preview URL, health/body, service stdout, DOM snapshots, and browser") &&
+      agentWorkspaceSource.includes("const visualContext = [explicitlySelectedElementContext, compactContext]") &&
+      !agentWorkspaceSource.includes("formatPreviewPromptContext") &&
+      !agentWorkspaceSource.includes("formatDevScreenPromptContext") &&
+      !agentWorkspaceSource.includes("const automaticCheck = await devScreenCheck"),
+    message:
+      "Preview browser diagnostics must be locally captured after completion and excluded from provider prompts",
+  },
+  {
+    ok:
+      packageSource.includes('"smoke:devscreen-picker"') &&
+      (workflowSource.match(/npm run smoke:devscreen-picker/g) || []).length >= 3 &&
+      devScreenSource.includes("__ATELIER_ELEMENT_PICKER_V1__") &&
+      devScreenSource.includes("ELEMENT_PICKER_START_SCRIPT") &&
+      devScreenSource.includes("ELEMENT_PICKER_POLL_SCRIPT") &&
+      devScreenSource.includes("ELEMENT_PICKER_CANCEL_SCRIPT") &&
+      devScreenSource.includes("DEV_SCREEN_STYLE_ALLOWLIST") &&
+      devScreenSource.includes("normalizeDevScreenElementSelection") &&
+      devScreenSource.includes("formatDevScreenElementSelectionPrompt") &&
+      !devScreenSource.includes("element.value") &&
+      !devScreenSource.includes(".outerHTML") &&
+      agentWorkspaceSource.includes("runDevScreenElementPickerStart") &&
+      agentWorkspaceSource.includes("cancelDevScreenElementPicker") &&
+      agentWorkspaceSource.includes("devScreenSelectionAttached") &&
+      agentWorkspaceSource.includes("devScreenElementSelection") &&
+      agentWorkspaceSource.includes("elementSelection?: DevScreenElementSelection") &&
+      agentWorkspaceSource.includes("elementSelection: normalizeDevScreenElementSelection(turn.elementSelection) || undefined") &&
+      agentWorkspaceSource.includes("formatDevScreenElementSelectionPrompt") &&
+      agentWorkspaceSource.includes("payload.elementSelection") &&
+      devScreenPickerSmokeSource.includes("backgroundImage") &&
+      devScreenPickerSmokeSource.includes("http://localhost:5173/settings"),
+    message:
+      "Preview element selection must stay localhost-only, bounded, user-controlled, credential-redacted, and release-tested",
   },
   {
     ok: !credentialSource.includes("sync_codex_auth_to_hermes"),
@@ -24,14 +235,39 @@ const sourceInvariants = [
   {
     ok:
       agentSource.includes('cmd.env("ANTHROPIC_OAUTH_TOKEN", token)') &&
-      credentialSource.includes("atelier-keychain-env-migration"),
-    message: "Gajae must receive short-lived OAuth access through process environment only",
+      agentSource.includes('cmd.env("CLAUDE_CODE_OAUTH_TOKEN", token)') &&
+      credentialSource.includes("atelier-keychain-env-migration") &&
+      credentialSource.includes('vec![vec!["setup-token"], vec!["auth", "login", "--claudeai"]]') &&
+      credentialSource.includes("cache_claude_setup_token_from_output") &&
+      !credentialSource.includes("sync_claude_credentials_file_to_app_cache") &&
+      !credentialSource.includes("read_claude_oauth_credential_from_credentials_file") &&
+      !credentialSource.includes("refresh_claude_subscription_oauth_credential") &&
+      !credentialSource.includes("cache_claude_subscription_oauth_credential") &&
+      !credentialSource.includes("https://api.anthropic.com/v1/oauth/token"),
+    message: "Claude automation must use only the official setup-token bridge without refresh-token fan-in",
   },
   {
     ok:
-      credentialSource.includes("atelier_codex_cli_access") &&
-      credentialSource.includes("scrub_staged_codex_access_from_hermes"),
-    message: "Hermes Codex access staging must be marked and scrubbed after execution",
+      !credentialSource.includes("stage_codex_access_for_hermes") &&
+      !credentialSource.includes("scrub_staged_codex_access_from_hermes") &&
+      !credentialSource.includes('home_file(&[".hermes", "auth.json"])') &&
+      !libSource.includes("scrub_staged_codex_access_from_hermes") &&
+      !windowsProviderSmokeSource.includes("auth.json") &&
+      windowsProviderSmokeSource.includes('"auth", "status", "openai-codex"'),
+    message: "Atelier must not read, write, or delete Hermes provider authentication state",
+  },
+  {
+    ok:
+      libSource.includes("sensitive_home_path") &&
+      libSource.includes("configured_hermes_roots") &&
+      libSource.includes('std::env::var_os("HERMES_HOME")') &&
+      libSource.includes('std::env::var_os("LOCALAPPDATA")') &&
+      libSource.includes('basename.starts_with("auth.json.")') &&
+      libSource.includes('relative.starts_with("mcp-tokens/")') &&
+      libSource.includes('".codex/auth.json"') &&
+      libSource.includes('".claude/.credentials.json"') &&
+      libSource.includes('return Some("Hermes provider credential")'),
+    message: "Generic file preview must block provider credential stores after canonicalization",
   },
   {
     ok:
@@ -40,8 +276,375 @@ const sourceInvariants = [
     message: "Atelier must not read Claude Code's external macOS Keychain item",
   },
   {
-    ok: credentialSource.includes('vec!["login", "--device-auth"]'),
-    message: "Codex subscription login must keep the cross-platform device authorization path",
+    ok:
+      credentialSource.includes('vec!["login", "--device-auth"]') &&
+      credentialSource.includes(
+        'const CODEX_DEVICE_AUTH_URL: &str = "https://auth.openai.com/codex/device"',
+      ) &&
+      credentialSource.includes("oauth_login_url_hint") &&
+      credentialSource.includes("hinted_browser_opened"),
+    message: "Codex subscription login must pre-open the validated cross-platform device authorization path",
+  },
+  {
+    ok:
+      windowsProviderSmokeSource.includes('"login", "--device-auth"') &&
+      windowsProviderSmokeSource.includes('"setup-token"') &&
+      windowsProviderSmokeSource.includes('ProcessStartInfo]::new()') &&
+      windowsProviderSmokeSource.includes('Properties.Name -contains "ArgumentList"') &&
+      windowsProviderSmokeSource.includes("EnvironmentVariables") &&
+      windowsProviderSmokeSource.includes("Stop-CapturedProcessTree") &&
+      windowsProviderSmokeSource.includes('System32\\taskkill.exe') &&
+      windowsProviderSmokeSource.includes("Resolve-CapturedTextTask") &&
+      windowsProviderSmokeSource.includes("Get-Command $Command -All") &&
+      windowsProviderSmokeSource.includes('if ($extension -eq ".ps1")') &&
+      windowsProviderSmokeSource.includes("Process-tree timeout self-test") &&
+      windowsProviderSmokeSource.includes('Remove-Item Env:BROWSER') &&
+      windowsProviderSmokeSource.includes("authenticated after device login") &&
+      windowsProviderSmokeSource.includes("authenticated after setup-token login") &&
+      windowsProviderSmokeSource.includes("did not prove Atelier's native browser handoff and URL fallback") &&
+      windowsProviderSmokeSource.includes("Get-BrowserProcessRecords") &&
+      windowsProviderSmokeSource.includes("Wait-BrowserProcessEvidence") &&
+      windowsProviderSmokeSource.includes("RequireBrowserProcessEvidence") &&
+      windowsProviderSmokeSource.includes("RequireVisibleBrowserWindowEvidence") &&
+      workflowSource.includes("-ProbeBrowserHandoff") &&
+      workflowSource.includes("-RequireBrowserProcessEvidence") &&
+      windowsProviderWorkflowSource.includes("timeout-minutes: 45") &&
+      windowsProviderWorkflowSource.includes('$scriptArgs = @("-File", "tools/windows-provider-smoke.ps1", "-Strict")') &&
+      windowsProviderSmokeSource.includes("authentication failed after login") &&
+      windowsProviderSmokeSource.includes("Get-AppxPackage") &&
+      windowsProviderSmokeSource.includes('Programs\\Atelier Agent\\Atelier.exe') &&
+      !windowsProviderSmokeSource.includes('@("/C", "codex", "login")') &&
+      !windowsProviderSmokeSource.includes('@("/C", "claude", "auth", "login"'),
+    message: "Windows provider smoke must mirror device-auth/setup-token, support PowerShell 5.1, and strictly verify final auth",
+  },
+  {
+    ok:
+      credentialSource.includes("open_oauth_browser_probe") &&
+      credentialSource.includes("provider_oauth_browser_probe") &&
+      libSource.includes("run_oauth_browser_probe") &&
+      mainSource.includes('"--atelier-oauth-browser-probe"') &&
+      mainSource.includes('"--atelier-oauth-open-url"') &&
+      mainSource.includes("run_oauth_browser_url") &&
+      libSource.includes("run_oauth_browser_url") &&
+      credentialSource.includes("open_oauth_browser_helper_url") &&
+      connectionsSource.includes("providerOauthBrowserProbe") &&
+      windowsProviderSmokeSource.includes('"Atelier native browser probe"') &&
+      windowsProviderSmokeSource.includes('"--atelier-oauth-browser-probe", "codex"') &&
+      windowsProviderSmokeSource.includes('"Atelier signed browser helper probe"') &&
+      windowsProviderSmokeSource.includes('"--atelier-oauth-open-url", "https://auth.openai.com/codex/device"'),
+    message: "Physical and in-app diagnostics must exercise Atelier's native browser handoff path",
+  },
+  {
+    ok:
+      libSource.includes("windows_smart_app_control_state") &&
+      libSource.includes("VerifiedAndReputablePolicyState") &&
+      libSource.includes("smart_app_control_state") &&
+      settingsSource.includes("installInfo.smart_app_control_state") &&
+      settingsSource.includes("installInfo.oauth_browser_handoff"),
+    message: "Installed runtime diagnostics must expose read-only Smart App Control and OAuth handoff state",
+  },
+  {
+    ok:
+      lifecycleSource.includes("AgentLifecyclePhase::Cancelled") &&
+      lifecycleSource.includes("if state.phase.is_terminal()"),
+    message: "Agent lifecycle must preserve explicit cancellation and exactly-once terminal state",
+  },
+  {
+    ok:
+      packageSource.includes('"smoke:session-runs"') &&
+      orcaFeatureGateSource.includes('"smoke:session-runs"') &&
+      sessionRunRegistrySource.includes("registry[sessionId] !== turnId") &&
+      sessionRunRegistrySource.includes('current === "stopped"') &&
+      sessionRunHookSource.includes("busyTurnIdsRef.current = next") &&
+      sessionRunSmokeSource.includes("independent sessions must run concurrently") &&
+      sessionRunSmokeSource.includes("a stale finalizer must not clear the live turn") &&
+      agentWorkspaceSource.includes("beginRunForSession(sessionId, turnId)") &&
+      agentWorkspaceSource.includes("finishRunForSession(sessionId, turnId)") &&
+      !agentWorkspaceSource.includes("interruptedTurnIdsRef") &&
+      !agentWorkspaceSource.includes("stoppedTurnIdsRef"),
+    message:
+      "Session runs must remain concurrent across sessions, exact-turn finalized, cancellation-prioritized, and release-gated",
+  },
+  {
+    ok:
+      packageSource.includes('"harness:parallel-agent"') &&
+      orcaFeatureGateSource.includes('"harness:parallel-agent"') &&
+      cargoSource.includes('features = ["protocol-asset", "test"]') &&
+      agentSource.includes("struct TestGajaeLaunchOverride") &&
+      agentSource.includes("parallel_fixture_turns_isolate_cancel_and_reap_process_trees") &&
+      cargoSource.includes('atelier-process-tree = { path = "crates/atelier-process-tree" }') &&
+      agentSource.includes("terminate_process_tree as terminate_agent_pid") &&
+      processTreeSource.includes("fn terminates_native_process_tree()") &&
+      agentSource.includes('env("ATELIER_TEST_AGENT_REQUEST", provider_prompt)') &&
+      parallelAgentHarnessSource.includes("session-run-registry-smoke.ts") &&
+      parallelAgentHarnessSource.includes("agent-fleet-smoke.ts") &&
+      parallelAgentHarnessSource.includes("agent_worktree::tests::") &&
+      parallelAgentHarnessSource.includes("shared Windows process-tree runtime E2E") &&
+      parallelAgentHarnessSource.includes("Windows Tauri adapter and worktree integration compile") &&
+      parallelAgentHarnessSource.includes("externalProviderCalls: 0"),
+    message:
+      "Parallel agent releases must run the offline three-turn adapter, cancellation, event-isolation, process-tree, and worktree harness",
+  },
+  {
+    ok:
+      packageSource.includes('"smoke:terminal-layout"') &&
+      (workflowSource.match(/npm run smoke:terminal-layout/g) || []).length >= 3 &&
+      terminalWorkspaceSource.includes("async function splitActiveTerminal(direction: TerminalSplitDirection)") &&
+      terminalWorkspaceSource.includes('setCodeLayout("grid")') &&
+      terminalWorkspaceSource.includes('e.code === "Backslash"') &&
+      terminalWorkspaceSource.includes('splitActiveTerminal("vertical")') &&
+      terminalWorkspaceSource.includes('splitActiveTerminal("horizontal")') &&
+      terminalWorkspaceSource.includes("updateTerminalSplitRatio") &&
+      terminalWorkspaceSource.includes("terminalSplitDivider") &&
+      terminalLayoutSource.includes("MIN_TERMINAL_SPLIT_RATIO") &&
+      terminalLayoutSource.includes("MAX_TERMINAL_SPLIT_RATIO") &&
+      terminalLayoutSource.includes("reconcileTerminalLayout") &&
+      terminalLayoutSource.includes("parseTerminalLayout"),
+    message: "Terminal workspace must preserve, restore, split, resize, and release-test its pane tree",
+  },
+  {
+    ok:
+      packageSource.includes('"smoke:agent-performance"') &&
+      (workflowSource.match(/npm run smoke:agent-performance/g) || []).length >= 3 &&
+      agentPerformanceSmokeSource.includes("elapsed-time updates must not rerender the entire workspace") &&
+      agentWorkspaceSource.includes("const AgentActivityView = React.memo") &&
+      !agentWorkspaceSource.includes("const [nowTickMs") &&
+      agentWorkspaceSource.includes("atelier-transcript-message flex min-w-0 gap-3") &&
+      indexCssSource.includes("content-visibility: auto"),
+    message:
+      "Agent workspace must keep keystrokes ref-backed, isolate elapsed-time ticks, and defer offscreen transcript rendering",
+  },
+  {
+    ok:
+      packageSource.includes('"smoke:diff-review"') &&
+      (workflowSource.match(/npm run smoke:diff-review/g) || []).length >= 3 &&
+      diffReviewSource.includes("parseUnifiedDiff") &&
+      diffReviewSource.includes("normalizeReviewAnnotations") &&
+      diffReviewSource.includes("reviewAnnotationMatchesLine") &&
+      diffReviewSource.includes("formatReviewAnnotationsPrompt") &&
+      agentWorkspaceSource.includes("reviewAnnotations?: ChangeReviewAnnotation[]") &&
+      agentWorkspaceSource.includes("saveLineReview") &&
+      agentWorkspaceSource.includes("sendLineReviews") &&
+      agentWorkspaceSource.includes("atelier-diff-line"),
+    message: "Change review must parse line numbers, persist bounded annotations, and release-test agent feedback",
+  },
+  {
+    ok:
+      packageSource.includes('"smoke:review-workflow"') &&
+      (workflowSource.match(/npm run smoke:review-workflow/g) || []).length >= 3 &&
+      reviewWorkflowSource.includes("RECEIPT_LIMIT") &&
+      reviewWorkflowSource.includes("normalizeReviewDispatchContext") &&
+      reviewWorkflowSource.includes("transitionReviewWorkflow") &&
+      reviewWorkflowSource.includes("finalizeInterruptedReviewWorkflow") &&
+      reviewWorkflowViewSource.includes("summary.pending === 0") &&
+      agentWorkspaceSource.includes("reviewRequest?: ReviewDispatchContext") &&
+      agentWorkspaceSource.includes("updateReviewWorkflowStatus"),
+    message: "Line review dispatches must be bounded, restart-safe, lifecycle-linked, and release-tested",
+  },
+  {
+    ok:
+      libSource.includes('"atelier-quick-open"') &&
+      libSource.includes('.accelerator("CmdOrCtrl+P")') &&
+      libSource.includes('app.emit("atelier://quick-open", ())') &&
+      /onQuickOpenRequested\((?:openQuickOpen|requestQuickOpen)\)/.test(agentWorkspaceSource),
+    message:
+      "Quick Open must retain both the native desktop accelerator path and the workspace event listener",
+  },
+  {
+    ok:
+      agentModelsSource.includes("codex_reasoning_levels") &&
+      agentModelsSource.includes("codex_model_requires_multi_agent_v2") &&
+      agentSource.includes('cmd.arg("--enable").arg("multi_agent_v2")') &&
+      agentModelsSource.includes('"low" | "medium" | "high" | "xhigh" | "max" | "ultra"') &&
+      agentHarnessSource.includes("requiresMultiAgentV2") &&
+      agentHarnessSource.includes('"multi_agent_v2"'),
+    message: "Codex adapters must map live model capabilities to native effort and collaboration runtime flags",
+  },
+  {
+    ok:
+      ptySupervisorSmokeSource.includes("parallelSessionCount = 3") &&
+      ptySupervisorSmokeSource.includes("parallelReconnect: true") &&
+      ptySupervisorSmokeSource.includes("did not survive reconnect"),
+    message: "Release PTY smoke must prove multiple hidden sessions survive fresh-client reconnects",
+  },
+  {
+    ok:
+      supervisorSource.includes('TcpListener::bind(("127.0.0.1", 0))') &&
+      supervisorSource.includes("token"),
+    message: "Detached PTY supervisor must stay loopback-only and token authenticated",
+  },
+  {
+    ok:
+      !worktreeSource.includes("reset --hard") &&
+      !worktreeSource.includes('arg("remove")') &&
+      !worktreeSource.includes("rm -rf"),
+    message: "Production worktree isolation must not delete, reset, or auto-remove user work",
+  },
+  {
+    ok:
+      worktreeSource.includes('env("GIT_INDEX_FILE", index)') &&
+      worktreeSource.includes('canonical_git_common_dir(&source_root)? != canonical_git_common_dir(&candidate_root)?') &&
+      worktreeSource.includes('&["apply", "--check", "--whitespace=nowarn", "-"]') &&
+      worktreeSource.includes("save_adoption_receipt") &&
+      !worktreeSource.includes('arg("merge")') &&
+      !worktreeSource.includes('arg("commit")'),
+    message:
+      "Candidate adoption must use an isolated index, verify repository identity and conflicts, retain a receipt, and never auto-merge or commit",
+  },
+  {
+    ok:
+      !openLoginBrowserSource.includes('Command::new("cmd.exe")') &&
+      credentialSource.includes("Launcher::LaunchUriAsync") &&
+      credentialSource.includes("RoInitialize") &&
+      credentialSource.includes("RO_INIT_SINGLETHREADED") &&
+      credentialSource.includes('name("atelier-oauth-browser-winrt".into())') &&
+      credentialSource.includes("ShellExecuteExW") &&
+      credentialSource.includes("CoInitializeEx") &&
+      credentialSource.includes("SEE_MASK_NOASYNC") &&
+      credentialSource.includes('name("atelier-oauth-browser-sta".into())') &&
+      credentialSource.includes("COINIT_APARTMENTTHREADED") &&
+      credentialSource.indexOf("windows_runtime_launch_url(url)") <
+        credentialSource.indexOf("windows_shell_execute_url(url)"),
+    message: "Windows OAuth browser handoff must prefer WinRT Launcher, retain the COM STA ShellExecute fallback, and avoid cmd.exe URL interpretation",
+  },
+  {
+    ok:
+      credentialSource.includes('command.env_remove("BROWSER")') &&
+      credentialSource.includes('cmd.env_remove("BROWSER")') &&
+      credentialSource.includes('PathBuf::from("/usr/bin/open")') &&
+      !credentialSource.includes('join("atelier-oauth-browser")') &&
+      !credentialSource.includes('join("open-url.sh")'),
+    message: "Windows OAuth must leave the provider browser unmodified while Unix uses trusted system launchers",
+  },
+  {
+    ok: (() => {
+      const handoff = connectionsSource
+        .split("async function openExternalUrl", 2)[1]
+        ?.split("export const ConnectionsPanel", 1)[0] || "";
+      const nativeIndex = handoff.indexOf("await providerOpenOauthLoginUrl(provider, url)");
+      const fallbackIndex = handoff.indexOf('@tauri-apps/plugin-shell');
+      return nativeIndex >= 0
+        && fallbackIndex > nativeIndex
+        && handoff.includes('parsed.protocol === "https:"')
+        && handoff.includes('host.endsWith(`.${root}`)')
+        && handoff.includes('["claude.ai", "claude.com", "anthropic.com"]')
+        && handoff.includes('["openai.com", "chatgpt.com"]');
+    })(),
+    message: "Packaged OAuth browser handoff must validate provider HTTPS hosts, try native open first, then use only the trusted Tauri fallback",
+  },
+  {
+    ok:
+      cargoSource.includes("store-build = []") &&
+      libSource.includes('#[cfg(not(feature = "store-build"))]') &&
+      libSource.includes('github_updater_available: cfg!(not(feature = "store-build"))') &&
+      storeBuildSource.includes("--features store-build") &&
+      packageSource.includes("--features store-build --bundles msi"),
+    message: "Microsoft Store builds must compile without the GitHub updater plugin",
+  },
+  {
+    ok:
+      connectionsSource.includes("openLoginUrlWithRetry") &&
+      connectionsSource.includes("openingLoginUrlsRef") &&
+      connectionsSource.includes("attempt.count >= 3") &&
+      connectionsSource.includes("if (nextUrl && loginState.browser_opened)") &&
+      connectionsSource.includes("if (result.browser_opened) openedLoginUrlsRef.current") &&
+      connectionsSource.includes("else void openLoginUrlWithRetry"),
+    message:
+      "OAuth browser handoff must preserve native success, retry bounded failures, and prevent concurrent duplicate opens",
+  },
+  {
+    ok: unpinnedWorkflowUses.length === 0,
+    message: `Release workflow actions must be pinned to full commits (${unpinnedWorkflowUses.join(", ")})`,
+  },
+  {
+    ok:
+      !workflowSource.includes("npm install --legacy-peer-deps") &&
+      (workflowSource.match(/npm ci --legacy-peer-deps/g) || []).length >= 4,
+    message: "Release workflows must install the locked npm dependency graph with npm ci",
+  },
+  {
+    ok:
+      packageSource.includes('"smoke:updater-contract"') &&
+      workflowSource.includes("npm run smoke:updater-contract"),
+    message: "Release workflows must verify the signed Windows updater platform contract",
+  },
+  {
+    ok:
+      !releaseWorkflowSource.includes("workflow_dispatch:") &&
+      releaseWorkflowSource.includes('tags:\n      - "v*"') &&
+      releaseWorkflowSource.includes("releaseDraft: true") &&
+      !releaseWorkflowSource.includes("releaseDraft: false") &&
+      releaseWorkflowSource.includes("seal-release-candidate.mjs") &&
+      releaseWorkflowSource.includes("release-manifest.json") &&
+      releaseCandidateSealSource.includes('status: "signed-draft-candidate"') &&
+      releaseCandidateSealSource.includes('releaseChannel: "github-draft"') &&
+      releaseCandidateVerifySource.includes('manifest.status !== "signed-draft-candidate"') &&
+      releaseCandidateVerifySource.includes("signature changed after sealing"),
+    message:
+      "Tag builds must remain private drafts until the complete signed candidate manifest is sealed",
+  },
+  {
+    ok:
+      publishReleaseWorkflowSource.includes("workflow_dispatch:") &&
+      publishReleaseWorkflowSource.includes("environment: production-release") &&
+      publishReleaseWorkflowSource.includes('test "$APPROVAL" = "PUBLISH $RELEASE_TAG"') &&
+      publishReleaseWorkflowSource.includes("validate-publish-evidence.mjs") &&
+      publishReleaseWorkflowSource.includes("physical_gate_run_id") &&
+      publishReleaseWorkflowSource.includes("windows-physical-release-gate.yml") &&
+      publishReleaseWorkflowSource.includes("run.head_sha") &&
+      publishReleaseWorkflowSource.includes("final-candidate-assets") &&
+      publishReleaseWorkflowSource.includes("CANDIDATE_MANIFEST_SHA") &&
+      publishReleaseWorkflowSource.includes('--repo "$RELEASE_OWNER/$RELEASE_REPO"') &&
+      publishReleaseWorkflowSource.includes("--draft=false") &&
+      (workflowSource.match(/--draft=false/g) || []).length === 1 &&
+      publishEvidenceSource.includes("upgradePersistenceProved") &&
+      publishEvidenceSource.includes("visibleWindow") &&
+      publishEvidenceSource.includes("claudeAuthOk") &&
+      publishEvidenceSource.includes("codexAuthOk") &&
+      publishEvidenceSource.includes("PHYSICAL_GATE_RUN_ID") &&
+      publishEvidenceSource.includes("expected exactly one Windows provider receipt") &&
+      publishEvidenceSource.includes("package GitHub run ID") &&
+      publishEvidenceSource.includes('["nsis", nsisAsset]') &&
+      publishEvidenceSource.includes("${kind} package hash") &&
+      publishEvidenceSource.includes("provider/candidate installed executable path"),
+    message:
+      "Only the approval-gated publisher may make a release public after exact physical evidence validation",
+  },
+  {
+    ok:
+      releaseWorkflowSource.includes("TAURI_SIGNING_PRIVATE_KEY") &&
+      releaseWorkflowSource.includes("TAURI_SIGNING_PRIVATE_KEY_PASSWORD") &&
+      releaseWorkflowSource.includes("codesign --verify --deep --strict") &&
+      releaseWorkflowSource.includes("Authority=Developer ID Application:") &&
+      releaseWorkflowSource.includes("spctl --assess --type execute") &&
+      releaseWorkflowSource.includes("hdiutil attach") &&
+      releaseWorkflowSource.includes('ditto "$mount_root/Atelier.app"') &&
+      releaseWorkflowSource.includes('tools/renderer-ready-smoke.sh "$installed_app"') &&
+      (releaseWorkflowSource.match(/xcrun stapler validate/g) || []).length >= 3,
+    message:
+      "macOS candidates must prove updater signing, Developer ID, Gatekeeper, and stapled notarization receipts",
+  },
+  {
+    ok:
+      windowsPhysicalGateSource.includes('RELEASE_OWNER: ${{ vars.RELEASE_OWNER') &&
+      windowsPhysicalGateSource.includes('"-RunId", $env:GITHUB_RUN_ID') &&
+      windowsPhysicalGateSource.includes('"-LogDir", "artifacts/windows-provider-current"') &&
+      windowsPhysicalGateSource.includes("windows-package-smoke.json") &&
+      !windowsPhysicalGateSource.includes("collect-windows-provider-evidence.ps1") &&
+      releaseCandidateGateSource.includes("githubRunId = $RunId") &&
+      windowsProviderSmokeSource.includes("githubRunId = $RunId") &&
+      windowsPackageSmokeSource.includes("Find-7Zip") &&
+      windowsPackageSmokeSource.includes('Assert-AtelierPayload -Root $extractRoot -Kind "NSIS"'),
+    message:
+      "Windows publication evidence must be run-local, bind the GitHub run ID, and inspect signed MSI and NSIS payloads",
+  },
+  {
+    ok:
+      packageSource.includes('"smoke:release-candidate"') &&
+      packageSource.includes('"smoke:publish-evidence"') &&
+      (releaseWorkflowSource.match(/npm run smoke:release-candidate/g) || []).length >= 2 &&
+      (releaseWorkflowSource.match(/npm run smoke:publish-evidence/g) || []).length >= 2,
+    message: "macOS and Windows release gates must test candidate sealing and publication evidence",
   },
 ];
 for (const invariant of sourceInvariants) {
@@ -50,7 +653,7 @@ for (const invariant of sourceInvariants) {
     process.exit(1);
   }
 }
-console.log("release credential boundary check: no long-lived cross-provider token fan-out");
+console.log("release credential boundary check: provider-owned auth with setup-token-only automation bridge");
 
 function run(command, args, options = {}) {
   return spawnSync(command, args, {

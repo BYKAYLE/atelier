@@ -1,10 +1,10 @@
 [package]
 name = "atelier"
-version = "0.1.81"
+version = "0.2.12"
 description = "Atelier — 이미지 붙여넣기가 되는 GUI 터미널"
 authors = ["BYKAYLE <indra850@gmail.com>"]
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.77.2"
 license = "MIT"
 repository = "https://github.com/BYKAYLE/atelier"
 homepage = "https://github.com/BYKAYLE/atelier"
@@ -18,6 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+atelier-process-tree = { path = "crates/atelier-process-tree" }
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
@@ -25,9 +26,11 @@ tauri-plugin-fs = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 portable-pty = "0.9"
+vt100 = "0.15"
 tokio = { version = "1", features = ["full"] }
 bytes = "1"
 anyhow = "1"
@@ -41,13 +44,45 @@ uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
+sha2 = "0.10"
+axum = "0.8"
+axum-server = { version = "0.7.2", features = ["tls-rustls"] }
+rcgen = "0.13.2"
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.61.3", features = ["Foundation", "System", "Win32_System_WinRT"] }
+
+[dev-dependencies]
+tauri = { version = "2", features = ["protocol-asset", "test"] }
 
 [features]
-default = ["custom-protocol"]
+default = [
+  "custom-protocol",
+  "orca-atelier-cli",
+  "orca-github-workflows",
+  "orca-linear-workflows",
+  "orca-ssh-workspaces",
+  "orca-provider-usage",
+  "orca-remote-followup",
+  "orca-mobile-control",
+  "orca-computer-use",
+  "orca-dev-services",
+  "orca-automations",
+]
 custom-protocol = ["tauri/custom-protocol"]
+store-build = []
+orca-atelier-cli = []
+orca-github-workflows = []
+orca-linear-workflows = []
+orca-ssh-workspaces = []
+orca-provider-usage = []
+orca-remote-followup = []
+orca-mobile-control = ["orca-remote-followup"]
+orca-computer-use = []
+orca-dev-services = []
+orca-automations = []

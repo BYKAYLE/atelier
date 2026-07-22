@@ -1,11 +1,74 @@
 mod agent;
+mod agent_changes;
+mod agent_editor_diagnostics;
+mod agent_git;
+mod agent_lifecycle;
+mod agent_models;
+mod agent_plugins;
+mod agent_preview;
+mod agent_process;
+mod agent_quick_open;
+mod agent_registry;
+mod agent_rich_preview;
+mod agent_worktree;
+#[cfg(feature = "orca-atelier-cli")]
+mod atelier_cli;
+#[cfg(feature = "orca-automations")]
+mod automations;
 mod clipboard;
+#[cfg(feature = "orca-computer-use")]
+mod computer_use;
+mod control_plane;
 mod credentials;
+#[cfg(feature = "orca-dev-services")]
+mod dev_services;
+#[cfg(feature = "orca-github-workflows")]
+mod github_workflows;
+#[cfg(feature = "orca-linear-workflows")]
+mod linear_workflows;
+#[cfg(feature = "orca-mobile-control")]
+mod mobile_control;
+#[cfg(feature = "orca-provider-usage")]
+mod provider_usage;
 mod pty;
+mod pty_output;
+mod pty_supervisor;
+#[cfg(feature = "orca-remote-followup")]
+mod remote_followup;
+mod runtime_receipt;
+#[cfg(feature = "orca-ssh-workspaces")]
+mod ssh_workspaces;
 mod stella;
+mod subscription_usage;
 
 use serde::Serialize;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+
+pub fn run_pty_supervisor() -> Result<(), String> {
+    pty_supervisor::run_from_env()
+}
+
+pub fn run_oauth_browser_probe(provider: &str) -> Result<(), String> {
+    credentials::open_oauth_browser_probe(provider)
+}
+
+pub fn run_oauth_browser_url(url: &str) -> Result<(), String> {
+    credentials::open_oauth_browser_helper_url(url)
+}
+
+pub fn run_renderer_ready_probe() -> Result<(), String> {
+    runtime_receipt::run_renderer_ready_probe()
+}
+
+#[cfg(feature = "orca-atelier-cli")]
+pub fn run_atelier_cli(args: &[String]) -> Option<Result<(), String>> {
+    atelier_cli::try_run(args)
+}
+
+#[cfg(not(feature = "orca-atelier-cli"))]
+pub fn run_atelier_cli(_args: &[String]) -> Option<Result<(), String>> {
+    None
+}
 
 #[cfg(target_os = "windows")]
 fn configure_background_command(command: &mut std::process::Command) {
@@ -17,6 +80,7 @@ fn configure_background_command(command: &mut std::process::Command) {
 
 fn reveal_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
+        log::debug!("revealing existing main window");
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
@@ -32,6 +96,7 @@ fn reveal_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         .build()
     {
         Ok(window) => {
+            log::debug!("created missing main window");
             let _ = window.center();
             let _ = window.show();
             let _ = window.set_focus();
@@ -42,7 +107,7 @@ fn reveal_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 
 /// 진단 파일들이 저장되는 비공개 앱 캐시 디렉토리. macOS는 ~/Library/Caches/com.atelier.app.
 /// /tmp 대신 사용자 전용 디렉토리로 옮겨 world-readable 노출을 차단한다.
-fn app_cache_dir() -> std::path::PathBuf {
+pub(crate) fn app_cache_dir() -> std::path::PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     #[cfg(target_os = "macos")]
     let dir = std::path::PathBuf::from(&home).join("Library/Caches/com.atelier.app");
@@ -64,7 +129,7 @@ fn app_cache_dir() -> std::path::PathBuf {
 
 /// 파일 권한 0600 (소유자만 read/write)로 강제 설정.
 #[cfg(unix)]
-fn chmod_600(path: &std::path::Path) {
+pub(crate) fn chmod_600(path: &std::path::Path) {
     use std::os::unix::fs::PermissionsExt;
     if let Ok(meta) = std::fs::metadata(path) {
         let mut p = meta.permissions();
@@ -73,7 +138,7 @@ fn chmod_600(path: &std::path::Path) {
     }
 }
 #[cfg(not(unix))]
-fn chmod_600(_: &std::path::Path) {}
+pub(crate) fn chmod_600(_: &std::path::Path) {}
 
 #[tauri::command]
 async fn dump_debug(content: String) -> std::result::Result<(), String> {
@@ -96,6 +161,81 @@ struct DirEntry {
 struct RuntimeInstallInfo {
     exe_path: String,
     windows_store_like: bool,
+    github_updater_available: bool,
+    app_version: String,
+    platform: String,
+    architecture: String,
+    smart_app_control_state: Option<String>,
+    oauth_browser_handoff: String,
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_store_like_install(exe_path: &str) -> bool {
+    if cfg!(feature = "store-build") {
+        return true;
+    }
+    let lower = exe_path.to_ascii_lowercase().replace('/', "\\");
+    lower.contains("\\windowsapps\\") || lower.contains("atelieragent")
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn smart_app_control_state_label(value: u32) -> String {
+    match value {
+        0 => "Off".to_string(),
+        1 => "On".to_string(),
+        2 => "Evaluation".to_string(),
+        other => format!("Unknown({other})"),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_smart_app_control_state() -> Option<String> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::System::Registry::{
+        RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD,
+    };
+
+    fn wide(value: &str) -> Vec<u16> {
+        OsStr::new(value).encode_wide().chain(Some(0)).collect()
+    }
+
+    let subkey = wide(r"SYSTEM\CurrentControlSet\Control\CI\Policy");
+    let value_name = wide("VerifiedAndReputablePolicyState");
+    let mut value = 0_u32;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            subkey.as_ptr(),
+            value_name.as_ptr(),
+            RRF_RT_REG_DWORD,
+            std::ptr::null_mut(),
+            std::ptr::addr_of_mut!(value).cast(),
+            &mut size,
+        )
+    };
+    (status == 0).then(|| smart_app_control_state_label(value))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn windows_smart_app_control_state() -> Option<String> {
+    None
+}
+
+fn oauth_browser_handoff_contract() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "COM STA / ShellExecuteExW"
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "/usr/bin/open"
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        "xdg-open"
+    }
 }
 
 #[tauri::command]
@@ -104,36 +244,211 @@ async fn runtime_install_info() -> std::result::Result<RuntimeInstallInfo, Strin
     let exe_path = exe.to_string_lossy().into_owned();
 
     #[cfg(target_os = "windows")]
-    let windows_store_like = {
-        let lower = exe_path.to_ascii_lowercase().replace('/', "\\");
-        lower.contains("\\windowsapps\\") || lower.contains("atelieragent")
-    };
+    let windows_store_like = windows_store_like_install(&exe_path);
 
     #[cfg(not(target_os = "windows"))]
-    let windows_store_like = false;
+    let windows_store_like = cfg!(feature = "store-build");
 
     Ok(RuntimeInstallInfo {
         exe_path,
         windows_store_like,
+        github_updater_available: cfg!(not(feature = "store-build")),
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        platform: std::env::consts::OS.to_string(),
+        architecture: std::env::consts::ARCH.to_string(),
+        smart_app_control_state: windows_smart_app_control_state(),
+        oauth_browser_handoff: oauth_browser_handoff_contract().to_string(),
     })
 }
 
-/// 사용자 HOME 디렉토리를 root로 간주하는 sandbox. 입력 경로가 HOME 하위가 아니면 거부.
+#[cfg(test)]
+mod runtime_install_tests {
+    use super::{smart_app_control_state_label, windows_store_like_install};
+
+    #[test]
+    fn maps_smart_app_control_registry_contract() {
+        assert_eq!(smart_app_control_state_label(0), "Off");
+        assert_eq!(smart_app_control_state_label(1), "On");
+        assert_eq!(smart_app_control_state_label(2), "Evaluation");
+        assert_eq!(smart_app_control_state_label(9), "Unknown(9)");
+    }
+
+    #[test]
+    fn detects_windows_store_paths_and_legacy_store_name() {
+        assert!(windows_store_like_install(
+            r"C:\\Program Files\\WindowsApps\\BYKAYLE.Atelier_1.0.0.0_x64__abc\\Atelier.exe"
+        ));
+        assert!(windows_store_like_install(
+            r"C:\\Program Files\\AtelierAgent\\Atelier.exe"
+        ));
+    }
+
+    #[cfg(not(feature = "store-build"))]
+    #[test]
+    fn normal_windows_install_is_not_store_like() {
+        assert!(!windows_store_like_install(
+            r"C:\\Program Files\\Atelier\\Atelier.exe"
+        ));
+    }
+
+    #[cfg(feature = "store-build")]
+    #[test]
+    fn store_feature_marks_every_install_store_like() {
+        assert!(windows_store_like_install(
+            r"C:\\Program Files\\Atelier\\Atelier.exe"
+        ));
+    }
+}
+
+fn canonical_home_path() -> std::result::Result<std::path::PathBuf, String> {
+    let home = std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .or_else(|| std::env::var_os("USERPROFILE").filter(|value| !value.is_empty()))
+        .ok_or_else(|| "HOME/USERPROFILE not set".to_string())?;
+    std::fs::canonicalize(&home).map_err(|e| format!("canonicalize home: {e}"))
+}
+
+/// 사용자 홈 디렉토리를 root로 간주하는 sandbox. 입력 경로가 홈 하위가 아니면 거부.
 /// symlink는 canonicalize 결과로 평가되어 외부로 탈출 불가.
 fn sandbox_path(input: &str) -> std::result::Result<std::path::PathBuf, String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
-    let home_c = std::fs::canonicalize(&home).map_err(|e| format!("canonicalize HOME: {e}"))?;
+    let home_c = canonical_home_path()?;
     let target = if input.is_empty() {
-        home.clone()
+        home_c.clone()
     } else {
-        input.to_string()
+        std::path::PathBuf::from(input)
     };
-    let target_c =
-        std::fs::canonicalize(&target).map_err(|e| format!("canonicalize {target}: {e}"))?;
+    let target_c = std::fs::canonicalize(&target)
+        .map_err(|e| format!("canonicalize {}: {e}", target.display()))?;
     if !target_c.starts_with(&home_c) {
-        return Err(format!("sandbox violation: {target} is outside HOME"));
+        return Err(format!(
+            "sandbox violation: {} is outside the user home",
+            target.display()
+        ));
     }
     Ok(target_c)
+}
+
+fn normalized_path_for_match(path: &std::path::Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_ascii_lowercase()
+}
+
+fn configured_hermes_roots(home: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut roots = vec![
+        home.join(".hermes"),
+        home.join("AppData").join("Local").join("hermes"),
+    ];
+
+    if let Some(configured) = std::env::var_os("HERMES_HOME").filter(|value| !value.is_empty()) {
+        roots.push(std::path::PathBuf::from(configured));
+    }
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA").filter(|value| !value.is_empty())
+    {
+        roots.push(std::path::PathBuf::from(local_app_data).join("hermes"));
+    }
+
+    for root in &mut roots {
+        if root.is_relative() {
+            *root = home.join(&*root);
+        }
+        if let Ok(canonical) = std::fs::canonicalize(&*root) {
+            *root = canonical;
+        }
+    }
+    roots.sort_by_key(|root| normalized_path_for_match(root));
+    roots.dedup_by(|left, right| {
+        normalized_path_for_match(left) == normalized_path_for_match(right)
+    });
+    roots
+}
+
+fn hermes_credential_relative_path(relative: &str) -> bool {
+    let relative = relative.trim_matches('/');
+    let basename = relative.rsplit('/').next().unwrap_or(relative);
+
+    relative == "auth"
+        || relative.starts_with("auth/")
+        || relative == "mcp-tokens"
+        || relative.starts_with("mcp-tokens/")
+        || basename == "auth.json"
+        || basename.starts_with("auth.json.")
+        || matches!(
+            basename,
+            "auth.lock" | ".env" | ".anthropic_oauth.json" | "webhook_subscriptions.json"
+        )
+}
+
+fn sensitive_home_path_with_hermes_roots(
+    home: &std::path::Path,
+    resolved: &std::path::Path,
+    hermes_roots: &[std::path::PathBuf],
+) -> Option<&'static str> {
+    let relative = resolved.strip_prefix(home).ok()?;
+    let normalized = relative
+        .iter()
+        .map(|part| part.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+        .to_ascii_lowercase();
+
+    const BLOCKED_DIRECTORIES: &[&str] = &[
+        ".ssh",
+        ".gnupg",
+        ".aws",
+        ".azure",
+        ".config/gcloud",
+        "library/keychains",
+    ];
+    for blocked in BLOCKED_DIRECTORIES {
+        if normalized == *blocked || normalized.starts_with(&format!("{blocked}/")) {
+            return Some(blocked);
+        }
+    }
+
+    const BLOCKED_FILES: &[&str] = &[
+        ".docker/config.json",
+        ".kube/config",
+        ".codex/auth.json",
+        ".claude/.credentials.json",
+        ".config/gh/hosts.yml",
+        ".npmrc",
+        ".pypirc",
+        ".netrc",
+        ".git-credentials",
+    ];
+    for blocked in BLOCKED_FILES {
+        if normalized == *blocked {
+            return Some(blocked);
+        }
+    }
+
+    for blocked in [".codex/auth.json", ".claude/.credentials.json"] {
+        if normalized.starts_with(&format!("{blocked}.")) {
+            return Some("provider credential backup");
+        }
+    }
+
+    let resolved_normalized = normalized_path_for_match(resolved);
+    for root in hermes_roots {
+        let root_normalized = normalized_path_for_match(root);
+        let Some(relative) = resolved_normalized
+            .strip_prefix(&format!("{root_normalized}/"))
+            .or_else(|| (resolved_normalized == root_normalized).then_some(""))
+        else {
+            continue;
+        };
+        if hermes_credential_relative_path(relative) {
+            return Some("Hermes provider credential");
+        }
+    }
+
+    None
+}
+
+fn sensitive_home_path(home: &std::path::Path, resolved: &std::path::Path) -> Option<&'static str> {
+    sensitive_home_path_with_hermes_roots(home, resolved, &configured_hermes_roots(home))
 }
 
 /// 디렉토리 내용을 JS에 전달. 숨김 파일 제외, 디렉토리가 이름순으로 상단.
@@ -167,23 +482,111 @@ async fn list_dir(path: String) -> std::result::Result<Vec<DirEntry>, String> {
     Ok(out)
 }
 
-/// 텍스트 파일 읽기. 상한 2MB. HOME 외부 sandbox 거부 + 민감 경로(.ssh/.gnupg/Keychain 등) 블랙리스트.
+/// 작업 폴더 안의 파일을 빠르게 찾는다. 대형 생성 디렉터리와 숨김 폴더는
+/// 기본 제외하고 결과/방문 수를 제한해 renderer 입력이 시스템을 막지 않게 한다.
+#[tauri::command]
+async fn search_workspace_files(
+    root: String,
+    query: String,
+    max_results: Option<usize>,
+) -> std::result::Result<Vec<DirEntry>, String> {
+    use std::collections::VecDeque;
+
+    let resolved_root = sandbox_path(&root)?;
+    if !resolved_root.is_dir() {
+        return Err("search_workspace_files: root is not a directory".to_string());
+    }
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    const SKIP_DIRECTORIES: &[&str] = &[
+        ".git",
+        ".next",
+        ".turbo",
+        "node_modules",
+        "target",
+        "dist",
+        "build",
+        "out",
+        "vendor",
+    ];
+    const MAX_VISITED: usize = 20_000;
+    let limit = max_results.unwrap_or(80).clamp(1, 200);
+    let mut queue = VecDeque::from([resolved_root.clone()]);
+    let mut visited = 0usize;
+    let mut matches = Vec::new();
+
+    while let Some(directory) = queue.pop_front() {
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            visited += 1;
+            if visited > MAX_VISITED || matches.len() >= limit {
+                break;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(_) => continue,
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                if !SKIP_DIRECTORIES.contains(&name.as_str()) {
+                    queue.push_back(entry.path());
+                }
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+
+            let entry_path = entry.path();
+            let relative = entry_path
+                .strip_prefix(&resolved_root)
+                .unwrap_or(entry_path.as_path())
+                .to_string_lossy()
+                .to_lowercase();
+            if !relative.contains(&needle) {
+                continue;
+            }
+            let size = entry.metadata().map(|meta| meta.len()).unwrap_or(0);
+            matches.push(DirEntry {
+                name,
+                path: entry_path.to_string_lossy().into_owned(),
+                is_dir: false,
+                size,
+            });
+        }
+        if visited > MAX_VISITED || matches.len() >= limit {
+            break;
+        }
+    }
+
+    matches.sort_by(|left, right| {
+        left.name
+            .to_lowercase()
+            .cmp(&right.name.to_lowercase())
+            .then_with(|| left.path.to_lowercase().cmp(&right.path.to_lowercase()))
+    });
+    Ok(matches)
+}
+
+/// 텍스트 파일 읽기. 상한 2MB. HOME 외부 sandbox와 공급자 자격증명 경로를 거부.
 #[tauri::command]
 async fn read_text_file(path: String) -> std::result::Result<String, String> {
     let resolved = sandbox_path(&path)?;
-    // 민감 디렉토리/파일 블랙리스트. HOME 하위여도 이건 차단.
-    let banned = [
-        ".ssh",
-        ".gnupg",
-        ".aws",
-        ".docker/config.json",
-        "Library/Keychains",
-    ];
-    let s = resolved.to_string_lossy();
-    for b in &banned {
-        if s.contains(b) {
-            return Err(format!("blocked sensitive path: {b}"));
-        }
+    let home_c = canonical_home_path()?;
+    if let Some(blocked) = sensitive_home_path(&home_c, &resolved) {
+        return Err(format!("blocked sensitive path: {blocked}"));
     }
     let meta = std::fs::metadata(&resolved).map_err(|e| format!("stat: {e}"))?;
     if meta.len() > 2 * 1024 * 1024 {
@@ -192,74 +595,244 @@ async fn read_text_file(path: String) -> std::result::Result<String, String> {
     std::fs::read_to_string(&resolved).map_err(|e| format!("read_text_file: {e}"))
 }
 
+/// 텍스트 파일 저장. HOME sandbox/자격증명 차단에 더해 활성 작업 루트
+/// 밖으로 쓰지 못하게 하고 같은 디렉터리의 임시 파일로 원자 교체한다.
+#[tauri::command]
+async fn write_text_file(
+    root: String,
+    path: String,
+    contents: String,
+) -> std::result::Result<(), String> {
+    const MAX_TEXT_BYTES: usize = 2 * 1024 * 1024;
+    if contents.len() > MAX_TEXT_BYTES {
+        return Err(format!("file too large: {} bytes", contents.len()));
+    }
+
+    let resolved_root = sandbox_path(&root)?;
+    if !resolved_root.is_dir() {
+        return Err("write_text_file: workspace root is not a directory".to_string());
+    }
+    let resolved = sandbox_path(&path)?;
+    if !resolved.starts_with(&resolved_root) {
+        return Err("write_text_file: target is outside the active workspace".to_string());
+    }
+    let home_c = canonical_home_path()?;
+    if let Some(blocked) = sensitive_home_path(&home_c, &resolved) {
+        return Err(format!("blocked sensitive path: {blocked}"));
+    }
+    let meta = std::fs::metadata(&resolved).map_err(|e| format!("stat: {e}"))?;
+    if !meta.is_file() {
+        return Err("write_text_file: target is not a regular file".to_string());
+    }
+
+    #[cfg(windows)]
+    std::fs::write(&resolved, contents.as_bytes()).map_err(|e| format!("write_text_file: {e}"))?;
+
+    #[cfg(not(windows))]
+    {
+        let parent = resolved
+            .parent()
+            .ok_or_else(|| "write_text_file: target has no parent directory".to_string())?;
+        let file_name = resolved
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| "write_text_file: invalid file name".to_string())?;
+        let temp_path = parent.join(format!(".{file_name}.atelier-save-{}", std::process::id()));
+
+        std::fs::write(&temp_path, contents.as_bytes())
+            .map_err(|e| format!("write_text_file temp: {e}"))?;
+        if let Err(error) = std::fs::set_permissions(&temp_path, meta.permissions()) {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(format!("write_text_file permissions: {error}"));
+        }
+        if let Err(error) = std::fs::rename(&temp_path, &resolved) {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(format!("write_text_file replace: {error}"));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod sensitive_path_tests {
+    use super::{sensitive_home_path, sensitive_home_path_with_hermes_roots};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn blocks_provider_and_shell_credential_paths() {
+        let home = Path::new("/Users/example");
+        for path in [
+            "/Users/example/.hermes/auth.json",
+            "/Users/example/.hermes/auth.json.corrupt",
+            "/Users/example/.hermes/profiles/coder/auth.json",
+            "/Users/example/.hermes/.env",
+            "/Users/example/.hermes/auth/google_oauth.json",
+            "/Users/example/.hermes/mcp-tokens/github.json",
+            "/Users/example/AppData/Local/hermes/auth.json",
+            "/Users/example/.codex/auth.json",
+            "/Users/example/.codex/auth.json.backup",
+            "/Users/example/.claude/.credentials.json",
+            "/Users/example/.claude/.credentials.json.backup",
+            "/Users/example/.ssh/id_ed25519",
+            "/Users/example/.config/gh/hosts.yml",
+            "/Users/example/.npmrc",
+        ] {
+            assert!(
+                sensitive_home_path(home, Path::new(path)).is_some(),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn blocks_credentials_under_configured_hermes_root() {
+        let home = Path::new("/Users/example");
+        let roots = vec![PathBuf::from(
+            "/Users/example/Library/Application Support/Atelier/Hermes",
+        )];
+        for path in [
+            "/Users/example/Library/Application Support/Atelier/Hermes/auth.json",
+            "/Users/example/Library/Application Support/Atelier/Hermes/auth.json.corrupt",
+            "/Users/example/Library/Application Support/Atelier/Hermes/mcp-tokens/github.json",
+        ] {
+            assert!(
+                sensitive_home_path_with_hermes_roots(home, Path::new(path), &roots).is_some(),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn allows_project_files_with_generic_auth_names() {
+        let home = Path::new("/Users/example");
+        for path in [
+            "/Users/example/Service/app/auth.json",
+            "/Users/example/Service/app/.env.example",
+            "/Users/example/.hermes/skills/research/SKILL.md",
+        ] {
+            assert!(
+                sensitive_home_path(home, Path::new(path)).is_none(),
+                "{path}"
+            );
+        }
+    }
+}
+
 #[tauri::command]
 fn home_dir() -> String {
     std::env::var("HOME").unwrap_or_else(|_| "/".into())
 }
 
-pub(crate) fn augmented_cli_path() -> String {
+fn cli_path_extras() -> Vec<std::path::PathBuf> {
     #[cfg(target_os = "windows")]
     {
-        let userprofile = std::env::var("USERPROFILE")
-            .or_else(|_| std::env::var("HOME"))
+        let userprofile = std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(std::path::PathBuf::from)
             .unwrap_or_default();
-        let localappdata = std::env::var("LOCALAPPDATA").unwrap_or_default();
-        let programfiles = std::env::var("ProgramFiles").unwrap_or_default();
-        let programfiles_x86 = std::env::var("ProgramFiles(x86)").unwrap_or_default();
-        let existing = std::env::var("PATH").unwrap_or_default();
-        let mut extras = vec![
-            format!("{up}\\AppData\\Roaming\\npm", up = userprofile),
-            format!("{up}\\.claude\\local", up = userprofile),
-            format!("{up}\\.claude\\local\\bin", up = userprofile),
-            format!("{up}\\.local\\bin", up = userprofile),
-        ];
-        if !localappdata.is_empty() {
-            extras.push(format!("{localappdata}\\Programs\\nodejs"));
-            extras.push(format!("{localappdata}\\hermes\\hermes-agent"));
-            extras.push(format!(
-                "{localappdata}\\hermes\\hermes-agent\\venv\\Scripts"
-            ));
-            extras.push(format!("{localappdata}\\hermes\\node"));
+        let localappdata = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from);
+        let programfiles = std::env::var_os("ProgramFiles").map(std::path::PathBuf::from);
+        let programfiles_x86 = std::env::var_os("ProgramFiles(x86)").map(std::path::PathBuf::from);
+        let mut extras = Vec::new();
+        if !userprofile.as_os_str().is_empty() {
+            extras.extend([
+                userprofile.join("AppData").join("Roaming").join("npm"),
+                userprofile.join(".claude").join("local"),
+                userprofile.join(".claude").join("local").join("bin"),
+                userprofile.join(".local").join("bin"),
+            ]);
         }
-        if !programfiles.is_empty() {
-            extras.push(format!("{programfiles}\\nodejs"));
-            extras.push(format!("{programfiles}\\Git\\bin"));
-            extras.push(format!("{programfiles}\\Git\\cmd"));
+        if let Some(path) = localappdata {
+            extras.extend([
+                path.join("Programs").join("nodejs"),
+                path.join("hermes").join("hermes-agent"),
+                path.join("hermes")
+                    .join("hermes-agent")
+                    .join("venv")
+                    .join("Scripts"),
+                path.join("hermes").join("node"),
+            ]);
         }
-        if !programfiles_x86.is_empty() {
-            extras.push(format!("{programfiles_x86}\\nodejs"));
-            extras.push(format!("{programfiles_x86}\\Git\\bin"));
-            extras.push(format!("{programfiles_x86}\\Git\\cmd"));
+        if let Some(path) = programfiles {
+            extras.extend([
+                path.join("nodejs"),
+                path.join("Git").join("bin"),
+                path.join("Git").join("cmd"),
+            ]);
         }
-        let extra = extras.join(";");
-        if existing.is_empty() {
-            extra
-        } else {
-            format!("{extra};{existing}")
+        if let Some(path) = programfiles_x86 {
+            extras.extend([
+                path.join("nodejs"),
+                path.join("Git").join("bin"),
+                path.join("Git").join("cmd"),
+            ]);
         }
+        extras
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let existing = std::env::var("PATH").unwrap_or_default();
-        let base = if cfg!(target_os = "macos") {
-            "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        } else {
-            "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-        };
-        let extra = if home.is_empty() {
-            base.to_string()
-        } else {
-            format!(
-                "{home}/.claude/local:{home}/.local/bin:{home}/.npm-global/bin:{home}/bin:{base}"
-            )
-        };
-        if existing.is_empty() {
-            extra
-        } else {
-            format!("{extra}:{existing}")
+        let mut extras = Vec::new();
+        if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+            extras.extend([
+                home.join(".claude").join("local"),
+                home.join(".local").join("bin"),
+                home.join(".npm-global").join("bin"),
+                home.join("bin"),
+            ]);
         }
+        if cfg!(target_os = "macos") {
+            extras.extend([
+                std::path::PathBuf::from("/opt/homebrew/bin"),
+                std::path::PathBuf::from("/opt/homebrew/sbin"),
+            ]);
+        }
+        extras.extend([
+            std::path::PathBuf::from("/usr/local/bin"),
+            std::path::PathBuf::from("/usr/local/sbin"),
+            std::path::PathBuf::from("/usr/bin"),
+            std::path::PathBuf::from("/bin"),
+            std::path::PathBuf::from("/usr/sbin"),
+            std::path::PathBuf::from("/sbin"),
+        ]);
+        extras
     }
+}
+
+fn path_dedup_key(path: &std::path::Path) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        path.to_string_lossy().replace('/', "\\").to_lowercase()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        path.to_string_lossy().into_owned()
+    }
+}
+
+fn merged_cli_path(existing: Option<std::ffi::OsString>) -> std::ffi::OsString {
+    let mut seen = std::collections::HashSet::new();
+    let mut paths = Vec::new();
+    for path in cli_path_extras().into_iter().chain(
+        existing
+            .as_deref()
+            .into_iter()
+            .flat_map(std::env::split_paths),
+    ) {
+        if path.as_os_str().is_empty() || !seen.insert(path_dedup_key(&path)) {
+            continue;
+        }
+        paths.push(path);
+    }
+    std::env::join_paths(paths).unwrap_or_else(|error| {
+        log::warn!("Could not construct augmented CLI PATH: {error}");
+        existing.unwrap_or_default()
+    })
+}
+
+pub(crate) fn augmented_cli_path() -> String {
+    merged_cli_path(std::env::var_os("PATH"))
+        .to_string_lossy()
+        .into_owned()
 }
 
 #[cfg(target_os = "windows")]
@@ -660,7 +1233,7 @@ async fn design_claude_call(
     };
 
     #[cfg(target_os = "windows")]
-    let mut command = crate::agent::command_for_cli("claude");
+    let mut command = crate::agent_process::command_for_cli("claude");
     #[cfg(not(target_os = "windows"))]
     let mut command = Command::new("claude");
 
@@ -719,40 +1292,41 @@ async fn design_claude_call(
     Ok(stdout.trim().to_string())
 }
 
-/// macOS/Linux GUI 앱은 로그인 셸 PATH 를 상속받지 못해 /opt/homebrew/bin 같은
-/// 사용자 도구(npm, node, git, claude, codex …)를 못 찾는다. 표준 설치 위치를 PATH 앞에
-/// prepend 해 모든 subprocess 호출이 동작하도록 한다.
+/// Desktop GUI apps inherit an incomplete PATH on every supported platform.
+/// Build it with the platform path API so Windows drive letters and separators
+/// are never interpreted as Unix PATH syntax.
 fn bootstrap_path() {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let mut extras: Vec<String> = vec![
-        "/opt/homebrew/bin".into(),
-        "/opt/homebrew/sbin".into(),
-        "/usr/local/bin".into(),
-        "/usr/local/sbin".into(),
-    ];
-    if !home.is_empty() {
-        // npm 글로벌 prefix 와 사용자 로컬 bin. ~/.npm-global/bin 은 npm config 가
-        // 표준 /usr/local 외부를 가리킬 때 codex/claude-code CLI 가 떨어지는 곳.
-        extras.push(format!("{home}/.npm-global/bin"));
-        extras.push(format!("{home}/.local/bin"));
-    }
-    let current = std::env::var("PATH").unwrap_or_default();
-    let mut prefix = String::new();
-    for p in &extras {
-        if !current.split(':').any(|s| s == p) {
-            if !prefix.is_empty() {
-                prefix.push(':');
-            }
-            prefix.push_str(p);
+    std::env::set_var("PATH", merged_cli_path(std::env::var_os("PATH")));
+}
+
+#[cfg(test)]
+mod cli_path_tests {
+    use super::{merged_cli_path, path_dedup_key};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn augmented_path_preserves_existing_entries_and_removes_duplicates() {
+        let existing_entries = [
+            PathBuf::from("/tmp/atelier-a"),
+            PathBuf::from("/tmp/atelier-b"),
+        ];
+        let existing = std::env::join_paths(existing_entries.clone()).expect("test PATH");
+        let merged = merged_cli_path(Some(existing));
+        let paths = std::env::split_paths(&merged).collect::<Vec<_>>();
+
+        for expected in existing_entries {
+            assert!(paths.iter().any(|path| path == &expected));
         }
+        let keys = paths
+            .iter()
+            .map(|path| path_dedup_key(path))
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(keys.len(), paths.len());
     }
-    if !prefix.is_empty() {
-        let new_path = if current.is_empty() {
-            prefix
-        } else {
-            format!("{prefix}:{current}")
-        };
-        std::env::set_var("PATH", new_path);
+
+    #[test]
+    fn path_keys_are_stable_for_platform_paths() {
+        assert!(!path_dedup_key(Path::new("/tmp/atelier")).is_empty());
     }
 }
 
@@ -760,28 +1334,99 @@ fn bootstrap_path() {
 pub fn run() {
     env_logger::try_init().ok();
     bootstrap_path();
+    if let Err(error) = control_plane::recover_abandoned_claims() {
+        log::warn!("Could not recover abandoned Atelier control requests: {error}");
+    }
     pty::init_state();
 
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_process::init());
+    #[cfg(not(feature = "store-build"))]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+
+    let app = builder
+        .on_menu_event(|app, event| {
+            if event.id().as_ref() == "atelier-quick-open" {
+                let _ = app.emit("atelier://quick-open", ());
+            }
+        })
+        .setup(|app| {
+            if let Some(menu) = app.menu() {
+                let quick_open =
+                    tauri::menu::MenuItemBuilder::with_id("atelier-quick-open", "Quick Open...")
+                        .accelerator("CmdOrCtrl+P")
+                        .build(app)?;
+                let navigate =
+                    tauri::menu::SubmenuBuilder::with_id(app, "atelier-navigate", "Navigate")
+                        .item(&quick_open)
+                        .build()?;
+                menu.append(&navigate)?;
+            }
+            let app_handle = app.handle().clone();
+            reveal_main_window(&app_handle);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             pty::pty_spawn,
             pty::pty_write,
             pty::pty_resize,
             pty::pty_kill,
             pty::pty_list,
+            pty::pty_output_snapshot,
+            pty::pty_ack,
             pty::session_log_load,
+            pty::session_log_snapshot,
             pty::session_log_clear,
             clipboard::clipboard_save_image,
             dump_debug,
             runtime_install_info,
+            runtime_receipt::renderer_ready,
+            control_plane::control_requests_pending,
+            control_plane::control_request_claim,
+            control_plane::control_request_complete,
+            #[cfg(feature = "orca-automations")]
+            automations::automations_snapshot,
+            #[cfg(feature = "orca-automations")]
+            automations::automation_upsert,
+            #[cfg(feature = "orca-automations")]
+            automations::automation_set_enabled,
+            #[cfg(feature = "orca-automations")]
+            automations::automation_run_now,
+            #[cfg(feature = "orca-automations")]
+            automations::automations_tick,
+            #[cfg(feature = "orca-computer-use")]
+            computer_use::computer_use_status,
+            #[cfg(feature = "orca-computer-use")]
+            computer_use::computer_use_prepared,
+            #[cfg(feature = "orca-computer-use")]
+            computer_use::computer_use_set_enabled,
+            #[cfg(feature = "orca-computer-use")]
+            computer_use::computer_use_prepare,
+            #[cfg(feature = "orca-computer-use")]
+            computer_use::computer_use_authorize,
+            #[cfg(feature = "orca-computer-use")]
+            computer_use::computer_use_complete,
+            #[cfg(feature = "orca-computer-use")]
+            computer_use::computer_use_execute,
+            #[cfg(feature = "orca-computer-use")]
+            computer_use::computer_use_discard,
+            #[cfg(feature = "orca-computer-use")]
+            computer_use::computer_use_receipts,
+            #[cfg(feature = "orca-dev-services")]
+            dev_services::dev_services_scan,
+            #[cfg(feature = "orca-dev-services")]
+            dev_services::dev_service_stop_prepare,
+            #[cfg(feature = "orca-dev-services")]
+            dev_services::dev_service_stop_execute,
             list_dir,
+            search_workspace_files,
             read_text_file,
+            write_text_file,
             home_dir,
             command_exists,
             load_profiles,
@@ -793,22 +1438,116 @@ pub fn run() {
             design_claude_call,
             agent::agent_claude_send,
             agent::agent_send,
-            agent::claude_model_options,
-            agent::codex_model_options,
-            agent::openrouter_model_options,
+            agent::agent_runtime_capabilities,
+            agent_models::claude_model_options,
+            agent_models::codex_model_options,
+            agent_models::openrouter_model_options,
             agent::agent_cli_command,
-            agent::academic_research_install_claude_plugin,
-            agent::atelier_skill_install_public_bundle,
-            agent::insane_search_install_gajecode_skill,
-            agent::plugin_skill_install_status,
+            agent_plugins::academic_research_install_claude_plugin,
+            agent_plugins::atelier_skill_install_public_bundle,
+            agent_plugins::insane_search_install_gajecode_skill,
+            agent_plugins::plugin_skill_install_status,
             agent::agent_cancel,
-            agent::agent_change_baseline,
-            agent::agent_change_summary,
-            agent::agent_undo_changes,
-            agent::preview_health_check,
-            agent::preview_service_start,
-            agent::preview_service_status,
-            agent::preview_service_stop,
+            agent_changes::agent_change_baseline,
+            agent_changes::agent_change_summary,
+            agent_editor_diagnostics::agent_editor_snapshot,
+            agent_editor_diagnostics::agent_editor_write,
+            agent_git::agent_git_state,
+            agent_git::agent_git_stage,
+            agent_git::agent_git_unstage,
+            agent_git::agent_git_commit,
+            agent_git::agent_undo_changes,
+            #[cfg(feature = "orca-github-workflows")]
+            github_workflows::github_workflow_snapshot,
+            #[cfg(feature = "orca-github-workflows")]
+            github_workflows::github_workflow_prepare,
+            #[cfg(feature = "orca-github-workflows")]
+            github_workflows::github_workflow_execute,
+            #[cfg(feature = "orca-github-workflows")]
+            github_workflows::github_workflow_discard,
+            #[cfg(feature = "orca-github-workflows")]
+            github_workflows::github_workflow_receipts,
+            #[cfg(feature = "orca-linear-workflows")]
+            linear_workflows::linear_workflow_snapshot,
+            #[cfg(feature = "orca-linear-workflows")]
+            linear_workflows::linear_workflow_prepare,
+            #[cfg(feature = "orca-linear-workflows")]
+            linear_workflows::linear_workflow_execute,
+            #[cfg(feature = "orca-linear-workflows")]
+            linear_workflows::linear_workflow_discard,
+            #[cfg(feature = "orca-linear-workflows")]
+            linear_workflows::linear_workflow_receipts,
+            #[cfg(feature = "orca-mobile-control")]
+            mobile_control::mobile_control_server_status,
+            #[cfg(feature = "orca-mobile-control")]
+            mobile_control::mobile_control_server_start,
+            #[cfg(feature = "orca-mobile-control")]
+            mobile_control::mobile_control_server_stop,
+            #[cfg(feature = "orca-mobile-control")]
+            mobile_control::mobile_control_pairing_create,
+            #[cfg(feature = "orca-mobile-control")]
+            mobile_control::mobile_control_pairing_discard,
+            #[cfg(feature = "orca-mobile-control")]
+            mobile_control::mobile_control_devices,
+            #[cfg(feature = "orca-mobile-control")]
+            mobile_control::mobile_control_device_revoke,
+            #[cfg(feature = "orca-mobile-control")]
+            mobile_control::mobile_control_device_followups_set,
+            #[cfg(feature = "orca-remote-followup")]
+            remote_followup::remote_followup_proposals,
+            #[cfg(feature = "orca-remote-followup")]
+            remote_followup::remote_followup_prepare,
+            #[cfg(feature = "orca-remote-followup")]
+            remote_followup::remote_followup_execute,
+            #[cfg(feature = "orca-remote-followup")]
+            remote_followup::remote_followup_discard,
+            #[cfg(feature = "orca-remote-followup")]
+            remote_followup::remote_followup_reject,
+            #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::ssh_workspace_status,
+            #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::ssh_profile_save,
+            #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::ssh_profile_archive,
+            #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::ssh_host_probe,
+            #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::ssh_host_trust,
+            #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::ssh_connection_probe,
+            #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::ssh_remote_directory_list,
+            #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::ssh_remote_file_read,
+            #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::ssh_remote_file_write_prepare,
+            #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::ssh_remote_file_write_execute,
+            #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::ssh_terminal_launch,
+            #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::ssh_tunnel_start,
+            #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::ssh_tunnel_list,
+            #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::ssh_tunnel_retry,
+            #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::ssh_tunnel_stop,
+            #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::ssh_remote_worktree_prepare,
+            #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::ssh_remote_worktree_execute,
+            #[cfg(feature = "orca-provider-usage")]
+            provider_usage::provider_usage_snapshot,
+            subscription_usage::provider_subscription_usage,
+            agent_worktree::agent_worktree_prepare,
+            agent_worktree::agent_worktree_adopt,
+            agent_preview::preview_health_check,
+            agent_preview::preview_service_start,
+            agent_preview::preview_service_status,
+            agent_preview::preview_service_stop,
+            agent_quick_open::agent_quick_open_index,
+            agent_rich_preview::agent_rich_preview,
             stella::stella_factory_bootstrap,
             stella::stella_factory_autopilot,
             stella::stella_factory_status,
@@ -820,6 +1559,7 @@ pub fn run() {
             credentials::provider_clear_credentials,
             credentials::provider_login_oauth,
             credentials::provider_oauth_login_state,
+            credentials::provider_oauth_browser_probe,
             credentials::provider_open_oauth_login_url,
             credentials::provider_submit_oauth_code,
             credentials::provider_install_cli,
@@ -841,6 +1581,12 @@ pub fn run() {
             if !has_visible_windows {
                 reveal_main_window(app_handle);
             }
+        }
+        tauri::RunEvent::Exit => {
+            #[cfg(feature = "orca-mobile-control")]
+            mobile_control::stop_server();
+            #[cfg(feature = "orca-ssh-workspaces")]
+            ssh_workspaces::stop_all_tunnels();
         }
         _ => {}
     });

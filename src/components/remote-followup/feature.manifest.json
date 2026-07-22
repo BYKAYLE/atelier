@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "remote-followup",
+  "rustFeature": "orca-remote-followup",
+  "rustModule": "remote_followup",
+  "smokeScript": "smoke:remote-followup",
+  "dependencies": []
+}

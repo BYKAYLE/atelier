@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "provider-usage",
+  "rustFeature": "orca-provider-usage",
+  "rustModule": "provider_usage",
+  "smokeScript": "smoke:provider-usage",
+  "dependencies": []
+}

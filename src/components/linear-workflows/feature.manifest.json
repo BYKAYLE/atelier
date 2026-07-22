@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "linear-workflows",
+  "rustFeature": "orca-linear-workflows",
+  "rustModule": "linear_workflows",
+  "smokeScript": "smoke:linear-workflows",
+  "dependencies": []
+}

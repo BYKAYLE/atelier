@@ -24,6 +24,120 @@ const Icon: React.FC<IconProps> = ({ d, size = 16, stroke = 1.6, className = "" 
 );
 
 export const I = {
+  sessions: (
+    <Icon
+      d={
+        <>
+          <path d="M7 5h10a3 3 0 013 3v6a3 3 0 01-3 3h-5l-4 3v-3H7a3 3 0 01-3-3V8a3 3 0 013-3z" />
+          <path d="M8 9h8M8 13h5" />
+        </>
+      }
+    />
+  ),
+  profile: (
+    <Icon
+      d={
+        <>
+          <circle cx="12" cy="8" r="4" />
+          <path d="M4.5 21a7.5 7.5 0 0115 0" />
+        </>
+      }
+    />
+  ),
+  report: (
+    <Icon
+      d={
+        <>
+          <path d="M6 3h9l4 4v14H6z" />
+          <path d="M15 3v5h4M12 11v4M12 18h.01" />
+        </>
+      }
+    />
+  ),
+  code: (
+    <Icon
+      d={
+        <>
+          <path d="M8 8l-4 4 4 4M16 8l4 4-4 4M14 4l-4 16" />
+        </>
+      }
+    />
+  ),
+  changes: (
+    <Icon
+      d={
+        <>
+          <circle cx="6" cy="5" r="2" />
+          <circle cx="18" cy="7" r="2" />
+          <circle cx="6" cy="19" r="2" />
+          <path d="M6 7v10M8 9c4 0 4-2 8-2M16 7l-2-2M16 7l-2 2" />
+        </>
+      }
+    />
+  ),
+  plugin: (
+    <Icon
+      d={
+        <>
+          <path d="M8 3v4M16 3v4M6 7h12v4a6 6 0 01-6 6v4" />
+          <path d="M9 11h6" />
+        </>
+      }
+    />
+  ),
+  worktree: (
+    <Icon
+      d={
+        <>
+          <circle cx="6" cy="5" r="2" />
+          <circle cx="6" cy="19" r="2" />
+          <circle cx="18" cy="12" r="2" />
+          <path d="M6 7v10M8 8h3a7 7 0 017 4M8 16h3a7 7 0 007-4" />
+        </>
+      }
+    />
+  ),
+  search: (
+    <Icon
+      d={
+        <>
+          <circle cx="11" cy="11" r="7" />
+          <path d="M20 20l-3.5-3.5" />
+        </>
+      }
+    />
+  ),
+  comment: (
+    <Icon
+      d={
+        <>
+          <path d="M21 15a4 4 0 01-4 4H8l-5 3V7a4 4 0 014-4h10a4 4 0 014 4z" />
+          <path d="M8 9h8M8 13h5" />
+        </>
+      }
+    />
+  ),
+  check: <Icon d={<path d="M5 12l4 4L19 6" />} />,
+  bell: (
+    <Icon
+      d={
+        <>
+          <path d="M18 8a6 6 0 00-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
+          <path d="M10 21h4" />
+        </>
+      }
+    />
+  ),
+  bellOff: (
+    <Icon
+      d={
+        <>
+          <path d="M13.7 4.2A6 6 0 006 8c0 2.1-.3 3.6-.8 4.7M18 8c0 7 3 7 3 9H9" />
+          <path d="M10 21h4M3 3l18 18" />
+        </>
+      }
+    />
+  ),
   plus: (
     <Icon
       d={
@@ -120,12 +234,34 @@ export const I = {
       }
     />
   ),
+  mobile: (
+    <Icon
+      d={
+        <>
+          <rect x="6" y="2.5" width="12" height="19" rx="2.5" />
+          <path d="M10 5h4M11 18.5h2" />
+        </>
+      }
+    />
+  ),
   eye: (
     <Icon
       d={
         <>
           <path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" />
           <circle cx="12" cy="12" r="3" />
+        </>
+      }
+    />
+  ),
+  eyeOff: (
+    <Icon
+      d={
+        <>
+          <path d="M3 3l18 18" />
+          <path d="M10.6 5.2A11.3 11.3 0 0112 5c6 0 10 7 10 7a18 18 0 01-2.1 2.8" />
+          <path d="M6.6 6.6C3.8 8.5 2 12 2 12s4 7 10 7a10 10 0 004.1-.9" />
+          <path d="M9.9 9.9a3 3 0 004.2 4.2" />
         </>
       }
     />
@@ -221,6 +357,39 @@ export const I = {
         <>
           <rect x="3" y="4" width="18" height="16" rx="2" />
           <path d="M12 4v16" />
+        </>
+      }
+    />
+  ),
+  splitRight: (
+    <Icon
+      d={
+        <>
+          <rect x="3" y="4" width="18" height="16" rx="2" />
+          <path d="M13 4v16" />
+          <path d="M8 9l3 3-3 3" />
+        </>
+      }
+    />
+  ),
+  splitDown: (
+    <Icon
+      d={
+        <>
+          <rect x="3" y="4" width="18" height="16" rx="2" />
+          <path d="M3 13h18" />
+          <path d="M9 8l3 3 3-3" />
+        </>
+      }
+    />
+  ),
+  parallel: (
+    <Icon
+      d={
+        <>
+          <path d="M5 4v4a4 4 0 004 4h6" />
+          <path d="M5 20v-4a4 4 0 014-4" />
+          <path d="M15 8l4 4-4 4" />
         </>
       }
     />

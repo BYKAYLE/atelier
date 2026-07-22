@@ -2,23 +2,18 @@ import React, { lazy, Suspense, useEffect, useState } from "react";
 import { useTweaks } from "../lib/useTweaks";
 import { ACCENTS, cls } from "../lib/tokens";
 import { safeLocalStorageGet, safeLocalStorageSet } from "../lib/storage";
+import { TERMINAL_LAUNCH_EVENT } from "../lib/terminalLaunch";
 import Welcome from "./Welcome";
 import Main from "./Main";
 import Settings from "./Settings";
 import AgentWorkspace from "./AgentWorkspace";
 import PluginSkillsPage from "./PluginSkillsPage";
 import { I } from "./Icons";
+import { FeatureBackgrounds, featureSettingsPages } from "../features/featureRegistry";
 const DesignPage = lazy(() => import("./DesignPage"));
 
 type AppScreen = "agent" | "main" | "settings" | "design" | "plugins" | "welcome";
-type SettingsSection =
-  | "terminal"
-  | "appearance"
-  | "profiles"
-  | "shortcuts"
-  | "preview"
-  | "connections"
-  | "updates";
+type SettingsSection = string;
 
 type NavItem = {
   id: string;
@@ -55,16 +50,25 @@ const NAV_GROUPS: NavGroup[] = [
       {
         id: "sessions",
         screen: "agent",
-        icon: I.preview,
+        icon: I.sessions,
         labelKo: "Sessions",
         labelEn: "Sessions",
         hintKo: "Claude · Hermes · Codex",
         hintEn: "Claude · Hermes · Codex",
       },
       {
+        id: "terminal",
+        screen: "main",
+        icon: I.terminal,
+        labelKo: "Terminal",
+        labelEn: "Terminal",
+        hintKo: "CLI · 터미널 세션",
+        hintEn: "CLI · terminal sessions",
+      },
+      {
         id: "plugins",
         screen: "plugins",
-        icon: I.zap,
+        icon: I.plugin,
         labelKo: "플러그인&스킬",
         labelEn: "Plugins & Skills",
         hintKo: "설치 · 내장",
@@ -91,7 +95,7 @@ const NAV_GROUPS: NavGroup[] = [
         id: "profiles",
         screen: "settings",
         settingsSection: "profiles",
-        icon: I.zap,
+        icon: I.profile,
         labelKo: "Profiles",
         labelEn: "Profiles",
         hintKo: "CLI 실행 프로필",
@@ -108,14 +112,34 @@ const NAV_GROUPS: NavGroup[] = [
         hintEn: "Auth · API links",
       },
       {
+        id: "remote-access",
+        screen: "settings",
+        settingsSection: "remote",
+        icon: I.mobile,
+        labelKo: "원격 접근",
+        labelEn: "Remote access",
+        hintKo: "모바일 페어링 · 모니터링",
+        hintEn: "Pairing · Monitoring",
+      },
+      {
+        id: "feature-settings",
+        screen: "settings",
+        settingsSection: "features",
+        icon: I.gear,
+        labelKo: "기능 설정",
+        labelEn: "Feature settings",
+        hintKo: "독립 모듈 · 동작 정책",
+        hintEn: "Modules · Behavior",
+      },
+      {
         id: "preview-settings",
         screen: "settings",
         settingsSection: "preview",
-        icon: I.eye,
-        labelKo: "Preview",
-        labelEn: "Preview",
-        hintKo: "패치 · 제보",
-        hintEn: "Patches · Bugs",
+        icon: I.report,
+        labelKo: "패치 & 제보",
+        labelEn: "Patches & Feedback",
+        hintKo: "릴리스 노트 · 버그 접수",
+        hintEn: "Release notes · Bug reports",
       },
       {
         id: "shortcuts",
@@ -141,6 +165,40 @@ const NAV_GROUPS: NavGroup[] = [
   },
 ];
 
+const BUILT_IN_SETTINGS_SECTIONS = new Set([
+  "terminal",
+  "appearance",
+  "profiles",
+  "shortcuts",
+  "preview",
+  "connections",
+  "remote",
+  "features",
+  "updates",
+]);
+
+function isAvailableSettingsSection(value: string | null): value is SettingsSection {
+  if (!value) return false;
+  return BUILT_IN_SETTINGS_SECTIONS.has(value)
+    || featureSettingsPages().some((page) => page.id === value);
+}
+
+function navigationGroups(): NavGroup[] {
+  const featureItems: NavItem[] = featureSettingsPages().map((page) => ({
+    id: `feature-page:${page.id}`,
+    screen: "settings",
+    settingsSection: page.id,
+    icon: page.icon,
+    labelKo: page.title.ko,
+    labelEn: page.title.en,
+    hintKo: page.hint.ko,
+    hintEn: page.hint.en,
+  }));
+  return NAV_GROUPS.map((group) => group.id === "system"
+    ? { ...group, items: [...featureItems, ...group.items] }
+    : group);
+}
+
 const App: React.FC = () => {
   const [tw, setTw] = useTweaks();
   const accent = ACCENTS[tw.accent] || ACCENTS.terracotta;
@@ -151,13 +209,13 @@ const App: React.FC = () => {
       safeLocalStorageSet("atelier.agentDefaultMigrated", "1");
       return "agent";
     }
-    if (saved === "design" || saved === "main") return "agent";
+    if (saved === "design") return "agent";
     return isScreen(saved) ? saved : "agent";
   });
   const [activeNav, setActiveNav] = useState<string>(() => {
     const savedNav = safeLocalStorageGet("atelier.nav");
     if (savedNav === "settings") return "appearance";
-    if (savedNav === "terminal") return "sessions";
+    if (savedNav === "terminal") return "terminal";
     if (savedNav === "gateway") return "providers";
     if (
       savedNav === "agent" ||
@@ -166,27 +224,21 @@ const App: React.FC = () => {
       savedNav === "factory" ||
       savedNav === "design"
     ) return "sessions";
-    if (savedNav === "main") return "sessions";
+    if (savedNav === "main") return "terminal";
     if (savedNav === "skills") return "plugins";
     if (savedNav) return savedNav;
     if (screen === "settings") return "appearance";
     if (screen === "agent") return "sessions";
-    if (screen === "main") return "sessions";
+    if (screen === "main") return "terminal";
     return screen;
   });
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(() => {
     const saved = safeLocalStorageGet("atelier.settingsSection");
-    return saved === "appearance" ||
-      saved === "profiles" ||
-      saved === "shortcuts" ||
-      saved === "preview" ||
-      saved === "connections" ||
-      saved === "updates"
-      ? saved
-      : "appearance";
+    return isAvailableSettingsSection(saved) ? saved : "appearance";
   });
 
   const language = tw.language;
+  const settingsActive = screen === "settings";
 
   useEffect(() => {
     safeLocalStorageSet("atelier.screen", screen);
@@ -199,6 +251,15 @@ const App: React.FC = () => {
   useEffect(() => {
     safeLocalStorageSet("atelier.settingsSection", settingsSection);
   }, [settingsSection]);
+
+  useEffect(() => {
+    const openTerminal = () => {
+      setActiveNav("terminal");
+      setScreen("main");
+    };
+    window.addEventListener(TERMINAL_LAUNCH_EVENT, openTerminal);
+    return () => window.removeEventListener(TERMINAL_LAUNCH_EVENT, openTerminal);
+  }, []);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -223,6 +284,7 @@ const App: React.FC = () => {
       <aside
         className={cls(
           "atelier-shell-sidebar h-full border-r flex flex-col",
+          settingsActive && "atelier-shell-sidebar-settings",
           tw.dark ? "bg-[#191917] border-dline" : "bg-[#f1efe7] border-line",
         )}
       >
@@ -232,7 +294,7 @@ const App: React.FC = () => {
             openNav({
               id: "sessions",
               screen: "agent",
-              icon: I.preview,
+              icon: I.sessions,
               labelKo: "Sessions",
               labelEn: "Sessions",
               hintKo: "Claude · Hermes · Codex",
@@ -260,9 +322,18 @@ const App: React.FC = () => {
           </span>
         </button>
 
-        <nav className="atelier-shell-nav flex-1 overflow-y-auto px-3 pb-3">
-          {NAV_GROUPS.map((group) => (
-            <div key={group.id} className="atelier-shell-nav-group mb-5">
+        <nav
+          className={cls(
+            "atelier-shell-nav flex-1 overflow-y-auto px-3 pb-3",
+            settingsActive && "atelier-shell-nav-settings",
+          )}
+        >
+          {navigationGroups().map((group) => (
+            <div
+              key={group.id}
+              data-nav-group={group.id}
+              className="atelier-shell-nav-group mb-5"
+            >
               <div
                 className={cls(
                   "atelier-shell-section-title mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-[0.16em]",
@@ -271,7 +342,7 @@ const App: React.FC = () => {
               >
                 {language === "en" ? group.labelEn : group.labelKo}
               </div>
-              <div className="space-y-1">
+              <div className="atelier-shell-nav-items space-y-1">
                 {group.items.map((item) => {
                   const active = activeNav === item.id && screen === item.screen;
                   return (
@@ -279,6 +350,8 @@ const App: React.FC = () => {
                       key={item.id}
                       type="button"
                       onClick={() => openNav(item)}
+                      aria-label={language === "en" ? item.labelEn : item.labelKo}
+                      title={`${language === "en" ? item.labelEn : item.labelKo} - ${language === "en" ? item.hintEn : item.hintKo}`}
                       className={cls(
                         "atelier-shell-nav-item group grid w-full grid-cols-[22px_1fr] items-center gap-2.5 rounded-[8px] px-2.5 py-2 text-left transition-colors",
                         active
@@ -379,6 +452,8 @@ const App: React.FC = () => {
         </div>
       </aside>
 
+      <FeatureBackgrounds tw={tw} />
+
       <div className="flex-1 min-h-0 relative">
         {/* Main과 Settings는 mount 유지 + display 토글. 화면 전환 시 탭/xterm
             상태(채팅 내역, 실행 중 claude 세션 등)가 초기화되는 현상 방지. */}
@@ -386,7 +461,14 @@ const App: React.FC = () => {
           className="absolute inset-0"
           style={{ display: screen === "agent" ? "block" : "none" }}
         >
-          <AgentWorkspace tw={tw} />
+          <AgentWorkspace
+            tw={tw}
+            isActive={screen === "agent"}
+            onOpenTerminal={() => {
+              setActiveNav("terminal");
+              setScreen("main");
+            }}
+          />
         </div>
         <div
           className="absolute inset-0"

@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "github-workflows",
+  "rustFeature": "orca-github-workflows",
+  "rustModule": "github_workflows",
+  "smokeScript": "smoke:github-workflows",
+  "dependencies": []
+}

@@ -6,18 +6,22 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { cls, Tweaks } from "../lib/tokens";
 import { safeLocalStorageGet, safeLocalStorageSet } from "../lib/storage";
+import { FeaturePanels } from "../features/featureRegistry";
 import {
   GajecodeUpdateStatus,
   HermesUpdateStatus,
+  ProviderBrowserProbeResult,
   ProviderLoginOauthResult,
   ProviderStatus,
   gajecodeCheckUpdate,
   gajecodeUpdate,
   hermesCheckUpdate,
   hermesUpdate,
+  isTauri,
   providerClearCredentials,
   providerInstallCli,
   providerLoginOauth,
+  providerOauthBrowserProbe,
   providerOpenOauthLoginUrl,
   providerOauthLoginState,
   providerSaveApiKey,
@@ -29,7 +33,7 @@ interface Props {
   tw: Tweaks;
 }
 
-type ProviderId = "claude" | "codex" | "openrouter" | "hermes" | "gajecode";
+type ProviderId = "claude" | "codex" | "openrouter" | "alibaba" | "linear" | "hermes" | "gajecode";
 
 interface ProviderDef {
   id: ProviderId;
@@ -96,6 +100,34 @@ const PROVIDERS: ProviderDef[] = [
     apiUrl: "https://openrouter.ai/keys",
   },
   {
+    id: "alibaba",
+    name: "Alibaba Cloud Model Studio",
+    desc: {
+      ko: "Alibaba Cloud Model Studio Token Plan의 Qwen·GLM 모델을 Hermes와 가재코드에서 사용합니다.",
+      en: "Use Qwen and GLM models from an Alibaba Cloud Model Studio Token Plan in Hermes and Gajae Code.",
+    },
+    oauthCta: { ko: "", en: "" },
+    apiHelp: {
+      ko: "싱가포르 리전 Token Plan API 키 (sk-...)를 입력하세요.",
+      en: "Enter a Singapore-region Token Plan API key (sk-...).",
+    },
+    apiUrl: "https://modelstudio.console.alibabacloud.com/?tab=globalset#/efm/api_key",
+  },
+  {
+    id: "linear",
+    name: "Linear",
+    desc: {
+      ko: "Linear 이슈와 워크플로 상태를 조회하고, 승인 후 이슈 생성·댓글·상태 변경을 실행합니다.",
+      en: "Inspect Linear issues and workflow states, then create issues, comment, or change status after approval.",
+    },
+    oauthCta: { ko: "", en: "" },
+    apiHelp: {
+      ko: "Linear 개인 API 키 — Linear 설정의 Security & access에서 발급",
+      en: "Linear personal API key — create one under Linear Settings > Security & access",
+    },
+    apiUrl: "https://linear.app/settings/api",
+  },
+  {
     id: "gajecode",
     name: "가재코드 (Gajae Code)",
     desc: {
@@ -112,7 +144,7 @@ const PROVIDERS: ProviderDef[] = [
   },
 ];
 
-type HermesBackend = "openai-codex" | "openrouter";
+type HermesBackend = "openai-codex" | "openrouter" | "alibaba";
 
 const HERMES_BACKENDS: Array<{
   value: HermesBackend;
@@ -131,6 +163,12 @@ const HERMES_BACKENDS: Array<{
     label: "OpenRouter",
     credentialProvider: "openrouter",
     desc: { ko: "위 OpenRouter API 키 사용", en: "Uses the OpenRouter key above" },
+  },
+  {
+    value: "alibaba",
+    label: "Alibaba Cloud",
+    credentialProvider: "alibaba",
+    desc: { ko: "위 Token Plan API 키 사용", en: "Uses the Token Plan key above" },
   },
 ];
 
@@ -159,6 +197,13 @@ const COPY = {
     installTimeout:
       "설치 완료를 아직 감지하지 못했습니다. Node.js/npm, Git Bash 또는 네트워크 상태를 확인한 뒤 다시 눌러주세요.",
     refresh: "상태 새로고침",
+    browserProbeTitle: "브라우저 연결 진단",
+    browserProbeClaude: "Claude 테스트",
+    browserProbeCodex: "Codex 테스트",
+    browserProbeRunning: "브라우저 전달 중…",
+    browserProbeSuccess: (name: string, handoff: string) =>
+      `${name} 로그인 주소를 OS에 전달했습니다 · ${handoff}. 실제 브라우저 창을 확인하세요.`,
+    browserProbeFailed: (message: string) => `브라우저 전달 실패: ${message}`,
     loginStartFailed: (name: string, message: string) =>
       `${name} 로그인을 시작하지 못했습니다. ${message}`,
     loginAlreadyConnected: (name: string) => `${name} 구독 로그인이 이미 연결되어 있습니다.`,
@@ -243,6 +288,13 @@ const COPY = {
     installTimeout:
       "Atelier still cannot detect the CLI. Check Node.js/npm, Git Bash, or your network, then try again.",
     refresh: "Refresh status",
+    browserProbeTitle: "Browser handoff diagnostics",
+    browserProbeClaude: "Test Claude",
+    browserProbeCodex: "Test Codex",
+    browserProbeRunning: "Handing off to the browser…",
+    browserProbeSuccess: (name: string, handoff: string) =>
+      `${name} login URL was handed to the OS via ${handoff}. Confirm that the browser window appeared.`,
+    browserProbeFailed: (message: string) => `Browser handoff failed: ${message}`,
     loginStartFailed: (name: string, message: string) =>
       `Could not start ${name} sign-in. ${message}`,
     loginAlreadyConnected: (name: string) => `${name} subscription sign-in is already connected.`,
@@ -309,27 +361,58 @@ const COPY = {
 
 type CopyT = typeof COPY[keyof typeof COPY];
 
+function connectionStatus(
+  providerId: ProviderId,
+  status: ProviderStatus | null,
+  copy: CopyT,
+): { tone: "ok" | "info" | "warn" | "neutral"; label: string } {
+  const provider = PROVIDERS.find((candidate) => candidate.id === providerId);
+  const connected = Boolean(status?.oauth_logged_in || status?.api_key_present);
+  const cliInstalled = Boolean(status?.cli_installed);
+  const requiresCli = providerId === "hermes" || Boolean(provider?.installHelp);
+
+  if (connected) return { tone: "ok", label: copy.statusOk };
+  if (cliInstalled) return { tone: "info", label: copy.statusCliReady };
+  if (requiresCli) return { tone: "warn", label: copy.statusNoCli };
+  return { tone: "neutral", label: copy.statusNoKey };
+}
+
 async function openExternalUrl(provider: ProviderId, url: string): Promise<boolean> {
-  let opened = false;
+  const allowedRoots = provider === "claude"
+    ? ["claude.ai", "claude.com", "anthropic.com"]
+    : provider === "codex"
+      ? ["openai.com", "chatgpt.com"]
+      : [];
+  let allowed = false;
   try {
-    const { open } = await import("@tauri-apps/plugin-shell");
-    await open(url);
-    opened = true;
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    allowed = parsed.protocol === "https:" && allowedRoots.some((root) => host === root || host.endsWith(`.${root}`));
   } catch {
-    // Fall through to the Rust/browser fallback below.
+    allowed = false;
   }
-  if (!opened) {
-    try {
-      await providerOpenOauthLoginUrl(provider, url);
-      opened = true;
-    } catch {
-      // Fall through to the webview fallback below.
+  if (!allowed) return false;
+
+  // Keep one authoritative desktop path. The Rust command validates the
+  // provider host and uses native ShellExecuteExW/open instead of treating a
+  // successful plugin invocation as proof that Windows displayed a browser.
+  try {
+    await providerOpenOauthLoginUrl(provider, url);
+    return true;
+  } catch {
+    if (isTauri()) {
+      try {
+        // Independent OS-open fallback for packaged hosts where the direct
+        // Windows shell call is rejected by the local runtime or policy.
+        const { open } = await import("@tauri-apps/plugin-shell");
+        await open(url);
+        return true;
+      } catch {
+        return false;
+      }
     }
   }
-  if (!opened) {
-    opened = window.open(url, "_blank", "noopener,noreferrer") !== null;
-  }
-  return opened;
+  return !isTauri() && window.open(url, "_blank", "noopener,noreferrer") !== null;
 }
 
 export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
@@ -340,6 +423,8 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
     claude: null,
     codex: null,
     openrouter: null,
+    alibaba: null,
+    linear: null,
     hermes: null,
     gajecode: null,
   });
@@ -355,9 +440,13 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
   } | null>(null);
   const [panelError, setPanelError] = useState<string | null>(null);
   const [panelNotice, setPanelNotice] = useState<string | null>(null);
+  const [browserProbeBusy, setBrowserProbeBusy] = useState<"claude" | "codex" | null>(null);
+  const [browserProbeResult, setBrowserProbeResult] = useState<ProviderBrowserProbeResult | null>(null);
+  const [browserProbeError, setBrowserProbeError] = useState<string | null>(null);
+  const [selectedProviderId, setSelectedProviderId] = useState<ProviderId>("claude");
 
   const refresh = useCallback(async (only?: ProviderId) => {
-    const targets = only ? [only] : (["claude", "codex", "openrouter", "hermes", "gajecode"] as ProviderId[]);
+    const targets = only ? [only] : (["claude", "codex", "openrouter", "alibaba", "linear", "hermes", "gajecode"] as ProviderId[]);
     const results = await Promise.all(
       targets.map(async (pid) => {
         const status = await providerStatus(pid).catch(() => null);
@@ -377,6 +466,39 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
 
   const pollRef = useRef<number | null>(null);
   const openedLoginUrlsRef = useRef<Record<string, string | null>>({});
+  const openingLoginUrlsRef = useRef<Record<string, string | null>>({});
+  const loginUrlAttemptsRef = useRef<Record<string, { url: string; count: number; lastAt: number }>>({});
+  const openLoginUrlWithRetry = useCallback(async (
+    provider: ProviderId,
+    url: string,
+    force = false,
+  ) => {
+    if (openedLoginUrlsRef.current[provider] === url) return true;
+    if (openingLoginUrlsRef.current[provider] === url) return false;
+
+    const now = Date.now();
+    const previous = loginUrlAttemptsRef.current[provider];
+    const attempt = previous?.url === url
+      ? previous
+      : { url, count: 0, lastAt: 0 };
+    if (!force && (attempt.count >= 3 || now - attempt.lastAt < 2_000)) return false;
+
+    loginUrlAttemptsRef.current[provider] = {
+      url,
+      count: attempt.count + 1,
+      lastAt: now,
+    };
+    openingLoginUrlsRef.current[provider] = url;
+    try {
+      const opened = await openExternalUrl(provider, url);
+      if (opened) openedLoginUrlsRef.current[provider] = url;
+      return opened;
+    } finally {
+      if (openingLoginUrlsRef.current[provider] === url) {
+        openingLoginUrlsRef.current[provider] = null;
+      }
+    }
+  }, []);
   const loginProvider = loginModal?.provider ?? null;
   useEffect(() => {
     if (!loginProvider) return;
@@ -393,9 +515,10 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
       if (cancelled) return;
       if (loginState) {
         const nextUrl = loginState.login_url || null;
-        if (nextUrl && openedLoginUrlsRef.current[loginProvider] !== nextUrl) {
+        if (nextUrl && loginState.browser_opened) {
           openedLoginUrlsRef.current[loginProvider] = nextUrl;
-          void openExternalUrl(loginProvider, nextUrl);
+        } else if (nextUrl && openedLoginUrlsRef.current[loginProvider] !== nextUrl) {
+          void openLoginUrlWithRetry(loginProvider, nextUrl);
         }
         setLoginModal((m) =>
           m?.provider === loginProvider
@@ -436,7 +559,7 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
       cancelled = true;
       stopPolling();
     };
-  }, [copy.loginModalTimeout, loginProvider]);
+  }, [copy.loginModalTimeout, loginProvider, openLoginUrlWithRetry]);
 
   function loginNoticeForResult(p: ProviderDef, result: ProviderLoginOauthResult) {
     if (result.already_logged_in) return copy.loginAlreadyConnected(p.name);
@@ -460,6 +583,8 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
     setPanelError(null);
     setPanelNotice(null);
     openedLoginUrlsRef.current[p.id] = null;
+    openingLoginUrlsRef.current[p.id] = null;
+    delete loginUrlAttemptsRef.current[p.id];
     try {
       const result = await providerLoginOauth(p.id, force);
       const notice = loginNoticeForResult(p, result);
@@ -474,8 +599,8 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
         failed: null,
       });
       if (result.login_url) {
-        openedLoginUrlsRef.current[p.id] = result.login_url;
-        void openExternalUrl(p.id, result.login_url);
+        if (result.browser_opened) openedLoginUrlsRef.current[p.id] = result.login_url;
+        else void openLoginUrlWithRetry(p.id, result.login_url);
       }
       void refresh(p.id);
       if (result.completed || result.already_logged_in) {
@@ -489,52 +614,191 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
     }
   }
 
+  async function runBrowserProbe(provider: "claude" | "codex") {
+    setBrowserProbeBusy(provider);
+    setBrowserProbeResult(null);
+    setBrowserProbeError(null);
+    try {
+      setBrowserProbeResult(await providerOauthBrowserProbe(provider));
+    } catch (error) {
+      setBrowserProbeError(copy.browserProbeFailed(String(error)));
+    } finally {
+      setBrowserProbeBusy(null);
+    }
+  }
+
+  const providerChoices: Array<{ id: ProviderId; name: string }> = [
+    ...PROVIDERS.filter((provider) => provider.id !== "gajecode").map((provider) => ({
+      id: provider.id,
+      name: provider.name,
+    })),
+    { id: "hermes", name: copy.hermesTitle },
+    { id: "gajecode", name: "가재코드" },
+  ];
+  const selectedProvider = PROVIDERS.find((provider) => provider.id === selectedProviderId) ?? null;
+
   return (
     <div className={cls("space-y-4", dark ? "text-dink" : "text-ink")}>
-      <header className="space-y-1.5">
-        <h2 className="font-display text-[20px] font-[500]">{copy.title}</h2>
-        <p className={cls("text-[13px] leading-relaxed max-w-[640px]", dark ? "text-dsub" : "text-sub")}>
-          {copy.sub}
-        </p>
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-1.5">
+          <h2 className="font-display text-[20px] font-[500]">{copy.title}</h2>
+          <p className={cls("text-[13px] leading-relaxed max-w-[720px]", dark ? "text-dsub" : "text-sub")}>
+            {copy.sub}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void refresh()}
+          className={cls(
+            "h-8 shrink-0 rounded-md border px-3 text-[12px] transition-colors",
+            dark
+              ? "border-dline text-dsub hover:bg-dpanel hover:text-dink"
+              : "border-line text-sub hover:bg-panel hover:text-ink",
+          )}
+        >
+          ↻ {copy.refresh}
+        </button>
       </header>
 
-      <div className="space-y-3">
-        {PROVIDERS.map((p) => (
+      <div
+        data-testid="connection-provider-picker"
+        className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-7"
+      >
+        {providerChoices.map((provider) => {
+          const status = connectionStatus(provider.id, statuses[provider.id], copy);
+          const selected = provider.id === selectedProviderId;
+          return (
+            <button
+              key={provider.id}
+              type="button"
+              data-connection-provider={provider.id}
+              aria-pressed={selected}
+              onClick={() => setSelectedProviderId(provider.id)}
+              className={cls(
+                "min-w-0 rounded-md border px-3 py-2 text-left transition-colors",
+                selected
+                  ? "border-[var(--accent)] bg-[var(--accent)]/10"
+                  : dark
+                  ? "border-dline bg-dpanel hover:border-[var(--accent-hover)]"
+                  : "border-line bg-panel hover:border-[var(--accent-hover)]",
+              )}
+            >
+              <span className="block truncate text-[12px] font-medium">{provider.name}</span>
+              <span className="mt-1 block">
+                <StatusDot tone={status.tone} label={status.label} dark={dark} />
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div data-testid="selected-connection-provider" className="space-y-3">
+        {selectedProvider && (
           <ProviderCard
-            key={p.id}
-            def={p}
+            key={selectedProvider.id}
+            def={selectedProvider}
             tw={tw}
-            status={statuses[p.id]}
-            busy={busyId === p.id}
-            onStartLogin={(force) => void startLogin(p, force)}
-            onSaved={() => void refresh(p.id)}
-            onCleared={() => void refresh(p.id)}
+            status={statuses[selectedProvider.id]}
+            busy={busyId === selectedProvider.id}
+            onStartLogin={(force) => void startLogin(selectedProvider, force)}
+            onSaved={() => void refresh(selectedProvider.id)}
+            onCleared={() => void refresh(selectedProvider.id)}
             onInstalled={() => {
-              setBusyId(p.id);
+              setBusyId(selectedProvider.id);
               setTimeout(() => {
                 setBusyId(null);
-                void refresh(p.id);
+                void refresh(selectedProvider.id);
               }, 4000);
             }}
           />
-        ))}
+        )}
 
-        <HermesCard
-          tw={tw}
-          statuses={statuses}
-          onInstalled={() => {
-            setTimeout(() => void refresh("hermes"), 1000);
-          }}
-        />
+        {selectedProviderId === "hermes" && (
+          <HermesCard
+            tw={tw}
+            statuses={statuses}
+            onInstalled={() => {
+              setTimeout(() => void refresh("hermes"), 1000);
+            }}
+          />
+        )}
 
-        <GajecodeCard
-          tw={tw}
-          status={statuses.gajecode}
-          onUpdated={() => {
-            setTimeout(() => void refresh("gajecode"), 1000);
-          }}
-        />
+        {selectedProviderId === "gajecode" && (
+          <GajecodeCard
+            tw={tw}
+            status={statuses.gajecode}
+            onUpdated={() => {
+              setTimeout(() => void refresh("gajecode"), 1000);
+            }}
+          />
+        )}
       </div>
+
+      <details
+        data-testid="browser-handoff-diagnostics"
+        className={cls("border-y", dark ? "border-dline" : "border-line")}
+      >
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 py-3 text-[12.5px] font-medium">
+          <span>{copy.browserProbeTitle}</span>
+          <span className={cls("text-[11px]", dark ? "text-dsub" : "text-sub")}>
+            {lang === "ko" ? "필요할 때 열기" : "Open when needed"}
+          </span>
+        </summary>
+        <div className="pb-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void runBrowserProbe("claude")}
+              disabled={browserProbeBusy !== null}
+              className={cls(
+                "h-8 rounded-md border px-3 text-[12px] disabled:opacity-50",
+                dark ? "border-dline text-dsub hover:text-dink" : "border-line text-sub hover:text-ink",
+              )}
+            >
+              {browserProbeBusy === "claude" ? copy.browserProbeRunning : copy.browserProbeClaude}
+            </button>
+            <button
+              type="button"
+              onClick={() => void runBrowserProbe("codex")}
+              disabled={browserProbeBusy !== null}
+              className={cls(
+                "h-8 rounded-md border px-3 text-[12px] disabled:opacity-50",
+                dark ? "border-dline text-dsub hover:text-dink" : "border-line text-sub hover:text-ink",
+              )}
+            >
+              {browserProbeBusy === "codex" ? copy.browserProbeRunning : copy.browserProbeCodex}
+            </button>
+          </div>
+          {browserProbeResult && (
+            <div className={cls("mt-2 text-[11.5px] leading-relaxed", dark ? "text-dsub" : "text-sub")}>
+              {copy.browserProbeSuccess(
+                browserProbeResult.provider === "claude" ? "Claude" : "Codex",
+                browserProbeResult.handoff,
+              )}
+            </div>
+          )}
+          {browserProbeError && (
+            <div className={cls("mt-2 text-[11.5px]", dark ? "text-red-300" : "text-red-700")}>
+              {browserProbeError}
+            </div>
+          )}
+        </div>
+      </details>
+
+      <details
+        data-testid="connection-tools"
+        className={cls("rounded-lg border", dark ? "border-dline bg-dpanel" : "border-line bg-panel")}
+      >
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-[12.5px] font-medium">
+          <span>{lang === "ko" ? "연결 도구" : "Connection tools"}</span>
+          <span className={cls("text-[11px] font-normal", dark ? "text-dsub" : "text-sub")}>
+            {lang === "ko" ? "SSH · 개발 서비스 · 사용량" : "SSH · dev services · usage"}
+          </span>
+        </summary>
+        <div className={cls("space-y-3 border-t p-3", dark ? "border-dline" : "border-line")}>
+          <FeaturePanels slot="connections" tw={tw} />
+        </div>
+      </details>
 
       {panelError && (
         <div
@@ -556,20 +820,6 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
           {panelNotice}
         </div>
       )}
-
-      <div className="pt-2">
-        <button
-          onClick={() => void refresh()}
-          className={cls(
-            "text-[12px] px-3 h-8 rounded-md border transition-colors",
-            dark
-              ? "border-dline text-dsub hover:text-dink hover:bg-dpanel"
-              : "border-line text-sub hover:text-ink hover:bg-panel",
-          )}
-        >
-          ↻ {copy.refresh}
-        </button>
-      </div>
 
       {loginModal && (
         <LoginModal
@@ -626,7 +876,7 @@ const ProviderCard: React.FC<CardProps> = ({
   const oauthLoggedIn = status?.oauth_logged_in ?? false;
   const apiKeyPresent = status?.api_key_present ?? false;
   const connected = oauthLoggedIn || apiKeyPresent;
-  const shouldForceOauthLogin = def.id === "claude" && oauthLoggedIn;
+  const shouldForceOauthLogin = (def.id === "claude" || def.id === "codex") && oauthLoggedIn;
   const oauthButtonLabel = shouldForceOauthLogin ? copy.oauthReconnect : def.oauthCta[lang];
 
   const statusLabel = connected
@@ -1101,7 +1351,7 @@ const HermesCard: React.FC<{
         <div className={cls("text-[11.5px] uppercase tracking-wider font-semibold mb-2", dark ? "text-dsub" : "text-sub")}>
           {copy.hermesBackendLabel}
         </div>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
           {HERMES_BACKENDS.map((b) => {
             const s = statuses[b.credentialProvider];
             const ok = !!s && (s.oauth_logged_in || s.api_key_present);
