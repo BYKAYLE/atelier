@@ -14,6 +14,9 @@ param(
   [int]$BrowserProbeTimeoutSec = 20,
   [string]$AtelierExe = "",
   [string]$ExpectedVersion = "",
+  [string]$ReleaseTag = "",
+  [string]$SourceSha = "",
+  [string]$RunId = "",
   [string]$LogDir = "$env:LOCALAPPDATA\Atelier\diagnostics"
 )
 
@@ -724,7 +727,12 @@ try {
   }
 
   $summary = [ordered]@{
+    schemaVersion = 1
     generatedAt = (Get-Date).ToString("o")
+    releaseTag = $ReleaseTag
+    sourceSha = $SourceSha.ToLowerInvariant()
+    expectedVersion = $ExpectedVersion.TrimStart("v")
+    githubRunId = $RunId
     installRequested = [bool]$Install
     loginRequested = [bool]$Login
     providers = @()

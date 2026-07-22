@@ -1,5 +1,33 @@
 # Evidence Log
 
+## 2026-07-23 Release Publication Gate Hardening (Source/Workflow)
+
+- The version-tag workflow now keeps macOS and Windows assets in one private
+  draft and seals the complete asset set in `release-manifest.json`; it cannot
+  publish a partial release.
+- macOS publication candidates must prove Developer ID Application signing,
+  Gatekeeper acceptance, and stapled notarization tickets for the app and DMG.
+- The Windows physical gate downloads and installs the exact signed draft MSI,
+  verifies Authenticode and embedded resources, restarts the same installed
+  executable, and records exact version, renderer, persistence, visible browser
+  handoff, Claude/Codex authentication, and optional Smart App Control proof.
+- A separate `production-release` environment workflow validates the selected
+  successful physical-gate run and exact manifest/source binding. It is the
+  only code path that can remove draft state, and requires `PUBLISH <tag>`.
+- Cross-review hardening now rejects evidence mixed across workflow runs,
+  requires candidate/package/provider receipts to share the exact run ID and
+  source SHA, extracts the NSIS payload with 7-Zip, and binds its executable,
+  resources, version, and Authenticode status to the sealed manifest. The
+  publisher also re-downloads the remote draft immediately before publication
+  and rejects any manifest change after evidence validation.
+- The macOS notarization gate now mounts the stapled DMG, copies the app into a
+  fresh installed location, and repeats Developer ID, Gatekeeper, stapler,
+  exact-version, and renderer-ready checks against that installed copy.
+- Candidate sealing, tamper rejection, publication-evidence rejection, and the
+  release-security audit pass locally. This is source/workflow evidence only;
+  no Developer ID/SignPath credentials, physical Windows runner result, or
+  public GitHub release is inferred or claimed.
+
 ## 2026-07-22 Atelier 0.2.12 Release Candidate
 
 - Hardened provider CLI installation so release builds no longer execute

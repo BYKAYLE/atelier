@@ -7,7 +7,7 @@ Atelier는 Claude Code, Codex, Hermes, Gajae Code를 하나의 구조화된 작�
 세션 재연결, 작업 격리, 변경사항 리뷰, 라이브 프리뷰 검증, 구독 로그인,
 업데이트를 하나의 로컬 작업 기록으로 묶습니다.
 
-현재 개발 기준은 `0.2.8`입니다. 소스, 패키지, 설치 앱, 실제 Windows
+현재 개발 기준은 `0.2.12`입니다. 소스, 패키지, 설치 앱, 실제 Windows
 동작은 서로 다른 증거로 관리하며, 교차 컴파일 성공을 물리 Windows 검증으로
 간주하지 않습니다.
 
@@ -129,6 +129,7 @@ Windows normal, Store, SignPath 경로는 서로 다른 워크플로로 검증�
 
 - Microsoft Store: [docs/microsoft-store-release.md](docs/microsoft-store-release.md)
 - Windows signing: [docs/windows-code-signing.md](docs/windows-code-signing.md)
+- Release process: [docs/release-process.md](docs/release-process.md)
 - Code signing policy: [docs/code-signing-policy.md](docs/code-signing-policy.md)
 - Privacy policy: [docs/privacy-policy.md](docs/privacy-policy.md)
 

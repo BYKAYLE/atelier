@@ -1,0 +1,184 @@
+name: Publish Sealed Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Sealed private draft release tag"
+        required: true
+        type: string
+      physical_gate_run_id:
+        description: "Successful Windows Physical Release Gate run ID"
+        required: true
+        type: string
+      approval:
+        description: "Type PUBLISH followed by the release tag"
+        required: true
+        type: string
+      allow_initial_signed_channel:
+        description: "Accept the first signed direct-channel release without an older baseline"
+        required: false
+        type: boolean
+        default: false
+      require_smart_app_control_evidence:
+        description: "Require readable Smart App Control state evidence"
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: publish-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_OWNER: ${{ vars.RELEASE_OWNER || github.repository_owner }}
+  RELEASE_REPO: ${{ vars.RELEASE_REPO || github.event.repository.name }}
+
+jobs:
+  publish:
+    name: Verify signed evidence and publish
+    runs-on: ubuntu-latest
+    environment: production-release
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Require explicit release approval
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          APPROVAL: ${{ inputs.approval }}
+          PHYSICAL_GATE_RUN_ID: ${{ inputs.physical_gate_run_id }}
+        run: |
+          test "$APPROVAL" = "PUBLISH $RELEASE_TAG" || {
+            echo "Approval must exactly match: PUBLISH $RELEASE_TAG" >&2
+            exit 1
+          }
+          case "$PHYSICAL_GATE_RUN_ID" in
+            ''|*[!0-9]*) echo "physical_gate_run_id must be numeric" >&2; exit 1 ;;
+          esac
+
+      - name: Checkout exact release tag
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.release_tag }}
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      - name: Resolve exact draft source
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN || github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          source_sha="$(git rev-parse HEAD)"
+          version="$(node -p "require('./package.json').version")"
+          test "$RELEASE_TAG" = "v$version" || {
+            echo "Tag $RELEASE_TAG does not match package version $version" >&2
+            exit 1
+          }
+          release_json="$(gh release view "$RELEASE_TAG" \
+            --repo "$RELEASE_OWNER/$RELEASE_REPO" \
+            --json isDraft,isPrerelease,tagName)"
+          node -e '
+            const release = JSON.parse(process.argv[1]);
+            if (!release.isDraft) throw new Error("Release must still be a private draft");
+            if (release.isPrerelease) throw new Error("Production release cannot be a prerelease");
+            if (release.tagName !== process.env.RELEASE_TAG) throw new Error("Release tag mismatch");
+          ' "$release_json"
+          echo "RELEASE_SOURCE_SHA=$source_sha" >> "$GITHUB_ENV"
+          echo "EXPECTED_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Download and verify sealed candidate
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN || github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_ASSETS_DIR: candidate-assets
+        run: |
+          mkdir -p "$RELEASE_ASSETS_DIR"
+          gh release download "$RELEASE_TAG" \
+            --repo "$RELEASE_OWNER/$RELEASE_REPO" \
+            --dir "$RELEASE_ASSETS_DIR"
+          node .github/scripts/verify-release-candidate.mjs
+          echo "CANDIDATE_MANIFEST_SHA=$(sha256sum "$RELEASE_ASSETS_DIR/release-manifest.json" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: Verify physical gate workflow identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PHYSICAL_GATE_RUN_ID: ${{ inputs.physical_gate_run_id }}
+        run: |
+          run_json="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$PHYSICAL_GATE_RUN_ID")"
+          # shellcheck disable=SC2016
+          node -e '
+            const run = JSON.parse(process.argv[1]);
+            if (run.event !== "workflow_dispatch") throw new Error("Physical gate was not manually dispatched");
+            if (run.conclusion !== "success") throw new Error(`Physical gate conclusion is ${run.conclusion}`);
+            if (run.path !== ".github/workflows/windows-physical-release-gate.yml") {
+              throw new Error(`Unexpected evidence workflow: ${run.path}`);
+            }
+            if (run.repository?.full_name !== process.env.GITHUB_REPOSITORY) {
+              throw new Error("Physical gate belongs to a different repository");
+            }
+            if (String(run.head_sha || "").toLowerCase() !== process.env.RELEASE_SOURCE_SHA.toLowerCase()) {
+              throw new Error("Physical gate was not dispatched from the exact release source SHA");
+            }
+          ' "$run_json"
+
+      - name: Download exact physical gate evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PHYSICAL_GATE_RUN_ID: ${{ inputs.physical_gate_run_id }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          mkdir -p physical-evidence
+          gh run download "$PHYSICAL_GATE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "atelier-windows-physical-release-gate-$RELEASE_TAG" \
+            --dir physical-evidence
+
+      - name: Validate publish evidence
+        env:
+          EVIDENCE_DIR: physical-evidence
+          RELEASE_ASSETS_DIR: candidate-assets
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          ALLOW_INITIAL_SIGNED_CHANNEL: ${{ inputs.allow_initial_signed_channel }}
+          REQUIRE_SMART_APP_CONTROL_EVIDENCE: ${{ inputs.require_smart_app_control_evidence }}
+          PHYSICAL_GATE_RUN_ID: ${{ inputs.physical_gate_run_id }}
+        run: node .github/scripts/validate-publish-evidence.mjs
+
+      - name: Retain accepted publication evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: atelier-publish-evidence-${{ inputs.release_tag }}
+          path: |
+            physical-evidence/**
+            candidate-assets/release-manifest.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish the verified draft
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN || github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_ASSETS_DIR: final-candidate-assets
+        run: |
+          test "$(gh release view "$RELEASE_TAG" \
+            --repo "$RELEASE_OWNER/$RELEASE_REPO" \
+            --json isDraft \
+            --jq .isDraft)" = "true"
+          mkdir "$RELEASE_ASSETS_DIR"
+          gh release download "$RELEASE_TAG" \
+            --repo "$RELEASE_OWNER/$RELEASE_REPO" \
+            --dir "$RELEASE_ASSETS_DIR"
+          node .github/scripts/verify-release-candidate.mjs
+          final_manifest_sha="$(sha256sum "$RELEASE_ASSETS_DIR/release-manifest.json" | cut -d' ' -f1)"
+          test "$final_manifest_sha" = "$CANDIDATE_MANIFEST_SHA" || {
+            echo "Remote draft manifest changed after evidence validation" >&2
+            exit 1
+          }
+          gh release edit "$RELEASE_TAG" \
+            --repo "$RELEASE_OWNER/$RELEASE_REPO" \
+            --draft=false \
+            --latest

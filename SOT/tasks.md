@@ -1,8 +1,23 @@
 # Stella Factory Task Ledger
 
-Last updated: 2026-07-22
+Last updated: 2026-07-23
 
 ## Completed
+
+- Replaced the partial tag-publication path with a sealed private-draft
+  release pipeline. The candidate manifest binds all platform assets to the
+  exact tag, version, source commit, hashes, sizes, URLs, and updater
+  signatures. Publication now requires a selected successful interactive
+  Windows physical-gate run, exact evidence validation, the protected
+  `production-release` environment, and an explicit `PUBLISH <tag>` approval.
+- Added fail-closed Developer ID/Gatekeeper/notarization checks for macOS and
+  exact signed-candidate install, restart, renderer, provider-login, browser
+  visibility, update-persistence, and Smart App Control evidence checks for
+  Windows. No unsigned or partially built release can become public.
+- Bound publication to one exact physical-gate run and source SHA. The gate now
+  verifies MSI and NSIS inner payloads, while the publisher re-downloads and
+  reverifies the remote draft immediately before publication to close stale or
+  substituted evidence paths.
 
 - Prepared and installed the 0.2.12 local release candidate. The packaged and
   `/Applications` executables match exactly, the installed app reports 0.2.12,

@@ -66,6 +66,8 @@
     "gate:orca-features": "node tools/orca-feature-release-gate.mjs",
     "smoke:renderer-ready:mac": "bash tools/renderer-ready-smoke.sh",
     "smoke:updater-contract": "node tools/updater-contract-smoke.mjs",
+    "smoke:release-candidate": "node tools/release-candidate-smoke.mjs",
+    "smoke:publish-evidence": "node tools/publish-evidence-smoke.mjs",
     "tauri:trust": "bash tools/verify-macos-bundle.sh"
   },
   "dependencies": {

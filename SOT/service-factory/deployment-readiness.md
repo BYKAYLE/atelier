@@ -14,6 +14,30 @@ execution_lifecycle_stabilization_installed_at: 2026-07-20T20:14:15+09:00
 
 release_candidate_0_2_12_installed_at: 2026-07-22T22:56:31+09:00
 
+release_publication_gate_hardened_at: 2026-07-23T00:19:08+09:00
+
+release_evidence_binding_hardened_at: 2026-07-23T00:45:00+09:00
+
+> Release publication gate update: version tags now create only a sealed
+> private draft. `release-manifest.json` binds the complete macOS and Windows
+> asset set, updater signatures, byte lengths, SHA-256 hashes, version, tag,
+> and source commit. A separate interactive Windows gate must install that
+> exact signed candidate and produce browser-visibility, provider-auth,
+> renderer, restart, update-persistence, and optional Smart App Control
+> evidence. Only the protected `production-release` workflow can publish the
+> draft after validating a selected successful gate run and an exact operator
+> confirmation. This is source/workflow proof; real Developer ID, SignPath,
+> physical Windows, and public-release evidence are still external gates.
+
+> Cross-review correction: publication evidence is now run-local and binds the
+> candidate, MSI/NSIS payload proofs, provider authentication, source SHA, and
+> selected GitHub run ID. The Windows gate must run from the exact release tag
+> and extracts the NSIS payload with 7-Zip. The publisher re-downloads and
+> reverifies the remote draft immediately before changing draft state. The
+> macOS gate also verifies a fresh installed copy taken from the stapled DMG.
+> These are source/workflow protections; no external signing or physical-device
+> result is claimed by this record.
+
 > Current 0.2.12 candidate: the complete gate passes 20 contract smokes,
 > ten removable backend feature builds, 188 Rust tests with one live-login test
 > intentionally ignored, strict all-feature Clippy, production frontend build,
@@ -96,7 +120,7 @@ external evidence that this macOS host cannot produce.
 ## Source Truth
 
 - Version metadata is consistent across `package.json`, `Cargo.toml`,
-  `Cargo.lock`, `package-lock.json`, and `tauri.conf.json`: `0.2.5`.
+  `Cargo.lock`, `package-lock.json`, and `tauri.conf.json`: `0.2.12`.
 - Frontend production build passes. The current Quick Open searches up to 24
   persisted sessions by task, provider, source folder, and isolated-worktree
   branch; it is not yet a file, command, or repository-context palette. The

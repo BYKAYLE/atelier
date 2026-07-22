@@ -5,8 +5,10 @@ the primary Windows trust path is now Microsoft Store distribution. See
 `docs/microsoft-store-release.md` for the Store MSIX workflow.
 
 The SignPath path builds on GitHub-hosted Windows runners, uploads the unsigned
-installer as a GitHub Actions artifact, submits it to SignPath, then releases
-only after the signed installers are returned.
+installer as a GitHub Actions artifact, submits it to SignPath, and keeps the
+returned signed installers in a private draft. A separate interactive Windows
+gate installs that exact draft candidate. Publication is a distinct,
+approval-protected workflow and is never performed by the tag build.
 
 This keeps the SignPath origin-verification chain intact if the project is
 approved. New projects can be declined for insufficient public reputation, so
@@ -49,14 +51,29 @@ updater endpoint in `src-tauri/tauri.conf.json` is migrated at the same time.
 
 ## Workflow
 
-`.github/workflows/release.yml` now uses three jobs:
+The direct-download release has three independent stages:
 
-- `build-macos` builds and uploads the macOS release with Tauri Action.
-- `build-windows-unsigned` builds unsigned Windows MSI/NSIS installers and
-  uploads them as a GitHub Actions artifact.
-- `sign-windows` submits that artifact to SignPath, waits for completion,
-  regenerates Tauri updater `.sig` files from the signed installers, merges the
-  Windows entries into `latest.json`, and uploads the signed assets.
+1. `.github/workflows/release.yml` runs only for a version tag. It builds a
+   Developer ID signed and notarized macOS app, builds Windows MSI/NSIS
+   installers, sends the Windows payload to SignPath, and uploads every asset
+   to a **private draft**. It then seals the exact asset hashes, updater
+   signatures, tag, version, and source commit in `release-manifest.json`.
+2. `.github/workflows/windows-physical-release-gate.yml` runs on an interactive
+   self-hosted Windows x64 runner. It downloads that private draft, verifies
+   the manifest and Authenticode signatures, extracts both MSI and NSIS payloads
+   with 7-Zip, installs the exact MSI, restarts the installed executable, and
+   proves version persistence, renderer startup, visible Claude/Codex browser
+   login, CLI authentication, and optional Smart App Control state. Dispatch
+   the workflow from the exact release tag; a branch-dispatched run is refused.
+3. `.github/workflows/publish-release.yml` downloads the evidence from one
+   explicitly selected successful physical-gate run. The protected
+   `production-release` environment and an exact `PUBLISH <tag>` confirmation
+   are both required. Every receipt must bind to that run ID and source SHA,
+   and the remote draft is re-downloaded and reverified immediately before its
+   draft flag is removed. This is the only workflow allowed to remove draft
+   state.
+
+See `docs/release-process.md` for the complete operator checklist.
 
 ## SignPath Project Notes
 
@@ -71,7 +88,8 @@ For the SignPath project configuration:
 
 The release workflow intentionally does not use Azure Artifact Signing anymore.
 
-The workflow also has no unsigned fallback. If the SignPath secret or project
-configuration is missing, the release fails before any Windows installer is
-published. Tauri updater signatures verify update integrity, but they do not
-replace Windows Authenticode trust for Smart App Control.
+The workflows have no unsigned fallback. If SignPath, Developer ID,
+notarization, updater signing, physical-runner evidence, or release approval is
+missing, the candidate stays private or the run fails. Tauri updater
+signatures verify update integrity, but they do not replace Windows
+Authenticode trust for Smart App Control.

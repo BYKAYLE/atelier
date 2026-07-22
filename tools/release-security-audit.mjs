@@ -23,12 +23,34 @@ const cargoSource = readFileSync(manifest, "utf8");
 const packageSource = readFileSync("package.json", "utf8");
 const storeBuildSource = readFileSync("tools/windows-store/build-msix.ps1", "utf8");
 const windowsProviderSmokeSource = readFileSync("tools/windows-provider-smoke.ps1", "utf8");
+const windowsPackageSmokeSource = readFileSync("tools/windows-package-smoke.ps1", "utf8");
 const windowsProviderWorkflowSource = readFileSync(
   ".github/workflows/windows-provider-smoke.yml",
   "utf8",
 );
+const releaseWorkflowSource = readFileSync(".github/workflows/release.yml", "utf8");
 const windowsPhysicalGateSource = readFileSync(
   ".github/workflows/windows-physical-release-gate.yml",
+  "utf8",
+);
+const publishReleaseWorkflowSource = readFileSync(
+  ".github/workflows/publish-release.yml",
+  "utf8",
+);
+const releaseCandidateGateSource = readFileSync(
+  "tools/windows-release-candidate-gate.ps1",
+  "utf8",
+);
+const releaseCandidateSealSource = readFileSync(
+  ".github/scripts/seal-release-candidate.mjs",
+  "utf8",
+);
+const releaseCandidateVerifySource = readFileSync(
+  ".github/scripts/verify-release-candidate.mjs",
+  "utf8",
+);
+const publishEvidenceSource = readFileSync(
+  ".github/scripts/validate-publish-evidence.mjs",
   "utf8",
 );
 const ptySupervisorSmokeSource = readFileSync("tools/pty-supervisor-smoke.mjs", "utf8");
@@ -66,9 +88,11 @@ const devScreenPickerSmokeSource = readFileSync("tools/devscreen-element-picker-
 const previewEvidenceSource = readFileSync("src/lib/previewEvidence.ts", "utf8");
 const previewEvidenceSmokeSource = readFileSync("tools/preview-evidence-smoke.ts", "utf8");
 const workflowSource = [
-  readFileSync(".github/workflows/release.yml", "utf8"),
+  releaseWorkflowSource,
   readFileSync(".github/workflows/windows-store.yml", "utf8"),
   windowsProviderWorkflowSource,
+  windowsPhysicalGateSource,
+  publishReleaseWorkflowSource,
 ].join("\n");
 const openLoginBrowserSource = credentialSource
   .split("fn open_login_url_in_browser", 2)[1]
@@ -125,7 +149,14 @@ const sourceInvariants = [
       windowsPhysicalGateSource.includes("-RequireRendererReadyEvidence") &&
       windowsPhysicalGateSource.includes("-RequireBrowserProcessEvidence") &&
       windowsPhysicalGateSource.includes("-RequireVisibleBrowserWindowEvidence") &&
-      windowsPhysicalGateSource.includes("-SelfTest"),
+      windowsPhysicalGateSource.includes("-SelfTest") &&
+      windowsPhysicalGateSource.includes("verify-release-candidate.mjs") &&
+      windowsPhysicalGateSource.includes("windows-release-candidate-gate.ps1") &&
+      windowsPhysicalGateSource.includes("gh release download") &&
+      releaseCandidateGateSource.includes("[Environment]::UserInteractive") &&
+      releaseCandidateGateSource.includes("Get-AuthenticodeSignature") &&
+      releaseCandidateGateSource.includes("--atelier-renderer-ready-probe") &&
+      releaseCandidateGateSource.includes("upgradePersistenceProved"),
     message:
       "Physical Windows release gate must prove installed version, signature, restart, browser auth, and Smart App Control evidence",
   },
@@ -536,6 +567,84 @@ const sourceInvariants = [
       packageSource.includes('"smoke:updater-contract"') &&
       workflowSource.includes("npm run smoke:updater-contract"),
     message: "Release workflows must verify the signed Windows updater platform contract",
+  },
+  {
+    ok:
+      !releaseWorkflowSource.includes("workflow_dispatch:") &&
+      releaseWorkflowSource.includes('tags:\n      - "v*"') &&
+      releaseWorkflowSource.includes("releaseDraft: true") &&
+      !releaseWorkflowSource.includes("releaseDraft: false") &&
+      releaseWorkflowSource.includes("seal-release-candidate.mjs") &&
+      releaseWorkflowSource.includes("release-manifest.json") &&
+      releaseCandidateSealSource.includes('status: "signed-draft-candidate"') &&
+      releaseCandidateSealSource.includes('releaseChannel: "github-draft"') &&
+      releaseCandidateVerifySource.includes('manifest.status !== "signed-draft-candidate"') &&
+      releaseCandidateVerifySource.includes("signature changed after sealing"),
+    message:
+      "Tag builds must remain private drafts until the complete signed candidate manifest is sealed",
+  },
+  {
+    ok:
+      publishReleaseWorkflowSource.includes("workflow_dispatch:") &&
+      publishReleaseWorkflowSource.includes("environment: production-release") &&
+      publishReleaseWorkflowSource.includes('test "$APPROVAL" = "PUBLISH $RELEASE_TAG"') &&
+      publishReleaseWorkflowSource.includes("validate-publish-evidence.mjs") &&
+      publishReleaseWorkflowSource.includes("physical_gate_run_id") &&
+      publishReleaseWorkflowSource.includes("windows-physical-release-gate.yml") &&
+      publishReleaseWorkflowSource.includes("run.head_sha") &&
+      publishReleaseWorkflowSource.includes("final-candidate-assets") &&
+      publishReleaseWorkflowSource.includes("CANDIDATE_MANIFEST_SHA") &&
+      publishReleaseWorkflowSource.includes('--repo "$RELEASE_OWNER/$RELEASE_REPO"') &&
+      publishReleaseWorkflowSource.includes("--draft=false") &&
+      (workflowSource.match(/--draft=false/g) || []).length === 1 &&
+      publishEvidenceSource.includes("upgradePersistenceProved") &&
+      publishEvidenceSource.includes("visibleWindow") &&
+      publishEvidenceSource.includes("claudeAuthOk") &&
+      publishEvidenceSource.includes("codexAuthOk") &&
+      publishEvidenceSource.includes("PHYSICAL_GATE_RUN_ID") &&
+      publishEvidenceSource.includes("expected exactly one Windows provider receipt") &&
+      publishEvidenceSource.includes("package GitHub run ID") &&
+      publishEvidenceSource.includes('["nsis", nsisAsset]') &&
+      publishEvidenceSource.includes("${kind} package hash") &&
+      publishEvidenceSource.includes("provider/candidate installed executable path"),
+    message:
+      "Only the approval-gated publisher may make a release public after exact physical evidence validation",
+  },
+  {
+    ok:
+      releaseWorkflowSource.includes("TAURI_SIGNING_PRIVATE_KEY") &&
+      releaseWorkflowSource.includes("TAURI_SIGNING_PRIVATE_KEY_PASSWORD") &&
+      releaseWorkflowSource.includes("codesign --verify --deep --strict") &&
+      releaseWorkflowSource.includes("Authority=Developer ID Application:") &&
+      releaseWorkflowSource.includes("spctl --assess --type execute") &&
+      releaseWorkflowSource.includes("hdiutil attach") &&
+      releaseWorkflowSource.includes('ditto "$mount_root/Atelier.app"') &&
+      releaseWorkflowSource.includes('tools/renderer-ready-smoke.sh "$installed_app"') &&
+      (releaseWorkflowSource.match(/xcrun stapler validate/g) || []).length >= 3,
+    message:
+      "macOS candidates must prove updater signing, Developer ID, Gatekeeper, and stapled notarization receipts",
+  },
+  {
+    ok:
+      windowsPhysicalGateSource.includes('RELEASE_OWNER: ${{ vars.RELEASE_OWNER') &&
+      windowsPhysicalGateSource.includes('"-RunId", $env:GITHUB_RUN_ID') &&
+      windowsPhysicalGateSource.includes('"-LogDir", "artifacts/windows-provider-current"') &&
+      windowsPhysicalGateSource.includes("windows-package-smoke.json") &&
+      !windowsPhysicalGateSource.includes("collect-windows-provider-evidence.ps1") &&
+      releaseCandidateGateSource.includes("githubRunId = $RunId") &&
+      windowsProviderSmokeSource.includes("githubRunId = $RunId") &&
+      windowsPackageSmokeSource.includes("Find-7Zip") &&
+      windowsPackageSmokeSource.includes('Assert-AtelierPayload -Root $extractRoot -Kind "NSIS"'),
+    message:
+      "Windows publication evidence must be run-local, bind the GitHub run ID, and inspect signed MSI and NSIS payloads",
+  },
+  {
+    ok:
+      packageSource.includes('"smoke:release-candidate"') &&
+      packageSource.includes('"smoke:publish-evidence"') &&
+      (releaseWorkflowSource.match(/npm run smoke:release-candidate/g) || []).length >= 2 &&
+      (releaseWorkflowSource.match(/npm run smoke:publish-evidence/g) || []).length >= 2,
+    message: "macOS and Windows release gates must test candidate sealing and publication evidence",
   },
 ];
 for (const invariant of sourceInvariants) {

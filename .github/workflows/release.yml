@@ -4,7 +4,6 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
 
 env:
   RELEASE_OWNER: ${{ vars.RELEASE_OWNER || github.repository_owner }}
@@ -66,6 +65,8 @@ jobs:
           cargo build --manifest-path src-tauri/Cargo.toml
           npm run smoke:pty-supervisor
           npm run smoke:updater-contract
+          npm run smoke:release-candidate
+          npm run smoke:publish-evidence
           npm run audit:release
 
       - name: Generate release notes
@@ -80,9 +81,11 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           missing=()
-          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD; do
             if [ -z "${!name}" ]; then missing+=("$name"); fi
           done
           if [ ${#missing[@]} -gt 0 ]; then
@@ -113,11 +116,44 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "Atelier ${{ github.ref_name }}"
           releaseBody: ${{ steps.release-notes.outputs.body }}
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
           updaterJsonPreferNsis: true
           args: "--target universal-apple-darwin"
+
+      - name: Verify Developer ID, Gatekeeper, and notarization receipts
+        run: |
+          app_path="$(find target/universal-apple-darwin/release/bundle -type d -name 'Atelier.app' -print -quit)"
+          dmg_path="$(find target/universal-apple-darwin/release/bundle -type f -name '*.dmg' -print -quit)"
+          test -n "$app_path" && test -d "$app_path"
+          test -n "$dmg_path" && test -f "$dmg_path"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          codesign -dv --verbose=4 "$app_path" 2>&1 | tee codesign-evidence.txt
+          grep -q '^Authority=Developer ID Application:' codesign-evidence.txt
+          spctl --assess --type execute --verbose=4 "$app_path"
+          xcrun stapler validate "$app_path"
+          xcrun stapler validate "$dmg_path"
+
+          mount_root="$(mktemp -d "${RUNNER_TEMP}/atelier-dmg.XXXXXX")"
+          install_root="$(mktemp -d "${RUNNER_TEMP}/atelier-install.XXXXXX")"
+          cleanup_dmg() {
+            hdiutil detach "$mount_root" -quiet 2>/dev/null || true
+          }
+          trap cleanup_dmg EXIT
+          hdiutil attach "$dmg_path" -nobrowse -readonly -mountpoint "$mount_root"
+          test -d "$mount_root/Atelier.app"
+          ditto "$mount_root/Atelier.app" "$install_root/Atelier.app"
+          installed_app="$install_root/Atelier.app"
+          installed_exe="$installed_app/Contents/MacOS/atelier"
+          codesign --verify --deep --strict --verbose=2 "$installed_app"
+          spctl --assess --type execute --verbose=4 "$installed_app"
+          xcrun stapler validate "$installed_app"
+          expected_version="$(node -p "require('./package.json').version")"
+          test "$("$installed_exe" --atelier-version-probe)" = "$expected_version"
+          tools/renderer-ready-smoke.sh "$installed_app"
+          cleanup_dmg
+          trap - EXIT
 
   build-windows-unsigned:
     name: Build unsigned Windows bundle
@@ -173,6 +209,8 @@ jobs:
           cargo build --manifest-path src-tauri/Cargo.toml
           npm run smoke:pty-supervisor
           npm run smoke:updater-contract
+          npm run smoke:release-candidate
+          npm run smoke:publish-evidence
           npm run audit:release
           powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1 -SelfTest
           powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1 -Install -Strict
@@ -327,3 +365,64 @@ jobs:
           gh release upload $env:GITHUB_REF_NAME @assets `
             --repo "$env:RELEASE_OWNER/$env:RELEASE_REPO" `
             --clobber
+
+  seal-release-candidate:
+    name: Seal signed draft candidate
+    needs:
+      - build-macos
+      - sign-windows
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tagged source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      - name: Require an unpublished draft release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN || github.token }}
+        run: |
+          release_json="$(gh release view "$GITHUB_REF_NAME" \
+            --repo "$RELEASE_OWNER/$RELEASE_REPO" \
+            --json isDraft,isPrerelease,tagName,targetCommitish)"
+          node -e '
+            const release = JSON.parse(process.argv[1]);
+            if (!release.isDraft) throw new Error("Release candidate must remain a draft");
+            if (release.isPrerelease) throw new Error("Signed candidate must not be a prerelease");
+            if (release.tagName !== process.env.GITHUB_REF_NAME) throw new Error("Release tag mismatch");
+          ' "$release_json"
+
+      - name: Download signed release candidate assets
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN || github.token }}
+        run: |
+          mkdir -p candidate-assets
+          gh release download "$GITHUB_REF_NAME" \
+            --repo "$RELEASE_OWNER/$RELEASE_REPO" \
+            --dir candidate-assets
+
+      - name: Validate and seal candidate manifest
+        env:
+          RELEASE_ASSETS_DIR: candidate-assets
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_SOURCE_SHA: ${{ github.sha }}
+        run: node .github/scripts/seal-release-candidate.mjs
+
+      - name: Upload candidate manifest without publishing
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN || github.token }}
+        run: |
+          gh release upload "$GITHUB_REF_NAME" candidate-assets/release-manifest.json \
+            --repo "$RELEASE_OWNER/$RELEASE_REPO" \
+            --clobber
+          test "$(gh release view "$GITHUB_REF_NAME" \
+            --repo "$RELEASE_OWNER/$RELEASE_REPO" \
+            --json isDraft \
+            --jq .isDraft)" = "true"
