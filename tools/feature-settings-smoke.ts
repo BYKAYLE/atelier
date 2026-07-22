@@ -41,9 +41,16 @@ for (const contract of [
   'role="switch"',
   "overflow-hidden rounded-full",
   "absolute left-0.5 top-0.5",
+  'data-testid="feature-module-picker"',
+  'data-testid="feature-module-options"',
+  "data-feature-module-option={module.id}",
+  "aria-pressed={selected}",
+  'data-testid="selected-feature-settings"',
+  "selectedModuleId",
 ]) {
   assertContains(panel, contract, "feature settings panel");
 }
+assert.ok(!panel.includes('data-testid="feature-module-select"'), "feature settings panel: native select must stay removed");
 
 const registry = read("src/features/featureRegistry.tsx");
 assertContains(registry, "settings?: FeatureSettingsContribution", "feature registry settings contribution");

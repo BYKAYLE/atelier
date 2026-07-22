@@ -101,19 +101,8 @@ const RemoteAccessSection: React.FC<Props> = ({ tw }) => {
   );
 
   return (
-    <div data-testid="remote-access-section">
-      <div className="mb-8">
-        <div className={cls("font-display text-[32px] font-medium leading-tight", dark ? "text-dink" : "text-ink")}>
-          {ko ? "원격 접근" : "Remote access"}
-        </div>
-        <p className={cls("mt-2 text-[14px]", dark ? "text-dsub" : "text-sub")}>
-          {ko
-            ? "휴대폰에서 Atelier 작업 상태만 안전하게 확인합니다. 대화 원문과 자격증명은 공유되지 않습니다."
-            : "Monitor Atelier safely from a phone. Prompts and credentials are never shared."}
-        </p>
-      </div>
-
-      <section className={cls("border-y py-5", dark ? "border-dline" : "border-line")}>
+    <div data-testid="remote-access-section" className="min-w-0">
+      <section className={cls("border-y py-3", dark ? "border-dline" : "border-line")}>
         {!featureEnabled && (
           <div className="mb-4 rounded-md border border-amber-500/30 px-3 py-2 text-[12px] text-amber-500">
             {status?.running
@@ -185,7 +174,7 @@ const RemoteAccessSection: React.FC<Props> = ({ tw }) => {
         )}
       </section>
 
-      <section className={cls("border-b py-5", dark ? "border-dline" : "border-line")}>
+      <section className={cls("border-b py-3", dark ? "border-dline" : "border-line")}>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="text-[14px] font-medium">{ko ? "새 기기 연결" : "Pair a device"}</div>
@@ -237,7 +226,7 @@ const RemoteAccessSection: React.FC<Props> = ({ tw }) => {
         )}
       </section>
 
-      <section className="py-5">
+      <section className="py-3">
         <div className="flex items-center justify-between gap-3">
           <div className="text-[14px] font-medium">{ko ? "연결된 기기" : "Paired devices"}</div>
           <button type="button" className={buttonClass} disabled={!featureEnabled || busy !== null} onClick={() => void load()}>
@@ -246,7 +235,7 @@ const RemoteAccessSection: React.FC<Props> = ({ tw }) => {
         </div>
         <div className="mt-3 divide-y divide-current/10">
           {devices.length === 0 && (
-            <p className={cls("py-4 text-[12.5px]", dark ? "text-dsub" : "text-sub")}>
+            <p className={cls("py-2 text-[12.5px]", dark ? "text-dsub" : "text-sub")}>
               {ko ? "연결된 기기가 없습니다." : "No devices are paired."}
             </p>
           )}

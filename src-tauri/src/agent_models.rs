@@ -516,6 +516,86 @@ fn read_openrouter_models_cache() -> Option<String> {
     std::fs::read_to_string(openrouter_models_cache_path()?).ok()
 }
 
+fn openrouter_reasoning_metadata(item: &Value) -> (Option<Vec<String>>, Option<String>) {
+    let Some(reasoning) = item.get("reasoning").filter(|value| value.is_object()) else {
+        // OpenRouter can advertise the generic `reasoning` request parameter for
+        // routers that do not expose a selectable effort. The model-level
+        // `reasoning` object is the authoritative UI capability surface.
+        return (Some(Vec::new()), None);
+    };
+
+    let mandatory = reasoning
+        .get("mandatory")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let default_enabled = reasoning
+        .get("default_enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let supports_max_tokens = reasoning
+        .get("supports_max_tokens")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let all_efforts = || {
+        ["minimal", "low", "medium", "high", "xhigh", "max"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    let mut levels = match reasoning.get("supported_efforts") {
+        Some(Value::Array(entries)) => entries
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| {
+                matches!(
+                    value.as_str(),
+                    "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
+                )
+            })
+            .collect::<Vec<_>>(),
+        Some(Value::Null) => all_efforts(),
+        _ if supports_max_tokens => all_efforts(),
+        _ => Vec::new(),
+    };
+    if !levels.is_empty() && !mandatory && !levels.iter().any(|level| level == "none") {
+        levels.insert(0, "none".to_string());
+    }
+    if levels.is_empty() {
+        return (Some(Vec::new()), None);
+    }
+
+    let requested_default = reasoning
+        .get("default_effort")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            item.get("default_parameters").and_then(|parameters| {
+                parameters
+                    .get("reasoning")
+                    .and_then(|reasoning| reasoning.get("effort"))
+                    .and_then(Value::as_str)
+                    .or_else(|| parameters.get("reasoning_effort").and_then(Value::as_str))
+            })
+        })
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| levels.iter().any(|level| level == value));
+    let default_level = requested_default.or_else(|| {
+        if !default_enabled && levels.iter().any(|level| level == "none") {
+            return Some("none".to_string());
+        }
+        if levels.iter().any(|level| level == "medium") {
+            return Some("medium".to_string());
+        }
+        levels
+            .iter()
+            .find(|level| level.as_str() != "none")
+            .cloned()
+            .or_else(|| levels.first().cloned())
+    });
+
+    (Some(levels), default_level)
+}
+
 fn parse_openrouter_model_options(raw: &str, source: &str) -> Option<OpenRouterModelOptionsResult> {
     let value = serde_json::from_str::<Value>(raw).ok()?;
     let updated_at = json_string(&value, "fetched_at");
@@ -543,12 +623,14 @@ fn parse_openrouter_model_options(raw: &str, source: &str) -> Option<OpenRouterM
         if !seen.insert(id.clone()) {
             continue;
         }
+        let (supported_reasoning_levels, default_reasoning_level) =
+            openrouter_reasoning_metadata(item);
         models.push(AgentModelOption {
             label: json_string(item, "name").unwrap_or_else(|| id.clone()),
             value: id,
             disabled: None,
-            supported_reasoning_levels: None,
-            default_reasoning_level: None,
+            supported_reasoning_levels,
+            default_reasoning_level,
             requires_multi_agent_v2: None,
         });
     }
@@ -745,6 +827,110 @@ mod tests {
                 Some("low".to_string()),
             ),
             Some("xhigh".to_string())
+        );
+    }
+
+    #[test]
+    fn openrouter_catalog_exposes_reasoning_controls_per_model() {
+        let raw = serde_json::json!({
+            "data": [
+                {
+                    "id": "meituan/longcat-2.0",
+                    "name": "Meituan: LongCat 2.0",
+                    "architecture": { "output_modalities": ["text"] },
+                    "supported_parameters": ["reasoning", "tools"],
+                    "default_parameters": {},
+                    "reasoning": {
+                        "mandatory": false,
+                        "default_enabled": true,
+                        "supports_max_tokens": true
+                    },
+                    "expiration_date": null
+                },
+                {
+                    "id": "openai/gpt-4",
+                    "name": "OpenAI: GPT-4",
+                    "architecture": { "output_modalities": ["text"] },
+                    "supported_parameters": ["temperature", "tools"],
+                    "default_parameters": {},
+                    "expiration_date": null
+                }
+            ]
+        })
+        .to_string();
+
+        let result = parse_openrouter_model_options(&raw, "test").unwrap();
+        assert_eq!(result.models.len(), 2);
+        assert_eq!(
+            result.models[0].supported_reasoning_levels,
+            Some(vec![
+                "none".to_string(),
+                "minimal".to_string(),
+                "low".to_string(),
+                "medium".to_string(),
+                "high".to_string(),
+                "xhigh".to_string(),
+                "max".to_string(),
+            ])
+        );
+        assert_eq!(
+            result.models[0].default_reasoning_level.as_deref(),
+            Some("medium")
+        );
+        assert_eq!(
+            result.models[1].supported_reasoning_levels,
+            Some(Vec::new())
+        );
+        assert_eq!(result.models[1].default_reasoning_level, None);
+    }
+
+    #[test]
+    fn openrouter_mandatory_reasoning_model_cannot_turn_reasoning_off() {
+        let item = serde_json::json!({
+            "supported_parameters": ["reasoning_effort"],
+            "default_parameters": { "reasoning_effort": "high" },
+            "reasoning": {
+                "mandatory": true,
+                "default_enabled": true,
+                "supported_efforts": ["high", "low"]
+            }
+        });
+        let (levels, default_level) = openrouter_reasoning_metadata(&item);
+        let levels = levels.unwrap();
+        assert!(!levels.contains(&"none".to_string()));
+        assert_eq!(levels, vec!["high".to_string(), "low".to_string()]);
+        assert_eq!(default_level.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn openrouter_effort_selector_uses_catalog_levels_and_ignores_router_parameters() {
+        let filtered = serde_json::json!({
+            "supported_parameters": ["reasoning", "reasoning_effort"],
+            "reasoning": {
+                "mandatory": false,
+                "default_enabled": true,
+                "supported_efforts": ["max", "high", "low"],
+                "default_effort": "max"
+            }
+        });
+        let (levels, default_level) = openrouter_reasoning_metadata(&filtered);
+        assert_eq!(
+            levels,
+            Some(vec![
+                "none".to_string(),
+                "max".to_string(),
+                "high".to_string(),
+                "low".to_string(),
+            ])
+        );
+        assert_eq!(default_level.as_deref(), Some("max"));
+
+        let router = serde_json::json!({
+            "supported_parameters": ["reasoning", "reasoning_effort"]
+        });
+        assert_eq!(
+            openrouter_reasoning_metadata(&router),
+            (Some(Vec::new()), None)
         );
     }
 }

@@ -238,6 +238,7 @@ const App: React.FC = () => {
   });
 
   const language = tw.language;
+  const settingsActive = screen === "settings";
 
   useEffect(() => {
     safeLocalStorageSet("atelier.screen", screen);
@@ -283,6 +284,7 @@ const App: React.FC = () => {
       <aside
         className={cls(
           "atelier-shell-sidebar h-full border-r flex flex-col",
+          settingsActive && "atelier-shell-sidebar-settings",
           tw.dark ? "bg-[#191917] border-dline" : "bg-[#f1efe7] border-line",
         )}
       >
@@ -320,9 +322,18 @@ const App: React.FC = () => {
           </span>
         </button>
 
-        <nav className="atelier-shell-nav flex-1 overflow-y-auto px-3 pb-3">
+        <nav
+          className={cls(
+            "atelier-shell-nav flex-1 overflow-y-auto px-3 pb-3",
+            settingsActive && "atelier-shell-nav-settings",
+          )}
+        >
           {navigationGroups().map((group) => (
-            <div key={group.id} className="atelier-shell-nav-group mb-5">
+            <div
+              key={group.id}
+              data-nav-group={group.id}
+              className="atelier-shell-nav-group mb-5"
+            >
               <div
                 className={cls(
                   "atelier-shell-section-title mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-[0.16em]",
@@ -331,7 +342,7 @@ const App: React.FC = () => {
               >
                 {language === "en" ? group.labelEn : group.labelKo}
               </div>
-              <div className="space-y-1">
+              <div className="atelier-shell-nav-items space-y-1">
                 {group.items.map((item) => {
                   const active = activeNav === item.id && screen === item.screen;
                   return (
@@ -339,6 +350,8 @@ const App: React.FC = () => {
                       key={item.id}
                       type="button"
                       onClick={() => openNav(item)}
+                      aria-label={language === "en" ? item.labelEn : item.labelKo}
+                      title={`${language === "en" ? item.labelEn : item.labelKo} - ${language === "en" ? item.hintEn : item.hintKo}`}
                       className={cls(
                         "atelier-shell-nav-item group grid w-full grid-cols-[22px_1fr] items-center gap-2.5 rounded-[8px] px-2.5 py-2 text-left transition-colors",
                         active

@@ -223,7 +223,7 @@ fn adoption_receipt_dir() -> Result<PathBuf, String> {
     Ok(root)
 }
 
-fn save_adoption_receipt(branch: &str, patch: &str) -> Result<PathBuf, String> {
+fn save_adoption_receipt(receipt_dir: &Path, branch: &str, patch: &str) -> Result<PathBuf, String> {
     let name = format!(
         "{}-{}-{}.patch",
         SystemTime::now()
@@ -233,7 +233,13 @@ fn save_adoption_receipt(branch: &str, patch: &str) -> Result<PathBuf, String> {
         safe_task_slug(branch),
         &hash_value(patch)[..8]
     );
-    let path = adoption_receipt_dir()?.join(name);
+    fs::create_dir_all(receipt_dir).map_err(|err| {
+        format!(
+            "create adoption receipt directory {}: {err}",
+            receipt_dir.display()
+        )
+    })?;
+    let path = receipt_dir.join(name);
     fs::write(&path, patch)
         .map_err(|err| format!("write adoption receipt {}: {err}", path.display()))?;
     #[cfg(unix)]
@@ -302,6 +308,22 @@ fn adopt_worktree_changes(
     base_head: String,
     expected_branch: String,
 ) -> Result<AgentWorktreeAdoptResult, String> {
+    adopt_worktree_changes_with_receipt_dir(
+        source_cwd,
+        worktree_cwd,
+        base_head,
+        expected_branch,
+        None,
+    )
+}
+
+fn adopt_worktree_changes_with_receipt_dir(
+    source_cwd: String,
+    worktree_cwd: String,
+    base_head: String,
+    expected_branch: String,
+    receipt_dir: Option<&Path>,
+) -> Result<AgentWorktreeAdoptResult, String> {
     if !valid_git_oid(base_head.trim()) {
         return Err("Candidate base commit is invalid.".to_string());
     }
@@ -360,7 +382,11 @@ fn adopt_worktree_changes(
         &patch,
     )
     .map_err(|err| format!("Candidate conflicts with the source workspace: {err}"))?;
-    let receipt = save_adoption_receipt(branch.trim(), &patch)?;
+    let receipt_dir = match receipt_dir {
+        Some(path) => path.to_path_buf(),
+        None => adoption_receipt_dir()?,
+    };
+    let receipt = save_adoption_receipt(&receipt_dir, branch.trim(), &patch)?;
     git_apply(&source_root, &["apply", "--whitespace=nowarn", "-"], &patch)?;
 
     Ok(AgentWorktreeAdoptResult {
@@ -492,7 +518,7 @@ mod tests {
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{adopt_worktree_changes, prepare_in_store, safe_task_slug};
+    use super::{adopt_worktree_changes_with_receipt_dir, prepare_in_store, safe_task_slug};
 
     #[test]
     fn worktree_slug_is_bounded_and_shell_independent() {
@@ -607,16 +633,21 @@ mod tests {
         )
         .unwrap();
         fs::write(root.join("local-only.txt"), "preserve me\n").unwrap();
+        let receipt_dir = store.join("receipts");
 
-        let result = adopt_worktree_changes(
+        let result = adopt_worktree_changes_with_receipt_dir(
             root.to_string_lossy().into_owned(),
             candidate.worktree_cwd.clone(),
             candidate.head.clone(),
             candidate.branch.clone(),
+            Some(&receipt_dir),
         )
         .unwrap();
         assert_eq!(result.file_count, 2);
         assert!(result.source_dirty_before);
+        let receipt_path = Path::new(&result.receipt_path);
+        assert!(receipt_path.starts_with(&receipt_dir));
+        assert!(receipt_path.is_file());
         assert_eq!(
             fs::read_to_string(root.join("tracked.txt")).unwrap(),
             "candidate\n"
@@ -643,7 +674,6 @@ mod tests {
             .unwrap();
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(store);
-        let _ = fs::remove_file(result.receipt_path);
     }
 
     #[test]
@@ -683,12 +713,14 @@ mod tests {
         )
         .unwrap();
         fs::write(root.join("tracked.txt"), "source edit\n").unwrap();
+        let receipt_dir = store.join("receipts");
 
-        let error = adopt_worktree_changes(
+        let error = adopt_worktree_changes_with_receipt_dir(
             root.to_string_lossy().into_owned(),
             candidate.worktree_cwd.clone(),
             candidate.head.clone(),
             candidate.branch.clone(),
+            Some(&receipt_dir),
         )
         .unwrap_err();
         assert!(
@@ -699,6 +731,7 @@ mod tests {
             fs::read_to_string(root.join("tracked.txt")).unwrap(),
             "source edit\n"
         );
+        assert!(!receipt_dir.exists());
 
         Command::new("git")
             .args([

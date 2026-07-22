@@ -12,6 +12,24 @@ orca_modular_automations_installed_at: 2026-07-20T19:16:27+09:00
 
 execution_lifecycle_stabilization_installed_at: 2026-07-20T20:14:15+09:00
 
+release_candidate_0_2_12_installed_at: 2026-07-22T22:56:31+09:00
+
+> Current 0.2.12 candidate: the complete gate passes 20 contract smokes,
+> ten removable backend feature builds, 188 Rust tests with one live-login test
+> intentionally ignored, strict all-feature Clippy, production frontend build,
+> updater contract, npm audit, and release security audit. The locally signed
+> macOS package is installed at `/Applications/Atelier.app`; packaged and
+> installed executable SHA-256 values both equal
+> `2f0a1ab865eaa98edd2c69ede60608300581d060771ff23b00eaf67145233549`,
+> and the DMG SHA-256 is
+> `097a42df0f98ac265dbc4abe6c46a9de5fcb7ff838a04fa71931cd1235eb4332`.
+> Installer hardening, preview route fidelity, Hermes workload reflection,
+> keyboard menus, compact composer containment, installed renderer readiness,
+> and installed WindowServer metadata are verified. Public macOS distribution
+> remains blocked on Developer ID notarization. Public Windows distribution
+> remains blocked on signing and physical OAuth/browser, Smart App Control,
+> updater, relaunch, and persistence evidence.
+
 > Modular feature-package update: the ten adopted Orca-informed capabilities
 > now own `feature.manifest.json` contracts that drive frontend inclusion,
 > Cargo features, declared dependencies, and focused smoke tests. The release
@@ -70,10 +88,10 @@ release_candidate_with_external_platform_gates
 > integrated development workbench. The user-facing parity audit and required
 > P0/P1 work are recorded in `orca-parity-audit-2026-07-13.md`.
 
-Atelier 0.2.5 satisfies the local source, macOS package, installed-app, and
-Windows cross-link gates. Public distribution is not yet claimed because the
-physical Windows interactive flow and public signing identities are external
-evidence that this macOS host cannot produce.
+Atelier 0.2.12 satisfies the local source, macOS package, and installed-app
+gates. Public distribution is not yet claimed because Developer ID
+notarization, physical Windows interaction, and public Windows signing remain
+external evidence that this macOS host cannot produce.
 
 ## Source Truth
 

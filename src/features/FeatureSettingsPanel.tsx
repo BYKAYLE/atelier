@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { cls, type Tweaks } from "../lib/tokens";
 import { registeredFeatureModules } from "./featureRegistry";
 import {
@@ -29,6 +29,20 @@ const FeatureSettingsPanel: React.FC<Props> = ({ tw }) => {
   const language = tw.language;
   const dark = tw.dark;
   const modules = registeredFeatureModules().filter((module) => module.settings);
+  const moduleIds = modules.map((module) => module.id).join("|");
+  const [selectedModuleId, setSelectedModuleId] = useState(() => modules[0]?.id ?? "");
+
+  useEffect(() => {
+    if (modules.some((module) => module.id === selectedModuleId)) return;
+    setSelectedModuleId(modules[0]?.id ?? "");
+  }, [moduleIds, modules, selectedModuleId]);
+
+  const selectedModule = modules.find((module) => module.id === selectedModuleId) ?? modules[0];
+  const contribution = selectedModule?.settings;
+  const enabledDefinition = contribution?.settings.find((setting) => setting.key === "enabled");
+  const enabled = selectedModule && enabledDefinition
+    ? getFeatureSetting(selectedModule.id, "enabled", enabledDefinition.defaultValue) !== false
+    : true;
 
   return (
     <div data-testid="feature-settings-panel">
@@ -43,78 +57,135 @@ const FeatureSettingsPanel: React.FC<Props> = ({ tw }) => {
         </p>
       </div>
 
-      <div className="space-y-4">
-        {modules.map((module) => {
-          const contribution = module.settings!;
-          const enabledDefinition = contribution.settings.find((setting) => setting.key === "enabled");
-          const enabled = enabledDefinition
-            ? getFeatureSetting(module.id, "enabled", enabledDefinition.defaultValue) !== false
-            : true;
-          return (
-            <section
-              key={module.id}
-              data-feature-module={module.id}
-              className={cls("overflow-hidden rounded-lg border", dark ? "border-dline bg-dpanel" : "border-line bg-panel")}
-            >
-              <header className={cls("flex items-start justify-between gap-4 border-b px-4 py-3.5", dark ? "border-dline" : "border-line")}>
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="text-[14px] font-semibold">{labelFor(contribution.title, language)}</h2>
-                    <span className={cls("rounded-full border px-2 py-0.5 text-[10px]", dark ? "border-dline text-dsub" : "border-line text-sub")}>
-                      {enabled ? (language === "ko" ? "사용" : "Enabled") : (language === "ko" ? "중지" : "Disabled")}
-                    </span>
-                  </div>
-                  <p className={cls("mt-1 text-[12px] leading-relaxed", dark ? "text-dsub" : "text-sub")}>
-                    {labelFor(contribution.description, language)}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => resetFeatureSettings(module.id)}
-                  className={cls("h-8 shrink-0 rounded-md border px-3 text-[11.5px]", dark ? "border-dline text-dsub hover:text-dink" : "border-line text-sub hover:text-ink")}
-                >
-                  {language === "ko" ? "기본값" : "Reset"}
-                </button>
-              </header>
+      {selectedModule && contribution ? (
+        <div className="space-y-3">
+          <div
+            data-testid="feature-module-picker"
+            className={cls(
+              "overflow-hidden rounded-lg border",
+              dark ? "border-dline bg-dpanel" : "border-line bg-panel",
+            )}
+          >
+            <div className={cls("flex min-h-11 flex-wrap items-center gap-2 border-b px-3 py-2", dark ? "border-dline" : "border-line")}>
+              <span className="text-[12.5px] font-semibold">
+                {language === "ko" ? "기능 선택" : "Choose a feature"}
+              </span>
+              <span className={cls("text-[11px]", dark ? "text-dsub" : "text-sub")}>
+                {language === "ko" ? `${modules.length}개 기능` : `${modules.length} features`}
+              </span>
+              <span className="flex-1" />
+              <span className={cls("inline-flex items-center gap-1.5 text-[11px]", dark ? "text-dsub" : "text-sub")}>
+                <span className={cls("h-1.5 w-1.5 rounded-full", enabled ? "bg-emerald-500" : dark ? "bg-dsub" : "bg-sub")} />
+                {enabled ? (language === "ko" ? "사용 중" : "Enabled") : (language === "ko" ? "중지됨" : "Disabled")}
+              </span>
+              <button
+                type="button"
+                onClick={() => resetFeatureSettings(selectedModule.id)}
+                className={cls(
+                  "h-8 shrink-0 rounded-md border px-3 text-[11.5px] transition-colors",
+                  dark
+                    ? "border-dline text-dsub hover:bg-dmuted hover:text-dink"
+                    : "border-line text-sub hover:bg-surface hover:text-ink",
+                )}
+              >
+                {language === "ko" ? "기본값" : "Reset"}
+              </button>
+            </div>
 
-              <div className="divide-y divide-[color:var(--feature-setting-divider)] [--feature-setting-divider:#dedbd2] dark:[--feature-setting-divider:#3a3a37]">
-                {contribution.settings.map((definition) => {
-                  const value = getFeatureSetting(module.id, definition.key, definition.defaultValue);
-                  const locked = definition.kind === "locked";
-                  const disabled = locked || (definition.key !== "enabled" && !enabled);
-                  return (
-                    <div key={definition.key} className="flex min-h-[72px] min-w-0 items-center gap-6 px-4 py-3.5">
-                      <div className="min-w-0 flex-1">
-                        <div className={cls("text-[13px] font-medium", disabled && !locked && "opacity-50")}>
-                          {labelFor(definition.label, language)}
-                        </div>
-                        {definition.hint && (
-                          <p className={cls("mt-0.5 text-[11.5px] leading-relaxed", dark ? "text-dsub" : "text-sub", disabled && !locked && "opacity-50")}>
-                            {labelFor(definition.hint, language)}
-                          </p>
-                        )}
-                        {locked && definition.lockedReason && (
-                          <p className="mt-1 text-[10.5px] text-amber-600">
-                            {labelFor(definition.lockedReason, language)}
-                          </p>
-                        )}
+            <div
+              data-testid="feature-module-options"
+              className="grid grid-cols-2 gap-2 p-2 sm:grid-cols-3 md:grid-cols-5"
+            >
+              {modules.map((module) => {
+                const moduleEnabledDefinition = module.settings!.settings.find((setting) => setting.key === "enabled");
+                const moduleEnabled = moduleEnabledDefinition
+                  ? getFeatureSetting(module.id, "enabled", moduleEnabledDefinition.defaultValue) !== false
+                  : true;
+                const selected = module.id === selectedModule.id;
+                return (
+                  <button
+                    key={module.id}
+                    type="button"
+                    data-feature-module-option={module.id}
+                    aria-pressed={selected}
+                    onClick={() => setSelectedModuleId(module.id)}
+                    className={cls(
+                      "flex min-h-11 min-w-0 items-center gap-2 rounded-md border px-3 py-2 text-left transition-colors",
+                      selected
+                        ? "border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]"
+                        : dark
+                          ? "border-dline bg-dmuted/30 text-dink hover:border-[var(--accent-hover)] hover:bg-dmuted"
+                          : "border-line bg-surface/40 text-ink hover:border-[var(--accent-hover)] hover:bg-surface",
+                    )}
+                  >
+                    <span
+                      className={cls(
+                        "h-1.5 w-1.5 shrink-0 rounded-full",
+                        moduleEnabled ? "bg-emerald-500" : dark ? "bg-dsub" : "bg-sub",
+                      )}
+                    />
+                    <span className="min-w-0 truncate text-[11.5px] font-medium">
+                      {labelFor(module.settings!.title, language)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <section
+            data-feature-module={selectedModule.id}
+            data-testid="selected-feature-settings"
+            className={cls("overflow-hidden rounded-lg border", dark ? "border-dline bg-dpanel" : "border-line bg-panel")}
+          >
+            <header className={cls("border-b px-4 py-3", dark ? "border-dline" : "border-line")}>
+              <h2 className="text-[14px] font-semibold">{labelFor(contribution.title, language)}</h2>
+              <p className={cls("mt-1 text-[12px] leading-relaxed", dark ? "text-dsub" : "text-sub")}>
+                {labelFor(contribution.description, language)}
+              </p>
+            </header>
+
+            <div className="divide-y divide-[color:var(--feature-setting-divider)] [--feature-setting-divider:#dedbd2] dark:[--feature-setting-divider:#3a3a37]">
+              {contribution.settings.map((definition) => {
+                const value = getFeatureSetting(selectedModule.id, definition.key, definition.defaultValue);
+                const locked = definition.kind === "locked";
+                const disabled = locked || (definition.key !== "enabled" && !enabled);
+                return (
+                  <div key={definition.key} className="flex min-h-[60px] min-w-0 items-center gap-4 px-4 py-3">
+                    <div className="min-w-0 flex-1">
+                      <div className={cls("text-[13px] font-medium", disabled && !locked && "opacity-50")}>
+                        {labelFor(definition.label, language)}
                       </div>
-                      <SettingControl
-                        dark={dark}
-                        language={language}
-                        definition={definition}
-                        value={value}
-                        disabled={disabled}
-                        onChange={(nextValue) => setFeatureSetting(module.id, definition.key, nextValue)}
-                      />
+                      {definition.hint && (
+                        <p className={cls("mt-0.5 text-[11.5px] leading-relaxed", dark ? "text-dsub" : "text-sub", disabled && !locked && "opacity-50")}>
+                          {labelFor(definition.hint, language)}
+                        </p>
+                      )}
+                      {locked && definition.lockedReason && (
+                        <p className="mt-1 text-[10.5px] text-amber-600">
+                          {labelFor(definition.lockedReason, language)}
+                        </p>
+                      )}
                     </div>
-                  );
-                })}
-              </div>
-            </section>
-          );
-        })}
-      </div>
+                    <SettingControl
+                      dark={dark}
+                      language={language}
+                      definition={definition}
+                      value={value}
+                      disabled={disabled}
+                      onChange={(nextValue) => setFeatureSetting(selectedModule.id, definition.key, nextValue)}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        </div>
+      ) : (
+        <div className={cls("rounded-lg border px-4 py-6 text-[12.5px]", dark ? "border-dline text-dsub" : "border-line text-sub")}>
+          {language === "ko" ? "설정 가능한 기능이 없습니다." : "No configurable features are available."}
+        </div>
+      )}
     </div>
   );
 };

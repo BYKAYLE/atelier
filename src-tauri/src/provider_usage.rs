@@ -3,6 +3,10 @@ use serde_json::Value;
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::subscription_usage::{
+    fetch_claude_subscription_usage, fetch_codex_subscription_usage, ProviderSubscriptionUsage,
+};
+
 const PROVIDERS: [(&str, &str, Option<&str>); 5] = [
     ("claude", "Claude", Some("claude")),
     ("codex", "Codex", Some("codex")),
@@ -24,6 +28,7 @@ pub struct ProviderUsageEntry {
     pub quota_limit: Option<f64>,
     pub quota_remaining: Option<f64>,
     pub reset_at: Option<String>,
+    pub subscription_usage: Option<ProviderSubscriptionUsage>,
     pub source: String,
     pub note: String,
     pub error: Option<String>,
@@ -117,6 +122,7 @@ fn parse_openrouter_usage(value: &Value) -> Result<ProviderUsageEntry, String> {
         quota_limit: limit,
         quota_remaining: remaining,
         reset_at: value_string(data, &["reset_at", "limit_reset"]),
+        subscription_usage: None,
         source: "OpenRouter GET /api/v1/key".to_string(),
         note: "Usage is read from OpenRouter's documented key endpoint on explicit refresh."
             .to_string(),
@@ -168,6 +174,7 @@ pub async fn provider_usage_snapshot() -> Result<ProviderUsageSnapshot, String> 
                         quota_limit: None,
                         quota_remaining: None,
                         reset_at: None,
+                        subscription_usage: None,
                         source: "OpenRouter GET /api/v1/key".to_string(),
                         note: "Usage could not be refreshed; the stored key value was not exposed."
                             .to_string(),
@@ -184,6 +191,7 @@ pub async fn provider_usage_snapshot() -> Result<ProviderUsageSnapshot, String> 
                     quota_limit: None,
                     quota_remaining: None,
                     reset_at: None,
+                    subscription_usage: None,
                     source: "Atelier secure credential state".to_string(),
                     note: "No OpenRouter key is available for the documented usage endpoint."
                         .to_string(),
@@ -195,9 +203,32 @@ pub async fn provider_usage_snapshot() -> Result<ProviderUsageSnapshot, String> 
         }
 
         let connected = status.oauth_logged_in || status.api_key_present;
+        let (subscription_usage, subscription_error) = match provider {
+            "codex" if status.cli_installed && connected => {
+                match tokio::task::spawn_blocking(fetch_codex_subscription_usage).await {
+                    Ok(Ok(usage)) => (Some(usage), None),
+                    Ok(Err(error)) => (None, Some(error)),
+                    Err(error) => (
+                        None,
+                        Some(format!("Codex subscription usage worker failed: {error}")),
+                    ),
+                }
+            }
+            "claude" if status.cli_installed && connected => {
+                match tokio::task::spawn_blocking(fetch_claude_subscription_usage).await {
+                    Ok(Ok(usage)) => (Some(usage), None),
+                    Ok(Err(error)) => (None, Some(error)),
+                    Err(error) => (
+                        None,
+                        Some(format!("Claude subscription usage worker failed: {error}")),
+                    ),
+                }
+            }
+            _ => (None, None),
+        };
         let note = match provider {
-            "claude" => "Claude subscription quota has no documented non-interactive API. Atelier reports connection and CLI version without scraping OAuth credentials.",
-            "codex" => "ChatGPT subscription quota has no documented non-interactive API. Atelier reports connection and CLI version without emulating private endpoints.",
+            "claude" => "Claude subscription limits are read from Claude Code's official /usage view in a hidden PTY. OAuth secrets are never read.",
+            "codex" => "Codex subscription limits are read from the official CLI app-server account/rateLimits/read method.",
             "hermes" => "Hermes usage belongs to its selected backend; inspect the Codex or OpenRouter entry.",
             "gajecode" => "Gajae Code usage belongs to its configured model provider and remains isolated from Atelier credentials.",
             "openrouter" => "Connect an OpenRouter API key to read documented usage and remaining credit.",
@@ -214,9 +245,10 @@ pub async fn provider_usage_snapshot() -> Result<ProviderUsageSnapshot, String> 
             quota_limit: None,
             quota_remaining: None,
             reset_at: None,
-            source: "Official CLI and Atelier connection status".to_string(),
+            subscription_usage,
+            source: "Official CLI usage and Atelier connection status".to_string(),
             note: note.to_string(),
-            error: None,
+            error: subscription_error,
         });
     }
     Ok(ProviderUsageSnapshot {

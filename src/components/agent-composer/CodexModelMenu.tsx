@@ -62,9 +62,16 @@ const CodexModelMenu: React.FC<CodexModelMenuProps> = ({
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
 
-  const close = () => {
+  const menuItems = () => Array.from(
+    popoverRef.current?.querySelectorAll<HTMLButtonElement>(
+      'button[role="menuitem"]:not(:disabled), button[role="menuitemradio"]:not(:disabled)',
+    ) || [],
+  );
+
+  const close = (refocus = false) => {
     setOpen(false);
     setPanel("root");
+    if (refocus) window.requestAnimationFrame(() => triggerRef.current?.focus());
   };
 
   useEffect(() => {
@@ -84,7 +91,7 @@ const CodexModelMenu: React.FC<CodexModelMenuProps> = ({
       close();
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") close();
+      if (event.key === "Escape") close(true);
     };
     document.addEventListener("mousedown", closeOutside);
     document.addEventListener("keydown", closeOnEscape);
@@ -139,6 +146,9 @@ const CodexModelMenu: React.FC<CodexModelMenuProps> = ({
     if (!open) return;
     const frame = window.requestAnimationFrame(() => {
       popoverRef.current?.scrollTo({ top: 0, behavior: "auto" });
+      const items = menuItems();
+      const selectedItem = items.find((item) => item.getAttribute("aria-checked") === "true");
+      (selectedItem || items[0])?.focus();
     });
     return () => window.cancelAnimationFrame(frame);
   }, [open, panel]);
@@ -157,9 +167,18 @@ const CodexModelMenu: React.FC<CodexModelMenuProps> = ({
             return next;
           });
         }}
+        onKeyDown={(event) => {
+          if (disabled || (event.key !== "ArrowDown" && event.key !== "ArrowUp")) return;
+          event.preventDefault();
+          if (!open) {
+            setOpen(true);
+            setPanel("root");
+            onOpen?.();
+          }
+        }}
         disabled={disabled}
         className={cls(
-          "atelier-model-trigger h-8 min-w-[134px] max-w-[190px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2",
+          "atelier-model-trigger h-8 min-w-[134px] max-w-[190px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2 focus-visible:ring-2 focus-visible:ring-orange-500/70 focus-visible:ring-offset-1",
           dark
             ? "bg-dsurf border-dline text-dink disabled:text-dsub"
             : "bg-surface border-line text-ink disabled:text-sub",
@@ -184,6 +203,25 @@ const CodexModelMenu: React.FC<CodexModelMenuProps> = ({
           )}
           role="menu"
           data-testid="codex-model-menu"
+          onKeyDown={(event) => {
+            const items = menuItems();
+            if (!items.length) return;
+            const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
+            let nextIndex: number | null = null;
+            if (event.key === "ArrowDown") nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % items.length;
+            if (event.key === "ArrowUp") nextIndex = currentIndex < 0 ? items.length - 1 : (currentIndex - 1 + items.length) % items.length;
+            if (event.key === "Home") nextIndex = 0;
+            if (event.key === "End") nextIndex = items.length - 1;
+            if (event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              close(true);
+              return;
+            }
+            if (nextIndex === null) return;
+            event.preventDefault();
+            items[nextIndex]?.focus();
+          }}
         >
           {panel === "root" && (
             <>
@@ -198,7 +236,7 @@ const CodexModelMenu: React.FC<CodexModelMenuProps> = ({
                     type="button"
                     onClick={() => onEffortChange(option.value)}
                     className={cls(
-                      "h-9 w-full rounded-[10px] px-3 flex items-center justify-between text-[11px] text-left",
+                      "h-9 w-full rounded-[10px] px-3 flex items-center justify-between text-[11px] text-left outline-none focus-visible:ring-2 focus-visible:ring-orange-500/70",
                       selected
                         ? dark ? "bg-[#444442] text-dink" : "bg-[#dedbd3] text-ink"
                         : dark ? "hover:bg-[#393937]" : "hover:bg-[#e4e1da]",
@@ -216,7 +254,7 @@ const CodexModelMenu: React.FC<CodexModelMenuProps> = ({
                 type="button"
                 onClick={() => setPanel("model")}
                 className={cls(
-                  "h-9 w-full rounded-[10px] px-3 flex items-center justify-between gap-3 text-[11px] text-left",
+                  "h-9 w-full rounded-[10px] px-3 flex items-center justify-between gap-3 text-[11px] text-left outline-none focus-visible:ring-2 focus-visible:ring-orange-500/70",
                   dark ? "hover:bg-[#393937]" : "hover:bg-[#e4e1da]",
                 )}
                 role="menuitem"
@@ -228,7 +266,7 @@ const CodexModelMenu: React.FC<CodexModelMenuProps> = ({
                 type="button"
                 onClick={() => setPanel("speed")}
                 className={cls(
-                  "h-9 w-full rounded-[10px] px-3 flex items-center justify-between gap-3 text-[11px] text-left",
+                  "h-9 w-full rounded-[10px] px-3 flex items-center justify-between gap-3 text-[11px] text-left outline-none focus-visible:ring-2 focus-visible:ring-orange-500/70",
                   dark ? "hover:bg-[#393937]" : "hover:bg-[#e4e1da]",
                 )}
                 role="menuitem"
@@ -244,9 +282,10 @@ const CodexModelMenu: React.FC<CodexModelMenuProps> = ({
                 type="button"
                 onClick={() => setPanel("root")}
                 className={cls(
-                  "h-8 w-full rounded-[9px] px-3 flex items-center gap-2 text-[11px]",
+                  "h-8 w-full rounded-[9px] px-3 flex items-center gap-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-orange-500/70",
                   dark ? "text-dsub hover:bg-[#393937]" : "text-sub hover:bg-[#e4e1da]",
                 )}
+                role="menuitem"
               >
                 <span className="text-[14px]">‹</span>
                 <span>{modelLabel}</span>
@@ -264,7 +303,7 @@ const CodexModelMenu: React.FC<CodexModelMenuProps> = ({
                       setPanel("root");
                     }}
                     className={cls(
-                      "h-9 w-full rounded-[10px] px-3 flex items-center justify-between gap-3 text-[11px] text-left",
+                      "h-9 w-full rounded-[10px] px-3 flex items-center justify-between gap-3 text-[11px] text-left outline-none focus-visible:ring-2 focus-visible:ring-orange-500/70",
                       option.disabled
                         ? dark ? "text-dsub/60 cursor-not-allowed" : "text-sub/60 cursor-not-allowed"
                         : selected
@@ -288,9 +327,10 @@ const CodexModelMenu: React.FC<CodexModelMenuProps> = ({
                 type="button"
                 onClick={() => setPanel("root")}
                 className={cls(
-                  "h-8 w-full rounded-[9px] px-3 flex items-center gap-2 text-[11px]",
+                  "h-8 w-full rounded-[9px] px-3 flex items-center gap-2 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-orange-500/70",
                   dark ? "text-dsub hover:bg-[#393937]" : "text-sub hover:bg-[#e4e1da]",
                 )}
+                role="menuitem"
               >
                 <span className="text-[14px]">‹</span>
                 <span>{speedLabel}</span>
@@ -307,7 +347,7 @@ const CodexModelMenu: React.FC<CodexModelMenuProps> = ({
                       setPanel("root");
                     }}
                     className={cls(
-                      "h-9 w-full rounded-[10px] px-3 flex items-center justify-between text-[11px] text-left",
+                      "h-9 w-full rounded-[10px] px-3 flex items-center justify-between text-[11px] text-left outline-none focus-visible:ring-2 focus-visible:ring-orange-500/70",
                       selected
                         ? dark ? "bg-[#444442] text-dink" : "bg-[#dedbd3] text-ink"
                         : dark ? "hover:bg-[#393937]" : "hover:bg-[#e4e1da]",

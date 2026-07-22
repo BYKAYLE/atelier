@@ -39,6 +39,7 @@ mod runtime_receipt;
 #[cfg(feature = "orca-ssh-workspaces")]
 mod ssh_workspaces;
 mod stella;
+mod subscription_usage;
 
 use serde::Serialize;
 use tauri::{Emitter, Manager};
@@ -1538,6 +1539,7 @@ pub fn run() {
             ssh_workspaces::ssh_remote_worktree_execute,
             #[cfg(feature = "orca-provider-usage")]
             provider_usage::provider_usage_snapshot,
+            subscription_usage::provider_subscription_usage,
             agent_worktree::agent_worktree_prepare,
             agent_worktree::agent_worktree_adopt,
             agent_preview::preview_health_check,

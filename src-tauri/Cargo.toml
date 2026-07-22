@@ -1,6 +1,6 @@
 [package]
 name = "atelier"
-version = "0.2.11"
+version = "0.2.12"
 description = "Atelier — 이미지 붙여넣기가 되는 GUI 터미널"
 authors = ["BYKAYLE <indra850@gmail.com>"]
 edition = "2021"
@@ -29,6 +29,7 @@ tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 portable-pty = "0.9"
+vt100 = "0.15"
 tokio = { version = "1", features = ["full"] }
 bytes = "1"
 anyhow = "1"
@@ -54,6 +55,9 @@ libc = "0.2"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 windows = { version = "0.61.3", features = ["Foundation", "System", "Win32_System_WinRT"] }
+
+[dev-dependencies]
+tauri = { version = "2", features = ["protocol-asset", "test"] }
 
 [features]
 default = [

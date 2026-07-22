@@ -626,21 +626,35 @@ function Install-Codex {
     Write-Host "npm missing; Codex install cannot run."
     return $false
   }
-  $r = Invoke-Captured "Install Codex CLI" "cmd.exe" @("/C", "npm", "install", "-g", "@openai/codex") $InstallTimeoutSec
+  $r = Invoke-Captured "Install Codex CLI" "cmd.exe" @("/C", "npm", "install", "-g", "@openai/codex@0.145.0") $InstallTimeoutSec
   Refresh-Path
   return $r.ok
 }
 
 function Install-Claude {
-  $script = "& ([scriptblock]::Create((irm https://claude.ai/install.ps1))) stable"
-  $r = Invoke-Captured "Install Claude Code" "powershell.exe" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $script) $InstallTimeoutSec
+  if (-not (Find-Exe "npm")) {
+    Write-Host "npm missing; Claude Code install cannot run."
+    return $false
+  }
+  $r = Invoke-Captured "Install Claude Code" "cmd.exe" @("/C", "npm", "install", "-g", "@anthropic-ai/claude-code@2.1.217") $InstallTimeoutSec
   Refresh-Path
   return $r.ok
 }
 
 function Install-Hermes {
-  $script = "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1))) -SkipSetup -NonInteractive"
-  $r = Invoke-Captured "Install Hermes Agent" "powershell.exe" @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $script) $InstallTimeoutSec
+  $spec = "git+https://github.com/NousResearch/hermes-agent.git@3ef6bbd201263d354fd83ec55b3c306ded2eb72a"
+  if (Find-Exe "uv") {
+    $r = Invoke-Captured "Install Hermes Agent" "uv" @("tool", "install", "--force", "--python", "3.11", $spec) $InstallTimeoutSec
+  } elseif (Find-Exe "pipx") {
+    $r = Invoke-Captured "Install Hermes Agent" "pipx" @("install", "--force", $spec) $InstallTimeoutSec
+  } elseif (Find-Exe "py") {
+    $r = Invoke-Captured "Install Hermes Agent" "py" @("-3.11", "-m", "pip", "install", "--user", "--upgrade", $spec) $InstallTimeoutSec
+  } elseif (Find-Exe "python") {
+    $r = Invoke-Captured "Install Hermes Agent" "python" @("-m", "pip", "install", "--user", "--upgrade", $spec) $InstallTimeoutSec
+  } else {
+    Write-Host "uv, pipx, or Python 3.11-3.13 is required for Hermes installation."
+    return $false
+  }
   Refresh-Path
   return $r.ok
 }

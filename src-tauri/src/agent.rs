@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -30,6 +30,8 @@ use crate::credentials::{
 
 const RETURN_RAW_EVENT_LIMIT: usize = 120;
 const RETURN_RAW_EVENT_CHAR_LIMIT: usize = 12_000;
+const ALIBABA_TOKEN_PLAN_OPENAI_BASE_URL: &str =
+    "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1";
 
 fn clip_return_raw_event(raw: &str) -> String {
     if raw.chars().count() <= RETURN_RAW_EVENT_CHAR_LIMIT {
@@ -143,6 +145,117 @@ fn command_for_gajecode() -> Result<Command, String> {
     let mut command = command_for_cli(&executable.to_string_lossy());
     configure_gajecode_runtime_env(&mut command)?;
     Ok(command)
+}
+
+fn inject_gajecode_alibaba_token_plan_env(cmd: &mut Command, model: &str) -> Result<(), String> {
+    if !gajecode_uses_alibaba_token_plan(model) {
+        return Ok(());
+    }
+
+    let env_var = env_var_for("alibaba").unwrap_or("DASHSCOPE_API_KEY");
+    cmd.env_remove(env_var);
+    let key = read_agent_api_key("alibaba").ok_or_else(|| {
+        "Alibaba Cloud Token Plan API 키가 연결되어 있지 않습니다. 설정 > 연결 > Alibaba Cloud Model Studio에서 Token Plan 키를 저장한 뒤 다시 실행해 주세요."
+            .to_string()
+    })?;
+    cmd.env(env_var, key);
+    Ok(())
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+struct TestGajaeLaunchOverride {
+    executable: PathBuf,
+    run_dir: PathBuf,
+    env: Vec<(String, String)>,
+}
+
+#[cfg(test)]
+fn test_gajecode_launch_override() -> &'static Mutex<Option<TestGajaeLaunchOverride>> {
+    static OVERRIDE: OnceLock<Mutex<Option<TestGajaeLaunchOverride>>> = OnceLock::new();
+    OVERRIDE.get_or_init(|| Mutex::new(None))
+}
+
+#[cfg(test)]
+struct TestGajaeLaunchReset;
+
+#[cfg(test)]
+impl Drop for TestGajaeLaunchReset {
+    fn drop(&mut self) {
+        if let Ok(mut value) = test_gajecode_launch_override().lock() {
+            *value = None;
+        }
+    }
+}
+
+#[cfg(test)]
+fn install_test_gajecode_launch_override(value: TestGajaeLaunchOverride) -> TestGajaeLaunchReset {
+    let mut current = test_gajecode_launch_override()
+        .lock()
+        .expect("test Gajae launch override lock");
+    assert!(
+        current.is_none(),
+        "test Gajae launch override already active"
+    );
+    *current = Some(value);
+    TestGajaeLaunchReset
+}
+
+fn gajecode_launch() -> Result<(Command, PathBuf, bool), String> {
+    #[cfg(test)]
+    {
+        let fixture = test_gajecode_launch_override()
+            .lock()
+            .map_err(|err| format!("test Gajae launch override lock: {err}"))?
+            .clone();
+        if let Some(fixture) = fixture {
+            let mut command = Command::new(fixture.executable);
+            for (key, value) in fixture.env {
+                command.env(key, value);
+            }
+            return Ok((command, fixture.run_dir, true));
+        }
+    }
+
+    let run_dir = gajecode_workspace_dir()
+        .ok_or_else(|| "Could not resolve the isolated 가재코드 workspace.".to_string())?;
+    Ok((command_for_gajecode()?, run_dir, false))
+}
+
+fn configure_gajecode_invocation(
+    cmd: &mut Command,
+    run_dir: &Path,
+    requested_model: &str,
+    prompt: String,
+    project_cwd: Option<&Path>,
+    test_fixture: bool,
+) {
+    cmd.current_dir(run_dir)
+        .env("LANG", "ko_KR.UTF-8")
+        .env("LC_CTYPE", "ko_KR.UTF-8")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    #[cfg(test)]
+    if test_fixture {
+        let provider_prompt = gajecode_prompt_with_workspace(prompt, project_cwd);
+        cmd.arg("--exact")
+            .arg("agent::tests::gajecode_fixture_subprocess")
+            .arg("--nocapture")
+            .env("ATELIER_TEST_AGENT_REQUEST", provider_prompt);
+        return;
+    }
+    #[cfg(not(test))]
+    let _ = test_fixture;
+
+    cmd.arg("--print")
+        .arg("--no-title")
+        .arg("--no-session")
+        .arg("--append-system-prompt")
+        .arg(gajecode_model_system_prompt(requested_model))
+        .arg("--model")
+        .arg(requested_model)
+        .arg(gajecode_prompt_with_workspace(prompt, project_cwd));
 }
 
 fn is_help_request(args: &[String]) -> bool {
@@ -1043,6 +1156,20 @@ struct AgentStreamEvent {
     is_error: Option<bool>,
 }
 
+#[derive(Serialize, Clone, Debug, PartialEq)]
+struct AgentTokenUsageEvent {
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_read_tokens: Option<u64>,
+    cache_write_tokens: Option<u64>,
+    total_tokens: u64,
+    context_window: Option<u64>,
+    remaining_tokens: Option<u64>,
+    model: Option<String>,
+    source: String,
+    timestamp_ms: u64,
+}
+
 #[derive(Serialize)]
 pub struct AgentRunResult {
     text: String,
@@ -1075,6 +1202,261 @@ fn emit_agent_event<R: Runtime>(app: &AppHandle<R>, turn_id: &str, event: AgentS
         emit_agent_lifecycle(app, turn_id, lifecycle);
     }
     let _ = app.emit(&format!("agent://{turn_id}/event"), event);
+}
+
+fn emit_agent_token_usage<R: Runtime>(
+    app: &AppHandle<R>,
+    turn_id: &str,
+    usage: AgentTokenUsageEvent,
+) {
+    let _ = app.emit(&format!("agent://{turn_id}/usage"), usage);
+}
+
+fn token_usage_timestamp_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default()
+}
+
+fn parse_token_number(value: &Value) -> Option<u64> {
+    if let Some(number) = value.as_u64() {
+        return Some(number);
+    }
+    if let Some(number) = value.as_i64() {
+        return u64::try_from(number).ok();
+    }
+    let raw = value.as_str()?.trim().trim_start_matches('~');
+    raw.replace(',', "").parse::<u64>().ok()
+}
+
+fn token_field(value: &Value, names: &[&str]) -> Option<u64> {
+    names
+        .iter()
+        .find_map(|name| value.get(*name).and_then(parse_token_number))
+}
+
+fn token_usage_from_value(
+    value: &Value,
+    model: Option<String>,
+    context_window: Option<u64>,
+    source: &str,
+) -> Option<AgentTokenUsageEvent> {
+    let input_tokens = token_field(
+        value,
+        &[
+            "input_tokens",
+            "inputTokens",
+            "prompt_tokens",
+            "promptTokens",
+        ],
+    )
+    .unwrap_or_default();
+    let output_tokens = token_field(
+        value,
+        &[
+            "output_tokens",
+            "outputTokens",
+            "completion_tokens",
+            "completionTokens",
+        ],
+    )
+    .unwrap_or_default();
+    let explicit_total = token_field(value, &["total_tokens", "totalTokens"]);
+    let total_tokens = explicit_total.unwrap_or_else(|| input_tokens.saturating_add(output_tokens));
+    if total_tokens == 0 && input_tokens == 0 && output_tokens == 0 {
+        return None;
+    }
+    let context_window = token_field(
+        value,
+        &[
+            "context_window",
+            "contextWindow",
+            "model_context_window",
+            "modelContextWindow",
+        ],
+    )
+    .or(context_window);
+    Some(AgentTokenUsageEvent {
+        input_tokens,
+        output_tokens,
+        cache_read_tokens: token_field(
+            value,
+            &[
+                "cache_read_input_tokens",
+                "cacheReadInputTokens",
+                "cached_input_tokens",
+                "cachedInputTokens",
+            ],
+        ),
+        cache_write_tokens: token_field(
+            value,
+            &[
+                "cache_creation_input_tokens",
+                "cacheCreationInputTokens",
+                "cache_write_tokens",
+                "cacheWriteTokens",
+            ],
+        ),
+        total_tokens,
+        context_window,
+        remaining_tokens: context_window.map(|limit| limit.saturating_sub(total_tokens)),
+        model,
+        source: source.to_string(),
+        timestamp_ms: token_usage_timestamp_ms(),
+    })
+}
+
+fn extract_agent_token_usage(
+    value: &Value,
+    fallback_model: Option<&str>,
+) -> Option<AgentTokenUsageEvent> {
+    let model = value
+        .get("model")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .get("message")
+                .and_then(|message| message.get("model"))
+                .and_then(Value::as_str)
+        })
+        .or(fallback_model)
+        .map(str::to_string);
+    let root_context = token_field(
+        value,
+        &[
+            "context_window",
+            "contextWindow",
+            "model_context_window",
+            "modelContextWindow",
+        ],
+    );
+
+    for usage in [
+        value.get("usage"),
+        value
+            .get("message")
+            .and_then(|message| message.get("usage")),
+        value.get("event").and_then(|event| event.get("usage")),
+        value
+            .get("event")
+            .and_then(|event| event.get("message"))
+            .and_then(|message| message.get("usage")),
+        value
+            .get("response")
+            .and_then(|response| response.get("usage")),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(usage) = token_usage_from_value(usage, model.clone(), root_context, "provider")
+        {
+            return Some(usage);
+        }
+    }
+
+    for info in [
+        value.get("info"),
+        value.get("payload").and_then(|payload| payload.get("info")),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Some(total_usage) = info.get("total_token_usage") {
+            let context =
+                token_field(info, &["model_context_window", "modelContextWindow"]).or(root_context);
+            if let Some(usage) =
+                token_usage_from_value(total_usage, model.clone(), context, "provider")
+            {
+                return Some(usage);
+            }
+        }
+    }
+
+    let model_usage = value
+        .get("modelUsage")
+        .or_else(|| value.get("model_usage"))?;
+    let entries = model_usage.as_object()?;
+    let mut aggregate: Option<AgentTokenUsageEvent> = None;
+    for (model_name, item) in entries {
+        let Some(current) =
+            token_usage_from_value(item, Some(model_name.to_string()), root_context, "provider")
+        else {
+            continue;
+        };
+        if let Some(total) = aggregate.as_mut() {
+            total.input_tokens = total.input_tokens.saturating_add(current.input_tokens);
+            total.output_tokens = total.output_tokens.saturating_add(current.output_tokens);
+            total.cache_read_tokens = Some(
+                total
+                    .cache_read_tokens
+                    .unwrap_or_default()
+                    .saturating_add(current.cache_read_tokens.unwrap_or_default()),
+            );
+            total.cache_write_tokens = Some(
+                total
+                    .cache_write_tokens
+                    .unwrap_or_default()
+                    .saturating_add(current.cache_write_tokens.unwrap_or_default()),
+            );
+            total.total_tokens = total.total_tokens.saturating_add(current.total_tokens);
+            total.context_window = total.context_window.max(current.context_window);
+            total.remaining_tokens = total
+                .context_window
+                .map(|limit| limit.saturating_sub(total.total_tokens));
+            total.model = fallback_model
+                .map(str::to_string)
+                .or_else(|| total.model.clone());
+        } else {
+            aggregate = Some(current);
+        }
+    }
+    aggregate
+}
+
+fn parse_cli_token_usage_line(
+    line: &str,
+    model: Option<&str>,
+    source: &str,
+) -> Option<AgentTokenUsageEvent> {
+    let normalized = line.trim_start();
+    let lower = normalized.to_ascii_lowercase();
+    if !(lower.starts_with("tokens:")
+        || lower.starts_with("tokens=")
+        || lower.starts_with("context tokens:")
+        || lower.starts_with("context tokens="))
+    {
+        return None;
+    }
+    let marker = lower
+        .find("tokens:")
+        .map(|index| index + "tokens:".len())
+        .or_else(|| lower.find("tokens=").map(|index| index + "tokens=".len()))?;
+    let suffix = normalized.get(marker..)?.trim_start();
+    let approximate = suffix.starts_with('~');
+    let has_context_pair = suffix.contains('/') || suffix.to_ascii_lowercase().contains(" of ");
+    let mut numbers = suffix
+        .split(|character: char| !(character.is_ascii_digit() || character == ','))
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| part.replace(',', "").parse::<u64>().ok());
+    let total_tokens = numbers.next()?;
+    let context_window = has_context_pair.then(|| numbers.next()).flatten();
+    Some(AgentTokenUsageEvent {
+        input_tokens: total_tokens,
+        output_tokens: 0,
+        cache_read_tokens: None,
+        cache_write_tokens: None,
+        total_tokens,
+        context_window,
+        remaining_tokens: context_window.map(|limit| limit.saturating_sub(total_tokens)),
+        model: model.map(str::to_string),
+        source: if approximate {
+            format!("{source}_estimate")
+        } else {
+            source.to_string()
+        },
+        timestamp_ms: token_usage_timestamp_ms(),
+    })
 }
 
 fn emit_agent_lifecycle<R: Runtime>(app: &AppHandle<R>, turn_id: &str, event: AgentLifecycleEvent) {
@@ -1159,10 +1541,38 @@ fn normalize_hermes_provider(provider: Option<String>) -> String {
         .unwrap_or("openai-codex")
     {
         "openrouter" => "openrouter".to_string(),
+        "alibaba" | "alibaba-cloud" | "dashscope" | "aliyun" => "alibaba".to_string(),
         "openai-codex" | "codex" => "openai-codex".to_string(),
         "anthropic" | "claude" => "openai-codex".to_string(),
         _ => "openai-codex".to_string(),
     }
+}
+
+fn normalize_hermes_effort(effort: Option<String>) -> Option<String> {
+    match effort
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra") => {
+            effort.map(|value| value.trim().to_ascii_lowercase())
+        }
+        _ => None,
+    }
+}
+
+fn apply_hermes_workload_prompt(prompt: String, effort: Option<&str>) -> String {
+    let Some(effort) = effort else {
+        return prompt;
+    };
+    let trimmed = prompt.trim_start();
+    if trimmed.starts_with("Workload:") || trimmed.starts_with("작업량:") {
+        return prompt;
+    }
+    format!(
+        "[Atelier workload policy: {effort}] Apply this workload level to planning, tool use, implementation depth, and verification.\n\n{prompt}"
+    )
 }
 
 fn normalize_agent_permission_mode(permission_mode: Option<String>) -> String {
@@ -1227,14 +1637,19 @@ fn text_from_assistant_message(v: &Value) -> Option<String> {
     }
 }
 
+struct AgentLineParseState<'a> {
+    final_text: &'a mut String,
+    provider_session_id: &'a mut Option<String>,
+    is_error: &'a mut bool,
+    error: &'a mut Option<String>,
+}
+
 fn parse_claude_line<R: Runtime>(
     app: &AppHandle<R>,
     turn_id: &str,
     line: &str,
-    final_text: &mut String,
-    provider_session_id: &mut Option<String>,
-    is_error: &mut bool,
-    error: &mut Option<String>,
+    model: &str,
+    state: &mut AgentLineParseState<'_>,
 ) {
     let Ok(v) = serde_json::from_str::<Value>(line) else {
         emit_agent_event(
@@ -1245,23 +1660,27 @@ fn parse_claude_line<R: Runtime>(
                 text: None,
                 status: None,
                 raw: Some(line.to_string()),
-                provider_session_id: provider_session_id.clone(),
+                provider_session_id: state.provider_session_id.clone(),
                 is_error: None,
             },
         );
         return;
     };
 
-    if provider_session_id.is_none() {
+    if let Some(usage) = extract_agent_token_usage(&v, Some(model)) {
+        emit_agent_token_usage(app, turn_id, usage);
+    }
+
+    if state.provider_session_id.is_none() {
         if let Some(id) = v.get("session_id").and_then(Value::as_str) {
-            *provider_session_id = Some(id.to_string());
+            *state.provider_session_id = Some(id.to_string());
         }
     }
 
     match v.get("type").and_then(Value::as_str).unwrap_or_default() {
         "system" => {
             if let Some(id) = v.get("session_id").and_then(Value::as_str) {
-                *provider_session_id = Some(id.to_string());
+                *state.provider_session_id = Some(id.to_string());
             }
             let status = v
                 .get("subtype")
@@ -1277,7 +1696,7 @@ fn parse_claude_line<R: Runtime>(
                     text: None,
                     status: Some(status),
                     raw: Some(line.to_string()),
-                    provider_session_id: provider_session_id.clone(),
+                    provider_session_id: state.provider_session_id.clone(),
                     is_error: None,
                 },
             );
@@ -1302,7 +1721,7 @@ fn parse_claude_line<R: Runtime>(
                             text: Some(text.to_string()),
                             status: None,
                             raw: Some(line.to_string()),
-                            provider_session_id: provider_session_id.clone(),
+                            provider_session_id: state.provider_session_id.clone(),
                             is_error: None,
                         },
                     );
@@ -1327,7 +1746,7 @@ fn parse_claude_line<R: Runtime>(
                                     .or_else(|| Some(block_type.to_string())),
                                 status: Some(block_type.to_string()),
                                 raw: Some(line.to_string()),
-                                provider_session_id: provider_session_id.clone(),
+                                provider_session_id: state.provider_session_id.clone(),
                                 is_error: None,
                             },
                         );
@@ -1337,18 +1756,18 @@ fn parse_claude_line<R: Runtime>(
         }
         "assistant" => {
             if let Some(text) = text_from_assistant_message(&v) {
-                *final_text = text;
+                *state.final_text = text;
             }
         }
         "result" => {
             if let Some(id) = v.get("session_id").and_then(Value::as_str) {
-                *provider_session_id = Some(id.to_string());
+                *state.provider_session_id = Some(id.to_string());
             }
-            *is_error = v.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+            *state.is_error = v.get("is_error").and_then(Value::as_bool).unwrap_or(false);
             if let Some(result) = v.get("result").and_then(Value::as_str) {
-                *final_text = result.to_string();
+                *state.final_text = result.to_string();
             }
-            if *is_error {
+            if *state.is_error {
                 let raw_error = v
                     .get("result")
                     .and_then(Value::as_str)
@@ -1357,34 +1776,34 @@ fn parse_claude_line<R: Runtime>(
                     .to_string();
                 let message =
                     provider_cooldown_message("Claude/TeamClaude", &raw_error).unwrap_or(raw_error);
-                *final_text = message.clone();
-                *error = Some(message);
+                *state.final_text = message.clone();
+                *state.error = Some(message);
             }
             emit_agent_event(
                 app,
                 turn_id,
                 AgentStreamEvent {
                     kind: "result".into(),
-                    text: Some(final_text.clone()),
+                    text: Some(state.final_text.clone()),
                     status: v
                         .get("stop_reason")
                         .and_then(Value::as_str)
                         .map(str::to_string),
                     raw: Some(line.to_string()),
-                    provider_session_id: provider_session_id.clone(),
-                    is_error: Some(*is_error),
+                    provider_session_id: state.provider_session_id.clone(),
+                    is_error: Some(*state.is_error),
                 },
             );
         }
         "error" => {
-            *is_error = true;
+            *state.is_error = true;
             let raw_msg = v
                 .get("message")
                 .and_then(Value::as_str)
                 .unwrap_or("Claude stream error")
                 .to_string();
             let msg = provider_cooldown_message("Claude/TeamClaude", &raw_msg).unwrap_or(raw_msg);
-            *error = Some(msg.clone());
+            *state.error = Some(msg.clone());
             emit_agent_event(
                 app,
                 turn_id,
@@ -1393,7 +1812,7 @@ fn parse_claude_line<R: Runtime>(
                     text: Some(msg),
                     status: Some("error".into()),
                     raw: Some(line.to_string()),
-                    provider_session_id: provider_session_id.clone(),
+                    provider_session_id: state.provider_session_id.clone(),
                     is_error: Some(true),
                 },
             );
@@ -1421,7 +1840,7 @@ fn run_claude<R: Runtime>(
         .arg("stream-json")
         .arg("--include-partial-messages")
         .arg("--model")
-        .arg(model)
+        .arg(&model)
         .arg("--permission-mode")
         .arg(claude_permission_mode(&permission_mode))
         .env("PATH", crate::augmented_cli_path())
@@ -1431,7 +1850,6 @@ fn run_claude<R: Runtime>(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     isolate_claude_structured_run(&mut cmd);
-
     if let Some(session_id) = resume_session_id.filter(|s| !s.trim().is_empty()) {
         cmd.arg("--resume").arg(session_id);
     }
@@ -1497,15 +1915,13 @@ fn run_claude<R: Runtime>(
             continue;
         }
         raw_events.push(line.clone());
-        parse_claude_line(
-            &app,
-            &turn_id,
-            &line,
-            &mut final_text,
-            &mut provider_session_id,
-            &mut is_error,
-            &mut error,
-        );
+        let mut state = AgentLineParseState {
+            final_text: &mut final_text,
+            provider_session_id: &mut provider_session_id,
+            is_error: &mut is_error,
+            error: &mut error,
+        };
+        parse_claude_line(&app, &turn_id, &line, &model, &mut state);
     }
 
     let status = child.wait().map_err(|e| format!("claude wait: {e}"))?;
@@ -1556,10 +1972,8 @@ fn parse_codex_line<R: Runtime>(
     app: &AppHandle<R>,
     turn_id: &str,
     line: &str,
-    final_text: &mut String,
-    provider_session_id: &mut Option<String>,
-    is_error: &mut bool,
-    error: &mut Option<String>,
+    model: &str,
+    state: &mut AgentLineParseState<'_>,
 ) {
     let Ok(v) = serde_json::from_str::<Value>(line) else {
         emit_agent_event(
@@ -1570,17 +1984,21 @@ fn parse_codex_line<R: Runtime>(
                 text: None,
                 status: None,
                 raw: Some(line.to_string()),
-                provider_session_id: provider_session_id.clone(),
+                provider_session_id: state.provider_session_id.clone(),
                 is_error: None,
             },
         );
         return;
     };
 
+    if let Some(usage) = extract_agent_token_usage(&v, Some(model)) {
+        emit_agent_token_usage(app, turn_id, usage);
+    }
+
     match v.get("type").and_then(Value::as_str).unwrap_or_default() {
         "thread.started" => {
             if let Some(id) = v.get("thread_id").and_then(Value::as_str) {
-                *provider_session_id = Some(id.to_string());
+                *state.provider_session_id = Some(id.to_string());
             }
             emit_agent_event(
                 app,
@@ -1590,7 +2008,7 @@ fn parse_codex_line<R: Runtime>(
                     text: None,
                     status: Some("thread.started".into()),
                     raw: Some(line.to_string()),
-                    provider_session_id: provider_session_id.clone(),
+                    provider_session_id: state.provider_session_id.clone(),
                     is_error: None,
                 },
             );
@@ -1604,7 +2022,7 @@ fn parse_codex_line<R: Runtime>(
                     text: None,
                     status: Some("turn.started".into()),
                     raw: Some(line.to_string()),
-                    provider_session_id: provider_session_id.clone(),
+                    provider_session_id: state.provider_session_id.clone(),
                     is_error: None,
                 },
             );
@@ -1614,7 +2032,7 @@ fn parse_codex_line<R: Runtime>(
             let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
             if item_type == "agent_message" {
                 if let Some(text) = item.get("text").and_then(Value::as_str) {
-                    *final_text = text.to_string();
+                    *state.final_text = text.to_string();
                     emit_agent_event(
                         app,
                         turn_id,
@@ -1623,7 +2041,7 @@ fn parse_codex_line<R: Runtime>(
                             text: Some(text.to_string()),
                             status: Some("agent_message".into()),
                             raw: Some(line.to_string()),
-                            provider_session_id: provider_session_id.clone(),
+                            provider_session_id: state.provider_session_id.clone(),
                             is_error: Some(false),
                         },
                     );
@@ -1637,21 +2055,21 @@ fn parse_codex_line<R: Runtime>(
                         text: Some(item_type.to_string()),
                         status: Some("item.completed".into()),
                         raw: Some(line.to_string()),
-                        provider_session_id: provider_session_id.clone(),
+                        provider_session_id: state.provider_session_id.clone(),
                         is_error: None,
                     },
                 );
             }
         }
         "turn.failed" | "error" => {
-            *is_error = true;
+            *state.is_error = true;
             let msg = v
                 .get("message")
                 .and_then(Value::as_str)
                 .or_else(|| v.get("error").and_then(Value::as_str))
                 .unwrap_or("Codex returned an error")
                 .to_string();
-            *error = Some(msg.clone());
+            *state.error = Some(msg.clone());
             emit_agent_event(
                 app,
                 turn_id,
@@ -1660,7 +2078,7 @@ fn parse_codex_line<R: Runtime>(
                     text: Some(msg),
                     status: Some("error".into()),
                     raw: Some(line.to_string()),
-                    provider_session_id: provider_session_id.clone(),
+                    provider_session_id: state.provider_session_id.clone(),
                     is_error: Some(true),
                 },
             );
@@ -1674,7 +2092,7 @@ fn parse_codex_line<R: Runtime>(
                     text: None,
                     status: Some("turn.completed".into()),
                     raw: Some(line.to_string()),
-                    provider_session_id: provider_session_id.clone(),
+                    provider_session_id: state.provider_session_id.clone(),
                     is_error: Some(false),
                 },
             );
@@ -1790,15 +2208,13 @@ fn run_codex<R: Runtime>(
             continue;
         }
         raw_events.push(line.clone());
-        parse_codex_line(
-            &app,
-            &turn_id,
-            &line,
-            &mut final_text,
-            &mut provider_session_id,
-            &mut is_error,
-            &mut error,
-        );
+        let mut state = AgentLineParseState {
+            final_text: &mut final_text,
+            provider_session_id: &mut provider_session_id,
+            is_error: &mut is_error,
+            error: &mut error,
+        };
+        parse_codex_line(&app, &turn_id, &line, &model, &mut state);
     }
 
     let status = child.wait().map_err(|e| format!("codex wait: {e}"))?;
@@ -1916,7 +2332,7 @@ fn gajecode_model_label_for_prompt(model: &str) -> String {
         return codex_model_label_for_prompt(&model);
     }
 
-    match model {
+    match gajecode_model_without_effort(model) {
         "anthropic/claude-opus-4-8" | "claude-opus-4-8" => "Opus 4.8",
         "anthropic/claude-fable-5"
         | "claude-fable-5"
@@ -1924,6 +2340,8 @@ fn gajecode_model_label_for_prompt(model: &str) -> String {
         | "claude-fable-5-5" => "Fable 5",
         "anthropic/claude-sonnet-4-6" | "claude-sonnet-4-6" => "Sonnet 4.6",
         "anthropic/claude-haiku-4-5-20251001" | "claude-haiku-4-5-20251001" => "Haiku 4.5",
+        "alibaba-token-plan/qwen3.8-max-preview" => "Qwen 3.8 Max Preview",
+        "alibaba-token-plan/glm-5.2" => "GLM 5.2",
         _ => "selected model",
     }
     .to_string()
@@ -2007,6 +2425,54 @@ fn normalize_gajecode_model_for_cli(model: Option<String>) -> String {
         | "anthropic/claude-haiku-4.5" => "anthropic/claude-haiku-4-5-20251001".to_string(),
         _ => trimmed.to_string(),
     }
+}
+
+fn gajecode_model_without_effort(model: &str) -> &str {
+    model
+        .trim()
+        .split_once(':')
+        .map_or(model.trim(), |(base, _)| base)
+}
+
+fn gajecode_uses_alibaba_token_plan(model: &str) -> bool {
+    gajecode_model_without_effort(model).starts_with("alibaba-token-plan/")
+}
+
+fn gajecode_model_selector_with_effort(model: &str, effort: Option<&str>) -> String {
+    let base = gajecode_model_without_effort(model);
+    if !gajecode_uses_alibaba_token_plan(base) {
+        return base.to_string();
+    }
+    let effort = match base {
+        // GJC sends Qwen thinking as a binary `enable_thinking` flag. Keep the
+        // UI's off/on choice honest instead of pretending each effort is a
+        // distinct provider capability.
+        "alibaba-token-plan/qwen3.8-max-preview" => match effort.map(str::trim) {
+            Some("none") | Some("off") => "off",
+            _ => "high",
+        },
+        // GLM 5.2 accepts OpenAI-compatible reasoning_effort values through
+        // Alibaba Model Studio. GJC uses `off` to request the lowest/off path.
+        "alibaba-token-plan/glm-5.2" => match effort.map(str::trim) {
+            Some("none") | Some("off") => "off",
+            Some("minimal") => "minimal",
+            Some("low") => "low",
+            Some("high") => "high",
+            Some("xhigh") => "xhigh",
+            Some("max") | Some("ultra") => "max",
+            _ => "medium",
+        },
+        _ => match effort.map(str::trim) {
+            Some("none") | Some("off") => "off",
+            Some("minimal") => "minimal",
+            Some("low") => "low",
+            Some("high") => "high",
+            Some("xhigh") => "xhigh",
+            Some("max") | Some("ultra") => "max",
+            _ => "medium",
+        },
+    };
+    format!("{base}:{effort}")
 }
 
 /// A Gajae workspace can use the user's Codex subscription without requiring
@@ -2176,13 +2642,14 @@ fn run_gajecode<R: Runtime>(
         );
     }
     let requested_model = normalize_gajecode_model_for_cli(model);
+    let invocation_model = gajecode_model_selector_with_effort(&requested_model, effort.as_deref());
     let _resume_session_id = resume_session_id;
     let project_cwd = normalize_agent_cwd(cwd)?;
-    let run_dir = gajecode_workspace_dir()
-        .ok_or_else(|| "Could not resolve the isolated 가재코드 workspace.".to_string())?;
+    let (mut cmd, run_dir, test_fixture) = gajecode_launch()?;
     fs::create_dir_all(&run_dir).map_err(|e| format!("create {}: {e}", run_dir.display()))?;
 
-    let mut cmd = command_for_gajecode()?;
+    inject_gajecode_alibaba_token_plan_env(&mut cmd, &requested_model)?;
+
     if !inject_gajecode_claude_subscription_env(&mut cmd, &requested_model) {
         return Err(
             "Claude 구독/API 자격증명이 연결되어 있지 않습니다. 설정 > 연결에서 Claude 구독 로그인을 시작해 공식 setup-token 인증을 완료한 뒤 다시 실행해 주세요."
@@ -2197,22 +2664,14 @@ fn run_gajecode<R: Runtime>(
     } else {
         prompt
     };
-    cmd.current_dir(&run_dir)
-        .arg("--print")
-        .arg("--no-title")
-        .arg("--no-session")
-        .arg("--append-system-prompt")
-        .arg(gajecode_model_system_prompt(&requested_model))
-        .arg("--model")
-        .arg(&requested_model)
-        .arg(gajecode_prompt_with_workspace(
-            prompt,
-            project_cwd.as_deref(),
-        ))
-        .env("LANG", "ko_KR.UTF-8")
-        .env("LC_CTYPE", "ko_KR.UTF-8")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    configure_gajecode_invocation(
+        &mut cmd,
+        &run_dir,
+        &invocation_model,
+        prompt,
+        project_cwd.as_deref(),
+        test_fixture,
+    );
 
     emit_agent_event(
         &app,
@@ -2259,6 +2718,9 @@ fn run_gajecode<R: Runtime>(
         let line = line.map_err(|e| format!("gajecode stdout: {e}"))?;
         if line.trim().is_empty() {
             continue;
+        }
+        if let Some(usage) = parse_cli_token_usage_line(&line, Some(&requested_model), "cli") {
+            emit_agent_token_usage(&app, &turn_id, usage);
         }
         raw_events.push(line.clone());
         let delta = format!("{line}\n");
@@ -2335,21 +2797,29 @@ fn run_hermes<R: Runtime>(
     cwd: Option<String>,
     model: Option<String>,
     hermes_provider: Option<String>,
+    effort: Option<String>,
     permission_mode: Option<String>,
 ) -> Result<AgentRunResult, String> {
     let hermes_provider = normalize_hermes_provider(hermes_provider);
+    let effort = normalize_hermes_effort(effort);
+    let prompt = apply_hermes_workload_prompt(prompt, effort.as_deref());
     let permission_mode = normalize_agent_permission_mode(permission_mode);
+    let model = model.unwrap_or_else(|| "gpt-5.5".to_string());
     let mut cmd = command_for_hermes();
     // Hermes 의 sub-provider 별로 그에 맞는 사용자 키를 주입.
     let hermes_credential_provider = match hermes_provider.as_str() {
         "openai-codex" => "codex",
         "openrouter" => "openrouter",
+        "alibaba" => "alibaba",
         _ => "openrouter",
     };
     // Hermes owns its provider authentication and can import the canonical
     // Codex CLI credential itself. Atelier must not copy provider credentials
     // into Hermes state, even temporarily.
     inject_backend_credential_env(&mut cmd, hermes_credential_provider);
+    if hermes_provider == "alibaba" {
+        cmd.env("DASHSCOPE_BASE_URL", ALIBABA_TOKEN_PLAN_OPENAI_BASE_URL);
+    }
     // -Q (quiet) 는 banner·spinner·도구 프리뷰를 차단해 stdout 무음이 됨 → 진행 표시 불가.
     // 진행 흐름 노출을 위해 quiet 끄고, 대신 --source tool 로 세션 리스트 노출만 차단.
     cmd.arg("chat")
@@ -2360,7 +2830,7 @@ fn run_hermes<R: Runtime>(
         .arg("--provider")
         .arg(hermes_provider)
         .arg("-m")
-        .arg(model.unwrap_or_else(|| "gpt-5.5".to_string()))
+        .arg(&model)
         .arg("-q")
         .arg(prompt)
         .env("PATH", crate::augmented_cli_path())
@@ -2701,6 +3171,9 @@ fn run_hermes<R: Runtime>(
         };
         raw_events.push(line.clone());
         let trimmed = line.trim();
+        if let Some(usage) = parse_cli_token_usage_line(&line, Some(&model), "cli") {
+            emit_agent_token_usage(&app, &turn_id, usage);
+        }
 
         if replacement_block_active {
             if trimmed.is_empty()
@@ -3231,6 +3704,7 @@ fn run_registered_adapter<R: Runtime>(
             request.cwd,
             request.model,
             request.hermes_provider,
+            request.effort,
             request.permission_mode,
         ),
     }
@@ -3374,6 +3848,465 @@ pub fn agent_cancel<R: Runtime>(
 mod tests {
     use super::*;
 
+    #[test]
+    fn extracts_claude_token_usage_with_remaining_context() {
+        let event = serde_json::json!({
+            "type": "result",
+            "model": "claude-opus-4-8",
+            "context_window": 200_000,
+            "usage": {
+                "input_tokens": 31_250,
+                "output_tokens": 2_750,
+                "cache_read_input_tokens": 10_000
+            }
+        });
+        let usage = extract_agent_token_usage(&event, None).expect("usage");
+        assert_eq!(usage.total_tokens, 34_000);
+        assert_eq!(usage.context_window, Some(200_000));
+        assert_eq!(usage.remaining_tokens, Some(166_000));
+        assert_eq!(usage.model.as_deref(), Some("claude-opus-4-8"));
+    }
+
+    #[test]
+    fn extracts_codex_token_count_event() {
+        let event = serde_json::json!({
+            "type": "token_count",
+            "info": {
+                "total_token_usage": {
+                    "input_tokens": 82_000,
+                    "cached_input_tokens": 20_000,
+                    "output_tokens": 8_000,
+                    "reasoning_output_tokens": 3_000,
+                    "total_tokens": 90_000
+                },
+                "model_context_window": 272_000
+            }
+        });
+        let usage = extract_agent_token_usage(&event, Some("gpt-5.6-sol")).expect("usage");
+        assert_eq!(usage.total_tokens, 90_000);
+        assert_eq!(usage.cache_read_tokens, Some(20_000));
+        assert_eq!(usage.remaining_tokens, Some(182_000));
+        assert_eq!(usage.model.as_deref(), Some("gpt-5.6-sol"));
+    }
+
+    #[test]
+    fn parses_hermes_estimated_token_summary() {
+        let usage = parse_cli_token_usage_line(
+            "context tokens=~56,911",
+            Some("qwen3.8-max-preview"),
+            "cli",
+        )
+        .expect("usage");
+        assert_eq!(usage.total_tokens, 56_911);
+        assert_eq!(usage.context_window, None);
+        assert_eq!(usage.source, "cli_estimate");
+    }
+
+    #[test]
+    fn ignores_token_labels_inside_agent_prose() {
+        assert!(parse_cli_token_usage_line(
+            "Explain Tokens: 1,200 in the documentation",
+            Some("qwen3.8-max-preview"),
+            "cli",
+        )
+        .is_none());
+    }
+
+    #[cfg(any(unix, windows))]
+    use std::sync::Arc;
+    #[cfg(any(unix, windows))]
+    use std::time::{SystemTime, UNIX_EPOCH};
+    #[cfg(any(unix, windows))]
+    use tauri::Listener;
+
+    #[cfg(any(unix, windows))]
+    struct FixtureDirectory(PathBuf);
+
+    #[cfg(any(unix, windows))]
+    impl Drop for FixtureDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    struct FixtureTurnCleanup<R: Runtime> {
+        app: AppHandle<R>,
+        turn_ids: Vec<String>,
+    }
+
+    #[cfg(any(unix, windows))]
+    impl<R: Runtime> Drop for FixtureTurnCleanup<R> {
+        fn drop(&mut self) {
+            for turn_id in &self.turn_ids {
+                let _ = agent_cancel(self.app.clone(), turn_id.clone());
+            }
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    fn fixture_event_log<R: Runtime>(
+        app: &AppHandle<R>,
+        turn_id: &str,
+        suffix: &str,
+    ) -> Arc<Mutex<Vec<String>>> {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&events);
+        app.listen(format!("agent://{turn_id}/{suffix}"), move |event| {
+            if let Ok(mut events) = captured.lock() {
+                events.push(event.payload().to_string());
+            }
+        });
+        events
+    }
+
+    #[cfg(any(unix, windows))]
+    fn event_log_contains(events: &Arc<Mutex<Vec<String>>>, marker: &str) -> bool {
+        events
+            .lock()
+            .map(|events| events.iter().any(|event| event.contains(marker)))
+            .unwrap_or(false)
+    }
+
+    #[cfg(unix)]
+    fn process_is_gone(pid: u32) -> bool {
+        unsafe {
+            if libc::kill(pid as libc::pid_t, 0) == 0 {
+                return false;
+            }
+        }
+        std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    }
+
+    #[cfg(windows)]
+    fn process_is_gone(pid: u32) -> bool {
+        let filter = format!("PID eq {pid}");
+        Command::new("tasklist.exe")
+            .args(["/FI", &filter, "/FO", "CSV", "/NH"])
+            .output()
+            .map(|output| {
+                if !output.status.success() {
+                    return false;
+                }
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                !stdout.contains(&format!("\"{pid}\""))
+            })
+            .unwrap_or(false)
+    }
+
+    #[cfg(any(unix, windows))]
+    fn wait_for_process_to_exit(pid: u32) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            if process_is_gone(pid) {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        process_is_gone(pid)
+    }
+
+    #[cfg(any(unix, windows))]
+    fn terminal_lifecycle(events: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+        events
+            .lock()
+            .expect("lifecycle event log")
+            .iter()
+            .filter_map(|event| serde_json::from_str::<Value>(event).ok())
+            .filter(|event| event.get("terminal").and_then(Value::as_bool) == Some(true))
+            .filter_map(|event| {
+                event
+                    .get("phase")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect()
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn gajecode_fixture_subprocess() {
+        let Ok(request) = std::env::var("ATELIER_TEST_AGENT_REQUEST") else {
+            return;
+        };
+        let marker = ["FIXTURE_A", "FIXTURE_B", "FIXTURE_C"]
+            .into_iter()
+            .find(|candidate| request.contains(candidate))
+            .unwrap_or_else(|| panic!("unknown fixture request: {request}"));
+        let workspace = request
+            .strip_prefix("Atelier is running Gajae-Code (gjc) from an isolated provider workspace so existing Claude/Codex/Hermes/project skills are not auto-loaded. Treat this path as the only codebase target for the user's request: ")
+            .and_then(|value| value.split_once("\n\nUser request:\n"))
+            .map(|(workspace, _)| workspace)
+            .unwrap_or_else(|| panic!("fixture request did not carry a workspace: {request}"));
+        println!("{marker}:WORKSPACE:{workspace}");
+        match marker {
+            "FIXTURE_A" | "FIXTURE_C" => {
+                println!("{marker}:START");
+                std::io::stdout().flush().expect("flush fixture start");
+                thread::sleep(Duration::from_secs(4));
+                println!("{marker}:DONE");
+            }
+            "FIXTURE_B" => {
+                let pid_dir = PathBuf::from(
+                    std::env::var_os("ATELIER_FIXTURE_PID_DIR").expect("fixture pid directory"),
+                );
+                fs::write(pid_dir.join("b-shell.pid"), std::process::id().to_string())
+                    .expect("write fixture shell pid");
+
+                #[cfg(unix)]
+                let mut child = Command::new("/bin/sleep")
+                    .arg("30")
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .expect("spawn fixture child");
+
+                #[cfg(windows)]
+                let mut child = Command::new("ping.exe")
+                    .args(["-n", "31", "127.0.0.1"])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .expect("spawn fixture child");
+
+                fs::write(pid_dir.join("b-child.pid"), child.id().to_string())
+                    .expect("write fixture child pid");
+                println!("FIXTURE_B:READY");
+                std::io::stdout().flush().expect("flush fixture ready");
+                let _ = child.wait();
+            }
+            _ => unreachable!("fixture marker allowlist is exhaustive"),
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn parallel_fixture_turns_isolate_cancel_and_reap_process_trees() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let fixture_root = std::env::temp_dir().join(format!(
+            "atelier-parallel-agent-e2e-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&fixture_root).expect("create fixture root");
+        let _fixture_directory = FixtureDirectory(fixture_root.clone());
+        let run_dir = fixture_root.join("provider-workspace");
+        let pid_dir = fixture_root.join("pids");
+        for name in ["workspace-a", "workspace-b", "workspace-c", "pids"] {
+            fs::create_dir_all(fixture_root.join(name)).expect("create fixture directory");
+        }
+        let _launch_reset = install_test_gajecode_launch_override(TestGajaeLaunchOverride {
+            executable: std::env::current_exe().expect("resolve Rust test executable"),
+            run_dir,
+            env: vec![(
+                "ATELIER_FIXTURE_PID_DIR".to_string(),
+                pid_dir.to_string_lossy().into_owned(),
+            )],
+        });
+
+        let app = tauri::test::mock_app();
+        let app_handle = app.handle().clone();
+        let turn_a = format!("fixture-a-{nonce}");
+        let turn_b = format!("fixture-b-{nonce}");
+        let turn_c = format!("fixture-c-{nonce}");
+        let _turn_cleanup = FixtureTurnCleanup {
+            app: app_handle.clone(),
+            turn_ids: vec![turn_a.clone(), turn_b.clone(), turn_c.clone()],
+        };
+
+        let events_a = fixture_event_log(&app_handle, &turn_a, "event");
+        let events_b = fixture_event_log(&app_handle, &turn_b, "event");
+        let events_c = fixture_event_log(&app_handle, &turn_c, "event");
+        let lifecycle_a = fixture_event_log(&app_handle, &turn_a, "lifecycle");
+        let lifecycle_b = fixture_event_log(&app_handle, &turn_b, "lifecycle");
+        let lifecycle_c = fixture_event_log(&app_handle, &turn_c, "lifecycle");
+
+        let workspace_a = fixture_root.join("workspace-a");
+        let workspace_b = fixture_root.join("workspace-b");
+        let workspace_c = fixture_root.join("workspace-c");
+        let runtime_result = tauri::async_runtime::block_on(async {
+            let task_a = tauri::async_runtime::spawn(agent_send(
+                app_handle.clone(),
+                "gajecode".to_string(),
+                turn_a.clone(),
+                "FIXTURE_A".to_string(),
+                None,
+                Some(workspace_a.to_string_lossy().into_owned()),
+                Some("test/fake".to_string()),
+                None,
+                None,
+                None,
+                None,
+            ));
+            let task_b = tauri::async_runtime::spawn(agent_send(
+                app_handle.clone(),
+                "gajecode".to_string(),
+                turn_b.clone(),
+                "FIXTURE_B".to_string(),
+                None,
+                Some(workspace_b.to_string_lossy().into_owned()),
+                Some("test/fake".to_string()),
+                None,
+                None,
+                None,
+                None,
+            ));
+            let task_c = tauri::async_runtime::spawn(agent_send(
+                app_handle.clone(),
+                "gajecode".to_string(),
+                turn_c.clone(),
+                "FIXTURE_C".to_string(),
+                None,
+                Some(workspace_c.to_string_lossy().into_owned()),
+                Some("test/fake".to_string()),
+                None,
+                None,
+                None,
+                None,
+            ));
+
+            let ready_deadline = Instant::now() + Duration::from_secs(10);
+            let mut all_registered = false;
+            while Instant::now() < ready_deadline {
+                all_registered = agent_children()
+                    .lock()
+                    .map(|children| {
+                        children.contains_key(&turn_a)
+                            && children.contains_key(&turn_b)
+                            && children.contains_key(&turn_c)
+                    })
+                    .unwrap_or(false);
+                if all_registered && event_log_contains(&events_b, "FIXTURE_B:READY") {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+
+            let b_ready = event_log_contains(&events_b, "FIXTURE_B:READY");
+            let cancelled = agent_cancel(app_handle.clone(), turn_b.clone()).unwrap_or(false);
+            let peers_survived_cancel = agent_children()
+                .lock()
+                .map(|children| children.contains_key(&turn_a) && children.contains_key(&turn_c))
+                .unwrap_or(false);
+
+            let joined = tokio::time::timeout(Duration::from_secs(10), async {
+                tokio::join!(task_a, task_b, task_c)
+            })
+            .await;
+            if joined.is_err() {
+                for turn_id in [&turn_a, &turn_b, &turn_c] {
+                    let _ = agent_cancel(app_handle.clone(), (*turn_id).clone());
+                }
+                let cleanup_deadline = Instant::now() + Duration::from_secs(3);
+                while Instant::now() < cleanup_deadline {
+                    let retained = agent_children()
+                        .lock()
+                        .map(|children| {
+                            [&turn_a, &turn_b, &turn_c]
+                                .iter()
+                                .any(|turn_id| children.contains_key(*turn_id))
+                        })
+                        .unwrap_or(true);
+                    if !retained {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            }
+            (
+                all_registered,
+                b_ready,
+                cancelled,
+                peers_survived_cancel,
+                joined,
+            )
+        });
+
+        assert!(runtime_result.0, "three fixture turns were not concurrent");
+        assert!(
+            runtime_result.1,
+            "cancelled turn never emitted its ready marker"
+        );
+        assert!(
+            runtime_result.2,
+            "cancel request did not stop the target turn"
+        );
+        assert!(
+            runtime_result.3,
+            "cancelling turn B removed or stopped a peer turn"
+        );
+        let (result_a, result_b, result_c) = runtime_result
+            .4
+            .expect("parallel fixture turns did not finish within ten seconds");
+        let result_a = result_a.expect("turn A task join").expect("turn A adapter");
+        let result_b = result_b.expect("turn B task join").expect("turn B adapter");
+        let result_c = result_c.expect("turn C task join").expect("turn C adapter");
+
+        assert!(!result_a.is_error, "turn A failed: {:?}", result_a.error);
+        assert!(result_b.is_error, "cancelled turn B reported success");
+        assert!(!result_c.is_error, "turn C failed: {:?}", result_c.error);
+        assert!(result_a.text.contains("FIXTURE_A:DONE"));
+        assert!(result_a
+            .text
+            .contains(workspace_a.to_string_lossy().as_ref()));
+        assert!(result_b
+            .text
+            .contains(workspace_b.to_string_lossy().as_ref()));
+        assert!(result_c.text.contains("FIXTURE_C:DONE"));
+        assert!(result_c
+            .text
+            .contains(workspace_c.to_string_lossy().as_ref()));
+
+        for (events, own, foreign) in [
+            (&events_a, "FIXTURE_A", ["FIXTURE_B", "FIXTURE_C"]),
+            (&events_b, "FIXTURE_B", ["FIXTURE_A", "FIXTURE_C"]),
+            (&events_c, "FIXTURE_C", ["FIXTURE_A", "FIXTURE_B"]),
+        ] {
+            let events = events.lock().expect("agent event log");
+            let joined = events.join("\n");
+            assert!(joined.contains(own), "missing own marker {own}");
+            assert!(
+                foreign.iter().all(|marker| !joined.contains(marker)),
+                "turn event channel leaked a foreign marker: {joined}"
+            );
+        }
+
+        assert_eq!(terminal_lifecycle(&lifecycle_a), vec!["completed"]);
+        assert_eq!(terminal_lifecycle(&lifecycle_b), vec!["cancelled"]);
+        assert_eq!(terminal_lifecycle(&lifecycle_c), vec!["completed"]);
+        assert!(
+            agent_children()
+                .lock()
+                .expect("agent child registry")
+                .keys()
+                .all(|turn_id| turn_id != &turn_a && turn_id != &turn_b && turn_id != &turn_c),
+            "fixture child registry retained a completed turn"
+        );
+
+        let shell_pid = fs::read_to_string(pid_dir.join("b-shell.pid"))
+            .expect("cancelled shell pid")
+            .trim()
+            .parse::<u32>()
+            .expect("parse cancelled shell pid");
+        let child_pid = fs::read_to_string(pid_dir.join("b-child.pid"))
+            .expect("cancelled child pid")
+            .trim()
+            .parse::<u32>()
+            .expect("parse cancelled child pid");
+        assert!(
+            wait_for_process_to_exit(shell_pid),
+            "cancelled fixture shell {shell_pid} is still alive"
+        );
+        assert!(
+            wait_for_process_to_exit(child_pid),
+            "cancelled fixture child {child_pid} is still alive"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn terminate_agent_pid_stops_agent_process_group() {
@@ -3453,6 +4386,60 @@ mod tests {
             gajecode_codex_model("codex/gpt-5.6-sol"),
             Some("gpt-5.6-sol".to_string())
         );
+    }
+
+    #[test]
+    fn gajecode_alibaba_models_use_token_plan_selectors_and_effort() {
+        assert!(gajecode_uses_alibaba_token_plan(
+            "alibaba-token-plan/qwen3.8-max-preview"
+        ));
+        assert!(gajecode_uses_alibaba_token_plan(
+            "alibaba-token-plan/glm-5.2:high"
+        ));
+        assert!(!gajecode_uses_alibaba_token_plan(
+            "anthropic/claude-opus-4-8"
+        ));
+        assert_eq!(
+            gajecode_model_selector_with_effort(
+                "alibaba-token-plan/qwen3.8-max-preview",
+                Some("low")
+            ),
+            "alibaba-token-plan/qwen3.8-max-preview:high"
+        );
+        assert_eq!(
+            gajecode_model_selector_with_effort(
+                "alibaba-token-plan/qwen3.8-max-preview",
+                Some("none")
+            ),
+            "alibaba-token-plan/qwen3.8-max-preview:off"
+        );
+        assert_eq!(
+            gajecode_model_selector_with_effort("alibaba-token-plan/glm-5.2", Some("ultra")),
+            "alibaba-token-plan/glm-5.2:max"
+        );
+        assert_eq!(
+            gajecode_model_selector_with_effort("alibaba-token-plan/glm-5.2", Some("xhigh")),
+            "alibaba-token-plan/glm-5.2:xhigh"
+        );
+        assert_eq!(
+            gajecode_model_selector_with_effort("alibaba-token-plan/glm-5.2", Some("none")),
+            "alibaba-token-plan/glm-5.2:off"
+        );
+        assert_eq!(
+            gajecode_model_selector_with_effort("anthropic/claude-opus-4-8", Some("high")),
+            "anthropic/claude-opus-4-8"
+        );
+    }
+
+    #[test]
+    fn gajecode_alibaba_prompt_exposes_exact_runtime_model() {
+        let qwen = gajecode_model_system_prompt("alibaba-token-plan/qwen3.8-max-preview:medium");
+        assert!(qwen.contains("Qwen 3.8 Max Preview"));
+        assert!(qwen.contains("`alibaba-token-plan/qwen3.8-max-preview:medium`"));
+
+        let glm = gajecode_model_system_prompt("alibaba-token-plan/glm-5.2:high");
+        assert!(glm.contains("GLM 5.2"));
+        assert!(glm.contains("`alibaba-token-plan/glm-5.2:high`"));
     }
 
     #[test]
@@ -3611,6 +4598,37 @@ export ANTHROPIC_API_KEY="tc-example"
         assert!(hermes_heredoc_marker_closed("EOF", "EOF [error]"));
         assert!(!hermes_heredoc_marker_closed("PY", "PYEONGYANG"));
         assert!(!hermes_heredoc_marker_closed("PY", "print('PY 13.3s')"));
+    }
+
+    #[test]
+    fn hermes_alibaba_aliases_route_to_the_token_plan_provider() {
+        for alias in ["alibaba", "alibaba-cloud", "dashscope", "aliyun"] {
+            assert_eq!(
+                normalize_hermes_provider(Some(alias.to_string())),
+                "alibaba"
+            );
+        }
+        assert_eq!(
+            ALIBABA_TOKEN_PLAN_OPENAI_BASE_URL,
+            "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
+        );
+    }
+
+    #[test]
+    fn hermes_workload_is_bounded_and_applied_to_the_runtime_prompt() {
+        assert_eq!(
+            normalize_hermes_effort(Some("ULTRA".into())).as_deref(),
+            Some("ultra")
+        );
+        assert_eq!(normalize_hermes_effort(Some("unbounded".into())), None);
+        let prompt = apply_hermes_workload_prompt("inspect the project".into(), Some("high"));
+        assert!(prompt.starts_with("[Atelier workload policy: high]"));
+        assert!(prompt.ends_with("inspect the project"));
+        let already_tagged = apply_hermes_workload_prompt(
+            "작업량: 높음(high). 검증하세요.\n\n요청".into(),
+            Some("high"),
+        );
+        assert_eq!(already_tagged.matches("작업량:").count(), 1);
     }
 
     #[test]

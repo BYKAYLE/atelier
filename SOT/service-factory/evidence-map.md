@@ -1,6 +1,6 @@
 # Evidence Map
 
-updated_at: 2026-07-20T20:14:15+09:00
+updated_at: 2026-07-22T22:56:31+09:00
 
 | Capability | Source evidence | Runtime/package evidence | Status |
 |---|---|---|---|
@@ -27,7 +27,7 @@ updated_at: 2026-07-20T20:14:15+09:00
 | Development-service ownership | `src-tauri/src/dev_services.rs`, `src/components/dev-services/` | macOS, Windows, and Linux parser fixtures; PID-bound stop approval | ready_source |
 | In-process automations | `src-tauri/src/automations.rs`, `src/components/automations/` | manual, interval, and daily schedules; bounded missed-run handling; queue dispatch and receipts | ready_local |
 | Removable feature packages | `src/components/*/feature.manifest.json`, `vite.config.ts`, `src-tauri/Cargo.toml` | 10 isolated frontend/backend builds plus declared dependency-expansion smoke | ready |
-| macOS package/install reflection | `tools/build-macos-bundle.sh`, `tools/verify-macos-bundle.sh` | `Atelier_0.2.11_aarch64.dmg`; packaged and installed executable SHA-256 `ea828514cb964113da658e07024e9cc9ec3ebdc5665b19422009c0446dbc6b50`; DMG SHA-256 `8419ed9658fe74ecd982e7caebb016fd6f91bfbacc78624364810a93dbbf5589`; strict local signature and installed renderer receipt pass | ready_local |
+| macOS package/install reflection | `tools/build-macos-bundle.sh`, `tools/verify-macos-bundle.sh` | `Atelier_0.2.12_aarch64.dmg`; packaged and installed executable SHA-256 `2f0a1ab865eaa98edd2c69ede60608300581d060771ff23b00eaf67145233549`; DMG SHA-256 `097a42df0f98ac265dbc4abe6c46a9de5fcb7ff838a04fa71931cd1235eb4332`; strict local signature, installed renderer receipt, and WindowServer window metadata pass | ready_local |
 | Windows normal/Store source and link | workflows, `tools/windows-provider-smoke.ps1` | two PE32+ x86-64 links and strict cargo-xwin Clippy | ready_cross_target |
 | Physical Windows OAuth/Smart App Control/update survival | hosted process-observation and manual visible-window workflows | source contract passes; no registered physical runner or Windows execution receipt | validation_required |
 | Public signing and notarization | release workflows | SignPath/Developer ID credentials not available locally | external_gate |
@@ -49,6 +49,6 @@ updated_at: 2026-07-20T20:14:15+09:00
 - A generated file name is not package reflection unless version, signature,
   hash, and installed executable are checked separately.
 - A renderer-ready receipt from an already-running process is not proof that a
-  newly replaced bundle created a visible window. The current `0.2.11` receipt
+  newly replaced bundle created a visible window. The current `0.2.12` receipt
   was produced from the newly copied `/Applications/Atelier.app` executable;
   the app was then relaunched from that installed path for visual reflection.

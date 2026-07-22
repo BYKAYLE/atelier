@@ -1,8 +1,40 @@
 # Stella Factory Task Ledger
 
-Last updated: 2026-07-14
+Last updated: 2026-07-22
 
 ## Completed
+
+- Prepared and installed the 0.2.12 local release candidate. The packaged and
+  `/Applications` executables match exactly, the installed app reports 0.2.12,
+  strict local-signature verification passes, and the installed renderer and
+  WindowServer both report a live main window.
+- Replaced remote-script CLI installers with pinned package/commit installs,
+  bounded output capture, timeout/kill handling, redaction, background
+  execution, and post-install verification.
+- Closed the preview-route, Hermes workload, keyboard-menu, and compact send
+  control regressions. The final gate passes 20 contract smokes, ten removable
+  backend features, 188 Rust tests, strict all-feature Clippy, production
+  frontend build, updater contract, npm audit, and release security audit.
+
+## External Release Gates
+
+- Add Apple Developer ID signing and notarization credentials, rebuild, and
+  prove Gatekeeper acceptance. The current 0.2.12 package is locally signed and
+  must not be represented as a public macOS artifact.
+- Complete SignPath or equivalent public Windows signing and run the physical
+  Windows gate for browser visibility, Claude/Codex acceptance, Smart App
+  Control, updater install, relaunch, and version persistence.
+- Publish the GitHub tag/release only after both platform evidence sets are
+  attached to the release candidate. Updater signing alone is not sufficient.
+
+- Added and release-gated an offline parallel-agent runtime harness. It proves
+  three simultaneous adapter turns, per-turn workspace/event isolation,
+  selective cancellation, exactly-once lifecycle, process-tree reaping, and
+  temporary-only worktree/adoption behavior with zero provider calls.
+- Ran the final source matrix: Rust 159/159, strict Clippy, macOS frontend
+  build, Windows test-target cross-check, 17-contract Orca feature gate, and
+  npm/RustSec audits all pass. Installed-app UI and real local-model execution
+  remain explicitly separate future evidence.
 
 - Resumed the interrupted 0.2.8 workbench finishing pass from the exact dirty
   source state. The release UI now keeps one global Terminal destination,

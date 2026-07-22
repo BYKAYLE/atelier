@@ -154,6 +154,36 @@ export interface AgentStreamEvent {
   is_error?: boolean | null;
 }
 
+export interface AgentTokenUsageEvent {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens?: number | null;
+  cache_write_tokens?: number | null;
+  total_tokens: number;
+  context_window?: number | null;
+  remaining_tokens?: number | null;
+  model?: string | null;
+  source: "provider" | "cli" | "cli_estimate" | string;
+  timestamp_ms: number;
+}
+
+export interface SubscriptionRateLimitWindow {
+  id: string;
+  label?: string | null;
+  usedPercent: number;
+  remainingPercent: number;
+  windowMinutes?: number | null;
+  resetsAtUnixSeconds?: number | null;
+}
+
+export interface ProviderSubscriptionUsage {
+  provider: string;
+  plan?: string | null;
+  windows: SubscriptionRateLimitWindow[];
+  source: string;
+  capturedAtUnixMs: number;
+}
+
 export type AgentLifecyclePhase =
   | "started"
   | "output"
@@ -580,6 +610,7 @@ export interface ProviderUsageEntry {
   quotaLimit?: number | null;
   quotaRemaining?: number | null;
   resetAt?: string | null;
+  subscriptionUsage?: ProviderSubscriptionUsage | null;
   source: string;
   note: string;
   error?: string | null;
@@ -909,6 +940,20 @@ export async function onAgentEvent(
   return listen<AgentStreamEvent>(`agent://${turnId}/event`, (e) => handler(e.payload));
 }
 
+export async function onAgentTokenUsage(
+  turnId: string,
+  handler: (event: AgentTokenUsageEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<AgentTokenUsageEvent>(`agent://${turnId}/usage`, (e) => handler(e.payload));
+}
+
+export async function onAgentSubscriptionUsage(
+  turnId: string,
+  handler: (event: ProviderSubscriptionUsage) => void,
+): Promise<UnlistenFn> {
+  return listen<ProviderSubscriptionUsage>(`agent://${turnId}/subscription-usage`, (e) => handler(e.payload));
+}
+
 export async function onAgentLifecycle(
   turnId: string,
   handler: (event: AgentLifecycleEvent) => void,
@@ -1077,6 +1122,12 @@ export async function sshRemoteWorktreeExecute(
 
 export async function providerUsageSnapshot(): Promise<ProviderUsageSnapshot> {
   return invoke("provider_usage_snapshot");
+}
+
+export async function providerSubscriptionUsage(
+  provider: string,
+): Promise<ProviderSubscriptionUsage | null> {
+  return invoke("provider_subscription_usage", { provider });
 }
 
 export async function devServicesScan(workspace?: string | null): Promise<DevServicesSnapshot> {

@@ -1293,6 +1293,72 @@ body.dark {
   transition: width 160ms ease, flex-basis 160ms ease;
 }
 
+/* Settings has more destinations than the workspace. Keep every destination
+   reachable while using a short icon row for workspace jumps and one-line
+   rows for settings. The regular workspace navigation remains unchanged. */
+.atelier-shell-sidebar-settings .atelier-shell-brand {
+  margin-top: 10px;
+  margin-bottom: 6px;
+}
+
+.atelier-shell-sidebar-settings .atelier-shell-nav {
+  padding-bottom: 6px;
+}
+
+.atelier-shell-sidebar-settings .atelier-shell-nav-group {
+  margin-bottom: 10px;
+}
+
+.atelier-shell-sidebar-settings .atelier-shell-nav-group[data-nav-group="workspace"] .atelier-shell-section-title {
+  display: none;
+}
+
+.atelier-shell-sidebar-settings .atelier-shell-nav-group[data-nav-group="workspace"] .atelier-shell-nav-items {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.atelier-shell-sidebar-settings .atelier-shell-nav-group[data-nav-group="workspace"] .atelier-shell-nav-item {
+  min-height: 36px;
+  grid-template-columns: 1fr;
+  place-items: center;
+  gap: 0;
+  margin-top: 0 !important;
+  padding: 6px 0;
+}
+
+.atelier-shell-sidebar-settings .atelier-shell-nav-group[data-nav-group="workspace"] .atelier-shell-nav-copy {
+  display: none;
+}
+
+.atelier-shell-sidebar-settings .atelier-shell-nav-group[data-nav-group="workspace"] .atelier-shell-nav-icon {
+  margin: 0 auto;
+}
+
+.atelier-shell-sidebar-settings .atelier-shell-nav-group[data-nav-group="system"] .atelier-shell-nav-item {
+  min-height: 36px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.atelier-shell-sidebar-settings .atelier-shell-nav-group[data-nav-group="system"] .atelier-shell-nav-copy > span:first-child {
+  font-size: 12.5px;
+}
+
+.atelier-shell-sidebar-settings .atelier-shell-nav-group[data-nav-group="system"] .atelier-shell-nav-copy > span:last-child {
+  display: none;
+}
+
+.atelier-shell-sidebar-settings .atelier-shell-footer {
+  margin-bottom: 8px;
+  padding-top: 8px;
+}
+
+.atelier-shell-sidebar-settings .atelier-shell-footer button {
+  height: 34px;
+}
+
 .atelier-task-sidebar {
   width: 280px;
   flex: 0 0 280px;
@@ -1600,6 +1666,35 @@ body.dark {
   }
 }
 
+@media (max-height: 760px) {
+  .atelier-settings-content {
+    padding-top: 24px;
+    padding-bottom: 32px;
+  }
+
+  .atelier-settings-content.atelier-settings-content-compact {
+    padding-top: 16px;
+    padding-bottom: 0;
+  }
+
+  .atelier-settings-section-header {
+    margin-bottom: 20px;
+  }
+
+  .atelier-settings-content-compact .atelier-settings-section-header {
+    margin-bottom: 16px;
+  }
+
+  .atelier-settings-section-title {
+    font-size: 28px;
+  }
+
+  .atelier-settings-row {
+    padding-top: 14px;
+    padding-bottom: 14px;
+  }
+}
+
 @media (max-width: 1180px) {
   .atelier-shell-sidebar {
     width: 68px;
@@ -1674,9 +1769,11 @@ body.dark {
   }
 
   .atelier-composer-controls {
-    align-items: center;
-    flex-direction: row;
-    flex-wrap: wrap;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: end;
+    gap: 4px;
+    margin-top: 4px !important;
   }
 
   .atelier-composer-shell {
@@ -1685,13 +1782,32 @@ body.dark {
   }
 
   .atelier-composer-actions {
+    display: grid !important;
     width: 100%;
-    flex-wrap: wrap;
-    justify-content: flex-end;
+    grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+    gap: 4px;
+    justify-content: stretch;
   }
 
-  .atelier-composer-actions button[aria-haspopup="menu"] {
-    flex: 1 1 116px;
+  .atelier-composer-hint,
+  .atelier-composer-control-label,
+  .atelier-composer-secondary-action {
+    display: none !important;
+  }
+
+  .atelier-composer-actions > .relative,
+  .atelier-model-menu {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .atelier-provider-trigger,
+  .atelier-permission-trigger,
+  .atelier-model-trigger,
+  .atelier-workload-trigger {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
   }
 }
 
@@ -1866,6 +1982,70 @@ body.dark {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+.atelier-workbench-mode-secondary {
+  flex: 0 1 auto;
+  justify-content: flex-end;
+  overflow: hidden;
+}
+
+.atelier-session-token-usage {
+  height: 30px;
+  min-width: 0;
+  max-width: 340px;
+  padding: 0 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  border-left: 1px solid rgba(128, 126, 119, 0.24);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.atelier-session-token-model,
+.atelier-session-token-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.atelier-session-token-model {
+  max-width: 128px;
+}
+
+.atelier-session-token-value {
+  flex: 0 1 auto;
+}
+
+.atelier-session-token-divider {
+  opacity: 0.55;
+}
+
+.atelier-session-token-usage-reported-dark .atelier-session-token-value {
+  color: #d7d4cc;
+}
+
+.atelier-session-token-usage-reported-light .atelier-session-token-value {
+  color: #4b4944;
+}
+
+.atelier-session-token-meter {
+  width: 42px;
+  height: 3px;
+  flex: 0 0 42px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: rgba(128, 126, 119, 0.25);
+}
+
+.atelier-session-token-meter > span {
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: #d96445;
 }
 
 .atelier-workbench-mode-button {
@@ -3523,6 +3703,18 @@ body.dark {
 
 @media (max-width: 620px) {
   .atelier-workbench-modebar {
+    padding-left: 7px;
+    padding-right: 7px;
+  }
+
+  .atelier-session-token-model,
+  .atelier-session-token-divider,
+  .atelier-session-token-meter {
+    display: none;
+  }
+
+  .atelier-session-token-usage {
+    max-width: 126px;
     padding-left: 7px;
     padding-right: 7px;
   }

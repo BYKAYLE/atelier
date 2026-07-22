@@ -1,6 +1,13 @@
 import React from "react";
 import { cls } from "../../lib/tokens";
 import { I } from "../Icons";
+import {
+  type SessionTokenUsage,
+} from "./sessionTokenUsage";
+import {
+  subscriptionUsagePresentation,
+} from "./subscriptionUsage";
+import type { ProviderSubscriptionUsage } from "../../lib/tauri";
 
 export type WorkspaceView = "conversation" | "code" | "changes";
 
@@ -10,6 +17,10 @@ interface Props {
   view: WorkspaceView;
   previewActive: boolean;
   changeCount: number;
+  modelLabel: string;
+  tokenUsage?: SessionTokenUsage;
+  subscriptionUsage?: ProviderSubscriptionUsage;
+  running: boolean;
   onViewChange: (view: WorkspaceView) => void;
   onTogglePreview: () => void;
 }
@@ -20,6 +31,10 @@ const WorkspaceModeBar: React.FC<Props> = ({
   view,
   previewActive,
   changeCount,
+  modelLabel,
+  tokenUsage,
+  subscriptionUsage,
+  running,
   onViewChange,
   onTogglePreview,
 }) => {
@@ -42,6 +57,8 @@ const WorkspaceModeBar: React.FC<Props> = ({
     dark ? "text-dsub hover:text-dink" : "text-sub hover:text-ink",
   );
   const active = dark ? "atelier-workbench-mode-active-dark" : "atelier-workbench-mode-active-light";
+  const usage = subscriptionUsagePresentation(subscriptionUsage, tokenUsage, language, running);
+  const usageLabel = `${modelLabel} · ${usage.value}`;
 
   return (
     <nav
@@ -80,6 +97,36 @@ const WorkspaceModeBar: React.FC<Props> = ({
         </button>
       </div>
       <div className="atelier-workbench-mode-secondary">
+        <div
+          className={cls(
+            "atelier-session-token-usage",
+            dark ? "text-dsub" : "text-sub",
+            usage.reported && (dark ? "atelier-session-token-usage-reported-dark" : "atelier-session-token-usage-reported-light"),
+          )}
+          role="status"
+          aria-label={usageLabel}
+          title={usage.detail}
+          data-testid="atelier-session-token-usage"
+          data-reported={usage.reported ? "true" : "false"}
+        >
+          <span className="atelier-session-token-model">{modelLabel}</span>
+          <span className="atelier-session-token-divider" aria-hidden="true">·</span>
+          <span className="atelier-session-token-value">{usage.value}</span>
+          {usage.consumedPercent !== null && (
+            <span
+              className="atelier-session-token-meter"
+              role="progressbar"
+              aria-label={subscriptionUsage
+                ? (language === "en" ? "Subscription limit used" : "구독 한도 사용률")
+                : (language === "en" ? "Context used" : "컨텍스트 사용률")}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(usage.consumedPercent)}
+            >
+              <span style={{ width: `${usage.consumedPercent}%` }} />
+            </span>
+          )}
+        </div>
         <button
           type="button"
           className={cls(base, previewActive && active)}

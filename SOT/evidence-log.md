@@ -1,5 +1,72 @@
 # Evidence Log
 
+## 2026-07-22 Atelier 0.2.12 Release Candidate
+
+- Hardened provider CLI installation so release builds no longer execute
+  remote shell or PowerShell payloads. Claude Code, Codex, Bun, Gajae Code,
+  and Hermes installs are pinned to reviewed package versions or an immutable
+  Git commit, execute on a blocking worker with a 20-minute timeout, drain both
+  output streams, retain only a bounded 64 KiB tail, redact credentials, and
+  verify the installed CLI before reporting success.
+- Corrected user-visible release paths: preview diagnostics now remain bound to
+  the normalized preview route and origin, Hermes workload changes reach its
+  runtime prompt, composer menus are keyboard accessible, and compact layouts
+  retain a usable send action without clipping.
+- Fresh source verification on version 0.2.12:
+  - Orca feature release gate passed 20 contract smokes and ten independently
+    removable backend feature builds;
+  - Rust passed 188 tests with zero failures and one intentionally ignored
+    live-subscription test; all-target/all-feature Clippy passed with warnings
+    denied;
+  - production frontend build, updater contract, formatting, diff hygiene, and
+    npm audit passed; npm reported zero vulnerabilities;
+  - the release audit reported zero RustSec vulnerabilities, with 18
+    unmaintained and two unsound upstream advisories retained as warnings.
+- macOS package and installed-app proof:
+  - DMG: `Atelier_0.2.12_aarch64.dmg`, 13,484,669 bytes, SHA-256
+    `097a42df0f98ac265dbc4abe6c46a9de5fcb7ff838a04fa71931cd1235eb4332`;
+  - packaged and installed executable SHA-256
+    `2f0a1ab865eaa98edd2c69ede60608300581d060771ff23b00eaf67145233549`;
+  - `/Applications/Atelier.app` reports 0.2.12, matches the packaged bundle,
+    passes strict local-signature verification, and produced a renderer-ready
+    receipt for the installed executable and `main` window;
+  - WindowServer observed the installed `Atelier` window at 1600 x 900. The
+    installed-window screenshot itself was black because screen-recording
+    permission was unavailable, so source-renderer visual evidence and
+    installed-window metadata are intentionally recorded as separate proofs;
+  - the previous installation is preserved at
+    `/tmp/atelier-preinstall.dN7g77/Atelier.app`.
+- Distribution truth: the macOS artifact uses the local Atelier identity and
+  is not Developer ID notarized, so Gatekeeper rejects it for public
+  distribution. GitHub has updater signing secrets but no Apple notarization
+  credentials or SignPath configuration. Physical Windows browser visibility,
+  provider acceptance, Smart App Control, signed update survival, and public
+  Windows signing therefore remain mandatory external gates. No unsigned
+  public release was published.
+- No database, user data, credential store, production deployment, or external
+  service data was deleted or modified.
+
+## 2026-07-21 Offline Parallel Agent Runtime Verification (Source Only)
+
+- Added `npm run harness:parallel-agent`, which executes the existing frontend
+  session/fleet contracts, one real backend three-turn adapter E2E, and four
+  worktree isolation/adoption tests without provider calls.
+- Fresh harness result: three concurrent turns, A/C completed, B cancelled,
+  per-turn workspace and event isolation, one terminal lifecycle per turn,
+  empty child registry, cancelled parent/child PIDs reaped, four worktree tests,
+  and `externalProviderCalls: 0`.
+- Independent QC caught a pre-existing test receipt path that touched the real
+  app-support directory mtime. The tests now inject and assert a temporary
+  receipt path; corrected before/after mtime stayed `1784564140`, with no
+  retained receipt, fixture process, or temporary directory.
+- Fresh regression evidence: frontend build passed; Rust 159/159 passed;
+  strict all-target Clippy passed; Windows test target cross-check passed;
+  common feature gate passed 17 contract smokes and ten removable backends;
+  npm and RustSec audits reported zero vulnerabilities.
+- Truth boundary: backend runtime plus frontend/worktree contracts are source
+  verified. The installed 0.2.11 app was not replaced, a click-driven UI E2E
+  was not claimed, and the borrowed GPU server/local model remained untouched.
+
 ## 2026-07-20 Session Execution and OAuth Stabilization (0.2.11)
 
 - Extracted per-session turn ownership from the monolithic workspace into

@@ -190,7 +190,7 @@ const ComputerUsePanel: React.FC<Props> = ({ tw }) => {
   }
 
   return (
-    <section data-testid="computer-use-panel" className={cls("mt-6 border-t pt-5", dark ? "border-dline" : "border-line")}>
+    <section data-testid="computer-use-panel" className={cls("min-w-0 border-t pt-4", dark ? "border-dline" : "border-line")}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="flex items-center gap-2 text-[14px] font-medium">
@@ -228,7 +228,7 @@ const ComputerUsePanel: React.FC<Props> = ({ tw }) => {
         </div>
       )}
 
-      {featureEnabled && <div className="mt-4 flex flex-wrap gap-2">
+      {featureEnabled && <div className="mt-3 flex flex-wrap gap-2">
         <select
           className={controlClass}
           value={action}

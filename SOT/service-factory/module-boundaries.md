@@ -1,7 +1,7 @@
 # Atelier module boundary contract
 
 Status: active architecture contract
-Source target: 0.2.11
+Source target: 0.2.12
 
 ## Purpose
 

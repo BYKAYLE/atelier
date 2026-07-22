@@ -9,7 +9,11 @@ const npmEntrypoint = process.env.npm_execpath;
 const coreSmokeScripts = [
   "smoke:feature-boundaries",
   "smoke:feature-settings",
+  "smoke:settings-navigation",
+  "smoke:connections-layout",
+  "smoke:preview-evidence",
   "smoke:session-runs",
+  "harness:parallel-agent",
   "smoke:workbench",
 ];
 

@@ -44,6 +44,17 @@ const ComposerSelectMenu: React.FC<ComposerSelectMenuProps> = ({
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const selected = options.find((option) => option.value === value) || options[0];
 
+  const menuItems = () => Array.from(
+    popoverRef.current?.querySelectorAll<HTMLButtonElement>(
+      'button[role="menuitem"]:not(:disabled), button[role="menuitemradio"]:not(:disabled)',
+    ) || [],
+  );
+
+  const closeAndRefocus = () => {
+    setOpen(false);
+    window.requestAnimationFrame(() => triggerRef.current?.focus());
+  };
+
   useEffect(() => {
     if (!open) return;
     const closeOutside = (event: MouseEvent) => {
@@ -52,7 +63,7 @@ const ComposerSelectMenu: React.FC<ComposerSelectMenuProps> = ({
       setOpen(false);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") closeAndRefocus();
     };
     document.addEventListener("mousedown", closeOutside);
     document.addEventListener("keydown", closeOnEscape);
@@ -102,6 +113,16 @@ const ComposerSelectMenu: React.FC<ComposerSelectMenuProps> = ({
   }, [menuWidth, open]);
 
   useEffect(() => {
+    if (!open || !position) return;
+    const frame = window.requestAnimationFrame(() => {
+      const items = menuItems();
+      const selectedItem = items.find((item) => item.getAttribute("aria-checked") === "true");
+      (selectedItem || items[0])?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [open, position]);
+
+  useEffect(() => {
     if (disabled) setOpen(false);
   }, [disabled]);
 
@@ -118,9 +139,18 @@ const ComposerSelectMenu: React.FC<ComposerSelectMenuProps> = ({
             return next;
           });
         }}
+        onKeyDown={(event) => {
+          if (disabled || (event.key !== "ArrowDown" && event.key !== "ArrowUp")) return;
+          event.preventDefault();
+          if (!open) {
+            setOpen(true);
+            onOpen?.();
+          }
+        }}
         disabled={disabled}
         className={cls(
           triggerClassName,
+          "focus-visible:ring-2 focus-visible:ring-orange-500/70 focus-visible:ring-offset-1",
           dark
             ? "bg-dsurf border-dline text-dink disabled:text-dsub"
             : "bg-surface border-line text-ink disabled:text-sub",
@@ -146,6 +176,25 @@ const ComposerSelectMenu: React.FC<ComposerSelectMenuProps> = ({
           )}
           role="menu"
           data-testid={testId}
+          onKeyDown={(event) => {
+            const items = menuItems();
+            if (!items.length) return;
+            const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
+            let nextIndex: number | null = null;
+            if (event.key === "ArrowDown") nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % items.length;
+            if (event.key === "ArrowUp") nextIndex = currentIndex < 0 ? items.length - 1 : (currentIndex - 1 + items.length) % items.length;
+            if (event.key === "Home") nextIndex = 0;
+            if (event.key === "End") nextIndex = items.length - 1;
+            if (event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              closeAndRefocus();
+              return;
+            }
+            if (nextIndex === null) return;
+            event.preventDefault();
+            items[nextIndex]?.focus();
+          }}
         >
           {options.map((option) => {
             const optionSelected = option.value === value;
@@ -156,11 +205,11 @@ const ComposerSelectMenu: React.FC<ComposerSelectMenuProps> = ({
                 onClick={() => {
                   if (option.disabled) return;
                   onChange(option.value);
-                  setOpen(false);
+                  closeAndRefocus();
                 }}
                 disabled={option.disabled}
                 className={cls(
-                  "h-9 w-full rounded-[10px] px-3 flex items-center gap-2.5 text-[11px] text-left",
+                  "h-9 w-full rounded-[10px] px-3 flex items-center gap-2.5 text-[11px] text-left outline-none focus-visible:ring-2 focus-visible:ring-orange-500/70",
                   option.disabled
                     ? dark ? "text-dsub/60 cursor-not-allowed" : "text-sub/60 cursor-not-allowed"
                     : optionSelected

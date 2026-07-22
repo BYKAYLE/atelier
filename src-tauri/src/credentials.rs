@@ -8,7 +8,6 @@ use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::ffi::OsStr;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, Command, Output, Stdio};
@@ -23,10 +22,15 @@ const SERVICE: &str = "com.atelier.app";
 // state, or PKCE parameters before Atelier can open the URL.
 const OAUTH_LOGIN_PTY_COLS: u16 = 2048;
 const CODEX_DEVICE_AUTH_URL: &str = "https://auth.openai.com/codex/device";
-#[cfg(not(target_os = "windows"))]
-const HERMES_INSTALL_SH: &str =
-    "curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- --skip-setup";
 const GAJAE_CODE_PACKAGE_NAME: &str = "gajae-code";
+const CLAUDE_CODE_PACKAGE: &str = "@anthropic-ai/claude-code@2.1.217";
+const CODEX_PACKAGE: &str = "@openai/codex@0.145.0";
+const BUN_PACKAGE: &str = "bun@1.3.14";
+const GAJAE_CODE_PACKAGE: &str = "gajae-code@0.11.7";
+const HERMES_GIT_SPEC: &str =
+    "git+https://github.com/NousResearch/hermes-agent.git@3ef6bbd201263d354fd83ec55b3c306ded2eb72a";
+const CLI_INSTALL_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+const CLI_INSTALL_CAPTURE_LIMIT: usize = 64 * 1024;
 
 enum OAuthLoginInput {
     Process(ChildStdin),
@@ -48,49 +52,6 @@ struct OAuthLoginRuntimeState {
 
 static OAUTH_LOGIN_RUNTIME: Lazy<Mutex<HashMap<String, OAuthLoginRuntimeState>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
-#[cfg(target_os = "windows")]
-const HERMES_INSTALL_PS1: &str =
-    "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1))) -SkipSetup -NonInteractive";
-#[cfg(target_os = "windows")]
-const CLAUDE_INSTALL_PS1: &str =
-    "& ([scriptblock]::Create((irm https://claude.ai/install.ps1))) stable";
-#[cfg(target_os = "windows")]
-const GAJAE_CODE_INSTALL_PS1: &str = r#"
-$ErrorActionPreference = 'Stop'
-New-Item -ItemType Directory -Force -Path $env:BUN_INSTALL, $env:USERPROFILE, $env:GJC_HOME, $env:ATELIER_SKILLS_DIR | Out-Null
-$env:Path = "$env:BUN_INSTALL\bin;$env:USERPROFILE\.bun\bin;$env:Path"
-$bun = Join-Path $env:BUN_INSTALL 'bin\bun.exe'
-if (!(Test-Path $bun)) {
-  $installer = Invoke-RestMethod https://bun.sh/install.ps1
-  Invoke-Expression $installer
-}
-if (!(Test-Path $bun)) {
-  $fallback = Join-Path $env:USERPROFILE '.bun\bin\bun.exe'
-  if (Test-Path $fallback) {
-    $bun = $fallback
-  }
-}
-if (!(Test-Path $bun)) {
-  throw "Bun install completed but bun.exe was not found in the isolated Gajae Code runtime."
-}
-& $bun install -g gajae-code
-"#;
-#[cfg(not(target_os = "windows"))]
-const GAJAE_CODE_INSTALL_SH: &str = r#"
-set -eu
-mkdir -p "$BUN_INSTALL" "$HOME" "$GJC_HOME" "$ATELIER_SKILLS_DIR"
-export PATH="$BUN_INSTALL/bin:$HOME/.bun/bin:$PATH"
-if [ ! -x "$BUN_INSTALL/bin/bun" ]; then
-  command -v curl >/dev/null 2>&1 || { echo "curl not found. install curl first." >&2; exit 127; }
-  command -v bash >/dev/null 2>&1 || { echo "bash not found. install bash first." >&2; exit 127; }
-  curl -fsSL https://bun.sh/install | bash
-fi
-if [ ! -x "$BUN_INSTALL/bin/bun" ]; then
-  echo "Bun install completed but bun was not found in the isolated Gajae Code runtime." >&2
-  exit 127
-fi
-"$BUN_INSTALL/bin/bun" install -g gajae-code
-"#;
 
 #[cfg(target_os = "windows")]
 fn configure_background_command(command: &mut Command) {
@@ -170,6 +131,13 @@ fn provider_meta(provider: &str) -> Option<ProviderMeta> {
             cli: None,
             login_cmd: None,
             env_var: Some("OPENROUTER_API_KEY"),
+            supports_oauth: false,
+            supports_api: true,
+        }),
+        "alibaba" => Some(ProviderMeta {
+            cli: None,
+            login_cmd: None,
+            env_var: Some("DASHSCOPE_API_KEY"),
             supports_oauth: false,
             supports_api: true,
         }),
@@ -1166,18 +1134,55 @@ fn gajecode_agent_dir() -> Option<PathBuf> {
     Some(gajecode_home_dir()?.join(".gjc").join("agent"))
 }
 
+fn gajecode_models_config_content() -> &'static str {
+    r#"# Atelier managed default for the isolated Gajae Code runtime.
+# Provider credentials are injected only into the Gajae child process.
+# This file never stores API keys, OAuth tokens, or subscription credentials.
+providers:
+  alibaba-token-plan:
+    baseUrl: https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
+    apiKeyEnv: DASHSCOPE_API_KEY
+    api: openai-completions
+    auth: apiKey
+    compat:
+      supportsDeveloperRole: false
+    models:
+      - id: qwen3.8-max-preview
+        name: Qwen 3.8 Max Preview
+        reasoning: true
+        input: [text, image]
+        contextWindow: 1000000
+        maxTokens: 65536
+        thinking:
+          mode: effort
+          minLevel: minimal
+          maxLevel: high
+        compat:
+          supportsReasoningEffort: false
+          thinkingFormat: qwen
+      - id: glm-5.2
+        name: GLM 5.2
+        reasoning: true
+        input: [text]
+        contextWindow: 1000000
+        maxTokens: 65536
+        thinking:
+          mode: effort
+          minLevel: minimal
+          maxLevel: max
+        compat:
+          supportsReasoningEffort: true
+          thinkingFormat: openai
+"#
+}
+
 fn ensure_gajecode_models_config(agent_dir: &Path) -> Result<(), String> {
     let path = agent_dir.join("models.yml");
-    let content = r#"# Atelier managed default for the isolated Gajae Code runtime.
-# Claude subscription OAuth is passed only to the child process through
-# ANTHROPIC_OAUTH_TOKEN. Atelier stores only the inference-only token generated
-# by the official `claude setup-token` command and never stores a refresh token.
-providers: {}
-"#;
+    let content = gajecode_models_config_content();
     if path.exists() {
         if let Ok(existing) = std::fs::read_to_string(&path) {
-            let is_atelier_managed = existing.contains("Atelier managed default")
-                && existing.contains("ANTHROPIC_OAUTH_TOKEN");
+            let is_atelier_managed =
+                existing.contains("# Atelier managed default for the isolated Gajae Code runtime.");
             if is_atelier_managed && existing != content {
                 std::fs::write(&path, content)
                     .map_err(|e| format!("write {}: {e}", path.display()))?;
@@ -1419,6 +1424,7 @@ fn is_valid_api_key_for_provider(provider: &str, value: &str) -> bool {
         }
         "codex" => key.starts_with("sk-"),
         "openrouter" => key.starts_with("sk-or-v1-"),
+        "alibaba" => key.starts_with("sk-") && key.len() >= 20,
         // Linear does not document a stable personal-key prefix. Keep the
         // validation structural and let the authenticated viewer query be the
         // authority, without ever exposing the key to the renderer again.
@@ -2331,48 +2337,137 @@ pub async fn provider_submit_oauth_code(provider: String, code: String) -> Resul
 /// 새 사용자가 터미널 없이 한 클릭으로 셋업할 수 있도록.
 #[tauri::command]
 pub async fn provider_install_cli(provider: String) -> Result<(), String> {
-    match provider.as_str() {
-        "claude" => install_claude_cli(),
-        "codex" => install_npm_cli("codex", "@openai/codex"),
+    let provider_for_install = provider.clone();
+    tauri::async_runtime::spawn_blocking(move || match provider_for_install.as_str() {
+        "claude" => install_npm_cli("claude", CLAUDE_CODE_PACKAGE),
+        "codex" => install_npm_cli("codex", CODEX_PACKAGE),
         "hermes" => install_hermes_cli(),
         "gajecode" => install_gajecode_cli(),
-        _ => Err(format!("automatic install not available for {provider}")),
+        _ => Err(format!(
+            "automatic install not available for {provider_for_install}"
+        )),
+    })
+    .await
+    .map_err(|error| format!("{provider} installer task failed: {error}"))??;
+
+    let meta = provider_meta(&provider)
+        .ok_or_else(|| format!("automatic install not available for {provider}"))?;
+    if !provider_cli_installed(&provider, &meta) {
+        return Err(format!(
+            "{provider} installer exited successfully, but the CLI could not be verified on PATH"
+        ));
     }
+    Ok(())
 }
 
-fn spawn_cli_installer(
-    mut command: Command,
-    label: &'static str,
-    after_success: Option<fn()>,
-) -> Result<(), String> {
+fn capture_installer_stream<R>(mut reader: R) -> thread::JoinHandle<Vec<u8>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut captured = Vec::new();
+        let mut chunk = [0_u8; 4096];
+        loop {
+            let read = match reader.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => read,
+            };
+            if read >= CLI_INSTALL_CAPTURE_LIMIT {
+                captured.clear();
+                captured.extend_from_slice(&chunk[read - CLI_INSTALL_CAPTURE_LIMIT..read]);
+                continue;
+            }
+            let overflow = captured
+                .len()
+                .saturating_add(read)
+                .saturating_sub(CLI_INSTALL_CAPTURE_LIMIT);
+            if overflow > 0 {
+                captured.drain(..overflow);
+            }
+            captured.extend_from_slice(&chunk[..read]);
+        }
+        captured
+    })
+}
+
+fn installer_output(stdout: &[u8], stderr: &[u8]) -> String {
+    let mut combined = String::from_utf8_lossy(stdout).into_owned();
+    if !combined.is_empty() && !stderr.is_empty() {
+        combined.push('\n');
+    }
+    combined.push_str(&String::from_utf8_lossy(stderr));
+    crate::agent_process::clip_cli_output(redact_login_output(&combined))
+}
+
+fn run_cli_installer(mut command: Command, label: &'static str) -> Result<(), String> {
     configure_background_command(&mut command);
     let has_explicit_path = command
         .get_envs()
-        .any(|(key, value)| value.is_some() && key == OsStr::new("PATH"));
-    std::thread::spawn(move || {
-        if !has_explicit_path {
-            command.env("PATH", crate::augmented_cli_path());
+        .any(|(key, value)| value.is_some() && key == "PATH");
+    if !has_explicit_path {
+        command.env("PATH", crate::augmented_cli_path());
+    }
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("{label} installer could not start: {error}"))?;
+    let stdout_reader = child.stdout.take().map(capture_installer_stream);
+    let stderr_reader = child.stderr.take().map(capture_installer_stream);
+    let started = Instant::now();
+    let (status, timed_out) = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break (status, false),
+            Ok(None) if started.elapsed() < CLI_INSTALL_TIMEOUT => {
+                thread::sleep(Duration::from_millis(80));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let status = child
+                    .wait()
+                    .map_err(|error| format!("{label} installer timeout cleanup: {error}"))?;
+                break (status, true);
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("{label} installer status check failed: {error}"));
+            }
         }
-        match command
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .stdin(Stdio::null())
-            .spawn()
-        {
-            Ok(mut child) => match child.wait() {
-                Ok(status) if status.success() => {
-                    log::info!("{label} install completed");
-                    if let Some(callback) = after_success {
-                        callback();
-                    }
-                }
-                Ok(status) => log::warn!("{label} install exited with {status}"),
-                Err(e) => log::warn!("{label} install wait: {e}"),
-            },
-            Err(e) => log::warn!("{label} install spawn: {e}"),
-        }
-    });
-    Ok(())
+    };
+    let stdout = stdout_reader
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
+    let stderr = stderr_reader
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
+    let detail = installer_output(&stdout, &stderr);
+    if timed_out {
+        return Err(format!(
+            "{label} installer timed out after {} seconds{}",
+            CLI_INSTALL_TIMEOUT.as_secs(),
+            if detail.trim().is_empty() {
+                String::new()
+            } else {
+                format!(": {detail}")
+            }
+        ));
+    }
+    if status.success() {
+        log::info!("{label} install completed");
+        Ok(())
+    } else {
+        Err(format!(
+            "{label} installer exited with {status}{}",
+            if detail.trim().is_empty() {
+                String::new()
+            } else {
+                format!(": {detail}")
+            }
+        ))
+    }
 }
 
 fn install_npm_cli(label: &'static str, pkg: &'static str) -> Result<(), String> {
@@ -2400,82 +2495,61 @@ fn install_npm_cli(label: &'static str, pkg: &'static str) -> Result<(), String>
         command.arg("install").arg("-g").arg(pkg);
         command
     };
-    spawn_cli_installer(command, label, None)
-}
-
-fn install_claude_cli() -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        let mut command = Command::new("powershell.exe");
-        command
-            .arg("-NoProfile")
-            .arg("-WindowStyle")
-            .arg("Hidden")
-            .arg("-ExecutionPolicy")
-            .arg("Bypass")
-            .arg("-Command")
-            .arg(CLAUDE_INSTALL_PS1);
-        spawn_cli_installer(command, "claude", None)
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    install_npm_cli("claude", "@anthropic-ai/claude-code")
+    run_cli_installer(command, label)
 }
 
 fn install_hermes_cli() -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    {
-        let mut command = Command::new("powershell.exe");
-        command
-            .arg("-NoProfile")
-            .arg("-WindowStyle")
-            .arg("Hidden")
-            .arg("-ExecutionPolicy")
-            .arg("Bypass")
-            .arg("-Command")
-            .arg(HERMES_INSTALL_PS1);
-        spawn_cli_installer(command, "hermes", None)
+    if which("uv") {
+        let mut command = cli_command("uv");
+        command.args([
+            "tool",
+            "install",
+            "--force",
+            "--python",
+            "3.11",
+            HERMES_GIT_SPEC,
+        ]);
+        return run_cli_installer(command, "hermes");
+    }
+    if which("pipx") {
+        let mut command = cli_command("pipx");
+        command.args(["install", "--force", HERMES_GIT_SPEC]);
+        return run_cli_installer(command, "hermes");
     }
 
-    #[cfg(not(target_os = "windows"))]
-    {
-        if !which("curl") {
-            return Err("curl not found. install curl first.".into());
-        }
-        if !which("bash") {
-            return Err("bash not found. install bash first.".into());
-        }
-        let mut command = Command::new("sh");
-        command.arg("-c").arg(HERMES_INSTALL_SH);
-        spawn_cli_installer(command, "hermes", None)
+    let python = ["python3", "python", "py"]
+        .into_iter()
+        .find(|candidate| which(candidate))
+        .ok_or_else(|| {
+            "Hermes requires uv, pipx, or Python 3.11-3.13. Install one of them and retry."
+                .to_string()
+        })?;
+    let mut command = cli_command(python);
+    if python == "py" {
+        command.arg("-3.11");
     }
+    command.args([
+        "-m",
+        "pip",
+        "install",
+        "--user",
+        "--upgrade",
+        HERMES_GIT_SPEC,
+    ]);
+    run_cli_installer(command, "hermes")
 }
 
 fn install_gajecode_cli() -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = Command::new("powershell.exe");
-        command
-            .arg("-NoProfile")
-            .arg("-WindowStyle")
-            .arg("Hidden")
-            .arg("-ExecutionPolicy")
-            .arg("Bypass")
-            .arg("-Command")
-            .arg(GAJAE_CODE_INSTALL_PS1);
-        configure_background_command(&mut command);
-        command
-    };
-
-    #[cfg(not(target_os = "windows"))]
-    let mut command = {
-        let mut command = Command::new("sh");
-        command.arg("-lc").arg(GAJAE_CODE_INSTALL_SH);
-        command
-    };
-
+    if gajecode_bun_executable_path().is_none() && !which("bun") {
+        install_npm_cli("bun", BUN_PACKAGE)?;
+    }
+    let bun = gajecode_bun_executable_path()
+        .map(|path| path.to_string_lossy().to_string())
+        .unwrap_or_else(|| "bun".to_string());
+    let mut command = cli_command(&bun);
     configure_gajecode_runtime_env(&mut command)?;
-    spawn_cli_installer(command, "gajecode", None)
+    command.args(["install", "-g", GAJAE_CODE_PACKAGE]);
+    run_cli_installer(command, "gajecode")
 }
 
 #[derive(Serialize)]
@@ -2588,7 +2662,7 @@ pub async fn gajecode_check_update() -> Result<GajecodeUpdateStatus, String> {
 
 #[tauri::command]
 pub async fn gajecode_update() -> Result<(), String> {
-    install_gajecode_cli()
+    provider_install_cli("gajecode".to_string()).await
 }
 
 #[derive(Serialize)]
@@ -2810,6 +2884,35 @@ mod tests {
     }
 
     #[test]
+    fn alibaba_token_plan_keys_use_the_dashscope_secure_slot() {
+        assert_eq!(env_var_for("alibaba"), Some("DASHSCOPE_API_KEY"));
+        assert!(is_valid_api_key_for_provider(
+            "alibaba",
+            "sk-sp-fixture-token-plan-key"
+        ));
+        assert!(!is_valid_api_key_for_provider("alibaba", "fixture-key"));
+    }
+
+    #[test]
+    fn gajecode_managed_models_config_registers_alibaba_without_secrets() {
+        let config = gajecode_models_config_content();
+        assert!(config.contains("alibaba-token-plan:"));
+        assert!(config
+            .contains("https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"));
+        assert!(config.contains("apiKeyEnv: DASHSCOPE_API_KEY"));
+        assert!(config.contains("supportsReasoningEffort: false"));
+        assert!(config.contains("supportsReasoningEffort: true"));
+        assert!(config.contains("thinkingFormat: qwen"));
+        assert!(config.contains("thinkingFormat: openai"));
+        assert!(config.contains("id: qwen3.8-max-preview"));
+        assert!(config.contains("id: glm-5.2"));
+        assert!(config.contains("maxLevel: max"));
+        assert!(!config.contains("sk-"));
+        assert!(!config.contains("access_token"));
+        assert!(!config.contains("refresh_token"));
+    }
+
+    #[test]
     fn login_output_redacts_urls_and_tokens() {
         let fake_token = ["sk-ant-oat", "fixture", "redaction", "token"].join("-");
         let input = format!(
@@ -2822,6 +2925,20 @@ mod tests {
         assert!(!detail.contains("code_challenge=secret"));
         assert!(!detail.contains(&fake_token));
         assert!(!detail.contains("access_token=abc"));
+    }
+
+    #[test]
+    fn installer_stream_drains_all_output_and_keeps_only_the_bounded_tail() {
+        let input = (0..(CLI_INSTALL_CAPTURE_LIMIT + 8192))
+            .map(|index| (index % 251) as u8)
+            .collect::<Vec<_>>();
+        let expected = input[input.len() - CLI_INSTALL_CAPTURE_LIMIT..].to_vec();
+        let captured = capture_installer_stream(std::io::Cursor::new(input))
+            .join()
+            .expect("installer output reader should finish");
+
+        assert_eq!(captured.len(), CLI_INSTALL_CAPTURE_LIMIT);
+        assert_eq!(captured, expected);
     }
 
     #[test]

@@ -28,18 +28,25 @@ const Settings: React.FC<Props> = ({ tw, setTw, initialSection }) => {
   return (
     <div
       className={cls(
-        "h-full w-full overflow-auto fade-in",
+        "atelier-settings-scroll h-full w-full overflow-auto fade-in",
         dark ? "bg-dbg" : "bg-cream",
       )}
     >
-      <div className="w-full max-w-[1120px] px-[clamp(20px,4vw,48px)] pt-10 pb-16">
+      <div
+        className={cls(
+          "atelier-settings-content w-full px-[clamp(20px,4vw,48px)]",
+          section === "remote" || section === "preview"
+            ? "atelier-settings-content-compact max-w-[1440px] pt-4 pb-0"
+            : "max-w-[1120px] pt-10 pb-16",
+        )}
+      >
         {section === "terminal" && <TerminalSection tw={tw} setTw={setTw} />}
         {section === "appearance" && <AppearanceSection tw={tw} setTw={setTw} />}
         {section === "profiles" && <ProfilesSection tw={tw} setTw={setTw} />}
         {section === "shortcuts" && <ShortcutsSection dark={dark} language={tw.language} />}
         {section === "preview" && <PreviewSection dark={dark} language={tw.language} />}
         {section === "connections" && <ConnectionsPanel tw={tw} />}
-        {section === "remote" && <FeaturePanels slot="settings.remote" tw={tw} />}
+        {section === "remote" && <RemoteSettingsSection tw={tw} />}
         {section === "features" && <FeatureSettingsPanel tw={tw} />}
         {section === "updates" && <UpdatesSection dark={dark} language={tw.language} />}
         <FeatureSettingsPage section={section} tw={tw} />
@@ -48,15 +55,16 @@ const Settings: React.FC<Props> = ({ tw, setTw, initialSection }) => {
   );
 };
 
-const SectionHeader: React.FC<{ dark: boolean; title: string; sub: string }> = ({
+const SectionHeader: React.FC<{ dark: boolean; title: string; sub: string; compact?: boolean }> = ({
   dark,
   title,
   sub,
+  compact = false,
 }) => (
-  <div className="mb-8">
+  <div className={cls("atelier-settings-section-header", compact ? "mb-4" : "mb-8")}>
     <div
       className={cls(
-        "font-display text-[32px] font-[500] tracking-[-0.02em] leading-[1.12] mb-2",
+        "atelier-settings-section-title font-display text-[32px] font-[500] tracking-[-0.02em] leading-[1.12] mb-2",
         dark ? "text-dink" : "text-ink",
       )}
     >
@@ -66,6 +74,28 @@ const SectionHeader: React.FC<{ dark: boolean; title: string; sub: string }> = (
   </div>
 );
 
+const RemoteSettingsSection: React.FC<{ tw: Tweaks }> = ({ tw }) => {
+  const ko = tw.language === "ko";
+  return (
+    <div data-testid="remote-settings-page">
+      <SectionHeader
+        dark={tw.dark}
+        compact
+        title={ko ? "원격 접근" : "Remote access"}
+        sub={ko
+          ? "휴대폰에서 Atelier 작업 상태만 안전하게 확인합니다. 대화 원문과 자격증명은 공유되지 않습니다."
+          : "Monitor Atelier safely from a phone. Prompts and credentials are never shared."}
+      />
+      <div
+        data-testid="remote-settings-grid"
+        className="grid min-w-0 grid-cols-1 items-start gap-x-5 gap-y-0 min-[900px]:grid-cols-3"
+      >
+        <FeaturePanels slot="settings.remote" tw={tw} />
+      </div>
+    </div>
+  );
+};
+
 const Row: React.FC<{
   dark: boolean;
   label: string;
@@ -74,7 +104,7 @@ const Row: React.FC<{
 }> = ({ dark, label, hint, children }) => (
   <div
     className={cls(
-      "py-5 border-b flex items-start gap-6",
+      "atelier-settings-row py-5 border-b flex items-start gap-6",
       dark ? "border-dline" : "border-line",
     )}
   >
@@ -781,13 +811,18 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
 
   return (
     <>
-      <SectionHeader dark={dark} title={copy.title} sub={copy.sub} />
-      <section
-        className={cls(
-          "rounded-[9px] border overflow-hidden mb-5",
-          dark ? "border-dline bg-dpanel" : "border-line bg-panel",
-        )}
+      <SectionHeader dark={dark} title={copy.title} sub={copy.sub} compact />
+      <div
+        data-testid="patch-feedback-layout"
+        className="grid min-w-0 grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.08fr)_minmax(320px,0.92fr)]"
       >
+        <section
+          data-testid="patch-notes-panel"
+          className={cls(
+            "min-w-0 overflow-hidden rounded-[9px] border",
+            dark ? "border-dline bg-dpanel" : "border-line bg-panel",
+          )}
+        >
         <div className={cls("px-4 py-3 border-b", dark ? "border-dline" : "border-line")}>
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -852,19 +887,20 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
             </div>
           ))}
         </div>
-      </section>
+        </section>
 
-      <section
-        className={cls(
-          "rounded-[9px] border p-4",
-          dark ? "border-dline bg-dpanel" : "border-line bg-panel",
-        )}
-      >
+        <section
+          data-testid="bug-report-panel"
+          className={cls(
+            "min-w-0 rounded-[9px] border p-4",
+            dark ? "border-dline bg-dpanel" : "border-line bg-panel",
+          )}
+        >
         <div className="mb-4">
           <div className={cls("text-[14px] font-medium", dark ? "text-dink" : "text-ink")}>{copy.bugTitle}</div>
           <div className={cls("text-[12px] mt-0.5", dark ? "text-dsub" : "text-sub")}>{copy.bugHint}</div>
         </div>
-        <div className="grid grid-cols-[1fr_180px] gap-3 mb-3">
+        <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_140px]">
           <label className="min-w-0">
             <span className={cls("block text-[11px] font-mono uppercase tracking-wider mb-1.5", dark ? "text-dsub" : "text-sub")}>
               {copy.titleLabel}
@@ -951,7 +987,8 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
             {bugSendError || bugSendStatus}
           </div>
         )}
-      </section>
+        </section>
+      </div>
     </>
   );
 };

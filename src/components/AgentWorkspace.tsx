@@ -36,6 +36,11 @@ import type { StellaFactoryCommand } from "../lib/stellaFactory";
 import { safeLocalStorageGet, safeLocalStorageSet } from "../lib/storage";
 import { findUrl, isAutoReviewablePreviewUrl, restoreAutoPreviewUrl } from "../lib/previewUrl";
 import {
+  buildTaskPreviewEvidence,
+  previewDiagnosticsMatchPreview,
+} from "../lib/previewEvidence";
+import type { TaskPreviewEvidence } from "../lib/previewEvidence";
+import {
   formatReviewAnnotationsPrompt,
   normalizeReviewAnnotations,
   parseUnifiedDiff,
@@ -80,12 +85,15 @@ import {
   isTauri,
   onAgentEvent,
   onAgentLifecycle,
+  onAgentSubscriptionUsage,
+  onAgentTokenUsage,
   onQuickOpenRequested,
   openRouterModelOptions,
   previewHealthCheck,
   previewServiceStart,
   previewServiceStatus,
   previewServiceStop,
+  providerSubscriptionUsage,
   searchWorkspaceFiles,
   stellaFactoryAutopilot,
   stellaFactoryBootstrap,
@@ -104,8 +112,10 @@ import type {
   AgentProvider,
   AgentQuickOpenIndexEntry,
   AgentStreamEvent,
+  AgentTokenUsageEvent,
   AgentWorktreeInfo,
   FsEntry,
+  ProviderSubscriptionUsage,
   PreviewCheckResult,
   PreviewServiceStatus,
   StellaFactoryStatusResult,
@@ -167,6 +177,11 @@ import ChangesWorkbench from "./workbench/ChangesWorkbench";
 import CodeWorkbench from "./workbench/CodeWorkbench";
 import WorkspaceModeBar from "./workbench/WorkspaceModeBar";
 import type { WorkspaceView } from "./workbench/WorkspaceModeBar";
+import {
+  normalizeSessionTokenUsage,
+  type SessionTokenUsage,
+} from "./workbench/sessionTokenUsage";
+import { normalizeSubscriptionUsage } from "./workbench/subscriptionUsage";
 
 type Role = "user" | "assistant" | "system";
 
@@ -189,11 +204,12 @@ type ModelOption = {
   requires_multi_agent_v2?: boolean;
 };
 
-type WorkloadLevel = "low" | "medium" | "high" | "xhigh" | "ultra";
-type CodexEffort = WorkloadLevel;
+type OpenRouterEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+type CodexEffort = "low" | "medium" | "high" | "xhigh" | "ultra";
+type WorkloadLevel = OpenRouterEffort | CodexEffort;
 type CodexSpeed = "default" | "fast";
 type HermesInferenceProvider = "openai-codex" | "openrouter" | "alibaba";
-type GajaeInferenceProvider = "claude" | "codex";
+type GajaeInferenceProvider = "claude" | "codex" | "alibaba";
 type SlashCommandScope = "atelier" | AgentProvider;
 
 type SlashCommandSpec = {
@@ -536,31 +552,6 @@ interface ChatMessage {
   reviewWorkflow?: ChangeReviewWorkflowState;
 }
 
-interface TaskPreviewEvidence {
-  url: string;
-  ok: boolean;
-  status?: number | null;
-  title?: string | null;
-  error?: string | null;
-  checkedAt: number;
-  serviceRunning?: boolean;
-  servicePid?: number;
-  serviceRestarts?: number;
-  serviceError?: string;
-  serviceOutput?: string[];
-  bodyText?: string;
-  networkMethod?: "GET";
-  domNodes?: number;
-  screenshotCaptured?: boolean;
-  diagnosticsArmedAt?: number;
-  browserErrorCount?: number;
-  browserWarningCount?: number;
-  consoleEvidence?: string[];
-  networkRequestCount?: number;
-  networkFailureCount?: number;
-  networkEvidence?: string[];
-}
-
 const ORPHANED_RUN_TEXT = "이전 실행이 중단되어 응답을 완료하지 못했습니다.";
 
 function finalizeOrphanedStreamingMessages(messages: ChatMessage[]) {
@@ -632,7 +623,7 @@ interface AgentSession {
   model: string;
   hermesProvider?: HermesInferenceProvider;
   stellaOntologyMode?: StellaOntologyMode;
-  codexEffort?: CodexEffort;
+  codexEffort?: WorkloadLevel;
   codexSpeed?: CodexSpeed;
   permissionMode?: AgentPermissionMode;
   queueMode?: boolean;
@@ -650,6 +641,8 @@ interface AgentSession {
   providerSessionId?: string;
   providerSessionModel?: string;
   providerSessionHermesProvider?: HermesInferenceProvider;
+  tokenUsage?: SessionTokenUsage;
+  subscriptionUsage?: ProviderSubscriptionUsage;
   messages: ChatMessage[];
   queuedTurns?: QueuedAgentTurn[];
   rawEvents: string[];
@@ -1357,12 +1350,18 @@ const GAJECODE_MODELS: ModelOption[] = [
   { value: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
 ];
 
+const GAJECODE_ALIBABA_MODELS: ModelOption[] = [
+  { value: "alibaba-token-plan/qwen3.8-max-preview", label: "Qwen 3.8 Max Preview" },
+  { value: "alibaba-token-plan/glm-5.2", label: "GLM 5.2" },
+];
+
 function gajecodeModelOptions(
   provider: GajaeInferenceProvider,
   claudeModels: ModelOption[],
   codexModels: ModelOption[],
 ): ModelOption[] {
   if (provider === "claude") return claudeModels.length > 0 ? claudeModels : GAJECODE_MODELS;
+  if (provider === "alibaba") return GAJECODE_ALIBABA_MODELS;
   return (codexModels.length > 0 ? codexModels : CODEX_MODELS).map((option) => ({
     ...option,
     value: `codex/${option.value}`,
@@ -1385,6 +1384,7 @@ const HERMES_PROVIDERS: Array<{ value: HermesInferenceProvider; label: string }>
 const GAJECODE_PROVIDERS: Array<{ value: GajaeInferenceProvider; label: string }> = [
   { value: "claude", label: "Claude" },
   { value: "codex", label: "Codex" },
+  { value: "alibaba", label: "Alibaba Cloud" },
 ];
 
 const HERMES_MODEL_OPTIONS: Record<HermesInferenceProvider, ModelOption[]> = {
@@ -1400,6 +1400,23 @@ const CODEX_EFFORTS: Array<{ value: CodexEffort; ko: string; en: string }> = [
   { value: "xhigh", ko: "매우 높음", en: "Very high" },
   { value: "ultra", ko: "울트라 코드", en: "Ultra Code" },
 ];
+
+const OPENROUTER_EFFORTS: Array<{ value: OpenRouterEffort; ko: string; en: string }> = [
+  { value: "none", ko: "추론 끔", en: "Reasoning off" },
+  { value: "minimal", ko: "최소", en: "Minimal" },
+  { value: "low", ko: "낮음", en: "Low" },
+  { value: "medium", ko: "중간", en: "Medium" },
+  { value: "high", ko: "높음", en: "High" },
+  { value: "xhigh", ko: "매우 높음", en: "Very high" },
+  { value: "max", ko: "최대", en: "Maximum" },
+];
+
+const GAJECODE_QWEN_THINKING: Array<{ value: OpenRouterEffort; ko: string; en: string }> = [
+  { value: "none", ko: "추론 끔", en: "Reasoning off" },
+  { value: "high", ko: "추론 켬", en: "Reasoning on" },
+];
+
+const GAJECODE_GLM_EFFORTS = OPENROUTER_EFFORTS;
 
 const CODEX_SPEEDS: Array<{ value: CodexSpeed; ko: string; en: string }> = [
   { value: "default", ko: "기본", en: "Default" },
@@ -1447,10 +1464,22 @@ const isHermesProvider = (value: unknown): value is HermesInferenceProvider =>
   value === "openai-codex" || value === "openrouter" || value === "alibaba";
 
 const isGajaeProvider = (value: unknown): value is GajaeInferenceProvider =>
-  value === "claude" || value === "codex";
+  value === "claude" || value === "codex" || value === "alibaba";
 
 const isCodexEffort = (value: unknown): value is CodexEffort =>
   value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "ultra";
+
+const isOpenRouterEffort = (value: unknown): value is OpenRouterEffort =>
+  value === "none"
+  || value === "minimal"
+  || value === "low"
+  || value === "medium"
+  || value === "high"
+  || value === "xhigh"
+  || value === "max";
+
+const isWorkloadLevel = (value: unknown): value is WorkloadLevel =>
+  isCodexEffort(value) || isOpenRouterEffort(value);
 
 const isCodexSpeed = (value: unknown): value is CodexSpeed =>
   value === "default" || value === "fast";
@@ -1511,7 +1540,29 @@ function inferHermesProviderFromModel(model?: string | null) {
 }
 
 function inferGajaeProviderFromModel(model?: string | null): GajaeInferenceProvider {
-  return model?.trim().startsWith("codex/") ? "codex" : "claude";
+  const selected = model?.trim() || "";
+  if (selected.startsWith("codex/")) return "codex";
+  if (selected.startsWith("alibaba-token-plan/")) return "alibaba";
+  return "claude";
+}
+
+function subscriptionProviderForSession(
+  provider: AgentProvider,
+  hermesProvider: HermesInferenceProvider,
+  gajaeProvider: GajaeInferenceProvider,
+): "codex" | "claude" | null {
+  if (provider === "codex") return "codex";
+  if (provider === "claude") return "claude";
+  if (provider === "hermes" && hermesProvider === "openai-codex") return "codex";
+  if (provider === "gajecode" && gajaeProvider === "codex") return "codex";
+  if (provider === "gajecode" && gajaeProvider === "claude") return "claude";
+  return null;
+}
+
+function defaultGajaeModel(provider: GajaeInferenceProvider) {
+  if (provider === "codex") return "codex/gpt-5.5";
+  if (provider === "alibaba") return GAJECODE_ALIBABA_MODELS[0].value;
+  return "claude-opus-4-8";
 }
 
 function modelOptionsFor(
@@ -1572,26 +1623,70 @@ function coerceModelToOptions(model: string, options: ModelOption[]) {
 }
 
 function normalizeCodexEffort(value?: unknown): CodexEffort {
-  return isCodexEffort(value) ? value : DEFAULT_CODEX_EFFORT;
+  if (isCodexEffort(value)) return value;
+  if (value === "max") return "ultra";
+  if (value === "minimal" || value === "none") return "low";
+  return DEFAULT_CODEX_EFFORT;
+}
+
+function normalizeWorkloadLevel(value?: unknown): WorkloadLevel {
+  return isWorkloadLevel(value) ? value : DEFAULT_WORKLOAD;
 }
 
 function normalizeWorkloadInput(value: string): WorkloadLevel | null {
   const normalized = value.trim().toLowerCase().replace(/\s+/g, "");
-  if (isCodexEffort(normalized)) return normalized;
+  if (isWorkloadLevel(normalized)) return normalized;
+  if (["none", "off", "disabled", "추론끔", "끔"].includes(normalized)) return "none";
+  if (["minimal", "minimum", "최소"].includes(normalized)) return "minimal";
   if (["low", "light", "basic", "낮음", "가벼움", "작게"].includes(normalized)) return "low";
   if (["medium", "normal", "balanced", "중간", "보통", "기본"].includes(normalized)) return "medium";
   if (["high", "deep", "높음", "깊게"].includes(normalized)) return "high";
   if (["xhigh", "veryhigh", "매우높음", "아주높음"].includes(normalized)) return "xhigh";
-  if (["ultra", "ultracode", "max", "maximum", "울트라", "울트라코드", "최대"].includes(normalized)) return "ultra";
+  if (["max", "maximum", "최대"].includes(normalized)) return "max";
+  if (["ultra", "ultracode", "울트라", "울트라코드"].includes(normalized)) return "ultra";
   return null;
 }
 
+function openRouterEffortOptions(model: string, options: ModelOption[]) {
+  const metadata = options.find((option) => option.value === model);
+  const supported = metadata?.supported_reasoning_levels;
+  if (!supported?.length) return [];
+  return OPENROUTER_EFFORTS.filter((option) => supported.includes(option.value));
+}
+
+function coerceOpenRouterEffort(
+  workload: WorkloadLevel,
+  model: string,
+  options: ModelOption[],
+): OpenRouterEffort | null {
+  const effortOptions = openRouterEffortOptions(model, options);
+  if (!effortOptions.length) return null;
+  const supported = effortOptions.map((option) => option.value);
+  const mapped = workload === "ultra" ? "max" : workload;
+  if (isOpenRouterEffort(mapped) && supported.includes(mapped)) return mapped;
+  const metadataDefault = options.find((option) => option.value === model)?.default_reasoning_level;
+  if (isOpenRouterEffort(metadataDefault) && supported.includes(metadataDefault)) return metadataDefault;
+  if (supported.includes("medium")) return "medium";
+  return supported[0] || null;
+}
+
+function gajecodeAlibabaEffortOptions(model: string) {
+  return model.includes("/glm-5.2") ? GAJECODE_GLM_EFFORTS : GAJECODE_QWEN_THINKING;
+}
+
+function coerceGajaeAlibabaEffort(workload: WorkloadLevel, model: string): OpenRouterEffort {
+  if (!model.includes("/glm-5.2")) return workload === "none" ? "none" : "high";
+  if (workload === "ultra") return "max";
+  return isOpenRouterEffort(workload) ? workload : "medium";
+}
+
 function nativeCodexEffort(workload: WorkloadLevel, model: string, options: ModelOption[]): string {
+  const codexWorkload = normalizeCodexEffort(workload);
   const supported = options.find((option) => option.value === model)?.supported_reasoning_levels || [];
-  if (supported.includes(workload)) return workload;
-  if (workload === "ultra" && supported.includes("max")) return "max";
-  if (workload === "ultra" && supported.includes("xhigh")) return "xhigh";
-  return workload === "ultra" ? "xhigh" : workload;
+  if (supported.includes(codexWorkload)) return codexWorkload;
+  if (codexWorkload === "ultra" && supported.includes("max")) return "max";
+  if (codexWorkload === "ultra" && supported.includes("xhigh")) return "xhigh";
+  return codexWorkload === "ultra" ? "xhigh" : codexWorkload;
 }
 
 function normalizeCodexSpeed(value?: unknown): CodexSpeed {
@@ -1608,6 +1703,13 @@ function normalizePermissionMode(value?: unknown): AgentPermissionMode {
 
 function labelForCodexEffort(value: CodexEffort, language: Tweaks["language"]) {
   const option = CODEX_EFFORTS.find((item) => item.value === value) || CODEX_EFFORTS[0];
+  return language === "en" ? option.en : option.ko;
+}
+
+function labelForWorkload(value: WorkloadLevel, language: Tweaks["language"]) {
+  const option = OPENROUTER_EFFORTS.find((item) => item.value === value)
+    || CODEX_EFFORTS.find((item) => item.value === value)
+    || CODEX_EFFORTS[0];
   return language === "en" ? option.en : option.ko;
 }
 
@@ -1630,8 +1732,14 @@ function codexToolbarLabel(modelLabel: string, modelValue: string) {
 }
 
 function workloadDirectiveForPrompt(workload: WorkloadLevel, language: Tweaks["language"]) {
-  const label = labelForCodexEffort(workload, language);
+  const label = labelForWorkload(workload, language);
   const detail = {
+    none: language === "en"
+      ? "Disable optional model reasoning and answer directly."
+      : "선택형 모델 추론을 끄고 직접적으로 처리하세요.",
+    minimal: language === "en"
+      ? "Use the smallest available reasoning budget and keep latency low."
+      : "가능한 최소 추론 예산을 사용해 지연을 낮추세요.",
     low: language === "en"
       ? "Keep the pass light and concise. Prefer the smallest safe change."
       : "가볍고 빠르게 처리하세요. 안전한 최소 변경을 우선하세요.",
@@ -1644,6 +1752,9 @@ function workloadDirectiveForPrompt(workload: WorkloadLevel, language: Tweaks["l
     xhigh: language === "en"
       ? "Use the deepest practical pass. Plan, inspect, implement, recover from failures, and verify evidence before finishing."
       : "가능한 가장 깊게 진행하세요. 계획, 조사, 구현, 실패 복구, 증거 검증까지 마친 뒤 종료하세요.",
+    max: language === "en"
+      ? "Use the maximum reasoning budget supported by the selected model."
+      : "선택한 모델이 지원하는 최대 추론 예산을 사용하세요.",
     ultra: language === "en"
       ? "Use Ultra Code mode. Treat this as a full autonomous coding pass: decompose the goal, inspect the codebase, make coordinated edits, run focused verification, recover from failures, and summarize evidence."
       : "울트라 코드 모드로 진행하세요. 목표를 개발 작업으로 분해하고, 코드베이스를 조사하고, 필요한 수정을 통합적으로 수행하고, 집중 검증과 실패 복구를 거쳐 증거 중심으로 마무리하세요.",
@@ -1953,7 +2064,7 @@ function slashCommandsFor(
     return [
       ...common,
       {
-        command: "/provider claude|codex",
+        command: "/provider claude|codex|alibaba",
         insert: "/provider ",
         scope: "gajecode",
         detailKo: "가재코드 하위 provider 변경",
@@ -2334,7 +2445,7 @@ function loadSessions(): AgentSession[] {
             : normalizeModel(provider, session.model || meta.defaultModel),
           hermesProvider,
           stellaOntologyMode,
-          codexEffort: normalizeCodexEffort(session.codexEffort),
+          codexEffort: normalizeWorkloadLevel(session.codexEffort),
           codexSpeed: provider === "codex" ? normalizeCodexSpeed(session.codexSpeed) : undefined,
           permissionMode: normalizePermissionMode(session.permissionMode),
           queueMode: Boolean(session.queueMode),
@@ -2369,6 +2480,8 @@ function loadSessions(): AgentSession[] {
           providerSessionHermesProvider: isHermesProvider(session.providerSessionHermesProvider)
             ? session.providerSessionHermesProvider
             : undefined,
+          tokenUsage: normalizeSessionTokenUsage(session.tokenUsage),
+          subscriptionUsage: normalizeSubscriptionUsage(session.subscriptionUsage),
           messages: Array.isArray(session.messages)
               ? finalizeOrphanedStreamingMessages(session.messages.map((message) => ({
                 ...message,
@@ -2434,24 +2547,8 @@ function isLocalPreviewUrl(url?: string | null) {
   return isAutoReviewablePreviewUrl(url);
 }
 
-function localPreviewOriginKey(value?: string | null) {
-  if (!value || !isLocalPreviewUrl(value)) return "";
-  try {
-    const url = new URL(value);
-    const host = ["localhost", "127.0.0.1", "0.0.0.0", "[::1]", "::1"].includes(url.hostname)
-      ? "loopback"
-      : url.hostname;
-    const port = url.port || (url.protocol === "https:" ? "443" : "80");
-    return `${url.protocol}//${host}:${port}`;
-  } catch {
-    return "";
-  }
-}
-
 function devScreenMatchesPreview(diagnostics: DevScreenDiagnosticsResult | null | undefined, previewUrl: string) {
-  const previewOrigin = localPreviewOriginKey(previewUrl);
-  const screenOrigin = localPreviewOriginKey(diagnostics?.pageUrl);
-  return Boolean(previewOrigin && screenOrigin && previewOrigin === screenOrigin);
+  return previewDiagnosticsMatchPreview(diagnostics, previewUrl);
 }
 
 function parseRawJson(raw?: string | null): unknown {
@@ -3034,6 +3131,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   const [devScreenSnapshotResult, setDevScreenSnapshotResult] = useState<DevScreenSnapshotResult | null>(null);
   const [devScreenDiagnosticsResult, setDevScreenDiagnosticsResult] = useState<DevScreenDiagnosticsResult | null>(null);
   const [devScreenCheckResult, setDevScreenCheckResult] = useState<DevScreenCheckResult | null>(null);
+  const devScreenDiagnosticsResultRef = useRef<DevScreenDiagnosticsResult | null>(devScreenDiagnosticsResult);
+  const devScreenCheckResultRef = useRef<DevScreenCheckResult | null>(devScreenCheckResult);
+  devScreenDiagnosticsResultRef.current = devScreenDiagnosticsResult;
+  devScreenCheckResultRef.current = devScreenCheckResult;
   const devScreenCheckUrlRef = useRef("");
   const devScreenArmKeyRef = useRef("");
   const [devScreenActionResult, setDevScreenActionResult] = useState<DevScreenActionResult | null>(null);
@@ -3918,6 +4019,14 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   const activeGajaeProvider = activeProvider === "gajecode"
     ? inferGajaeProviderFromModel(rawActiveModel)
     : "claude";
+  const activeSubscriptionProvider = subscriptionProviderForSession(
+    activeProvider,
+    activeHermesProvider,
+    activeGajaeProvider,
+  );
+  const activeSubscriptionUsage = active?.subscriptionUsage?.provider === activeSubscriptionProvider
+    ? active.subscriptionUsage
+    : undefined;
   const normalizedActiveModel = activeProvider === "hermes"
     ? normalizeHermesModel(activeHermesProvider, rawActiveModel)
     : normalizeModel(activeProvider, rawActiveModel);
@@ -3941,6 +4050,26 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   const activeSlashSelection = Math.min(slashSelection, Math.max(visibleSlashCommands.length - 1, 0));
   const selectedSlashCommand = visibleSlashCommands[activeSlashSelection];
   const activeCodexEffort = normalizeCodexEffort(active?.codexEffort);
+  const activeWorkload = normalizeWorkloadLevel(active?.codexEffort);
+  const activeOpenRouterModel = activeProvider === "hermes" && activeHermesProvider === "openrouter";
+  const activeGajaeAlibabaModel = activeProvider === "gajecode" && activeGajaeProvider === "alibaba";
+  const activeOpenRouterEffortOptions = activeOpenRouterModel
+    ? openRouterEffortOptions(activeModel, activeModelOptions)
+    : [];
+  const activeOpenRouterEffort = activeOpenRouterModel
+    ? coerceOpenRouterEffort(activeWorkload, activeModel, activeModelOptions)
+    : null;
+  const activeWorkloadOptions = activeOpenRouterModel
+    ? activeOpenRouterEffortOptions
+    : activeGajaeAlibabaModel
+      ? gajecodeAlibabaEffortOptions(activeModel)
+      : CODEX_EFFORTS;
+  const activeWorkloadValue: WorkloadLevel = activeOpenRouterModel
+    ? activeOpenRouterEffort || activeWorkload
+    : activeGajaeAlibabaModel
+      ? coerceGajaeAlibabaEffort(activeWorkload, activeModel)
+      : activeCodexEffort;
+  const showActiveWorkload = !activeOpenRouterModel || activeOpenRouterEffortOptions.length > 0;
   const activeCodexSpeed = normalizeCodexSpeed(active?.codexSpeed);
   const activeCodexModelSurface = activeProvider === "codex"
     || (activeProvider === "hermes" && activeHermesProvider === "openai-codex")
@@ -4672,6 +4801,78 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     setSessions(next);
   };
 
+  const captureMessagePreviewEvidence = async (
+    sessionId: string,
+    assistantId: string,
+    candidateUrl: string,
+  ) => {
+    const targetUrl = cleanStoredPreviewUrl(candidateUrl);
+    if (!isTauri() || !isLocalPreviewUrl(targetUrl)) return;
+
+    const [healthResult, serviceResult] = await Promise.allSettled([
+      previewHealthCheck(targetUrl),
+      previewServiceStatus(targetUrl),
+    ]);
+    const health = healthResult.status === "fulfilled" ? healthResult.value : null;
+    const service = serviceResult.status === "fulfilled" ? serviceResult.value : null;
+    const checkedScreen = devScreenCheckResultRef.current;
+    const armedDiagnostics = devScreenDiagnosticsResultRef.current;
+    const matchingCheck = devScreenMatchesPreview(checkedScreen?.diagnostics, targetUrl)
+      ? checkedScreen
+      : null;
+    const diagnostics = matchingCheck?.diagnostics
+      || (devScreenMatchesPreview(armedDiagnostics, targetUrl) ? armedDiagnostics : null);
+    const evidence = buildTaskPreviewEvidence({
+      previewUrl: targetUrl,
+      health,
+      healthError: healthResult.status === "rejected" ? healthResult.reason : null,
+      service,
+      serviceError: serviceResult.status === "rejected" ? serviceResult.reason : null,
+      diagnostics,
+      screenshotCaptured: Boolean(matchingCheck?.screenshot?.dataUrl),
+    });
+
+    patchSession(sessionId, (session) => ({
+      ...session,
+      messages: session.messages.map((message) => (
+        message.id === assistantId ? { ...message, previewEvidence: evidence } : message
+      )),
+      updatedAt: Date.now(),
+    }));
+  };
+
+  useEffect(() => {
+    const sessionId = active?.id;
+    const provider = activeSubscriptionProvider;
+    if (!sessionId || !provider || !isTauri()) return undefined;
+
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const result = normalizeSubscriptionUsage(await providerSubscriptionUsage(provider));
+        if (cancelled || !result) return;
+        patchSession(sessionId, (session) => {
+          if (
+            session.subscriptionUsage
+            && session.subscriptionUsage.capturedAtUnixMs > result.capturedAtUnixMs
+          ) {
+            return session;
+          }
+          return { ...session, subscriptionUsage: result, updatedAt: Date.now() };
+        });
+      } catch (error) {
+        console.warn(`Failed to refresh ${provider} subscription usage`, error);
+      }
+    };
+
+    void refresh();
+    const timer = window.setInterval(refresh, 5 * 60 * 1_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [active?.id, active?.tokenUsage?.timestamp_ms, activeSubscriptionProvider]);
+
   const devScreenOptions = (): DevScreenOptions => {
     const trimmedPort = devScreenPort.trim();
     return {
@@ -5301,12 +5502,18 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         ? coerceModelToOptions(normalizedModel, options)
         : normalizedModel;
       const changed = nextModel !== session.model;
+      const nextWorkload = session.provider === "hermes" && hermesProvider === "openrouter"
+        ? coerceOpenRouterEffort(normalizeWorkloadLevel(session.codexEffort), nextModel, options)
+        : normalizeWorkloadLevel(session.codexEffort);
       return {
         ...session,
         model: nextModel,
+        codexEffort: nextWorkload || session.codexEffort,
         providerSessionId: changed ? undefined : session.providerSessionId,
         providerSessionModel: changed ? undefined : session.providerSessionModel,
         providerSessionHermesProvider: changed ? undefined : session.providerSessionHermesProvider,
+        tokenUsage: changed ? undefined : session.tokenUsage,
+        subscriptionUsage: changed ? undefined : session.subscriptionUsage,
         updatedAt: Date.now(),
       };
     });
@@ -5604,6 +5811,34 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     if (shouldRevealFinalNow) {
       backgroundedAssistantIdsRef.current.delete(assistantId);
     }
+  };
+
+  const handleAgentTokenUsage = (sessionId: string, event: AgentTokenUsageEvent) => {
+    const tokenUsage = normalizeSessionTokenUsage(event);
+    if (!tokenUsage) return;
+    patchSession(sessionId, (session) => {
+      if (session.tokenUsage && session.tokenUsage.timestamp_ms > tokenUsage.timestamp_ms) {
+        return session;
+      }
+      return { ...session, tokenUsage, updatedAt: Date.now() };
+    });
+  };
+
+  const handleAgentSubscriptionUsage = (
+    sessionId: string,
+    event: ProviderSubscriptionUsage,
+  ) => {
+    const subscriptionUsage = normalizeSubscriptionUsage(event);
+    if (!subscriptionUsage) return;
+    patchSession(sessionId, (session) => {
+      if (
+        session.subscriptionUsage
+        && session.subscriptionUsage.capturedAtUnixMs > subscriptionUsage.capturedAtUnixMs
+      ) {
+        return session;
+      }
+      return { ...session, subscriptionUsage, updatedAt: Date.now() };
+    });
   };
 
   const handleAgentLifecycle = (
@@ -6773,9 +7008,13 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       const nextModel = (session.provider === "claude" || session.provider === "codex" || session.provider === "gajecode" || (session.provider === "hermes" && isHermesProvider(nextHermesProvider)))
         ? coerceModelToOptions(normalizedModel, nextOptions)
         : normalizedModel;
+      const nextWorkload = session.provider === "hermes" && nextHermesProvider === "openrouter"
+        ? coerceOpenRouterEffort(normalizeWorkloadLevel(session.codexEffort), nextModel, nextOptions)
+        : normalizeWorkloadLevel(session.codexEffort);
       patchSession(session.id, (current) => ({
         ...current,
         model: nextModel,
+        codexEffort: nextWorkload || current.codexEffort,
         hermesProvider: current.provider === "hermes" ? nextHermesProvider : current.hermesProvider,
         providerSessionId: current.model !== nextModel || current.hermesProvider !== nextHermesProvider
           ? undefined
@@ -6786,6 +7025,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         providerSessionHermesProvider: current.model !== nextModel || current.hermesProvider !== nextHermesProvider
           ? undefined
           : current.providerSessionHermesProvider,
+        tokenUsage: current.model !== nextModel || current.hermesProvider !== nextHermesProvider
+          ? undefined
+          : current.tokenUsage,
+        subscriptionUsage: current.model !== nextModel || current.hermesProvider !== nextHermesProvider
+          ? undefined
+          : current.subscriptionUsage,
         updatedAt: Date.now(),
       }));
       localAssistantMessage(
@@ -7004,11 +7249,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     if (command === "/provider") {
       if (session.provider === "gajecode") {
         if (!arg || !isGajaeProvider(arg)) {
-          localAssistantMessage(session.id, rawText, tw.language === "en" ? "Usage: /provider claude|codex" : "사용법: /provider claude|codex");
+          localAssistantMessage(session.id, rawText, tw.language === "en" ? "Usage: /provider claude|codex|alibaba" : "사용법: /provider claude|codex|alibaba");
           return true;
         }
-        const options = modelOptionsFor("gajecode", arg === "codex" ? "codex/gpt-5.5" : "claude-opus-4-8", DEFAULT_HERMES_PROVIDER, claudeRuntimeModels, codexRuntimeModels, openRouterRuntimeModels);
-        const nextModel = options[0]?.value || (arg === "codex" ? "codex/gpt-5.5" : "claude-opus-4-8");
+        const defaultModel = defaultGajaeModel(arg);
+        const options = modelOptionsFor("gajecode", defaultModel, DEFAULT_HERMES_PROVIDER, claudeRuntimeModels, codexRuntimeModels, openRouterRuntimeModels);
+        const nextModel = options[0]?.value || defaultModel;
         patchSession(session.id, (current) => ({
           ...current,
           model: nextModel,
@@ -7016,7 +7262,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
           providerSessionModel: undefined,
           updatedAt: Date.now(),
         }));
-        localAssistantMessage(session.id, rawText, tw.language === "en" ? `Gajae provider changed: ${arg}` : `가재코드 provider를 ${arg === "codex" ? "Codex" : "Claude"}로 변경했습니다.`);
+        const providerLabel = GAJECODE_PROVIDERS.find((item) => item.value === arg)?.label || arg;
+        localAssistantMessage(session.id, rawText, tw.language === "en" ? `Gajae provider changed: ${providerLabel}` : `가재코드 provider를 ${providerLabel}로 변경했습니다.`);
         return true;
       }
       if (session.provider !== "hermes") {
@@ -7059,14 +7306,38 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     }
 
     if (command === "/effort" || command === "/workload") {
-      const workload = arg ? normalizeWorkloadInput(arg) : null;
+      const requestedWorkload = arg ? normalizeWorkloadInput(arg) : null;
+      if (!requestedWorkload) {
+        localAssistantMessage(
+          session.id,
+          rawText,
+          tw.language === "en"
+            ? "Usage: /workload none|minimal|low|medium|high|xhigh|max|ultra"
+            : "사용법: /workload none|minimal|low|medium|high|xhigh|max|ultra",
+        );
+        return true;
+      }
+      const hermesProvider = session.provider === "hermes"
+        ? normalizeHermesProvider(session.hermesProvider || inferHermesProviderFromModel(session.model))
+        : DEFAULT_HERMES_PROVIDER;
+      const modelOptions = modelOptionsFor(
+        session.provider,
+        session.model,
+        hermesProvider,
+        claudeRuntimeModels,
+        codexRuntimeModels,
+        openRouterRuntimeModels,
+      );
+      const workload = session.provider === "hermes" && hermesProvider === "openrouter"
+        ? coerceOpenRouterEffort(requestedWorkload, session.model, modelOptions)
+        : requestedWorkload;
       if (!workload) {
         localAssistantMessage(
           session.id,
           rawText,
           tw.language === "en"
-            ? "Usage: /workload low|medium|high|xhigh|ultra"
-            : "사용법: /workload low|medium|high|xhigh|ultra 또는 /workload 낮음|중간|높음|매우높음|울트라코드",
+            ? "The selected OpenRouter model does not expose a reasoning control."
+            : "선택한 OpenRouter 모델은 추론 작업량 조절을 지원하지 않습니다.",
         );
         return true;
       }
@@ -7075,8 +7346,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         session.id,
         rawText,
         tw.language === "en"
-          ? `Workload changed: ${labelForCodexEffort(workload, "en")}`
-          : `작업량을 변경했습니다: ${labelForCodexEffort(workload, "ko")}`,
+          ? `Workload changed: ${labelForWorkload(workload, "en")}`
+          : `작업량을 변경했습니다: ${labelForWorkload(workload, "ko")}`,
       );
       return true;
     }
@@ -7237,6 +7508,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
 	      providerSessionId: modelChangedForRun ? undefined : s.providerSessionId,
 	      providerSessionModel: modelChangedForRun ? undefined : s.providerSessionModel,
 	      providerSessionHermesProvider: modelChangedForRun ? undefined : s.providerSessionHermesProvider,
+	      tokenUsage: modelChangedForRun ? undefined : s.tokenUsage,
+	      subscriptionUsage: modelChangedForRun ? undefined : s.subscriptionUsage,
 	      messages: finalizeOrphanedStreamingMessages(s.messages)
 	        .map((message) =>
 	          message.id === payload.userMessageId ? { ...message, status: "done" as const } : message,
@@ -7247,6 +7520,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
 
     let unlisten: (() => void) | undefined;
     let unlistenLifecycle: (() => void) | undefined;
+    let unlistenSubscriptionUsage: (() => void) | undefined;
+    let unlistenTokenUsage: (() => void) | undefined;
     try {
       if (isTauri()) {
         if (session.worktreeEnabled) {
@@ -7265,10 +7540,29 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
           ? null
           : await captureChangeBaselineForTurn(runCwd || null, CHANGE_BASELINE_TIMEOUT_MS);
         unlisten = await onAgentEvent(turnId, (event) => handleAgentEvent(sessionId, assistantId, event));
+        unlistenTokenUsage = await onAgentTokenUsage(turnId, (event) =>
+          handleAgentTokenUsage(sessionId, event),
+        );
+        unlistenSubscriptionUsage = await onAgentSubscriptionUsage(turnId, (event) =>
+          handleAgentSubscriptionUsage(sessionId, event),
+        );
         unlistenLifecycle = await onAgentLifecycle(turnId, (event) =>
           handleAgentLifecycle(sessionId, assistantId, event),
         );
-        const runWorkload = fastPatchTask ? "low" : normalizeCodexEffort(session.codexEffort);
+        const requestedWorkload = fastPatchTask ? "low" : normalizeWorkloadLevel(session.codexEffort);
+        const runOpenRouterEffort = session.provider === "hermes" && hermesProvider === "openrouter"
+          ? coerceOpenRouterEffort(requestedWorkload, runModel, runModelOptions)
+          : null;
+        const runGajaeAlibabaEffort = session.provider === "gajecode" && inferGajaeProviderFromModel(runModel) === "alibaba"
+          ? coerceGajaeAlibabaEffort(requestedWorkload, runModel)
+          : null;
+        const codexStyleRun = session.provider === "codex"
+          || (session.provider === "hermes" && hermesProvider === "openai-codex")
+          || (session.provider === "gajecode" && inferGajaeProviderFromModel(runModel) === "codex");
+        const runWorkload = runOpenRouterEffort
+          || runGajaeAlibabaEffort
+          || (codexStyleRun ? normalizeCodexEffort(requestedWorkload) : requestedWorkload);
+        const runHermesEffort = session.provider === "hermes" ? runWorkload : null;
         const basePrompt = formatOntologyAgentPrompt(
           payload.text,
           tw.language,
@@ -7289,7 +7583,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
           hermesProvider,
           effort: session.provider === "codex" || (session.provider === "gajecode" && inferGajaeProviderFromModel(runModel) === "codex")
             ? nativeCodexEffort(runWorkload, runModel, runModelOptions)
-            : null,
+            : runHermesEffort || runGajaeAlibabaEffort,
           speed: session.provider === "codex" || (session.provider === "gajecode" && inferGajaeProviderFromModel(runModel) === "codex")
             ? (fastPatchTask ? "fast" : normalizeCodexSpeed(session.codexSpeed))
             : null,
@@ -7498,8 +7792,19 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     } finally {
       unlisten?.();
       unlistenLifecycle?.();
+      unlistenSubscriptionUsage?.();
+      unlistenTokenUsage?.();
       flushAgentStream(assistantId);
       delete pendingStreamRef.current[assistantId];
+      const completionIntent = turnTerminationIntent(turnId);
+      const completedSession = sessionsRef.current.find((item) => item.id === sessionId);
+      const completedPreviewUrl = sessionId === activeIdRef.current
+        ? previewUrlRef.current
+        : completedSession?.previewUrl || "";
+      if (completionIntent !== "interrupted" && completionIntent !== "stopped" && completedPreviewUrl) {
+        void captureMessagePreviewEvidence(sessionId, assistantId, completedPreviewUrl)
+          .catch((error) => console.warn("Local preview evidence capture failed", error));
+      }
       clearTurnIntent(turnId);
       finishRunForSession(sessionId, turnId);
       startNextQueuedTurn(sessionId);
@@ -8656,15 +8961,23 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                 )}
                 <span
                   role="button"
+                  tabIndex={0}
                   onClick={(e) => {
                     e.stopPropagation();
                     deleteSession(s.id);
                   }}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter" && e.key !== " ") return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    deleteSession(s.id);
+                  }}
                   className={cls(
-                    "opacity-0 group-hover:opacity-100 h-5 w-5 grid place-items-center rounded-[4px]",
+                    "opacity-0 group-hover:opacity-100 focus:opacity-100 h-5 w-5 grid place-items-center rounded-[4px]",
                     dark ? "text-dsub hover:text-dink hover:bg-[#3d3d3b]" : "text-sub hover:text-ink hover:bg-line",
                   )}
-                  title="세션 삭제"
+                  title={tw.language === "en" ? "Delete session" : "세션 삭제"}
+                  aria-label={tw.language === "en" ? "Delete session" : "세션 삭제"}
                 >
                   {I.x}
                 </span>
@@ -8696,6 +9009,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
           view={workspaceView}
           previewActive={showPreview}
           changeCount={visibleWorkspaceChanges?.files.length || 0}
+          modelLabel={activeModelLabel}
+          tokenUsage={active?.tokenUsage}
+          subscriptionUsage={activeSubscriptionUsage}
+          running={Boolean(active && isSessionRunning(active))}
           onViewChange={setWorkspaceView}
           onTogglePreview={() => setShowPreview((visible) => !visible)}
         />
@@ -9234,8 +9551,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                           if (activeProvider === "claude") {
                             refreshClaudeRuntimeModels().catch(console.error);
                           } else if (activeProvider === "gajecode") {
-                            refreshClaudeRuntimeModels().catch(console.error);
-                            refreshCodexRuntimeModels().catch(console.error);
+                            if (activeGajaeProvider === "claude") refreshClaudeRuntimeModels().catch(console.error);
+                            if (activeGajaeProvider === "codex") refreshCodexRuntimeModels().catch(console.error);
                           } else if (activeProvider === "hermes" && activeHermesProvider === "openrouter") {
                             refreshOpenRouterRuntimeModels().catch(console.error);
                           }
@@ -9248,23 +9565,31 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                         testId="agent-model-menu"
                       />
                     )}
-                    <span className={cls("atelier-composer-control-label text-[11px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
-                      {copy.workloadLabel}
-                    </span>
-                    <ComposerSelectMenu
-                      dark={dark}
-                      value={activeCodexEffort}
-                      options={CODEX_EFFORTS.map((option) => ({
-                        value: option.value,
-                        label: tw.language === "en" ? option.en : option.ko,
-                      }))}
-                      onChange={(value) => updateActiveWorkload(value as WorkloadLevel)}
-                      disabled={!active || !!busyTurnId}
-                      ariaLabel={copy.workloadLabel}
-                      triggerClassName="atelier-workload-trigger h-8 min-w-[94px] max-w-[132px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2"
-                      menuWidth={164}
-                      testId="workload-menu"
-                    />
+                    {showActiveWorkload && (
+                      <>
+                        <span className={cls("atelier-composer-control-label text-[11px] font-mono uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
+                          {activeOpenRouterModel
+                            ? (tw.language === "en" ? "Reasoning" : "추론")
+                            : copy.workloadLabel}
+                        </span>
+                        <ComposerSelectMenu
+                          dark={dark}
+                          value={activeWorkloadValue}
+                          options={activeWorkloadOptions.map((option) => ({
+                            value: option.value,
+                            label: tw.language === "en" ? option.en : option.ko,
+                          }))}
+                          onChange={(value) => updateActiveWorkload(value as WorkloadLevel)}
+                          disabled={!active || !!busyTurnId}
+                          ariaLabel={activeOpenRouterModel
+                            ? (tw.language === "en" ? "Reasoning" : "추론")
+                            : copy.workloadLabel}
+                          triggerClassName="atelier-workload-trigger h-8 min-w-[94px] max-w-[132px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2"
+                          menuWidth={164}
+                          testId="workload-menu"
+                        />
+                      </>
+                    )}
                   </div>
                   {busyTurnId && (
                     <button

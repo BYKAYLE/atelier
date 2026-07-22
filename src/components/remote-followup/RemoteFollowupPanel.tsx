@@ -95,7 +95,7 @@ const RemoteFollowupPanel: React.FC<Props> = ({ tw }) => {
   );
 
   return (
-    <section data-testid="remote-followup-panel" className={cls("border-t pt-5", dark ? "border-dline" : "border-line")}>
+    <section data-testid="remote-followup-panel" className={cls("min-w-0 border-t pt-4", dark ? "border-dline" : "border-line")}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="text-[14px] font-medium">{ko ? "후속 지시 승인" : "Follow-up approvals"}</div>
@@ -116,7 +116,7 @@ const RemoteFollowupPanel: React.FC<Props> = ({ tw }) => {
         </div>
       )}
 
-      {featureEnabled && <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+      {featureEnabled && <div className="mt-3 grid gap-2 md:grid-cols-2">
         <input
           className={cls(controlClass, "md:col-span-2")}
           value={workspace}
@@ -152,9 +152,9 @@ const RemoteFollowupPanel: React.FC<Props> = ({ tw }) => {
         </label>
       </div>}
 
-      {featureEnabled && <div className="mt-4 space-y-3">
+      {featureEnabled && <div className="mt-3 space-y-3">
         {pending.length === 0 && (
-          <p className={cls("py-3 text-[12.5px]", dark ? "text-dsub" : "text-sub")}>
+          <p className={cls("py-2 text-[12.5px]", dark ? "text-dsub" : "text-sub")}>
             {ko ? "승인을 기다리는 후속 지시가 없습니다." : "No follow-up instructions are waiting for approval."}
           </p>
         )}

@@ -37,6 +37,7 @@ const connectionsSource = readFileSync("src/components/ConnectionsPanel.tsx", "u
 const settingsSource = readFileSync("src/components/Settings.tsx", "utf8");
 const agentWorkspaceSource = readFileSync("src/components/AgentWorkspace.tsx", "utf8");
 const indexCssSource = readFileSync("src/index.css", "utf8");
+const cliInstallersSource = readFileSync("src/lib/cliInstallers.ts", "utf8");
 const agentPerformanceSmokeSource = readFileSync("tools/agent-workspace-performance-smoke.mjs", "utf8");
 const sessionRunRegistrySource = readFileSync(
   "src/components/agent-runtime/sessionRunRegistry.ts",
@@ -47,6 +48,7 @@ const sessionRunHookSource = readFileSync(
   "utf8",
 );
 const sessionRunSmokeSource = readFileSync("tools/session-run-registry-smoke.ts", "utf8");
+const parallelAgentHarnessSource = readFileSync("tools/parallel-agent-harness.mjs", "utf8");
 const orcaFeatureGateSource = readFileSync("tools/orca-feature-release-gate.mjs", "utf8");
 const rendererReceiptSource = readFileSync("src-tauri/src/runtime_receipt.rs", "utf8");
 const rendererSmokeSource = readFileSync("tools/renderer-ready-smoke.sh", "utf8");
@@ -57,6 +59,8 @@ const reviewWorkflowSource = readFileSync("src/components/review-workflow/review
 const reviewWorkflowViewSource = readFileSync("src/components/review-workflow/ReviewWorkflowStatus.tsx", "utf8");
 const devScreenSource = readFileSync("src/lib/devScreen.ts", "utf8");
 const devScreenPickerSmokeSource = readFileSync("tools/devscreen-element-picker-smoke.ts", "utf8");
+const previewEvidenceSource = readFileSync("src/lib/previewEvidence.ts", "utf8");
+const previewEvidenceSmokeSource = readFileSync("tools/preview-evidence-smoke.ts", "utf8");
 const workflowSource = [
   readFileSync(".github/workflows/release.yml", "utf8"),
   readFileSync(".github/workflows/windows-store.yml", "utf8"),
@@ -69,6 +73,28 @@ const unpinnedWorkflowUses = [...workflowSource.matchAll(/\buses:\s*[^@\s]+@([^\
   .map((match) => match[1])
   .filter((ref) => !/^[0-9a-f]{40}$/i.test(ref));
 const sourceInvariants = [
+  {
+    ok:
+      !credentialSource.includes("curl -fsSL") &&
+      !credentialSource.includes("Invoke-Expression") &&
+      !credentialSource.includes("[scriptblock]::Create") &&
+      !cliInstallersSource.includes("curl -fsSL") &&
+      !windowsProviderSmokeSource.includes("Invoke-Expression") &&
+      !windowsProviderSmokeSource.includes("[scriptblock]::Create") &&
+      credentialSource.includes("@anthropic-ai/claude-code@2.1.217") &&
+      credentialSource.includes("@openai/codex@0.145.0") &&
+      credentialSource.includes("bun@1.3.14") &&
+      credentialSource.includes("gajae-code@0.11.7") &&
+      credentialSource.includes("3ef6bbd201263d354fd83ec55b3c306ded2eb72a") &&
+      windowsProviderSmokeSource.includes("@anthropic-ai/claude-code@2.1.217") &&
+      windowsProviderSmokeSource.includes("@openai/codex@0.145.0") &&
+      credentialSource.includes("spawn_blocking") &&
+      credentialSource.includes("capture_installer_stream") &&
+      credentialSource.includes("CLI_INSTALL_CAPTURE_LIMIT") &&
+      credentialSource.includes("installer exited successfully, but the CLI could not be verified"),
+    message:
+      "CLI installers must use pinned package-manager or immutable Git sources, drain bounded output, and wait for verified completion",
+  },
   {
     ok: !credentialSource.includes("sync_gajecode_claude_subscription_credential"),
     message: "Gajae OAuth refresh tokens must not be copied into agent.db",
@@ -103,11 +129,18 @@ const sourceInvariants = [
     ok:
       agentPreviewSource.includes("redact_preview_output_line") &&
       agentPreviewSource.includes("preview_output_redacts_credentials_before_storage_and_events") &&
-      agentWorkspaceSource.includes("redactPreviewEvidenceText") &&
-      agentWorkspaceSource.includes("serviceOutput?: string[]") &&
-      agentWorkspaceSource.includes('networkMethod: "GET"'),
+      previewEvidenceSource.includes("redactPreviewEvidenceText") &&
+      previewEvidenceSource.includes("sanitizePreviewEvidenceUrl") &&
+      previewEvidenceSource.includes("serviceOutput?: string[]") &&
+      previewEvidenceSource.includes('networkMethod?: "GET"') &&
+      previewEvidenceSource.includes("MAX_EVIDENCE_LINES") &&
+      previewEvidenceSmokeSource.includes("ordinary diagnostics must remain readable") &&
+      previewEvidenceSmokeSource.includes("Authorization: Bearer") &&
+      agentWorkspaceSource.includes("captureMessagePreviewEvidence") &&
+      agentWorkspaceSource.includes("previewEvidence: evidence") &&
+      agentWorkspaceSource.includes("Local preview evidence capture failed"),
     message:
-      "Preview task evidence must retain bounded HTTP/server diagnostics without persisting provider credentials",
+      "Preview task evidence must remain local-only, bounded, URL-sanitized, and credential-redacted",
   },
   {
     ok:
@@ -120,17 +153,19 @@ const sourceInvariants = [
       !devScreenSource.includes("localStorage") &&
       !devScreenSource.includes("sessionStorage") &&
       !devScreenSource.includes("response.text()") &&
-      agentWorkspaceSource.includes("browserErrorCount?: number") &&
-      agentWorkspaceSource.includes("consoleEvidence?: string[]") &&
-      agentWorkspaceSource.includes("networkEvidence?: string[]") &&
-      agentWorkspaceSource.includes("formatDevScreenPromptContext") &&
+      previewEvidenceSource.includes("browserErrorCount?: number") &&
+      previewEvidenceSource.includes("consoleEvidence?: string[]") &&
+      previewEvidenceSource.includes("networkEvidence?: string[]") &&
       agentWorkspaceSource.includes("devScreenMatchesPreview") &&
-      agentWorkspaceSource.includes("const automaticCheck = await devScreenCheck") &&
       agentWorkspaceSource.includes("Number(entry.status || 0) >= 400") &&
-      agentWorkspaceSource.includes("if (!wasInterrupted && !wasStopped && completedPreviewUrl)") &&
-      !agentWorkspaceSource.includes("if (!result.is_error && !wasInterrupted && !wasStopped && completedPreviewUrl)"),
+      agentWorkspaceSource.includes('completionIntent !== "interrupted" && completionIntent !== "stopped"') &&
+      agentWorkspaceSource.includes("Preview URL, health/body, service stdout, DOM snapshots, and browser") &&
+      agentWorkspaceSource.includes("const visualContext = [explicitlySelectedElementContext, compactContext]") &&
+      !agentWorkspaceSource.includes("formatPreviewPromptContext") &&
+      !agentWorkspaceSource.includes("formatDevScreenPromptContext") &&
+      !agentWorkspaceSource.includes("const automaticCheck = await devScreenCheck"),
     message:
-      "Preview browser diagnostics must retain bounded redacted console/network metadata without reading bodies, headers, cookies, or storage",
+      "Preview browser diagnostics must be locally captured after completion and excluded from provider prompts",
   },
   {
     ok:
@@ -151,8 +186,8 @@ const sourceInvariants = [
       agentWorkspaceSource.includes("devScreenElementSelection") &&
       agentWorkspaceSource.includes("elementSelection?: DevScreenElementSelection") &&
       agentWorkspaceSource.includes("elementSelection: normalizeDevScreenElementSelection(turn.elementSelection) || undefined") &&
-      agentWorkspaceSource.includes("payload.elementSelection || null") &&
-      agentWorkspaceSource.includes("formatDevScreenElementSelectionPrompt(payload.elementSelection, tw.language)") &&
+      agentWorkspaceSource.includes("formatDevScreenElementSelectionPrompt") &&
+      agentWorkspaceSource.includes("payload.elementSelection") &&
       devScreenPickerSmokeSource.includes("backgroundImage") &&
       devScreenPickerSmokeSource.includes("http://localhost:5173/settings"),
     message:
@@ -294,6 +329,21 @@ const sourceInvariants = [
       !agentWorkspaceSource.includes("stoppedTurnIdsRef"),
     message:
       "Session runs must remain concurrent across sessions, exact-turn finalized, cancellation-prioritized, and release-gated",
+  },
+  {
+    ok:
+      packageSource.includes('"harness:parallel-agent"') &&
+      orcaFeatureGateSource.includes('"harness:parallel-agent"') &&
+      cargoSource.includes('features = ["protocol-asset", "test"]') &&
+      agentSource.includes("struct TestGajaeLaunchOverride") &&
+      agentSource.includes("parallel_fixture_turns_isolate_cancel_and_reap_process_trees") &&
+      agentSource.includes('env("ATELIER_TEST_AGENT_REQUEST", provider_prompt)') &&
+      parallelAgentHarnessSource.includes("session-run-registry-smoke.ts") &&
+      parallelAgentHarnessSource.includes("agent-fleet-smoke.ts") &&
+      parallelAgentHarnessSource.includes("agent_worktree::tests::") &&
+      parallelAgentHarnessSource.includes("externalProviderCalls: 0"),
+    message:
+      "Parallel agent releases must run the offline three-turn adapter, cancellation, event-isolation, process-tree, and worktree harness",
   },
   {
     ok:
