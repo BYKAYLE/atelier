@@ -11,12 +11,15 @@ use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Runtime};
 
+use atelier_process_tree::{
+    configure_process_tree as configure_agent_process_tree,
+    terminate_process_tree as terminate_agent_pid,
+};
+
 use crate::agent_lifecycle::{self, AgentLifecycleEvent, AgentLifecyclePhase};
 use crate::agent_models::{
     codex_model_requires_multi_agent_v2, normalize_codex_reasoning_effort, read_codex_config_model,
 };
-#[cfg(target_os = "windows")]
-use crate::agent_process::configure_windows_background_command;
 use crate::agent_process::{
     clip_cli_output, command_for_cli, describe_cli_command, resolve_cli_executable,
     wait_with_timeout,
@@ -1075,22 +1078,6 @@ fn agent_children() -> &'static Mutex<HashMap<String, u32>> {
     CHILDREN.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn configure_agent_process_tree(command: &mut Command) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-
-        // Give every agent turn its own process group so cancelling the turn also
-        // stops shell commands and tool subprocesses spawned by the CLI.
-        command.process_group(0);
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = command;
-    }
-}
-
 struct AgentChildRegistration {
     turn_id: String,
 }
@@ -1111,38 +1098,6 @@ impl Drop for AgentChildRegistration {
         if let Ok(mut children) = agent_children().lock() {
             children.remove(&self.turn_id);
         }
-    }
-}
-
-fn terminate_agent_pid(pid: u32) -> bool {
-    #[cfg(unix)]
-    {
-        let pid = pid as libc::pid_t;
-        unsafe {
-            // The group id matches the leader pid configured above. Keep a
-            // direct-pid fallback for turns started by an older app process.
-            libc::kill(-pid, libc::SIGTERM) == 0 || libc::kill(pid, libc::SIGTERM) == 0
-        }
-    }
-
-    #[cfg(windows)]
-    {
-        let mut command = Command::new("taskkill");
-        configure_windows_background_command(&mut command);
-        command
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false)
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = pid;
-        false
     }
 }
 

@@ -278,6 +278,7 @@ name = "atelier"
 version = "0.2.12"
 dependencies = [
  "anyhow",
+ "atelier-process-tree",
  "axum",
  "axum-server",
  "base64 0.22.1",
@@ -311,6 +312,13 @@ dependencies = [
  "vt100",
  "windows",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "atelier-process-tree"
+version = "0.1.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

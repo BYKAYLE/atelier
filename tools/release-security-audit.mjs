@@ -49,6 +49,10 @@ const sessionRunHookSource = readFileSync(
 );
 const sessionRunSmokeSource = readFileSync("tools/session-run-registry-smoke.ts", "utf8");
 const parallelAgentHarnessSource = readFileSync("tools/parallel-agent-harness.mjs", "utf8");
+const processTreeSource = readFileSync(
+  "src-tauri/crates/atelier-process-tree/src/lib.rs",
+  "utf8",
+);
 const orcaFeatureGateSource = readFileSync("tools/orca-feature-release-gate.mjs", "utf8");
 const rendererReceiptSource = readFileSync("src-tauri/src/runtime_receipt.rs", "utf8");
 const rendererSmokeSource = readFileSync("tools/renderer-ready-smoke.sh", "utf8");
@@ -337,10 +341,15 @@ const sourceInvariants = [
       cargoSource.includes('features = ["protocol-asset", "test"]') &&
       agentSource.includes("struct TestGajaeLaunchOverride") &&
       agentSource.includes("parallel_fixture_turns_isolate_cancel_and_reap_process_trees") &&
+      cargoSource.includes('atelier-process-tree = { path = "crates/atelier-process-tree" }') &&
+      agentSource.includes("terminate_process_tree as terminate_agent_pid") &&
+      processTreeSource.includes("fn terminates_native_process_tree()") &&
       agentSource.includes('env("ATELIER_TEST_AGENT_REQUEST", provider_prompt)') &&
       parallelAgentHarnessSource.includes("session-run-registry-smoke.ts") &&
       parallelAgentHarnessSource.includes("agent-fleet-smoke.ts") &&
       parallelAgentHarnessSource.includes("agent_worktree::tests::") &&
+      parallelAgentHarnessSource.includes("shared Windows process-tree runtime E2E") &&
+      parallelAgentHarnessSource.includes("Windows Tauri adapter and worktree integration compile") &&
       parallelAgentHarnessSource.includes("externalProviderCalls: 0"),
     message:
       "Parallel agent releases must run the offline three-turn adapter, cancellation, event-isolation, process-tree, and worktree harness",

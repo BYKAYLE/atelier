@@ -1,0 +1,9 @@
+[package]
+name = "atelier-process-tree"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77.2"
+publish = false
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
