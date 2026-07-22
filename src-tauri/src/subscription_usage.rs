@@ -9,7 +9,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 
-use crate::agent_process::{command_for_cli, resolve_cli_executable};
+use crate::agent_process::command_for_cli;
+#[cfg(not(target_os = "windows"))]
+use crate::agent_process::resolve_cli_executable;
 
 const CODEX_CACHE_TTL_MS: u64 = 60_000;
 const CLAUDE_CACHE_TTL_MS: u64 = 5 * 60_000;

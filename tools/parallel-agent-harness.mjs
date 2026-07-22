@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cargo = process.platform === "win32" ? "cargo.exe" : "cargo";
 const manifest = "src-tauri/Cargo.toml";
+const npmEntrypoint = process.env.npm_execpath;
 
 function runChecked(command, args, label) {
   const result = spawnSync(command, args, {
@@ -24,6 +25,15 @@ function runChecked(command, args, label) {
     throw new Error(`${label} exited with ${result.status ?? "no status"}`);
   }
   return `${stdout}\n${stderr}`;
+}
+
+function ensureFrontendDist() {
+  if (existsSync(resolve(root, "dist", "index.html"))) return;
+  if (npmEntrypoint) {
+    runChecked(process.execPath, [npmEntrypoint, "run", "build"], "frontend dist build");
+    return;
+  }
+  runChecked(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build"], "frontend dist build");
 }
 
 const workspaceSource = readFileSync(resolve(root, "src/components/AgentWorkspace.tsx"), "utf8");
@@ -52,6 +62,10 @@ runChecked(
   ["--experimental-strip-types", "tools/agent-fleet-smoke.ts"],
   "agent fleet contract",
 );
+
+// Tauri's generate_context! macro validates frontendDist even for the mocked
+// test runtime. Make the standalone harness reproducible from a clean checkout.
+ensureFrontendDist();
 
 const runtimeOutput = runChecked(
   cargo,
