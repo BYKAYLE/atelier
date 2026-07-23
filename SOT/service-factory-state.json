@@ -6590,7 +6590,7 @@
   ],
   "run_log": {
     "current_owner": "Stella",
-    "last_command": "release-readiness final audit at efee003",
+    "last_command": "release-readiness final audit at eb44c2c",
     "last_artifact": "/Users/kansic/Service/atelier/SOT/service-factory/release-readiness-2026-07-23.md",
     "blocked_reason": "external_release_evidence_required",
     "next_step": "provision production signing identities and CI secrets, then attach macOS notarization/stapling and physical-Windows OAuth/signature/restart receipts before public release",
@@ -8285,7 +8285,7 @@
       "id": "local-runtime",
       "desc": "Detached PTY, normalized agent lifecycle, isolation, review, and cancellation pass automated regression gates.",
       "met": true,
-      "evidence": "SOT/service-factory/release-readiness-2026-07-23.md; frontend and release security gates passed; cargo test 188 passed, 0 failed, 1 ignored in native and store-feature configurations; installed renderer-ready probe passed"
+      "evidence": "SOT/service-factory/release-readiness-2026-07-23.md; frontend and release security gates passed; cargo test 190 passed, 0 failed, 1 ignored in native and store-feature configurations; installed renderer-ready probe passed"
     },
     {
       "id": "automatic-preview-evidence",
@@ -8297,13 +8297,13 @@
       "id": "windows-cross-target",
       "desc": "Normal and Store Windows configurations pass strict Clippy and link PE32+ x86-64 executables.",
       "met": true,
-      "evidence": "SOT/service-factory/deployment-readiness.md; release workflow and Windows provider evidence gates hardened at efee003"
+      "evidence": "SOT/service-factory/release-readiness-2026-07-23.md; all Rust targets pass cached cargo-xwin check for x86_64-pc-windows-msvc at eb44c2c; physical Windows remains a separate gate"
     },
     {
       "id": "mac-installed-reflection",
       "desc": "Locally signed macOS 0.2.12 package is installed and verified at /Applications/Atelier.app.",
       "met": true,
-      "evidence": "SOT/service-factory/release-readiness-2026-07-23.md; installed and packaged signed executable SHA-256 match exactly at e198d7f8a3bd6928c917a77c5830cdb3b6169d2e3236d73bfb1137d983a1a953; renderer-ready and strict codesign passed"
+      "evidence": "SOT/service-factory/release-readiness-2026-07-23.md; installed and packaged signed executable SHA-256 match exactly at 0a7b87c262ccdbca8f94b3fc3c31638a620ab2cdfcdae9b513464165343c2c60; renderer-ready and strict codesign passed"
     },
     {
       "id": "physical-windows",

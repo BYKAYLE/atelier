@@ -1,7 +1,7 @@
 # Atelier 0.2.12 Release Readiness Evidence
 
-generated_at: 2026-07-23T11:45:05+09:00
-source_base_commit: e22c8b8c1da74c161198f84b2327c38150d936a9
+generated_at: 2026-07-23T20:12:04+09:00
+source_base_commit: eb44c2c13c0b729aa43190eef77ff437ba9bf0c2
 branch: codex/release-readiness-final
 
 ## Source And Automated Gates
@@ -55,23 +55,29 @@ branch: codex/release-readiness-final
   `git diff --check`, `npm run build`, and the release preflight, OAuth,
   updater, candidate, publication-evidence, and security-audit smokes. PowerShell
   execution remains intentionally unclaimed on this macOS host.
-- Commit `e22c8b8` additionally passed the Windows runner doctor contract smoke,
+- Commit `eb44c2c` additionally passed the Windows runner doctor contract smoke,
   workflow lint, release security audit, release preflight smoke,
   release-candidate smoke, publication-evidence smoke, updater-contract smoke,
   OAuth-login smoke, frontend production build, and whitespace validation.
-- Rust tests: 188 passed, 0 failed, 1 ignored in both native and store-feature
+- Hermes now exposes Anthropic as a selectable backend, reuses the verified
+  Claude subscription/API credential path, consumes the live Claude model
+  catalog, and normalizes `/provider anthropic`. Its backend-routing regression
+  test passes.
+- Rust tests: 190 passed, 0 failed, 1 ignored in both native and store-feature
   configurations.
 - `npm audit --audit-level=low`: 0 known vulnerabilities.
 - RustSec release audit: 0 release-target vulnerabilities. Upstream warnings
   remain (`unmaintained: 18`, `unsound: 2`) and are not represented as clean.
 - Windows PowerShell physical/provider smokes cannot execute on this macOS host;
   their real-device evidence remains a separate required gate.
-- A local `x86_64-pc-windows-msvc` Cargo check reached native dependency
-  compilation but cannot complete on macOS without the Windows SDK/MSVC headers
-  (`assert.h` and `windows.h`). This is recorded as a host-toolchain limitation,
-  not as Windows source or physical-runtime proof.
+- A cached local
+  `CARGO_NET_OFFLINE=true cargo xwin check --target x86_64-pc-windows-msvc
+  --manifest-path src-tauri/Cargo.toml --all-targets` completed successfully at
+  commit `eb44c2c`. This is Windows source-compilation proof only. It is not
+  Windows package-install, OAuth-browser, Smart App Control, updater-survival,
+  or Authenticode proof.
 - The shared preflight now has an opt-in release-infrastructure phase. At commit
-  `e22c8b8`, `npm run release:readiness` passed the version, repository,
+  `eb44c2c`, `npm run release:readiness` passed the version, repository,
   updater, clean-source, macOS toolchain, GitHub API, protected production
   environment, and required-reviewer checks. Its JSON report is schema 2 and
   records credential names only; secret values are neither read nor serialized.
@@ -97,9 +103,9 @@ branch: codex/release-readiness-final
 - DMG:
   `src-tauri/target/release/bundle/dmg/Atelier_0.2.12_aarch64.dmg`
 - DMG SHA-256:
-  `e19cff033a99b62ec68534591de5faead4acabe872f6082130111d7f8cb7bf42`
-- DMG bytes: `13478053`
-- DMG built at: `2026-07-23T09:23:57+0900`
+  `37241c6367ed6971726b5aa6f6b3151cf0090c0cf20ae7fe1053f07c8fcc57aa`
+- DMG bytes: `13484993`
+- DMG built at: `2026-07-23T19:57:30+0900`
 - Bundle verification: strict code-signature verification passed.
 - Renderer readiness: passed for the packaged and installed executables.
 - Signing identity: `Atelier Local Code Signing`.
@@ -112,12 +118,12 @@ branch: codex/release-readiness-final
 - Installed path: `/Applications/Atelier.app`
 - Installed version: `0.2.12`
 - Running executable: `/Applications/Atelier.app/Contents/MacOS/atelier`
-- Running PID at evidence time: `33720`
-- Renderer receipt: version `0.2.12`, PID `33720`, window `main`, status `ready`.
+- Running PID at evidence time: `28062`
+- Renderer receipt: version `0.2.12`, PID `28062`, window `main`, status `ready`.
 - Packaged executable SHA-256:
-  `e198d7f8a3bd6928c917a77c5830cdb3b6169d2e3236d73bfb1137d983a1a953`
+  `0a7b87c262ccdbca8f94b3fc3c31638a620ab2cdfcdae9b513464165343c2c60`
 - Installed executable SHA-256:
-  `e198d7f8a3bd6928c917a77c5830cdb3b6169d2e3236d73bfb1137d983a1a953`
+  `0a7b87c262ccdbca8f94b3fc3c31638a620ab2cdfcdae9b513464165343c2c60`
 - Reflection verdict: exact match.
 - The installed application bundle was replaced with the verified candidate
   after the prior process exited. Application Support, credentials, user data,

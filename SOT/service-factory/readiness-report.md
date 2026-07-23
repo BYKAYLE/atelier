@@ -1,6 +1,6 @@
 # Readiness Report
 
-generated_at: 2026-07-23T11:45:05+09:00
+generated_at: 2026-07-23T20:12:04+09:00
 
 ## Goal
 
@@ -18,10 +18,12 @@ blocked until the three unmet Definition of Done items have execution receipts.
 ## Truth Surfaces
 
 - Source and automated checks: the current candidate on
-  `codex/release-readiness-final`, based on commit `e22c8b8`, passes the release
+  `codex/release-readiness-final`, based on commit `eb44c2c`, passes the release
   evidence smoke, release security audit, shared preflight smoke, OAuth login
   flow smoke, updater contract smoke, release-candidate smoke, frontend build,
   Windows runner doctor contract smoke, workflow lint, and whitespace audit.
+  Hermes also exposes an Anthropic backend backed by the existing Claude
+  subscription/API credential path and the live Claude model catalog.
 - External infrastructure preflight: schema 2 inspected the source, local
   release host, and GitHub configuration without reading secret values. The
   clean-source, macOS toolchain, GitHub API, protected `production-release`
@@ -31,7 +33,7 @@ blocked until the three unmet Definition of Done items have execution receipts.
 - Installed macOS app: `/Applications/Atelier.app` is version `0.2.12`, is
   running, and its signed executable exactly matches the packaged app executable
   at SHA-256
-  `e198d7f8a3bd6928c917a77c5830cdb3b6169d2e3236d73bfb1137d983a1a953`.
+  `0a7b87c262ccdbca8f94b3fc3c31638a620ab2cdfcdae9b513464165343c2c60`.
 - Public macOS release: blocked. The local certificate is not a Developer ID
   Application certificate, and notarization and stapling receipts do not exist.
 - Windows source and workflow gates: ready for CI execution. The release workflow
@@ -41,6 +43,10 @@ blocked until the three unmet Definition of Done items have execution receipts.
   runner name. Existing browser windows are not accepted as new login evidence.
   A preparation-only doctor workflow verifies the interactive runner before a
   tag is created and emits a distinct phase that publication cannot consume.
+  In addition, all Rust targets pass a cached `cargo-xwin` check for
+  `x86_64-pc-windows-msvc` on this source candidate. This proves Windows source
+  compilation only; it does not replace package, browser, signature, or
+  physical-device evidence.
 - Windows physical proof: blocked until a physical Windows runner proves visible
   Claude/Codex browser login, authenticated CLI state, Smart App Control,
   signed-installer execution, and exact-version restart survival.
