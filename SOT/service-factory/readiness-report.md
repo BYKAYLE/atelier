@@ -1,6 +1,6 @@
 # Readiness Report
 
-generated_at: 2026-07-23T10:33:23+09:00
+generated_at: 2026-07-23T11:26:16+09:00
 
 ## Goal
 
@@ -18,10 +18,14 @@ blocked until the three unmet Definition of Done items have execution receipts.
 ## Truth Surfaces
 
 - Source and automated checks: the current candidate on
-  `codex/release-readiness-final`, based on commit `38b411d`, passes the release
+  `codex/release-readiness-final`, based on commit `dd16c80`, passes the release
   evidence smoke, release security audit, shared preflight smoke, OAuth login
   flow smoke, updater contract smoke, release-candidate smoke, frontend build,
   workflow lint, and whitespace audit.
+- External infrastructure preflight: schema 2 inspected the source, local
+  release host, and GitHub configuration without reading secret values. The
+  clean-source, macOS toolchain, GitHub API, protected `production-release`
+  environment, and required-reviewer checks pass.
 - Local macOS package: `0.2.12` builds successfully and passes strict bundle,
   DMG payload, renderer-readiness, and local-signing verification.
 - Installed macOS app: `/Applications/Atelier.app` is version `0.2.12`, is
@@ -44,7 +48,9 @@ blocked until the three unmet Definition of Done items have execution receipts.
   signing path signs the final artifact and the signature receipt passes.
 - Release credentials: the repository currently contains the two Tauri updater
   signing secrets only. Apple Developer ID/notarization and SignPath credentials
-  are absent, so the strict shared preflight correctly returns `blocked`.
+  and both SignPath variables are absent. The local keychain has no Developer ID
+  Application identity. No matching self-hosted Windows x64 runner is registered
+  or online, so the infrastructure preflight correctly returns `blocked`.
 - Public GitHub distribution: still `v0.1.66`; no `0.2.12` tag or release was
   published from this unsigned local candidate.
 

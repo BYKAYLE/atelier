@@ -1,7 +1,7 @@
 # Atelier 0.2.12 Release Readiness Evidence
 
-generated_at: 2026-07-23T10:33:23+09:00
-source_base_commit: 38b411deaadce1768ccef73a74b8a7829e52f09d
+generated_at: 2026-07-23T11:26:16+09:00
+source_base_commit: dd16c80716a8ef73e404294bed5a1e6715e8c1e2
 branch: codex/release-readiness-final
 
 ## Source And Automated Gates
@@ -58,15 +58,25 @@ branch: codex/release-readiness-final
   compilation but cannot complete on macOS without the Windows SDK/MSVC headers
   (`assert.h` and `windows.h`). This is recorded as a host-toolchain limitation,
   not as Windows source or physical-runtime proof.
-- The shared release preflight passed version, repository, updater, tag,
-  workflow-repository, and clean-source checks at commit `d51eac1`. Its only
-  blocker was the release credential set. The report contains credential names
-  and presence state only.
-- The GitHub repository currently has only
-  `TAURI_SIGNING_PRIVATE_KEY` and
-  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. No repository variables or
-  `production-release` environment credentials are configured. The local
-  shell has none of the 11 release credentials required by the strict gate.
+- The shared preflight now has an opt-in release-infrastructure phase. At commit
+  `dd16c80`, `npm run release:readiness` passed the version, repository,
+  updater, clean-source, macOS toolchain, GitHub API, protected production
+  environment, and required-reviewer checks. Its JSON report is schema 2 and
+  records credential names only; secret values are neither read nor serialized.
+- The local host has `security`, `codesign`, `spctl`, `hdiutil`, `notarytool`,
+  and `stapler`, but its keychain has no Developer ID Application identity.
+- The GitHub repository currently has only `TAURI_SIGNING_PRIVATE_KEY` and
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. It is missing the seven Apple/SignPath
+  repository secrets and both SignPath repository variables required by the
+  release workflow. The `production-release` environment exists, enforces its
+  branch policy, and has one required reviewer; it has no environment-level
+  credentials. No matching self-hosted Windows x64 runner is registered or
+  online.
+- The exact infrastructure blockers recorded in
+  `artifacts/release-readiness-preflight.json` are
+  `macos-developer-id-identity`, `github-release-secrets`,
+  `github-release-variables`, `github-windows-runner-registration`, and
+  `github-windows-runner-online`.
 
 ## Local macOS Package
 
