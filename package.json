@@ -28,6 +28,7 @@
     "harness:fixture": "node tools/atelier-agent-harness.mjs --fixture all",
     "harness:parallel-agent": "node tools/parallel-agent-harness.mjs",
     "audit:release": "node tools/release-security-audit.mjs",
+    "release:preflight": "node tools/release-preflight.mjs",
     "store:msix": "powershell -ExecutionPolicy Bypass -File tools/windows-store/build-msix.ps1",
     "smoke:windows-providers": "powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1",
     "smoke:pty-supervisor": "node tools/pty-supervisor-smoke.mjs",
@@ -68,6 +69,7 @@
     "smoke:updater-contract": "node tools/updater-contract-smoke.mjs",
     "smoke:release-candidate": "node tools/release-candidate-smoke.mjs",
     "smoke:publish-evidence": "node tools/publish-evidence-smoke.mjs",
+    "smoke:release-preflight": "node tools/release-preflight-smoke.mjs",
     "smoke:oauth-login-flow": "node --experimental-strip-types tools/oauth-login-flow-smoke.ts",
     "tauri:trust": "bash tools/verify-macos-bundle.sh"
   },

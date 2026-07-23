@@ -8,6 +8,13 @@ branch: codex/release-readiness-final
 
 - Release URL, repository, tag, asset, signature, and manifest contracts fail
   closed.
+- Local and CI release checks now share `tools/release-preflight.mjs`. It binds
+  the three version sources, GitHub repository, updater endpoint and public key,
+  direct/Store updater separation, clean tracked source, and the complete Apple,
+  Tauri, and SignPath credential-name set. Reports contain presence only, never
+  credential values.
+- The tag workflow evaluates that contract in strict mode before either platform
+  build and preserves `release-preflight.json` even when the gate blocks.
 - macOS release evidence binds the app, DMG, updater archive, Developer ID team,
   notarization, stapling, version, renderer readiness, and executable hashes.
 - Windows release evidence requires a timestamped Authenticode signature on the
@@ -36,6 +43,10 @@ branch: codex/release-readiness-final
   remain (`unmaintained: 18`, `unsound: 2`) and are not represented as clean.
 - Windows PowerShell physical/provider smokes cannot execute on this macOS host;
   their real-device evidence remains a separate required gate.
+- A local `x86_64-pc-windows-msvc` Cargo check reached native dependency
+  compilation but cannot complete on macOS without the Windows SDK/MSVC headers
+  (`assert.h` and `windows.h`). This is recorded as a host-toolchain limitation,
+  not as Windows source or physical-runtime proof.
 
 ## Local macOS Package
 

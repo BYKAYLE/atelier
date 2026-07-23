@@ -24,6 +24,8 @@ Run the local gates before creating a tag:
 
 ```bash
 npm ci
+npm run smoke:release-preflight
+npm run release:preflight -- --output artifacts/release-preflight.json
 npm run build
 npm run gate:orca-features
 npm run smoke:updater-contract
@@ -35,6 +37,13 @@ cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml --all-features
 ```
+
+The local preflight always writes a redacted `source-preflight` report and
+lists missing signing configuration without printing credential values. Local
+inspection does not return a failing exit code merely because release
+credentials are intentionally absent. The tag workflow runs the same evaluator
+with `--strict`, the exact tag and repository, and preserves
+`release-preflight.json` as a workflow artifact even when the gate blocks.
 
 Version metadata, release notes, and the reviewed commit must agree before the
 version tag is pushed.

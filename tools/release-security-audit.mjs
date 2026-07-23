@@ -21,6 +21,8 @@ const libSource = readFileSync("src-tauri/src/lib.rs", "utf8");
 const mainSource = readFileSync("src-tauri/src/main.rs", "utf8");
 const cargoSource = readFileSync(manifest, "utf8");
 const packageSource = readFileSync("package.json", "utf8");
+const releasePreflightSource = readFileSync("tools/release-preflight.mjs", "utf8");
+const releasePreflightSmokeSource = readFileSync("tools/release-preflight-smoke.mjs", "utf8");
 const storeBuildSource = readFileSync("tools/windows-store/build-msix.ps1", "utf8");
 const windowsProviderSmokeSource = readFileSync("tools/windows-provider-smoke.ps1", "utf8");
 const windowsPackageSmokeSource = readFileSync("tools/windows-package-smoke.ps1", "utf8");
@@ -617,6 +619,24 @@ const sourceInvariants = [
       packageSource.includes('"smoke:updater-contract"') &&
       workflowSource.includes("npm run smoke:updater-contract"),
     message: "Release workflows must verify the signed Windows updater platform contract",
+  },
+  {
+    ok:
+      packageSource.includes('"release:preflight"') &&
+      packageSource.includes('"smoke:release-preflight"') &&
+      releaseWorkflowSource.includes("npm run smoke:release-preflight") &&
+      releaseWorkflowSource.includes("node tools/release-preflight.mjs") &&
+      releaseWorkflowSource.includes('--tag "$GITHUB_REF_NAME"') &&
+      releaseWorkflowSource.includes('--repository "$GITHUB_REPOSITORY"') &&
+      releaseWorkflowSource.includes("--output release-preflight.json") &&
+      releaseWorkflowSource.includes("name: release-source-preflight") &&
+      releasePreflightSource.includes('phase: "source-preflight"') &&
+      releasePreflightSource.includes("RELEASE_CREDENTIAL_NAMES") &&
+      releasePreflightSource.includes("store-updater-isolation") &&
+      releasePreflightSource.includes("tracked-source-clean") &&
+      releasePreflightSmokeSource.includes("source-preflight-passed"),
+    message:
+      "Local and CI release preflight must share one fail-closed evaluator and preserve its evidence",
   },
   {
     ok:
