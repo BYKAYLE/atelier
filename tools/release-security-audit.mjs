@@ -53,11 +53,20 @@ const windowsConnectionsUiWitnessSource = readFileSync(
   "utf8",
 );
 const windowsPackageSmokeSource = readFileSync("tools/windows-package-smoke.ps1", "utf8");
+const windowsInstalledPackageSmokeSource = readFileSync(
+  "tools/windows-installed-package-smoke.ps1",
+  "utf8",
+);
 const windowsPhysicalRunnerPreflightSource = readTextIfExists(
   windowsPhysicalRunnerPreflightPath,
 );
 const windowsProviderWorkflowSource = readFileSync(
   ".github/workflows/windows-provider-smoke.yml",
+  "utf8",
+);
+const ciWorkflowSource = readFileSync(".github/workflows/ci.yml", "utf8");
+const windowsPackageVerifyWorkflowSource = readFileSync(
+  ".github/workflows/windows-package-verify.yml",
   "utf8",
 );
 const releaseWorkflowSource = readFileSync(".github/workflows/release.yml", "utf8");
@@ -99,6 +108,14 @@ const releaseCandidateVerifySource = readFileSync(
 );
 const publishEvidenceSource = readFileSync(
   ".github/scripts/validate-publish-evidence.mjs",
+  "utf8",
+);
+const initialSignedChannelResolverSource = readFileSync(
+  ".github/scripts/resolve-initial-signed-channel.mjs",
+  "utf8",
+);
+const initialSignedChannelSmokeSource = readFileSync(
+  "tools/initial-signed-channel-smoke.mjs",
   "utf8",
 );
 const windowsRunnerDoctorSmokeSource = readFileSync(
@@ -150,6 +167,8 @@ const previewEvidenceSource = readFileSync("src/lib/previewEvidence.ts", "utf8")
 const previewEvidenceSmokeSource = readFileSync("tools/preview-evidence-smoke.ts", "utf8");
 const workflowSource = [
   releaseWorkflowSource,
+  ciWorkflowSource,
+  windowsPackageVerifyWorkflowSource,
   readFileSync(".github/workflows/windows-store.yml", "utf8"),
   windowsProviderWorkflowSource,
   windowsPhysicalGateSource,
@@ -183,6 +202,9 @@ const credentialBearingReleaseJobsAreProtected = credentialBearingReleaseJobs.ev
 const openLoginBrowserSource = credentialSource
   .split("fn open_login_url_in_browser", 2)[1]
   ?.split("fn watch_and_open_login_url", 1)[0] || "";
+const claudeOauthReadSource = credentialSource
+  .split("pub fn read_claude_subscription_oauth_token()", 2)[1]
+  ?.split("fn scrub_gajecode_managed_claude_credential", 1)[0] || "";
 const unpinnedWorkflowUses = [...workflowSource.matchAll(/\buses:\s*[^@\s]+@([^\s#]+)/g)]
   .map((match) => match[1])
   .filter((ref) => !/^[0-9a-f]{40}$/i.test(ref));
@@ -317,8 +339,18 @@ const sourceInvariants = [
   },
   {
     ok:
-      agentPreviewSource.includes("redact_preview_output_line") &&
+      agentPreviewSource.includes("pub(crate) fn redact_cli_output") &&
       agentPreviewSource.includes("preview_output_redacts_credentials_before_storage_and_events") &&
+      agentSource.includes(
+        "clip_cli_output(redact_cli_output(&String::from_utf8_lossy(&output.stdout)))",
+      ) &&
+      agentSource.includes(
+        "clip_cli_output(redact_cli_output(&String::from_utf8_lossy(&output.stderr)))",
+      ) &&
+      agentSource.includes("가재코드 작업 탭에서 지원하지 않는 명령입니다") &&
+      claudeOauthReadSource.includes("read_claude_oauth_credential_from_atelier_keychain") &&
+      !claudeOauthReadSource.includes("std::env") &&
+      !claudeOauthReadSource.includes("env::var") &&
       previewEvidenceSource.includes("redactPreviewEvidenceText") &&
       previewEvidenceSource.includes("sanitizePreviewEvidenceUrl") &&
       previewEvidenceSource.includes("serviceOutput?: string[]") &&
@@ -330,7 +362,7 @@ const sourceInvariants = [
       agentWorkspaceSource.includes("previewEvidence: evidence") &&
       agentWorkspaceSource.includes("Local preview evidence capture failed"),
     message:
-      "Preview task evidence must remain local-only, bounded, URL-sanitized, and credential-redacted",
+      "CLI and preview output must be bounded and credential-redacted, Gajae commands must fail closed, and Claude credentials must stay app-owned",
   },
   {
     ok:
@@ -803,6 +835,8 @@ const sourceInvariants = [
       credentialBearingReleaseJobsAreProtected &&
       releaseWorkflowSource.includes("git merge-base --is-ancestor") &&
       releaseWorkflowSource.includes('test "$RELEASE_OWNER/$RELEASE_REPO" = "$GITHUB_REPOSITORY"') &&
+      releaseWorkflowSource.includes('gh release view "$GITHUB_REF_NAME"') &&
+      !releaseWorkflowSource.includes("releases?per_page=100") &&
       (releaseWorkflowSource.match(/needs: release-preflight/g) || []).length === 2 &&
       releaseWorkflowSource.includes("releaseDraft: true") &&
       !releaseWorkflowSource.includes("releaseDraft: false") &&
@@ -874,12 +908,17 @@ const sourceInvariants = [
       publishEvidenceSource.includes("provider/candidate installed executable path") &&
       publishEvidenceSource.includes("provider/candidate installed executable hash") &&
       publishEvidenceSource.includes("expected exactly one Windows updater canary receipt") &&
+      publishEvidenceSource.includes("expected exactly one signed-channel history receipt") &&
+      publishEvidenceSource.includes("assertSignedChannelHistory") &&
+      publishEvidenceSource.includes("sealed signed-channel history") &&
       publishEvidenceSource.includes("Tauri updater signature verification was not proved") &&
       publishEvidenceSource.includes("updater-driven relaunch was not proved") &&
       publishEvidenceSource.includes("updater/candidate installed executable path") &&
       publishEvidenceSource.includes("updater/candidate installed executable hash") &&
       publishEvidenceSource.includes("const requireSmartAppControl = true") &&
       physicalEvidenceSealSource.includes("windows-updater-canary.json") &&
+      physicalEvidenceSealSource.includes("signed-channel-history.json") &&
+      physicalEvidenceSealSource.includes("signedChannelHistory: receipt(signedChannelHistoryPath)") &&
       physicalEvidenceSealSource.includes("updater: receipt(updaterPath)") &&
       physicalEvidenceSealSource.includes("atelier-in-app-login-") &&
       physicalEvidenceSealSource.includes("inAppLogin: receipt(inAppLoginPath)") &&
@@ -889,6 +928,23 @@ const sourceInvariants = [
       ),
     message:
       "Only the approval-gated publisher may make a release public after exact physical evidence validation",
+  },
+  {
+    ok:
+      packageSource.includes('"smoke:initial-signed-channel"') &&
+      windowsPhysicalGateSource.includes("resolve-initial-signed-channel.mjs") &&
+      windowsPhysicalGateSource.includes("gh api --paginate --slurp") &&
+      windowsPhysicalGateSource.includes("signed-channel-history.json") &&
+      !windowsPhysicalGateSource.includes("allow_initial_signed_channel:\n") &&
+      !publishReleaseWorkflowSource.includes("allow_initial_signed_channel") &&
+      initialSignedChannelResolverSource.includes("qualifyingBaseline") &&
+      initialSignedChannelResolverSource.includes("initialSignedChannelEligible") &&
+      initialSignedChannelResolverSource.includes("release-manifest.json") &&
+      initialSignedChannelResolverSource.includes("latest.json") &&
+      initialSignedChannelSmokeSource.includes("Initial signed-channel history smoke passed") &&
+      publishEvidenceSource.includes("initialSignedChannelEligible === true"),
+    message:
+      "The one-time signed-channel baseline must be derived from complete public release history and sealed into publication evidence",
   },
   {
     ok:
@@ -943,9 +999,29 @@ const sourceInvariants = [
       windowsPackageSmokeSource.includes("githubRunAttempt = [int]$RunAttempt") &&
       windowsPackageSmokeSource.includes("runnerName = [string]$env:RUNNER_NAME") &&
       windowsPackageSmokeSource.includes("Find-7Zip") &&
-      windowsPackageSmokeSource.includes('Assert-AtelierPayload -Root $extractRoot -Kind "NSIS"'),
+      windowsPackageSmokeSource.includes('Assert-AtelierPayload -Root $extractRoot -Kind "NSIS"') &&
+      windowsInstalledPackageSmokeSource.includes('[ValidateSet("nsis", "msi")]') &&
+      windowsInstalledPackageSmokeSource.includes("installerKind = $normalizedInstallerKind") &&
+      windowsInstalledPackageSmokeSource.includes("msiexec.exe") &&
+      windowsPackageVerifyWorkflowSource.includes("installer-kind: [nsis, msi]") &&
+      windowsPackageVerifyWorkflowSource.includes('-InstallerKind "${{ matrix.installer-kind }}"'),
     message:
       "Windows publication evidence must preflight the runner before candidate download, upload the receipt, bind GitHub run ID and attempt, and inspect signed MSI and NSIS payloads",
+  },
+  {
+    ok:
+      ciWorkflowSource.includes("pull_request:") &&
+      ciWorkflowSource.includes("push:") &&
+      ciWorkflowSource.includes("npm run build") &&
+      ciWorkflowSource.includes("npm run audit:release") &&
+      ciWorkflowSource.includes("npm run gate:orca-features") &&
+      ciWorkflowSource.includes("npm run smoke:initial-signed-channel") &&
+      ciWorkflowSource.includes("npm run smoke:publish-evidence") &&
+      ciWorkflowSource.includes("cargo fmt --manifest-path src-tauri/Cargo.toml") &&
+      ciWorkflowSource.includes("cargo clippy --manifest-path src-tauri/Cargo.toml") &&
+      ciWorkflowSource.includes("cargo test --manifest-path src-tauri/Cargo.toml"),
+    message:
+      "Every main-branch change must run frontend, release-contract, modular feature, and Rust quality gates before a release tag exists",
   },
   {
     ok:

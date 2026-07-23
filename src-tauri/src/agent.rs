@@ -20,6 +20,7 @@ use crate::agent_lifecycle::{self, AgentLifecycleEvent, AgentLifecyclePhase};
 use crate::agent_models::{
     codex_model_requires_multi_agent_v2, normalize_codex_reasoning_effort, read_codex_config_model,
 };
+use crate::agent_preview::redact_cli_output;
 use crate::agent_process::{
     clip_cli_output, command_for_cli, describe_cli_command, wait_with_timeout,
 };
@@ -496,10 +497,9 @@ fn validate_agent_cli_command(provider: &str, args: &[String]) -> Result<(), Str
             _ if first.starts_with('-') => Err(format!(
                 "가재코드 작업 탭에서 지원하지 않는 옵션입니다: {first}"
             )),
-            _ if is_known_gajecode_cli_command(first) => Err(format!(
+            _ => Err(format!(
                 "가재코드 작업 탭에서 지원하지 않는 명령입니다: {first}"
             )),
-            _ => Ok(()),
         },
         other => Err(format!("지원하지 않는 provider입니다: {other}")),
     }
@@ -555,8 +555,8 @@ fn run_agent_cli_command(
         )
     })?;
     let (output, timed_out) = wait_with_timeout(child, Duration::from_secs(20))?;
-    let stdout = clip_cli_output(String::from_utf8_lossy(&output.stdout).to_string());
-    let stderr = clip_cli_output(String::from_utf8_lossy(&output.stderr).to_string());
+    let stdout = clip_cli_output(redact_cli_output(&String::from_utf8_lossy(&output.stdout)));
+    let stderr = clip_cli_output(redact_cli_output(&String::from_utf8_lossy(&output.stderr)));
     let success = output.status.success() && !timed_out;
 
     Ok(AgentCliCommandResult {
@@ -4448,8 +4448,6 @@ export ANTHROPIC_API_KEY="tc-example"
             vec!["q", "gajae code"],
             vec!["rlm", "summarize this dataset"],
             vec!["update", "--help"],
-            vec!["gjc", "review", "this", "project"],
-            vec!["review", "this", "project"],
         ] {
             let args = args.into_iter().map(String::from).collect::<Vec<_>>();
             assert!(
@@ -4464,6 +4462,8 @@ export ANTHROPIC_API_KEY="tc-example"
             vec!["setup", "hermes", "--install"],
             vec!["daemon"],
             vec!["--unknown"],
+            vec!["gjc", "review", "this", "project"],
+            vec!["review", "this", "project"],
         ] {
             let args = args.into_iter().map(String::from).collect::<Vec<_>>();
             assert!(

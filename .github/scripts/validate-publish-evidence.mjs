@@ -11,7 +11,6 @@ const sourceSha = requireEnv("RELEASE_SOURCE_SHA").toLowerCase();
 const physicalGateRunId = requireEnv("PHYSICAL_GATE_RUN_ID");
 const physicalGateRunAttempt = requireEnv("PHYSICAL_GATE_RUN_ATTEMPT");
 const physicalGateRunnerName = requireEnv("PHYSICAL_GATE_RUNNER_NAME");
-const allowInitialSignedChannel = parseBoolean(process.env.ALLOW_INITIAL_SIGNED_CHANNEL);
 const requireSmartAppControl = true;
 const releaseRepository = resolveReleaseRepository();
 
@@ -55,6 +54,10 @@ const runnerPreflightFiles = findFiles(evidenceDir, "windows-runner-preflight.js
 if (runnerPreflightFiles.length !== 1) {
   fail(`expected exactly one Windows runner preflight receipt, found ${runnerPreflightFiles.length}`);
 }
+const signedChannelHistoryFiles = findFiles(evidenceDir, "signed-channel-history.json");
+if (signedChannelHistoryFiles.length !== 1) {
+  fail(`expected exactly one signed-channel history receipt, found ${signedChannelHistoryFiles.length}`);
+}
 const physicalSealFiles = findFiles(evidenceDir, "physical-gate-receipt.json");
 if (physicalSealFiles.length !== 1) {
   fail(`expected exactly one physical gate seal, found ${physicalSealFiles.length}`);
@@ -65,6 +68,7 @@ const candidatePath = candidateFiles[0];
 const updaterPath = updaterFiles[0];
 const packagePath = packageFiles[0];
 const runnerPreflightPath = runnerPreflightFiles[0];
+const signedChannelHistoryPath = signedChannelHistoryFiles[0];
 const physicalSealPath = physicalSealFiles[0];
 const candidate = readJson(candidatePath);
 const updater = readJson(updaterPath);
@@ -72,11 +76,14 @@ const packageProof = readJson(packagePath);
 const provider = providerFile.payload;
 const inAppLogin = readJson(inAppLoginPath);
 const runnerPreflight = readJson(runnerPreflightPath);
+const signedChannelHistory = readJson(signedChannelHistoryPath);
 const physicalSeal = readJson(physicalSealPath);
 const manifestPath = join(assetsDir, "release-manifest.json");
 const manifest = readJson(manifestPath);
 
 assertRunnerPreflight(runnerPreflight);
+assertSignedChannelHistory(signedChannelHistory);
+const allowInitialSignedChannel = signedChannelHistory.initialSignedChannelEligible === true;
 assertPhysicalSeal(physicalSeal);
 assertUpdaterCanary(updater);
 assertInAppLoginReceipt(inAppLogin);
@@ -269,6 +276,7 @@ const report = {
   smartAppControlRequired: requireSmartAppControl,
   receipts: {
     runnerPreflight: receipt(runnerPreflightPath),
+    signedChannelHistory: receipt(signedChannelHistoryPath),
     candidate: receipt(candidatePath),
     updater: receipt(updaterPath),
     provider: receipt(providerFile.path),
@@ -288,11 +296,6 @@ function requireEnv(name) {
   const value = process.env[name]?.trim();
   if (!value) fail(`${name} is required`);
   return value;
-}
-
-function parseBoolean(value, fallback = false) {
-  if (value == null || value === "") return fallback;
-  return /^(1|true|yes)$/i.test(value.trim());
 }
 
 function findFiles(root, matcher) {
@@ -506,6 +509,72 @@ function assertRunnerPreflight(preflight) {
   }
 }
 
+function assertSignedChannelHistory(history) {
+  assertEqual(history?.schemaVersion, 1, "signed-channel history schema");
+  assertEqual(history?.phase, "signed-channel-history", "signed-channel history phase");
+  assertEqual(
+    history?.derivedFrom,
+    "github-public-release-history",
+    "signed-channel history source",
+  );
+  assertEqual(history?.releaseRepository, releaseRepository.slug, "signed-channel repository");
+  assertEqual(history?.releaseTag, releaseTag, "signed-channel release tag");
+  assertEqual(
+    String(history?.sourceSha || "").toLowerCase(),
+    sourceSha,
+    "signed-channel source SHA",
+  );
+  assertEqual(String(history?.githubRunId || ""), physicalGateRunId, "signed-channel run ID");
+  assertEqual(
+    String(history?.githubRunAttempt || ""),
+    physicalGateRunAttempt,
+    "signed-channel run attempt",
+  );
+  assertTrue(
+    Number.isInteger(history?.checkedReleaseCount) && history.checkedReleaseCount >= 0,
+    "signed-channel checked release count is invalid",
+  );
+  assertTrue(
+    Number.isInteger(history?.checkedPublicReleaseCount) &&
+      history.checkedPublicReleaseCount >= 0 &&
+      history.checkedPublicReleaseCount <= history.checkedReleaseCount,
+    "signed-channel checked public release count is invalid",
+  );
+  assertTrue(!Number.isNaN(Date.parse(history?.generatedAt)), "signed-channel timestamp is invalid");
+
+  if (history?.initialSignedChannelEligible === true) {
+    assertEqual(history?.status, "initial-channel-eligible", "signed-channel status");
+    assertEqual(history?.qualifyingBaseline, null, "signed-channel baseline");
+    return;
+  }
+
+  assertEqual(history?.initialSignedChannelEligible, false, "signed-channel eligibility");
+  assertEqual(history?.status, "baseline-required", "signed-channel status");
+  assertTrue(Boolean(history?.qualifyingBaseline), "signed-channel baseline is missing");
+  assertTrue(
+    /^v\d+\.\d+\.\d+(?:[-+].+)?$/.test(String(history.qualifyingBaseline.tag || "")) &&
+      history.qualifyingBaseline.tag !== releaseTag,
+    "signed-channel baseline tag is invalid",
+  );
+  assertTrue(
+    !Number.isNaN(Date.parse(history.qualifyingBaseline.publishedAt)),
+    "signed-channel baseline publish timestamp is invalid",
+  );
+  const names = new Set(
+    (Array.isArray(history.qualifyingBaseline.assetNames)
+      ? history.qualifyingBaseline.assetNames
+      : []
+    ).map((name) => String(name).toLowerCase()),
+  );
+  assertTrue(names.has("release-manifest.json"), "signed-channel baseline manifest is missing");
+  assertTrue(names.has("latest.json"), "signed-channel baseline updater metadata is missing");
+  assertTrue([...names].some((name) => name.endsWith(".msi")), "signed-channel baseline MSI is missing");
+  assertTrue(
+    [...names].some((name) => name.endsWith(".msi.sig")),
+    "signed-channel baseline updater signature is missing",
+  );
+}
+
 function assertUpdaterCanary(canary) {
   assertEqual(canary?.schemaVersion, 1, "updater canary schema");
   assertEqual(canary?.status, "passed", "updater canary status");
@@ -641,6 +710,11 @@ function assertPhysicalSeal(seal) {
     seal?.evidence?.runnerPreflight,
     receipt(runnerPreflightPath),
     "sealed runner preflight",
+  );
+  assertReceiptEqual(
+    seal?.evidence?.signedChannelHistory,
+    receipt(signedChannelHistoryPath),
+    "sealed signed-channel history",
   );
   assertReceiptEqual(seal?.evidence?.candidate, receipt(candidatePath), "sealed candidate");
   assertReceiptEqual(seal?.evidence?.updater, receipt(updaterPath), "sealed updater canary");

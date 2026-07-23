@@ -75,6 +75,7 @@
     "smoke:updater-contract": "node tools/updater-contract-smoke.mjs",
     "smoke:release-candidate": "node tools/release-candidate-smoke.mjs",
     "smoke:publish-evidence": "node tools/publish-evidence-smoke.mjs",
+    "smoke:initial-signed-channel": "node tools/initial-signed-channel-smoke.mjs",
     "smoke:release-preflight": "node tools/release-preflight-smoke.mjs",
     "smoke:oauth-login-flow": "node --experimental-strip-types tools/oauth-login-flow-smoke.ts",
     "tauri:trust": "bash tools/verify-macos-bundle.sh"

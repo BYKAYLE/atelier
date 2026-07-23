@@ -39,6 +39,7 @@ const providerPath = findExactlyOne(/^atelier-provider-smoke-.*\.json$/);
 const inAppLoginPath = findExactlyOne(/^atelier-in-app-login-.*\.json$/);
 const packagePath = findExactlyOne("windows-package-smoke.json");
 const runnerPreflightPath = findExactlyOne("windows-runner-preflight.json");
+const signedChannelHistoryPath = findExactlyOne("signed-channel-history.json");
 const provider = readJson(providerPath);
 const inAppLogin = readJson(inAppLoginPath);
 
@@ -62,6 +63,7 @@ const seal = {
   manifest: receipt(manifestPath),
   evidence: {
     runnerPreflight: receipt(runnerPreflightPath),
+    signedChannelHistory: receipt(signedChannelHistoryPath),
     candidate: receipt(candidatePath),
     updater: receipt(updaterPath),
     provider: receipt(providerPath),

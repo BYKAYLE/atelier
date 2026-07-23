@@ -11,11 +11,6 @@ on:
         description: "Installed Atelier version, without the v prefix"
         required: true
         type: string
-      allow_initial_signed_channel:
-        description: "Allow a clean install only for the first signed direct-channel release"
-        required: false
-        type: boolean
-        default: false
 
 env:
   RELEASE_OWNER: ${{ vars.RELEASE_OWNER || github.repository_owner }}
@@ -44,12 +39,32 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Derive signed-channel baseline from public release history
+        id: signed-channel
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN || github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          $releaseRepo = "$env:RELEASE_OWNER/$env:RELEASE_REPO"
+          gh api --paginate --slurp "repos/$releaseRepo/releases?per_page=100" > release-history.json
+          if ($LASTEXITCODE -ne 0) { throw "Could not read the complete public release history." }
+          $env:RELEASE_HISTORY_PATH = "release-history.json"
+          $env:RELEASE_SOURCE_SHA = (git rev-parse HEAD).Trim()
+          $env:RELEASE_REPOSITORY = $releaseRepo
+          $env:SIGNED_CHANNEL_HISTORY_RECEIPT = "artifacts/windows-signed-channel-history/signed-channel-history.json"
+          node .github/scripts/resolve-initial-signed-channel.mjs
+          if ($LASTEXITCODE -ne 0) { throw "Could not derive signed-channel eligibility." }
+          $receipt = Get-Content -LiteralPath $env:SIGNED_CHANNEL_HISTORY_RECEIPT -Raw | ConvertFrom-Json
+          $eligible = ([bool]$receipt.initialSignedChannelEligible).ToString().ToLowerInvariant()
+          Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "allow_initial_signed_channel=$eligible"
+
       - name: Preflight physical runner before candidate download
         shell: pwsh
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
           EXPECTED_VERSION: ${{ inputs.expected_version }}
-          ALLOW_INITIAL_SIGNED_CHANNEL: ${{ inputs.allow_initial_signed_channel }}
+          ALLOW_INITIAL_SIGNED_CHANNEL: ${{ steps.signed-channel.outputs.allow_initial_signed_channel }}
         run: |
           $sourceSha = (git rev-parse HEAD).Trim()
           $arguments = @(
@@ -128,7 +143,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Signed Windows package proof failed." }
 
       - name: Install the first signed-channel baseline
-        if: ${{ inputs.allow_initial_signed_channel }}
+        if: ${{ steps.signed-channel.outputs.allow_initial_signed_channel == 'true' }}
         id: initial-install-gate
         shell: pwsh
         env:
@@ -158,7 +173,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
           EXPECTED_VERSION: ${{ inputs.expected_version }}
-          ALLOW_INITIAL_SIGNED_CHANNEL: ${{ inputs.allow_initial_signed_channel }}
+          ALLOW_INITIAL_SIGNED_CHANNEL: ${{ steps.signed-channel.outputs.allow_initial_signed_channel }}
         run: |
           $sourceSha = (git rev-parse HEAD).Trim()
           $arguments = @(
@@ -180,7 +195,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "In-app updater canary failed." }
 
       - name: Verify the updater-installed candidate
-        if: ${{ !inputs.allow_initial_signed_channel }}
+        if: ${{ steps.signed-channel.outputs.allow_initial_signed_channel != 'true' }}
         id: install-gate
         shell: pwsh
         env:
@@ -266,6 +281,7 @@ jobs:
           name: atelier-windows-physical-release-gate-${{ inputs.release_tag }}
           path: |
             artifacts/windows-runner-preflight/*
+            artifacts/windows-signed-channel-history/*
             artifacts/windows-release-candidate/*
             artifacts/windows-updater-canary/*
             artifacts/windows-release-seal/*

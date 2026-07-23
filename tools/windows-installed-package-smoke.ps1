@@ -2,7 +2,9 @@ param(
   [string]$BundleRoot = "src-tauri/target/release/bundle",
   [string]$ExpectedVersion = "",
   [string]$EvidenceDir = "artifacts/windows-package-verification",
-  [int]$StartupTimeoutSec = 45
+  [int]$StartupTimeoutSec = 45,
+  [ValidateSet("nsis", "msi")]
+  [string]$InstallerKind = "nsis"
 )
 
 $ErrorActionPreference = "Stop"
@@ -189,20 +191,32 @@ if ($quotedLocationProbe -ne 'C:\Program Files\Atelier' -or $quotedIconProbe -ne
   throw "Windows registry path normalization self-test failed."
 }
 
-$installer = Get-ChildItem -LiteralPath $BundleRoot -Recurse -File -Filter "*.exe" -ErrorAction SilentlyContinue |
-  Where-Object { $_.DirectoryName -match "(?i)[\\/]nsis$" } |
+$normalizedInstallerKind = $InstallerKind.ToLowerInvariant()
+$installerExtension = if ($normalizedInstallerKind -eq "msi") { "*.msi" } else { "*.exe" }
+$installerDirectoryPattern = "(?i)[\\/]$([regex]::Escape($normalizedInstallerKind))$"
+$installer = Get-ChildItem -LiteralPath $BundleRoot -Recurse -File -Filter $installerExtension -ErrorAction SilentlyContinue |
+  Where-Object { $_.DirectoryName -match $installerDirectoryPattern } |
   Select-Object -First 1
 if (-not $installer) {
-  throw "No NSIS installer was found below $BundleRoot"
+  throw "No $($normalizedInstallerKind.ToUpperInvariant()) installer was found below $BundleRoot"
 }
 
 $evidencePath = [IO.Path]::GetFullPath($EvidenceDir)
 New-Item -ItemType Directory -Force -Path $evidencePath | Out-Null
 
-Write-Host "Installing NSIS package silently: $($installer.FullName)"
-$installerProcess = Start-Process -FilePath $installer.FullName -ArgumentList "/S" -Wait -PassThru
+Write-Host "Installing $($normalizedInstallerKind.ToUpperInvariant()) package silently: $($installer.FullName)"
+if ($normalizedInstallerKind -eq "msi") {
+  $msiexec = Join-Path $env:SystemRoot "System32\msiexec.exe"
+  $installerProcess = Start-Process `
+    -FilePath $msiexec `
+    -ArgumentList "/i `"$($installer.FullName)`" /qn /norestart" `
+    -Wait `
+    -PassThru
+} else {
+  $installerProcess = Start-Process -FilePath $installer.FullName -ArgumentList "/S" -Wait -PassThru
+}
 if ($installerProcess.ExitCode -ne 0) {
-  throw "NSIS installation failed with exit code $($installerProcess.ExitCode)"
+  throw "$($normalizedInstallerKind.ToUpperInvariant()) installation failed with exit code $($installerProcess.ExitCode)"
 }
 
 $installedExe = $null
@@ -212,7 +226,7 @@ for ($attempt = 0; $attempt -lt 30; $attempt++) {
   Start-Sleep -Seconds 1
 }
 if (-not $installedExe) {
-  throw "NSIS completed, but the installed Atelier.exe could not be located."
+  throw "$($normalizedInstallerKind.ToUpperInvariant()) completed, but the installed Atelier.exe could not be located."
 }
 
 $builtExe = [IO.Path]::GetFullPath("src-tauri/target/release/atelier.exe")
@@ -233,8 +247,8 @@ Write-Host "Installed executable: marker=$($installedIdentity.Marker) raw=$($ins
 if ($builtIdentity.Marker -ne "unknown") {
   throw "The post-bundle release executable must be restored to the Tauri unknown marker, found $($builtIdentity.Marker)."
 }
-if ($installedIdentity.Marker -ne "nsis") {
-  throw "The installed executable is not the NSIS payload: marker=$($installedIdentity.Marker)."
+if ($installedIdentity.Marker -ne $normalizedInstallerKind) {
+  throw "The installed executable is not the $($normalizedInstallerKind.ToUpperInvariant()) payload: marker=$($installedIdentity.Marker)."
 }
 if ($builtIdentity.Length -ne $installedIdentity.Length -or $builtIdentity.NormalizedSha256 -ne $installedIdentity.NormalizedSha256) {
   throw "Installed executable differs from the release executable beyond the required Tauri bundle marker."
@@ -282,6 +296,7 @@ try {
 $summary = [ordered]@{
   generatedAt = (Get-Date).ToUniversalTime().ToString("o")
   expectedVersion = $ExpectedVersion
+  installerKind = $normalizedInstallerKind
   installerPath = $installer.FullName
   installerSha256 = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
   installedExecutable = $installedExe

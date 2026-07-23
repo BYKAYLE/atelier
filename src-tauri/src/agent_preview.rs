@@ -919,7 +919,7 @@ fn redact_preview_prefixed_token(text: &mut String, prefix: &str, min_length: us
     }
 }
 
-fn redact_preview_output_line(line: &str) -> String {
+pub(crate) fn redact_cli_output(line: &str) -> String {
     let mut safe = line.to_string();
     redact_preview_prefixed_token(&mut safe, "bearer ", 14);
     redact_preview_prefixed_token(&mut safe, "basic ", 14);
@@ -975,7 +975,7 @@ fn spawn_preview_output_reader<R, T>(
     thread::spawn(move || {
         let reader = BufReader::new(stream);
         for line in reader.lines().map_while(Result::ok) {
-            let safe_line = redact_preview_output_line(&line);
+            let safe_line = redact_cli_output(&line);
             push_preview_output(&id, safe_line.clone());
             let _ = app.emit(
                 &format!("preview-service://{id}/event"),
@@ -1498,7 +1498,7 @@ mod tests {
 
     #[test]
     fn preview_output_redacts_credentials_before_storage_and_events() {
-        let redacted = redact_preview_output_line(
+        let redacted = redact_cli_output(
             "API_KEY=sk-preview-secret-123456789 Authorization: Bearer access-token-123456789 PASSWORD='hunter2'",
         );
         assert!(!redacted.contains("preview-secret"));
@@ -1506,7 +1506,7 @@ mod tests {
         assert!(!redacted.contains("hunter2"));
         assert!(redacted.matches("<redacted>").count() >= 3);
         assert_eq!(
-            redact_preview_output_line("password authentication failed"),
+            redact_cli_output("password authentication failed"),
             "password authentication failed"
         );
     }

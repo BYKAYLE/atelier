@@ -1801,15 +1801,6 @@ fn read_claude_oauth_credential_from_atelier_keychain() -> Option<ClaudeSubscrip
 
 #[allow(dead_code)]
 pub fn read_claude_subscription_oauth_token() -> Option<String> {
-    for key in ["ANTHROPIC_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"] {
-        if let Ok(token) = std::env::var(key) {
-            let token = token.trim().to_string();
-            if token.contains("sk-ant-oat") {
-                return Some(token);
-            }
-        }
-    }
-
     // Legacy Atelier builds cached a renewable Claude credential. Read only the
     // app-owned keychain item, immediately strip any refresh token, and keep a
     // fresh inference-only access token. External Claude credential stores are

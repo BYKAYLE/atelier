@@ -33,6 +33,7 @@ const providerPath = join(evidence, "atelier-provider-smoke-20260722-120000.json
 const inAppLoginPath = join(evidence, "atelier-in-app-login-20260722-120000.json");
 const packagePath = join(evidence, "windows-package-smoke.json");
 const runnerPreflightPath = join(evidence, "windows-runner-preflight.json");
+const signedChannelHistoryPath = join(evidence, "signed-channel-history.json");
 const physicalSealPath = join(evidence, "physical-gate-receipt.json");
 const manifestPath = join(assets, "release-manifest.json");
 
@@ -55,6 +56,13 @@ try {
   seal.manifest.sha256 = "f".repeat(64);
   writeJson(physicalSealPath, seal);
   run(false, "physical gate seal contains the wrong manifest hash", false, false);
+
+  resetValidUpgrade();
+  writePhysicalSeal();
+  const signedChannelHistory = readJson(signedChannelHistoryPath);
+  signedChannelHistory.checkedReleaseCount += 1;
+  writeJson(signedChannelHistoryPath, signedChannelHistory);
+  run(false, "signed-channel history changed after the physical gate", false, false);
 
   let preflight = readJson(runnerPreflightPath);
   preflight.githubRunAttempt = "5";
@@ -282,6 +290,7 @@ try {
 function resetValidUpgrade() {
   writeManifest();
   writeJson(runnerPreflightPath, runnerPreflightFixture());
+  writeJson(signedChannelHistoryPath, signedChannelHistoryFixture(false));
   writeJson(updaterPath, updaterFixture());
   writeJson(candidatePath, candidateFixture(fileReceipt(updaterPath)));
   const inAppLogin = inAppLoginFixture();
@@ -293,6 +302,7 @@ function resetValidUpgrade() {
 function resetWaiverCandidate() {
   writeManifest();
   writeJson(runnerPreflightPath, runnerPreflightFixture());
+  writeJson(signedChannelHistoryPath, signedChannelHistoryFixture(true));
   writeJson(updaterPath, updaterFixture(true));
   writeJson(candidatePath, candidateFixture(fileReceipt(updaterPath), true));
   const inAppLogin = inAppLoginFixture();
@@ -481,6 +491,39 @@ function runnerPreflightFixture() {
   };
 }
 
+function signedChannelHistoryFixture(initialSignedChannelEligible) {
+  const baselineVersion = previousVersion(version);
+  return {
+    schemaVersion: 1,
+    phase: "signed-channel-history",
+    status: initialSignedChannelEligible
+      ? "initial-channel-eligible"
+      : "baseline-required",
+    derivedFrom: "github-public-release-history",
+    releaseRepository,
+    releaseTag: tag,
+    sourceSha,
+    githubRunId: runId,
+    githubRunAttempt: runAttempt,
+    checkedReleaseCount: initialSignedChannelEligible ? 1 : 2,
+    checkedPublicReleaseCount: initialSignedChannelEligible ? 1 : 2,
+    initialSignedChannelEligible,
+    qualifyingBaseline: initialSignedChannelEligible
+      ? null
+      : {
+          tag: `v${baselineVersion}`,
+          publishedAt: "2026-07-21T00:00:00.000Z",
+          assetNames: [
+            `Atelier_${baselineVersion}_x64_en-US.msi`,
+            `Atelier_${baselineVersion}_x64_en-US.msi.sig`,
+            "latest.json",
+            "release-manifest.json",
+          ],
+        },
+    generatedAt: "2026-07-22T11:59:20.000Z",
+  };
+}
+
 function inAppLoginFixture() {
   return {
     schemaVersion: 1,
@@ -582,7 +625,10 @@ function signatureFixture() {
 }
 
 function run(shouldPass, label, allowWaiver = false, reseal = true, envOverrides = {}) {
-  if (reseal) writePhysicalSeal();
+  if (reseal) {
+    writeJson(signedChannelHistoryPath, signedChannelHistoryFixture(allowWaiver));
+    writePhysicalSeal();
+  }
   const result = spawnSync(process.execPath, [".github/scripts/validate-publish-evidence.mjs"], {
     cwd: process.cwd(),
     encoding: "utf8",
@@ -597,7 +643,6 @@ function run(shouldPass, label, allowWaiver = false, reseal = true, envOverrides
       PHYSICAL_GATE_RUN_ID: runId,
       PHYSICAL_GATE_RUN_ATTEMPT: runAttempt,
       PHYSICAL_GATE_RUNNER_NAME: runnerName,
-      ALLOW_INITIAL_SIGNED_CHANNEL: String(allowWaiver),
       REQUIRE_SMART_APP_CONTROL_EVIDENCE: "true",
       ...envOverrides,
     },

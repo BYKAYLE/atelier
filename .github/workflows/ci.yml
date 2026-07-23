@@ -1,0 +1,89 @@
+name: Continuous Integration
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  frontend-and-release-contracts:
+    name: Frontend and release contracts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Audit release security contracts
+        run: npm run audit:release
+
+      - name: Prove removable feature packages
+        run: npm run gate:orca-features
+
+      - name: Prove offline agent fixtures
+        run: npm run harness:fixture
+
+      - name: Prove release evidence contracts
+        run: |
+          npm run smoke:release-preflight
+          npm run smoke:updater-contract
+          npm run smoke:release-candidate
+          npm run smoke:initial-signed-channel
+          npm run smoke:publish-evidence
+
+      - name: Prove connection and installed update flows
+        run: |
+          npm run smoke:oauth-login-flow
+          npm run smoke:connections-layout
+          npm run smoke:updater-install
+
+      - name: Prove feature boundaries and settings
+        run: |
+          npm run smoke:feature-boundaries
+          npm run smoke:feature-settings
+          npm run smoke:settings-navigation
+          npm run smoke:workbench
+
+  rust:
+    name: Rust quality gate
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          components: clippy,rustfmt
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+
+      - name: Lint
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+
+      - name: Test
+        run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets --all-features

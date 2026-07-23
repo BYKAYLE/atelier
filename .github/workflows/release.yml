@@ -71,13 +71,28 @@ jobs:
             exit 1
           }
 
-          gh api "repos/$RELEASE_OWNER/$RELEASE_REPO/releases?per_page=100" > release-list.json
-          node - <<'NODE'
-          const releases = require("./release-list.json");
-          const release = releases.find((entry) => entry.tag_name === process.env.GITHUB_REF_NAME);
-          if (release && !release.draft) throw new Error("Release tag is already public");
-          if (release?.prerelease) throw new Error("Release candidate must not be a prerelease");
+          set +e
+          gh release view "$GITHUB_REF_NAME" \
+            --repo "$RELEASE_OWNER/$RELEASE_REPO" \
+            --json isDraft,isPrerelease,tagName > release-tag.json 2> release-tag-error.txt
+          release_status=$?
+          set -e
+
+          if [ "$release_status" -eq 0 ]; then
+            node - <<'NODE'
+          const release = require("./release-tag.json");
+          if (release.tagName !== process.env.GITHUB_REF_NAME) {
+            throw new Error("GitHub returned a different release tag");
+          }
+          if (!release.isDraft) throw new Error("Release tag is already public");
+          if (release.isPrerelease) throw new Error("Release candidate must not be a prerelease");
           NODE
+          elif grep -Eiq "release not found|not found|HTTP 404" release-tag-error.txt; then
+            echo "No GitHub release exists for $GITHUB_REF_NAME yet."
+          else
+            cat release-tag-error.txt >&2
+            exit "$release_status"
+          fi
 
       - name: Preserve source preflight evidence
         if: always()
