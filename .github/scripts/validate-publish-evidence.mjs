@@ -259,6 +259,8 @@ for (const command of ["codex", "claude"]) {
 }
 if (requireSmartAppControl) {
   assertTrue(provider.smartAppControl?.available === true, "Smart App Control evidence is unavailable");
+  assertEqual(provider.smartAppControl?.state, "On", "provider Smart App Control state");
+  assertTrue(provider.smartAppControl?.enforced === true, "provider Smart App Control is not enforcing");
 }
 
 const report = {
@@ -505,6 +507,8 @@ function assertRunnerPreflight(preflight) {
 
   if (requireSmartAppControl) {
     assertTrue(preflight?.smartAppControl?.available === true, "runner preflight Smart App Control is unavailable");
+    assertEqual(preflight?.smartAppControl?.state, "On", "runner preflight Smart App Control state");
+    assertTrue(preflight?.smartAppControl?.enforced === true, "runner preflight Smart App Control is not enforcing");
     assertTrue(preflight?.smartAppControl?.ok === true, "runner preflight Smart App Control verdict is not ok");
   }
 }

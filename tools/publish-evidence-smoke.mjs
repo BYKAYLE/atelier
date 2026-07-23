@@ -275,12 +275,28 @@ try {
   resetValidUpgrade();
   preflight = readJson(runnerPreflightPath);
   preflight.smartAppControl.available = false;
+  preflight.smartAppControl.enforced = false;
   preflight.smartAppControl.ok = false;
   writeJson(runnerPreflightPath, preflight);
   run(false, "required Smart App Control unavailable");
   run(false, "Smart App Control cannot be disabled by environment", false, true, {
     REQUIRE_SMART_APP_CONTROL_EVIDENCE: "false",
   });
+
+  resetValidUpgrade();
+  preflight = readJson(runnerPreflightPath);
+  preflight.smartAppControl.state = "Evaluation";
+  preflight.smartAppControl.enforced = false;
+  preflight.smartAppControl.ok = false;
+  writeJson(runnerPreflightPath, preflight);
+  run(false, "Smart App Control evaluation mode is not enforcement");
+
+  resetValidUpgrade();
+  provider = readJson(providerPath);
+  provider.smartAppControl.state = "Off";
+  provider.smartAppControl.enforced = false;
+  writeJson(providerPath, provider);
+  run(false, "provider ran with Smart App Control disabled");
 
   console.log("publish evidence smoke passed");
 } finally {
@@ -487,6 +503,7 @@ function runnerPreflightFixture() {
       available: true,
       ok: true,
       state: "On",
+      enforced: true,
     },
   };
 }
@@ -601,7 +618,7 @@ function providerFixture(inAppLogin = inAppLoginFixture()) {
       restartOk: true,
       rendererReadyOk: true,
     },
-    smartAppControl: { available: true, state: "On" },
+    smartAppControl: { available: true, state: "On", enforced: true },
     loginResults: {
       codexFlowExitOk: true,
       codexAuthOk: true,

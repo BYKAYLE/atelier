@@ -18,6 +18,7 @@ param(
   [int]$MinFreeSpaceGiB = 6,
   [switch]$AllowInitialSignedChannel,
   [switch]$RequireSmartAppControlEvidence,
+  [switch]$RequireSmartAppControlEnforcement,
   [switch]$Strict
 )
 
@@ -172,11 +173,18 @@ function Convert-SmartAppControlRegistryValue {
   }
 }
 
+function Test-SmartAppControlEnforced {
+  param([object]$State)
+  $stateText = if ($null -eq $State) { "" } else { [string]$State }
+  return $stateText.Trim() -ieq "On"
+}
+
 function Get-SmartAppControlEvidence {
   $result = [ordered]@{
     available = $false
     state = $null
     source = $null
+    enforced = $false
   }
   try {
     if (Get-Command Get-MpComputerStatus -ErrorAction SilentlyContinue) {
@@ -187,6 +195,7 @@ function Get-SmartAppControlEvidence {
           $result.available = $true
           $result.state = $state
           $result.source = "Get-MpComputerStatus"
+          $result.enforced = Test-SmartAppControlEnforced $state
           return [pscustomobject]$result
         }
       }
@@ -200,6 +209,7 @@ function Get-SmartAppControlEvidence {
       $result.available = $true
       $result.state = Convert-SmartAppControlRegistryValue $raw
       $result.source = "$policyPath\VerifiedAndReputablePolicyState"
+      $result.enforced = Test-SmartAppControlEnforced $result.state
     }
   } catch {}
   return [pscustomobject]$result
@@ -404,6 +414,9 @@ if ($baseline.runningProcessCount -gt 0) { Add-Failure "Close the installed Atel
 if (-not $browser.ok) { Add-Failure "The default HTTPS browser executable and process identity could not be resolved." }
 if ($trustProbeStatus -ne "Valid" -or [string]::IsNullOrWhiteSpace($trustProbeSignerThumbprint)) { Add-Failure "Windows Authenticode trust probe is not valid." }
 if ($RequireSmartAppControlEvidence -and -not $smartAppControl.available) { Add-Failure "Smart App Control state is unavailable." }
+if ($RequireSmartAppControlEnforcement -and -not $smartAppControl.enforced) {
+  Add-Failure "Smart App Control must be On and enforcing for the physical release gate. Current state: $($smartAppControl.state)."
+}
 
 $safeRunAttempt = if ($RunAttempt -match "^[1-9][0-9]*$") { [int]$RunAttempt } else { 0 }
 $safeSourceSha = if ($SourceSha) { $SourceSha.ToLowerInvariant() } else { "" }
@@ -474,7 +487,8 @@ $receipt = [ordered]@{
     available = [bool]$smartAppControl.available
     state = $smartAppControl.state
     source = $smartAppControl.source
-    ok = [bool]$smartAppControl.available
+    enforced = [bool]$smartAppControl.enforced
+    ok = [bool]$smartAppControl.available -and [bool]$smartAppControl.enforced
   }
 }
 

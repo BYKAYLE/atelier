@@ -78,7 +78,8 @@ jobs:
             "-RunAttempt", $env:GITHUB_RUN_ATTEMPT,
             "-EvidencePath", "artifacts/windows-runner-preflight/windows-runner-preflight.json",
             "-Strict",
-            "-RequireSmartAppControlEvidence"
+            "-RequireSmartAppControlEvidence",
+            "-RequireSmartAppControlEnforcement"
           )
           if ($env:ALLOW_INITIAL_SIGNED_CHANNEL -eq "true") {
             $arguments += "-AllowInitialSignedChannel"
@@ -251,6 +252,7 @@ jobs:
             "-RequireBrowserProcessEvidence",
             "-RequireVisibleBrowserWindowEvidence",
             "-RequireSmartAppControlEvidence",
+            "-RequireSmartAppControlEnforcement",
             "-ExpectedVersion", $env:EXPECTED_VERSION,
             "-AtelierExe", $env:ATELIER_EXE,
             "-ReleaseTag", $env:RELEASE_TAG,

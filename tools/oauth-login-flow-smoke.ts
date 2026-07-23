@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   OAUTH_LOGIN_RETRY_COOLDOWN_MS,
   OAUTH_LOGIN_RETRY_LIMIT,
+  OAUTH_LOGIN_SIGNAL_TIMEOUT_MS,
+  hasOauthLoginSignalTimedOut,
   isAllowedOauthLoginUrl,
   planOauthLoginUrlAttempt,
 } from "../src/features/connections/oauthLoginFlow.ts";
@@ -56,5 +58,50 @@ const changed = planOauthLoginUrlAttempt(
 );
 assert.equal(changed.shouldOpen, true);
 assert.equal(changed.next.count, 1);
+
+assert.equal(
+  hasOauthLoginSignalTimedOut(
+    1_000,
+    1_000 + OAUTH_LOGIN_SIGNAL_TIMEOUT_MS - 1,
+    true,
+    false,
+    null,
+  ),
+  false,
+);
+assert.equal(
+  hasOauthLoginSignalTimedOut(
+    1_000,
+    1_000 + OAUTH_LOGIN_SIGNAL_TIMEOUT_MS,
+    true,
+    false,
+    null,
+  ),
+  true,
+);
+assert.equal(
+  hasOauthLoginSignalTimedOut(1_000, 1_000 + OAUTH_LOGIN_SIGNAL_TIMEOUT_MS, false, false, null),
+  false,
+);
+assert.equal(
+  hasOauthLoginSignalTimedOut(
+    1_000,
+    1_000 + OAUTH_LOGIN_SIGNAL_TIMEOUT_MS,
+    true,
+    true,
+    null,
+  ),
+  false,
+);
+assert.equal(
+  hasOauthLoginSignalTimedOut(
+    1_000,
+    1_000 + OAUTH_LOGIN_SIGNAL_TIMEOUT_MS,
+    true,
+    false,
+    url,
+  ),
+  false,
+);
 
 console.log("OAuth login flow smoke passed");

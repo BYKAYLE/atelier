@@ -9,7 +9,7 @@ on:
         type: boolean
         default: false
       require_smart_app_control_evidence:
-        description: "Require readable Smart App Control state evidence"
+        description: "Require Smart App Control to be readable and actively enforcing"
         required: false
         type: boolean
         default: true
@@ -49,6 +49,7 @@ jobs:
           }
           if ($env:REQUIRE_SMART_APP_CONTROL_EVIDENCE -eq "true") {
             $arguments += "-RequireSmartAppControlEvidence"
+            $arguments += "-RequireSmartAppControlEnforcement"
           }
           powershell.exe @arguments
           if ($LASTEXITCODE -ne 0) { throw "Windows release runner doctor failed." }

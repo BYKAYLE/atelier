@@ -8,6 +8,7 @@ import { cls, Tweaks } from "../lib/tokens";
 import { safeLocalStorageGet, safeLocalStorageSet } from "../lib/storage";
 import { FeaturePanels } from "../features/featureRegistry";
 import {
+  hasOauthLoginSignalTimedOut,
   isAllowedOauthLoginUrl,
   LoginUrlAttempt,
   planOauthLoginUrlAttempt,
@@ -240,8 +241,12 @@ const COPY = {
     loginModalCopyUrl: "URL 복사",
     loginModalUrlCopied: "복사됨",
     loginModalOpenFailed: "자동 열기에 실패했습니다. URL을 복사해서 브라우저 주소창에 붙여넣어 주세요.",
+    loginModalOpenRetryLimit:
+      "브라우저 자동 열기를 3회 시도했지만 확인하지 못했습니다. 브라우저 열기를 다시 누르거나 URL을 복사해 주세요.",
+    loginModalNoSignal:
+      "20초 동안 브라우저 또는 로그인 URL을 확인하지 못했습니다. CLI 출력을 확인하고 URL이 나타나면 브라우저 열기 또는 URL 복사를 사용하세요.",
     loginModalCliOutput: "CLI 출력",
-    loginModalFailed: "로그인 명령이 종료되었습니다.",
+    loginModalFailed: "로그인 진행에 확인이 필요합니다.",
     loginModalTimeout: "5분 동안 연결을 확인하지 못했습니다. 창을 닫고 다시 로그인해 주세요.",
     hermesTitle: "Hermes (로컬)",
     hermesDesc:
@@ -331,8 +336,12 @@ const COPY = {
     loginModalCopyUrl: "Copy URL",
     loginModalUrlCopied: "Copied",
     loginModalOpenFailed: "Automatic open failed. Copy the URL and paste it into your browser address bar.",
+    loginModalOpenRetryLimit:
+      "Atelier tried to open the browser three times without confirmation. Use Open browser again or copy the URL.",
+    loginModalNoSignal:
+      "Atelier did not detect a browser or login URL within 20 seconds. Check the CLI output, then open or copy the URL when it appears.",
     loginModalCliOutput: "CLI output",
-    loginModalFailed: "The sign-in command has stopped.",
+    loginModalFailed: "The sign-in flow needs your attention.",
     loginModalTimeout: "Atelier could not verify the connection within five minutes. Close this dialog and try again.",
     hermesTitle: "Hermes (local)",
     hermesDesc:
@@ -466,13 +475,20 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
   const openedLoginUrlsRef = useRef<Record<string, string | null>>({});
   const openingLoginUrlsRef = useRef<Record<string, string | null>>({});
   const loginUrlAttemptsRef = useRef<Record<string, LoginUrlAttempt>>({});
+  type LoginUrlOpenResult =
+    | "opened"
+    | "already-opened"
+    | "opening"
+    | "cooldown"
+    | "limit"
+    | "failed";
   const openLoginUrlWithRetry = useCallback(async (
     provider: ProviderId,
     url: string,
     force = false,
-  ) => {
-    if (openedLoginUrlsRef.current[provider] === url) return true;
-    if (openingLoginUrlsRef.current[provider] === url) return false;
+  ): Promise<LoginUrlOpenResult> => {
+    if (openedLoginUrlsRef.current[provider] === url) return "already-opened";
+    if (openingLoginUrlsRef.current[provider] === url) return "opening";
 
     const plan = planOauthLoginUrlAttempt(
       loginUrlAttemptsRef.current[provider],
@@ -481,12 +497,12 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
       force,
     );
     loginUrlAttemptsRef.current[provider] = plan.next;
-    if (!plan.shouldOpen) return false;
+    if (!plan.shouldOpen) return plan.reason === "limit" ? "limit" : "cooldown";
     openingLoginUrlsRef.current[provider] = url;
     try {
       const opened = await openExternalUrl(provider, url);
       if (opened) openedLoginUrlsRef.current[provider] = url;
-      return opened;
+      return opened ? "opened" : "failed";
     } finally {
       if (openingLoginUrlsRef.current[provider] === url) {
         openingLoginUrlsRef.current[provider] = null;
@@ -509,18 +525,36 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
       if (cancelled) return;
       if (loginState) {
         const nextUrl = loginState.login_url || null;
+        let openResult: LoginUrlOpenResult | null = null;
         if (nextUrl && loginState.browser_opened) {
           openedLoginUrlsRef.current[loginProvider] = nextUrl;
         } else if (nextUrl && openedLoginUrlsRef.current[loginProvider] !== nextUrl) {
-          void openLoginUrlWithRetry(loginProvider, nextUrl);
+          openResult = await openLoginUrlWithRetry(loginProvider, nextUrl);
+          if (cancelled) return;
         }
+        const browserReady =
+          loginState.browser_opened
+          || Boolean(nextUrl && openedLoginUrlsRef.current[loginProvider] === nextUrl);
+        const signalTimedOut = hasOauthLoginSignalTimedOut(
+          start,
+          Date.now(),
+          loginState.active,
+          browserReady,
+          nextUrl,
+        );
         setLoginModal((m) =>
           m?.provider === loginProvider
             ? {
                 ...m,
                 loginUrl: nextUrl || m.loginUrl || null,
                 diagnostic: loginState.output || m.diagnostic || null,
-                failed: loginState.error || null,
+                failed: loginState.error
+                  || (openResult === "limit" ? copy.loginModalOpenRetryLimit : null)
+                  || (openResult === "failed" ? copy.loginModalOpenFailed : null)
+                  || (signalTimedOut ? copy.loginModalNoSignal : null)
+                  || (browserReady || (nextUrl && m.failed === copy.loginModalNoSignal)
+                    ? null
+                    : m.failed),
               }
             : m,
         );
@@ -528,6 +562,16 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
           stopPolling();
           return;
         }
+      }
+      if (
+        !loginState
+        && hasOauthLoginSignalTimedOut(start, Date.now(), true, false, null)
+      ) {
+        setLoginModal((m) =>
+          m?.provider === loginProvider && !m.loginUrl
+            ? { ...m, failed: copy.loginModalNoSignal }
+            : m,
+        );
       }
       const s = await providerStatus(loginProvider).catch(() => null);
       if (cancelled) return;
@@ -553,7 +597,14 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
       cancelled = true;
       stopPolling();
     };
-  }, [copy.loginModalTimeout, loginProvider, openLoginUrlWithRetry]);
+  }, [
+    copy.loginModalNoSignal,
+    copy.loginModalOpenFailed,
+    copy.loginModalOpenRetryLimit,
+    copy.loginModalTimeout,
+    loginProvider,
+    openLoginUrlWithRetry,
+  ]);
 
   function loginNoticeForResult(p: ProviderDef, result: ProviderLoginOauthResult) {
     if (result.already_logged_in) return copy.loginAlreadyConnected(p.name);
@@ -594,7 +645,21 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
       });
       if (result.login_url) {
         if (result.browser_opened) openedLoginUrlsRef.current[p.id] = result.login_url;
-        else void openLoginUrlWithRetry(p.id, result.login_url);
+        else {
+          const openResult = await openLoginUrlWithRetry(p.id, result.login_url);
+          if (openResult === "failed" || openResult === "limit") {
+            setLoginModal((m) =>
+              m?.provider === p.id
+                ? {
+                    ...m,
+                    failed: openResult === "limit"
+                      ? copy.loginModalOpenRetryLimit
+                      : copy.loginModalOpenFailed,
+                  }
+                : m,
+            );
+          }
+        }
       }
       void refresh(p.id);
       if (result.completed || result.already_logged_in) {

@@ -259,7 +259,9 @@ const sourceInvariants = [
       windowsProviderSmokeSource.includes("Test-AtelierInstalledRuntime") &&
       windowsProviderSmokeSource.includes("RequireAuthenticode") &&
       windowsProviderSmokeSource.includes("RequireSmartAppControlEvidence") &&
+      windowsProviderSmokeSource.includes("RequireSmartAppControlEnforcement") &&
       windowsProviderSmokeSource.includes("Convert-SmartAppControlRegistryValue") &&
+      windowsProviderSmokeSource.includes("Test-SmartAppControlEnforced") &&
       windowsProviderSmokeSource.includes('1 { return "On" }') &&
       windowsProviderSmokeSource.includes('2 { return "Evaluation" }') &&
       windowsProviderSmokeSource.includes("SelfTest") &&
@@ -279,6 +281,7 @@ const sourceInvariants = [
       windowsPhysicalGateSource.includes("-RequireBrowserProcessEvidence") &&
       windowsPhysicalGateSource.includes("-RequireVisibleBrowserWindowEvidence") &&
       (windowsPhysicalGateSource.match(/-RequireSmartAppControlEvidence/g) || []).length >= 2 &&
+      (windowsPhysicalGateSource.match(/-RequireSmartAppControlEnforcement/g) || []).length >= 2 &&
       !windowsPhysicalGateSource.includes("require_smart_app_control_evidence:") &&
       windowsPhysicalGateSource.includes("-InAppLogin") &&
       windowsPhysicalGateSource.includes("node --check tools/windows-connections-ui-witness.mjs") &&
@@ -300,7 +303,7 @@ const sourceInvariants = [
       windowsUpdaterCanarySource.includes("updaterDrivenRelaunch") &&
       windowsUpdaterCanarySource.includes("upgradePersistenceProved"),
     message:
-      "Physical Windows release gate must prove installed version, signature, restart, browser auth, and Smart App Control evidence",
+      "Physical Windows release gate must prove installed version, signature, restart, browser auth, and enforced Smart App Control",
   },
   {
     ok:
@@ -756,15 +759,20 @@ const sourceInvariants = [
       connectionsSource.includes("planOauthLoginUrlAttempt(") &&
       connectionsSource.includes("if (nextUrl && loginState.browser_opened)") &&
       connectionsSource.includes("if (result.browser_opened) openedLoginUrlsRef.current") &&
-      connectionsSource.includes("else void openLoginUrlWithRetry") &&
+      connectionsSource.includes("const openResult = await openLoginUrlWithRetry(p.id, result.login_url)") &&
+      connectionsSource.includes('openResult === "failed" || openResult === "limit"') &&
+      connectionsSource.includes("loginModalNoSignal") &&
       oauthLoginFlowSource.includes("OAUTH_LOGIN_RETRY_LIMIT = 3") &&
       oauthLoginFlowSource.includes("OAUTH_LOGIN_RETRY_COOLDOWN_MS = 2_000") &&
+      oauthLoginFlowSource.includes("OAUTH_LOGIN_SIGNAL_TIMEOUT_MS = 20_000") &&
+      oauthLoginFlowSource.includes("hasOauthLoginSignalTimedOut") &&
       oauthLoginFlowSource.includes("previous?.url === url") &&
       oauthLoginFlowSource.includes("if (!force && current.count >= OAUTH_LOGIN_RETRY_LIMIT)") &&
       oauthLoginFlowSmokeSource.includes('plan.reason, "cooldown"') &&
       oauthLoginFlowSmokeSource.includes(').reason,\n  "limit"') &&
       oauthLoginFlowSmokeSource.includes("const forced = planOauthLoginUrlAttempt") &&
-      oauthLoginFlowSmokeSource.includes("const changed = planOauthLoginUrlAttempt"),
+      oauthLoginFlowSmokeSource.includes("const changed = planOauthLoginUrlAttempt") &&
+      oauthLoginFlowSmokeSource.includes("hasOauthLoginSignalTimedOut"),
     message:
       "OAuth browser handoff must preserve native success, retry bounded failures, and prevent concurrent duplicate opens",
   },

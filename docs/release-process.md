@@ -128,9 +128,10 @@ pre-existing copy.
 Required proof includes the installer and installed-executable signatures,
 exact installed path, version, and executable SHA-256, renderer-ready receipt,
 restart persistence, visible native browser handoff, and successful Claude and
-Codex CLI authentication. Smart App Control state must also be readable on the
-release runner; neither the physical nor publication gate provides a bypass for
-this requirement. The source gate separately proves that the connection
+Codex CLI authentication. Smart App Control must be readable and actively
+enforcing in the `On` state on the release runner. `Off` and `Evaluation` are
+recorded for diagnostics but fail the physical and publication gates; neither
+gate provides a bypass for this requirement. The source gate separately proves that the connection
 UI accepts only supported provider URLs and follows the bounded browser retry
 contract. The physical gate then proves that the installed native executable
 opens the real browser and completes authentication; neither proof substitutes
@@ -184,7 +185,7 @@ Do not publish when any of the following is missing or inconsistent:
 - one of the required macOS or Windows assets;
 - exact tag, version, source commit, manifest hash, or installed-path binding;
 - interactive visible-browser and provider-authentication evidence;
-- readable Smart App Control evidence from the physical Windows runner;
+- Smart App Control `On` enforcement evidence from the physical Windows runner;
 - restart/update persistence evidence;
 - protected-environment reviewer approval.
 

@@ -6,6 +6,7 @@ param(
   [switch]$RestartApplication,
   [switch]$RequireAuthenticode,
   [switch]$RequireSmartAppControlEvidence,
+  [switch]$RequireSmartAppControlEnforcement,
   [switch]$ProbeBrowserHandoff,
   [switch]$RequireBrowserProcessEvidence,
   [switch]$RequireVisibleBrowserWindowEvidence,
@@ -538,6 +539,12 @@ function Convert-SmartAppControlRegistryValue {
   }
 }
 
+function Test-SmartAppControlEnforced {
+  param([object]$State)
+  $stateText = if ($null -eq $State) { "" } else { [string]$State }
+  return $stateText.Trim() -ieq "On"
+}
+
 function Get-SmartAppControlEvidence {
   $result = [ordered]@{
     available = $false
@@ -545,6 +552,7 @@ function Get-SmartAppControlEvidence {
     rawValue = $null
     source = $null
     note = $null
+    enforced = $false
   }
 
   try {
@@ -557,6 +565,7 @@ function Get-SmartAppControlEvidence {
           $result.state = $value
           $result.rawValue = $value
           $result.source = "Get-MpComputerStatus"
+          $result.enforced = Test-SmartAppControlEnforced $value
           return [pscustomobject]$result
         }
       }
@@ -576,6 +585,7 @@ function Get-SmartAppControlEvidence {
         $result.state = $state
         $result.rawValue = $raw
         $result.source = "$policyPath\VerifiedAndReputablePolicyState"
+        $result.enforced = Test-SmartAppControlEnforced $state
         return [pscustomobject]$result
       }
     }
@@ -802,6 +812,14 @@ if ($SelfTest) {
     $actual = Convert-SmartAppControlRegistryValue ([int]$entry.Key)
     if ($actual -ne $entry.Value) {
       throw "Smart App Control mapping failed for $($entry.Key): expected $($entry.Value), found $actual"
+    }
+  }
+  if (-not (Test-SmartAppControlEnforced "On")) {
+    throw "Smart App Control enforcement self-test rejected the On state"
+  }
+  foreach ($nonEnforcedState in @("Off", "Evaluation", "Unknown(9)", "", $null)) {
+    if (Test-SmartAppControlEnforced $nonEnforcedState) {
+      throw "Smart App Control enforcement self-test accepted a non-enforcing state: $nonEnforcedState"
     }
   }
   $secret = "api_key=sk-example-secret-value-123456"
@@ -1162,6 +1180,9 @@ try {
     }
     if ($RequireSmartAppControlEvidence -and -not $summary.smartAppControl.available) {
       throw "Smart App Control state evidence is unavailable on this Windows installation"
+    }
+    if ($RequireSmartAppControlEnforcement -and -not $summary.smartAppControl.enforced) {
+      throw "Smart App Control must be On and enforcing. Current state: $($summary.smartAppControl.state)"
     }
     if ($Login -or $ProbeBrowserHandoff) {
       if (-not $summary.atelierBrowserProbeExe -or $summary.browserProbe -ne $true -or $summary.browserHelperProbe -ne $true) {
