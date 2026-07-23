@@ -71,6 +71,20 @@ later stages.
 Version metadata, release notes, and the reviewed commit must agree before the
 version tag is pushed.
 
+After installing the locally validated candidate, bind the candidate and the
+actual `/Applications` app with:
+
+```bash
+npm run release:installed-proof:mac
+```
+
+This gate compares version, bundle identifier, executable SHA-256, strict
+codesign verification, and the installed-path renderer-ready receipt. It never
+replaces Developer ID, notarization, stapling, or public-distribution evidence.
+When Atelier is already running, the gate observes that process without
+stopping it. When it launches a proof-only process, it stops only that owned
+process.
+
 ## Stage 2: Sealed Private Draft
 
 Pushing the version tag starts `.github/workflows/release.yml`. The workflow

@@ -31,6 +31,7 @@
     "release:preflight": "node tools/release-preflight.mjs",
     "release:readiness": "node tools/release-preflight.mjs --inspect-host --inspect-github --output artifacts/release-readiness-preflight.json",
     "release:readiness:strict": "node tools/release-preflight.mjs --strict --inspect-host --inspect-github --output artifacts/release-readiness-preflight.json",
+    "release:installed-proof:mac": "bash tools/macos-installed-candidate-proof.sh",
     "store:msix": "powershell -ExecutionPolicy Bypass -File tools/windows-store/build-msix.ps1",
     "smoke:windows-providers": "powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1",
     "smoke:windows-runner-doctor": "node tools/windows-runner-doctor-smoke.mjs",
