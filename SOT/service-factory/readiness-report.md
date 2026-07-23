@@ -1,6 +1,6 @@
 # Readiness Report
 
-generated_at: 2026-07-23T11:26:16+09:00
+generated_at: 2026-07-23T11:45:05+09:00
 
 ## Goal
 
@@ -18,10 +18,10 @@ blocked until the three unmet Definition of Done items have execution receipts.
 ## Truth Surfaces
 
 - Source and automated checks: the current candidate on
-  `codex/release-readiness-final`, based on commit `dd16c80`, passes the release
+  `codex/release-readiness-final`, based on commit `e22c8b8`, passes the release
   evidence smoke, release security audit, shared preflight smoke, OAuth login
   flow smoke, updater contract smoke, release-candidate smoke, frontend build,
-  workflow lint, and whitespace audit.
+  Windows runner doctor contract smoke, workflow lint, and whitespace audit.
 - External infrastructure preflight: schema 2 inspected the source, local
   release host, and GitHub configuration without reading secret values. The
   clean-source, macOS toolchain, GitHub API, protected `production-release`
@@ -39,11 +39,13 @@ blocked until the three unmet Definition of Done items have execution receipts.
   evidence is absent. Candidate, package, provider, and runner-preflight receipts
   must agree on release tag, source SHA, GitHub run ID, run attempt, and physical
   runner name. Existing browser windows are not accepted as new login evidence.
+  A preparation-only doctor workflow verifies the interactive runner before a
+  tag is created and emits a distinct phase that publication cannot consume.
 - Windows physical proof: blocked until a physical Windows runner proves visible
   Claude/Codex browser login, authenticated CLI state, Smart App Control,
   signed-installer execution, and exact-version restart survival.
-  GitHub currently has no registered self-hosted runner and no physical-gate
-  workflow execution receipt.
+  GitHub currently has no registered self-hosted runner, so neither a runner
+  doctor receipt nor a physical-gate workflow receipt exists.
 - Signed direct Windows installer: blocked until SignPath or an equivalent public
   signing path signs the final artifact and the signature receipt passes.
 - Release credentials: the repository currently contains the two Tauri updater
@@ -61,7 +63,8 @@ candidate evidence and the remaining external gates.
 
 ## Next Executable Action
 
-Provision the production signing identities and CI secrets, run the protected
-release workflow, and attach the macOS notarization/stapling receipt plus the
-physical-Windows OAuth, signature, and restart-survival receipt before any tag or
-public release is created.
+Provision the production signing identities and CI secrets, register the
+interactive Windows x64 runner, pass `Windows Release Runner Doctor`, run the
+protected release workflow, and attach the macOS notarization/stapling receipt
+plus the physical-Windows OAuth, signature, and restart-survival receipt before
+any tag or public release is created.

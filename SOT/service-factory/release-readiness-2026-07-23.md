@@ -1,7 +1,7 @@
 # Atelier 0.2.12 Release Readiness Evidence
 
-generated_at: 2026-07-23T11:26:16+09:00
-source_base_commit: dd16c80716a8ef73e404294bed5a1e6715e8c1e2
+generated_at: 2026-07-23T11:45:05+09:00
+source_base_commit: e22c8b8c1da74c161198f84b2327c38150d936a9
 branch: codex/release-readiness-final
 
 ## Source And Automated Gates
@@ -24,6 +24,14 @@ branch: codex/release-readiness-final
   runner preflight, candidate, package, and provider evidence. The publisher
   also verifies the exact successful physical-gate job and its Windows x64
   self-hosted labels before accepting those receipts.
+- A separate `Windows Release Runner Doctor` workflow now checks the physical
+  host before a release tag exists. It requires the interactive self-hosted
+  Windows x64 runner context and checks desktop visibility, required tools,
+  writable storage, pending reboot, baseline installation, default browser,
+  Authenticode trust, and optional Smart App Control state. Its report phase is
+  `windows-runner-doctor`, so candidate and publication validators cannot treat
+  preparation evidence as a release receipt. The workflow does not download a
+  candidate or hold publication permissions.
 - Windows Store detection now uses the real Appx package identity or the
   `WindowsApps` location. Product-name heuristics no longer suppress the GitHub
   updater for a normal installer.
@@ -47,6 +55,10 @@ branch: codex/release-readiness-final
   `git diff --check`, `npm run build`, and the release preflight, OAuth,
   updater, candidate, publication-evidence, and security-audit smokes. PowerShell
   execution remains intentionally unclaimed on this macOS host.
+- Commit `e22c8b8` additionally passed the Windows runner doctor contract smoke,
+  workflow lint, release security audit, release preflight smoke,
+  release-candidate smoke, publication-evidence smoke, updater-contract smoke,
+  OAuth-login smoke, frontend production build, and whitespace validation.
 - Rust tests: 188 passed, 0 failed, 1 ignored in both native and store-feature
   configurations.
 - `npm audit --audit-level=low`: 0 known vulnerabilities.
@@ -59,7 +71,7 @@ branch: codex/release-readiness-final
   (`assert.h` and `windows.h`). This is recorded as a host-toolchain limitation,
   not as Windows source or physical-runtime proof.
 - The shared preflight now has an opt-in release-infrastructure phase. At commit
-  `dd16c80`, `npm run release:readiness` passed the version, repository,
+  `e22c8b8`, `npm run release:readiness` passed the version, repository,
   updater, clean-source, macOS toolchain, GitHub API, protected production
   environment, and required-reviewer checks. Its JSON report is schema 2 and
   records credential names only; secret values are neither read nor serialized.
@@ -129,8 +141,9 @@ branch: codex/release-readiness-final
 1. `physical-windows`: no physical Windows execution receipt exists for visible
    Claude/Codex browser login, authenticated CLI state, Smart App Control,
    timestamped signed-installer launch, and exact-version restart survival.
-   GitHub currently reports no registered self-hosted runner and no execution
-   history for `windows-physical-release-gate.yml`.
+   GitHub currently reports no registered self-hosted runner. Therefore neither
+   `windows-release-runner-doctor.yml` nor
+   `windows-physical-release-gate.yml` can produce real-device evidence yet.
 2. `windows-public-signing`: SignPath credentials, project configuration, and a
    timestamped signed final installer receipt are absent.
 3. `mac-public-notarization`: Developer ID Application identity, notarization
