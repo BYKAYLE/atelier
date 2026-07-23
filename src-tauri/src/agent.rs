@@ -21,14 +21,14 @@ use crate::agent_models::{
     codex_model_requires_multi_agent_v2, normalize_codex_reasoning_effort, read_codex_config_model,
 };
 use crate::agent_process::{
-    clip_cli_output, command_for_cli, describe_cli_command, resolve_cli_executable,
-    wait_with_timeout,
+    clip_cli_output, command_for_cli, describe_cli_command, wait_with_timeout,
 };
 use crate::agent_registry::{runtime_capabilities, AgentProviderKind, AgentRuntimeCapability};
 use crate::credentials::{
     configure_gajecode_runtime_env, env_var_for, gajecode_cli_name, gajecode_executable_path,
-    gajecode_workspace_dir, prepare_gajecode_claude_subscription_token, read_agent_api_key,
-    read_api_key, read_claude_subscription_oauth_token, should_clear_inherited_agent_api_env,
+    gajecode_workspace_dir, hermes_executable_path, prepare_gajecode_claude_subscription_token,
+    read_agent_api_key, read_api_key, read_claude_subscription_oauth_token,
+    should_clear_inherited_agent_api_env,
 };
 
 const RETURN_RAW_EVENT_LIMIT: usize = 120;
@@ -124,20 +124,8 @@ fn normalize_agent_cwd(cwd: Option<String>) -> Result<Option<PathBuf>, String> {
 }
 
 fn command_for_hermes() -> Command {
-    let executable = resolve_cli_executable("hermes");
-    if let Some(parent) = executable.parent() {
-        let activate = parent.join("activate");
-        if activate.is_file() && PathBuf::from("/bin/zsh").is_file() {
-            let mut command = Command::new("/bin/zsh");
-            command
-                .arg("-lc")
-                .arg("source \"$HERMES_VENV_ACTIVATE\" && exec hermes \"$@\"")
-                .arg("hermes")
-                .env("HERMES_VENV_ACTIVATE", activate);
-            return command;
-        }
-    }
-    command_for_cli("hermes")
+    let executable = hermes_executable_path().unwrap_or_else(|| PathBuf::from("hermes"));
+    command_for_cli(&executable.to_string_lossy())
 }
 
 fn command_for_gajecode() -> Result<Command, String> {
@@ -583,17 +571,8 @@ fn run_agent_cli_command(
 }
 
 fn describe_hermes_command() -> String {
-    let executable = resolve_cli_executable("hermes");
-    if let Some(parent) = executable.parent() {
-        let activate = parent.join("activate");
-        if activate.is_file() {
-            return format!(
-                "program=/bin/zsh args=-lc source_venv_then_exec_hermes activate={}",
-                activate.display()
-            );
-        }
-    }
-    describe_cli_command("hermes")
+    let executable = hermes_executable_path().unwrap_or_else(|| PathBuf::from("hermes"));
+    describe_cli_command(&executable.to_string_lossy())
 }
 
 fn describe_gajecode_command() -> String {

@@ -115,12 +115,21 @@ opens the real browser and completes authentication; neither proof substitutes
 for the other. The installed executable hash must match in both the candidate
 and provider receipts.
 
-An existing older signed installation is required to prove that installing the
-candidate replaces the previous application and remains current after restart,
-except for an explicitly approved first signed-channel waiver. This is a signed
-installer upgrade test. It must not be described as an in-app updater test,
-because the private draft does not yet expose the public `latest.json` endpoint
-that the application updater consumes.
+An existing older signed installation is required for the normal path. The
+physical gate serves private, run-bound update metadata and the exact signed MSI
+over a loopback HTTPS endpoint, then starts the installed application with the
+Windows updater canary entry point. The application must use the real Tauri
+updater to request metadata, download the candidate, verify its updater
+signature, launch installation, relaunch, and persist the new version after
+another restart. Candidate bytes, installed executable hash, source commit,
+GitHub run identity, and updater receipts are bound together before provider
+authentication begins.
+
+The first signed-channel exception may install the same version as a baseline
+and exercise the updater as an explicitly approved self-reinstall. It does not
+prove an upgrade from an older public version and is recorded as a waiver in
+the accepted evidence. A direct installer run or schema-only smoke test cannot
+replace the updater receipt.
 
 The resulting artifact is named
 `atelier-windows-physical-release-gate-<tag>`. Preserve its run ID for the
@@ -162,12 +171,14 @@ GitHub installer passed this process.
 
 ## Stage 5: Post-Public Updater Canary
 
-The first public signed release establishes the updater channel. Starting with
-the next release, keep the previous public version installed on a physical
-machine and use Atelier's Settings > Updates action to consume the public
-`latest.json`, install the new signed version, restart, and record the resulting
-version, executable hash, and persistence receipt. Only this post-public canary
-may be reported as proof that the in-app updater path works end to end.
+The physical release gate proves the native updater implementation against a
+private, run-bound HTTPS feed before publication. The first public signed
+release also establishes the public updater channel. Starting with the next
+release, keep the previous public version installed on a physical machine and
+use Atelier's Settings > Updates action to consume the public `latest.json`,
+install the new signed version, restart, and record the resulting version,
+executable hash, and persistence receipt. Only this post-public canary proves
+the public GitHub updater endpoint end to end.
 
 If this canary fails, retain the current public release as latest and return the
 new release to draft or withdraw it according to the incident procedure. Do not

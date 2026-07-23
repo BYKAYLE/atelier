@@ -72,6 +72,8 @@ const WorkspaceModeBar: React.FC<Props> = ({
           className={cls(base, view === "conversation" && active)}
           onClick={() => onViewChange("conversation")}
           aria-pressed={view === "conversation"}
+          aria-label={labels.conversation}
+          title={labels.conversation}
         >
           {I.comment}
           <span>{labels.conversation}</span>
@@ -81,6 +83,8 @@ const WorkspaceModeBar: React.FC<Props> = ({
           className={cls(base, view === "code" && active)}
           onClick={() => onViewChange("code")}
           aria-pressed={view === "code"}
+          aria-label={labels.code}
+          title={labels.code}
         >
           {I.code}
           <span>{labels.code}</span>
@@ -90,6 +94,8 @@ const WorkspaceModeBar: React.FC<Props> = ({
           className={cls(base, view === "changes" && active)}
           onClick={() => onViewChange("changes")}
           aria-pressed={view === "changes"}
+          aria-label={labels.changes}
+          title={labels.changes}
         >
           {I.changes}
           <span>{labels.changes}</span>
@@ -132,6 +138,7 @@ const WorkspaceModeBar: React.FC<Props> = ({
           className={cls(base, previewActive && active)}
           onClick={onTogglePreview}
           aria-pressed={previewActive}
+          aria-label={labels.preview}
           title={labels.preview}
         >
           {I.preview}

@@ -23,6 +23,14 @@ export type TerminalSurfaceMetrics = {
   height: number;
 };
 
+export type TerminalGridEstimate = {
+  cols: number;
+  rows: number;
+};
+
+export const MIN_STABLE_PTY_COLS = 80;
+export const MIN_STABLE_PTY_ROWS = 12;
+
 export function isTerminalSurfaceMeasurable(metrics: TerminalSurfaceMetrics): boolean {
   return (
     metrics.active &&
@@ -31,6 +39,29 @@ export function isTerminalSurfaceMeasurable(metrics: TerminalSurfaceMetrics): bo
     metrics.visibility !== "hidden" &&
     metrics.width > 200 &&
     metrics.height > 100
+  );
+}
+
+export function estimateTerminalGrid(
+  width: number,
+  height: number,
+  fontSize: number,
+): TerminalGridEstimate {
+  const safeFontSize = Number.isFinite(fontSize) && fontSize > 0 ? fontSize : 14;
+  const approxCharWidth = Math.max(6, safeFontSize * 0.62);
+  const approxCharHeight = Math.max(12, safeFontSize * 1.2);
+  return {
+    cols: Math.max(2, Math.floor(Math.max(0, width) / approxCharWidth) - 1),
+    rows: Math.max(1, Math.floor(Math.max(0, height) / approxCharHeight) - 1),
+  };
+}
+
+export function isStablePtyGrid(grid: TerminalGridEstimate): boolean {
+  return (
+    Number.isFinite(grid.cols) &&
+    Number.isFinite(grid.rows) &&
+    grid.cols >= MIN_STABLE_PTY_COLS &&
+    grid.rows >= MIN_STABLE_PTY_ROWS
   );
 }
 

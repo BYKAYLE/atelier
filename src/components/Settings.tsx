@@ -10,6 +10,11 @@ import {
   WELCOME_COPY,
 } from "../lib/tokens";
 import { runtimeInstallInfo, type RuntimeInstallInfo } from "../lib/tauri";
+import {
+  canUseInAppUpdaterForRuntime,
+  resolveWindowsUpdaterTarget,
+  type UpdaterInstallIdentity,
+} from "../lib/updaterInstall";
 import { FeaturePanels, FeatureSettingsPage } from "../features/featureRegistry";
 import FeatureSettingsPanel from "../features/FeatureSettingsPanel";
 import ComposerSelectMenu from "./ComposerSelectMenu";
@@ -1146,20 +1151,21 @@ async function readUpdateInstallInfo(): Promise<UpdateInstallInfo> {
   };
 }
 
-function windowsUpdaterTarget(info: UpdateInstallInfo | null): string | null | undefined {
-  if (!isWindowsRuntime()) return undefined;
-  const bundleType = info?.bundleType?.toLowerCase();
-  if (bundleType === "msi") return "windows-x86_64-msi";
-  if (bundleType === "nsis") return "windows-x86_64-nsis";
-  return null;
+function updaterInstallIdentity(info: UpdateInstallInfo | null): UpdaterInstallIdentity | null {
+  if (!info) return null;
+  return {
+    bundleType: info.bundleType,
+    githubUpdaterAvailable: info.github_updater_available,
+    windowsStoreLike: info.windows_store_like,
+  };
+}
+
+function windowsUpdaterTarget(info: UpdateInstallInfo | null) {
+  return resolveWindowsUpdaterTarget(isWindowsRuntime(), updaterInstallIdentity(info));
 }
 
 function canUseInAppUpdater(info: UpdateInstallInfo | null): boolean {
-  if (info && !info.github_updater_available) return false;
-  if (!isWindowsRuntime()) return true;
-  if (!info) return false;
-  if (info.windows_store_like) return false;
-  return windowsUpdaterTarget(info) !== null;
+  return canUseInAppUpdaterForRuntime(isWindowsRuntime(), updaterInstallIdentity(info));
 }
 
 /**
@@ -1333,7 +1339,7 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
       try {
         const { check } = await import("@tauri-apps/plugin-updater");
         const target = windowsUpdaterTarget(installInfo);
-        if (target === null || (installInfo?.windows_store_like ?? false)) {
+        if (!canUseInAppUpdater(installInfo)) {
           setError(copy.checkFailed(copy.unsupportedInstall));
           setStatus("");
           return;
@@ -1370,7 +1376,7 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
         setInstallInfo(activeInstallInfo);
       }
       const target = windowsUpdaterTarget(activeInstallInfo);
-      if (target === null || (activeInstallInfo?.windows_store_like ?? false)) {
+      if (!canUseInAppUpdater(activeInstallInfo)) {
         setError(copy.installFailed(copy.unsupportedInstall));
         setStatus("");
         return;

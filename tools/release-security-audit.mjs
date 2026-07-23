@@ -56,6 +56,14 @@ const releaseCandidateGateSource = readFileSync(
   "tools/windows-release-candidate-gate.ps1",
   "utf8",
 );
+const windowsUpdaterCanarySource = readFileSync(
+  "tools/windows-updater-canary.ps1",
+  "utf8",
+);
+const physicalEvidenceSealSource = readFileSync(
+  ".github/scripts/seal-physical-release-evidence.mjs",
+  "utf8",
+);
 const releaseCandidateSealSource = readFileSync(
   ".github/scripts/seal-release-candidate.mjs",
   "utf8",
@@ -164,6 +172,7 @@ const sourceInvariants = [
     ok:
       mainSource.includes('"--atelier-version-probe"') &&
       mainSource.includes('"--atelier-renderer-ready-probe"') &&
+      mainSource.includes('"--atelier-updater-canary"') &&
       rendererReceiptSource.includes("process_is_alive") &&
       rendererReceiptSource.includes("receipt_path_for") &&
       rendererReceiptSource.includes("Sha256::digest") &&
@@ -185,11 +194,20 @@ const sourceInvariants = [
       windowsPhysicalGateSource.includes("-SelfTest") &&
       windowsPhysicalGateSource.includes("verify-release-candidate.mjs") &&
       windowsPhysicalGateSource.includes("windows-release-candidate-gate.ps1") &&
+      windowsPhysicalGateSource.includes("windows-updater-canary.ps1") &&
+      windowsPhysicalGateSource.includes("-VerifyInstalledOnly") &&
+      windowsPhysicalGateSource.includes("-UpdaterEvidencePath") &&
+      windowsPhysicalGateSource.indexOf("windows-updater-canary.ps1") <
+        windowsPhysicalGateSource.indexOf("seal-physical-release-evidence.mjs") &&
       windowsPhysicalGateSource.includes("gh release download") &&
       releaseCandidateGateSource.includes("[Environment]::UserInteractive") &&
       releaseCandidateGateSource.includes("Get-AuthenticodeSignature") &&
       releaseCandidateGateSource.includes("--atelier-renderer-ready-probe") &&
-      releaseCandidateGateSource.includes("upgradePersistenceProved"),
+      releaseCandidateGateSource.includes("upgradePersistenceProved") &&
+      windowsUpdaterCanarySource.includes("--atelier-updater-canary") &&
+      windowsUpdaterCanarySource.includes("signatureVerifiedByTauriUpdater") &&
+      windowsUpdaterCanarySource.includes("updaterDrivenRelaunch") &&
+      windowsUpdaterCanarySource.includes("upgradePersistenceProved"),
     message:
       "Physical Windows release gate must prove installed version, signature, restart, browser auth, and Smart App Control evidence",
   },
@@ -791,6 +809,13 @@ const sourceInvariants = [
       publishEvidenceSource.includes("${kind} package hash") &&
       publishEvidenceSource.includes("provider/candidate installed executable path") &&
       publishEvidenceSource.includes("provider/candidate installed executable hash") &&
+      publishEvidenceSource.includes("expected exactly one Windows updater canary receipt") &&
+      publishEvidenceSource.includes("Tauri updater signature verification was not proved") &&
+      publishEvidenceSource.includes("updater-driven relaunch was not proved") &&
+      publishEvidenceSource.includes("updater/candidate installed executable path") &&
+      publishEvidenceSource.includes("updater/candidate installed executable hash") &&
+      physicalEvidenceSealSource.includes("windows-updater-canary.json") &&
+      physicalEvidenceSealSource.includes("updater: receipt(updaterPath)") &&
       publishEvidenceSource.includes(
         'assertEqual(manifest.releaseRepository, releaseRepository.slug, "release manifest repository")',
       ),
@@ -828,7 +853,10 @@ const sourceInvariants = [
       windowsPhysicalGateSource.includes("windows-physical-runner-preflight.ps1") &&
       windowsPhysicalGateSource.indexOf("windows-physical-runner-preflight.ps1") <
         windowsPhysicalGateSource.indexOf("gh release download") &&
+      windowsPhysicalGateSource.indexOf("windows-updater-canary.ps1") <
+        windowsPhysicalGateSource.indexOf("windows-provider-smoke.ps1") &&
       windowsPhysicalGateSource.includes("artifacts/windows-runner-preflight") &&
+      windowsPhysicalGateSource.includes("artifacts/windows-updater-canary/*") &&
       windowsPhysicalGateSource.includes("Upload physical gate evidence") &&
       windowsPhysicalGateSource.includes('"-Install",') &&
       windowsPhysicalGateSource.includes('"-LogDir", "artifacts/windows-provider-current"') &&
@@ -837,6 +865,9 @@ const sourceInvariants = [
       releaseCandidateGateSource.includes("githubRunId = $RunId") &&
       releaseCandidateGateSource.includes("githubRunAttempt = [int]$RunAttempt") &&
       releaseCandidateGateSource.includes("runnerName = [string]$env:RUNNER_NAME") &&
+      releaseCandidateGateSource.includes('installationPath = if ($VerifyInstalledOnly) { "in-app-updater" } else { "direct-msi" }') &&
+      releaseCandidateGateSource.includes("signatureVerifiedByTauriUpdater") &&
+      releaseCandidateGateSource.includes("updaterDrivenRelaunch") &&
       windowsProviderSmokeSource.includes("githubRunId = $RunId") &&
       windowsProviderSmokeSource.includes("githubRunAttempt = if") &&
       windowsProviderSmokeSource.includes("runnerName = if") &&

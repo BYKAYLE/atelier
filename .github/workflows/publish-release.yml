@@ -35,13 +35,16 @@ env:
   RELEASE_REPO: ${{ vars.RELEASE_REPO || github.event.repository.name }}
 
 jobs:
-  publish:
-    name: Verify signed evidence and publish
+  verify:
+    name: Verify sealed candidate and signed evidence
     runs-on: ubuntu-latest
-    environment: production-release
     permissions:
       actions: read
-      contents: write
+      contents: read
+    outputs:
+      candidate_manifest_sha: ${{ steps.candidate.outputs.manifest_sha }}
+      expected_version: ${{ steps.release-source.outputs.expected_version }}
+      release_source_sha: ${{ steps.release-source.outputs.source_sha }}
     steps:
       - name: Require explicit release approval
         env:
@@ -69,6 +72,7 @@ jobs:
           node-version: "22"
 
       - name: Resolve exact draft source
+        id: release-source
         env:
           GH_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN || github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
@@ -90,8 +94,11 @@ jobs:
           ' "$release_json"
           echo "RELEASE_SOURCE_SHA=$source_sha" >> "$GITHUB_ENV"
           echo "EXPECTED_VERSION=$version" >> "$GITHUB_ENV"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          echo "expected_version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Download and verify sealed candidate
+        id: candidate
         env:
           GH_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN || github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
@@ -102,7 +109,8 @@ jobs:
             --repo "$RELEASE_OWNER/$RELEASE_REPO" \
             --dir "$RELEASE_ASSETS_DIR"
           node .github/scripts/verify-release-candidate.mjs
-          echo "CANDIDATE_MANIFEST_SHA=$(sha256sum "$RELEASE_ASSETS_DIR/release-manifest.json" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+          manifest_sha="$(sha256sum "$RELEASE_ASSETS_DIR/release-manifest.json" | cut -d' ' -f1)"
+          echo "manifest_sha=$manifest_sha" >> "$GITHUB_OUTPUT"
 
       - name: Verify physical gate workflow identity
         env:
@@ -188,16 +196,51 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-      - name: Publish the verified draft
+  publish:
+    name: Approve and publish the verified draft
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: production-release
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout exact release tag
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.release_tag }}
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+
+      - name: Revalidate and publish the verified draft
         env:
           GH_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN || github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           RELEASE_ASSETS_DIR: final-candidate-assets
+          RELEASE_SOURCE_SHA: ${{ needs.verify.outputs.release_source_sha }}
+          EXPECTED_VERSION: ${{ needs.verify.outputs.expected_version }}
+          CANDIDATE_MANIFEST_SHA: ${{ needs.verify.outputs.candidate_manifest_sha }}
         run: |
-          test "$(gh release view "$RELEASE_TAG" \
+          test "$(git rev-parse HEAD)" = "$RELEASE_SOURCE_SHA" || {
+            echo "Checked-out tag moved after evidence validation" >&2
+            exit 1
+          }
+          test "$RELEASE_TAG" = "v$(node -p "require('./package.json').version")" || {
+            echo "Release tag no longer matches package version" >&2
+            exit 1
+          }
+          release_json="$(gh release view "$RELEASE_TAG" \
             --repo "$RELEASE_OWNER/$RELEASE_REPO" \
-            --json isDraft \
-            --jq .isDraft)" = "true"
+            --json isDraft,isPrerelease,tagName)"
+          node -e '
+            const release = JSON.parse(process.argv[1]);
+            if (!release.isDraft) throw new Error("Release is no longer a private draft");
+            if (release.isPrerelease) throw new Error("Production release cannot be a prerelease");
+            if (release.tagName !== process.env.RELEASE_TAG) throw new Error("Release tag mismatch");
+          ' "$release_json"
           mkdir "$RELEASE_ASSETS_DIR"
           gh release download "$RELEASE_TAG" \
             --repo "$RELEASE_OWNER/$RELEASE_REPO" \

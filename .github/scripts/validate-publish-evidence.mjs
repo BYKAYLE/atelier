@@ -38,6 +38,10 @@ const candidateFiles = findFiles(evidenceDir, "windows-release-candidate.json");
 if (candidateFiles.length !== 1) {
   fail(`expected exactly one Windows candidate receipt, found ${candidateFiles.length}`);
 }
+const updaterFiles = findFiles(evidenceDir, "windows-updater-canary.json");
+if (updaterFiles.length !== 1) {
+  fail(`expected exactly one Windows updater canary receipt, found ${updaterFiles.length}`);
+}
 const providerFiles = findFiles(evidenceDir, /^atelier-provider-smoke-.*\.json$/);
 if (providerFiles.length !== 1) {
   fail(`expected exactly one Windows provider receipt, found ${providerFiles.length}`);
@@ -50,18 +54,28 @@ const runnerPreflightFiles = findFiles(evidenceDir, "windows-runner-preflight.js
 if (runnerPreflightFiles.length !== 1) {
   fail(`expected exactly one Windows runner preflight receipt, found ${runnerPreflightFiles.length}`);
 }
+const physicalSealFiles = findFiles(evidenceDir, "physical-gate-receipt.json");
+if (physicalSealFiles.length !== 1) {
+  fail(`expected exactly one physical gate seal, found ${physicalSealFiles.length}`);
+}
 const providerFile = { path: providerFiles[0], payload: readJson(providerFiles[0]) };
 const candidatePath = candidateFiles[0];
+const updaterPath = updaterFiles[0];
 const packagePath = packageFiles[0];
 const runnerPreflightPath = runnerPreflightFiles[0];
+const physicalSealPath = physicalSealFiles[0];
 const candidate = readJson(candidatePath);
+const updater = readJson(updaterPath);
 const packageProof = readJson(packagePath);
 const provider = providerFile.payload;
 const runnerPreflight = readJson(runnerPreflightPath);
+const physicalSeal = readJson(physicalSealPath);
 const manifestPath = join(assetsDir, "release-manifest.json");
 const manifest = readJson(manifestPath);
 
 assertRunnerPreflight(runnerPreflight);
+assertPhysicalSeal(physicalSeal);
+assertUpdaterCanary(updater);
 
 assertEqual(candidate.schemaVersion, 1, "candidate receipt schema");
 assertEqual(candidate.releaseTag, releaseTag, "candidate release tag");
@@ -89,6 +103,29 @@ if (candidate.upgradePersistenceProved !== true) {
   );
 } else if (candidate.initialSignedChannelWaiverUsed === true) {
   fail("candidate receipt cannot claim both a real upgrade proof and an initial-channel waiver");
+}
+if (allowInitialSignedChannel) {
+  assertEqual(candidate.installationPath, "direct-msi", "first-channel candidate installation path");
+  assertTrue(
+    candidate.initialSignedChannelWaiverUsed === true,
+    "first-channel candidate receipt did not record its direct-install waiver",
+  );
+} else {
+  assertEqual(candidate.installationPath, "in-app-updater", "candidate installation path");
+  assertEqual(candidate.updaterEvidence?.mode, "upgrade", "candidate updater evidence mode");
+  assertTrue(
+    candidate.updaterEvidence?.signatureVerifiedByTauriUpdater === true,
+    "candidate receipt did not reference Tauri updater signature verification",
+  );
+  assertTrue(
+    candidate.updaterEvidence?.updaterDrivenRelaunch === true,
+    "candidate receipt did not reference the updater-driven relaunch",
+  );
+  assertEqual(
+    String(candidate.updaterEvidence?.sha256 || "").toLowerCase(),
+    receipt(updaterPath).sha256,
+    "candidate updater receipt SHA-256",
+  );
 }
 
 assertEqual(manifest.schemaVersion, 2, "release manifest schema");
@@ -121,6 +158,12 @@ assertEqual(
   String(msiAsset.sha256 || "").toLowerCase(),
   "installed candidate MSI hash",
 );
+assertEqual(
+  String(updater.candidate?.sha256 || "").toLowerCase(),
+  String(msiAsset.sha256 || "").toLowerCase(),
+  "updater candidate MSI hash",
+);
+assertEqual(updater.candidate?.bytes, msiAsset.bytes, "updater candidate MSI bytes");
 const nsisName = manifest.primaryAssets?.windowsNsis;
 const nsisAsset = Array.isArray(manifest.assets)
   ? manifest.assets.find((asset) => asset?.name === nsisName)
@@ -165,6 +208,11 @@ assertEqual(
   normalizeWindowsPath(candidate.installed?.path),
   "provider/candidate installed executable path",
 );
+assertEqual(
+  normalizeWindowsPath(updater.installed?.path),
+  normalizeWindowsPath(candidate.installed?.path),
+  "updater/candidate installed executable path",
+);
 assertTrue(
   /^[0-9a-f]{64}$/i.test(String(candidate.installed?.sha256 || "")),
   "candidate installed executable hash is missing or malformed",
@@ -173,6 +221,11 @@ assertEqual(
   String(provider.installedApp?.sha256 || "").toLowerCase(),
   String(candidate.installed?.sha256 || "").toLowerCase(),
   "provider/candidate installed executable hash",
+);
+assertEqual(
+  String(updater.installed?.sha256 || "").toLowerCase(),
+  String(candidate.installed?.sha256 || "").toLowerCase(),
+  "updater/candidate installed executable hash",
 );
 assertTrue(provider.browserProbe === true, "native OAuth browser probe failed");
 assertTrue(provider.browserHelperProbe === true, "signed OAuth browser helper probe failed");
@@ -202,14 +255,16 @@ const report = {
   physicalGateRunnerName,
   validatedAt: new Date().toISOString(),
   initialSignedChannelWaiverAccepted:
-    candidate.upgradePersistenceProved !== true && allowInitialSignedChannel,
+    updater.upgradePersistenceProved !== true && allowInitialSignedChannel,
   smartAppControlRequired: requireSmartAppControl,
   receipts: {
     runnerPreflight: receipt(runnerPreflightPath),
     candidate: receipt(candidatePath),
+    updater: receipt(updaterPath),
     provider: receipt(providerFile.path),
     packages: receipt(packagePath),
     manifest: receipt(manifestPath),
+    physicalGateSeal: receipt(physicalSealPath),
   },
 };
 const outputPath = resolve(
@@ -393,6 +448,154 @@ function assertRunnerPreflight(preflight) {
     assertTrue(preflight?.smartAppControl?.available === true, "runner preflight Smart App Control is unavailable");
     assertTrue(preflight?.smartAppControl?.ok === true, "runner preflight Smart App Control verdict is not ok");
   }
+}
+
+function assertUpdaterCanary(canary) {
+  assertEqual(canary?.schemaVersion, 1, "updater canary schema");
+  assertEqual(canary?.status, "passed", "updater canary status");
+  assertEqual(canary?.releaseTag, releaseTag, "updater canary release tag");
+  assertEqual(canary?.expectedVersion, expectedVersion, "updater canary expected version");
+  assertEqual(String(canary?.sourceSha || "").toLowerCase(), sourceSha, "updater canary source SHA");
+  assertEqual(String(canary?.githubRunId || ""), physicalGateRunId, "updater canary GitHub run ID");
+  assertEqual(
+    String(canary?.githubRunAttempt || ""),
+    physicalGateRunAttempt,
+    "updater canary GitHub run attempt",
+  );
+  assertEqual(canary?.runnerName, physicalGateRunnerName, "updater canary runner name");
+  assertTrue(canary?.interactiveDesktop === true, "updater canary was not run in an interactive desktop");
+  assertTrue(
+    !Number.isNaN(Date.parse(canary?.generatedAt)),
+    "updater canary generatedAt timestamp is missing or invalid",
+  );
+  assertTimestampedSignature(canary?.candidate?.authenticode, "updater candidate MSI");
+  assertTrue(
+    /^[0-9a-f]{64}$/i.test(String(canary?.candidate?.tauriSignatureSha256 || "")),
+    "updater candidate Tauri signature hash is missing or malformed",
+  );
+  assertTrue(
+    Number.isInteger(canary?.candidate?.bytes) && canary.candidate.bytes > 0,
+    "updater candidate byte count is missing or invalid",
+  );
+  assertEqual(
+    canary?.updater?.downloadedBytes,
+    canary?.candidate?.bytes,
+    "updater downloaded byte count",
+  );
+  assertTrue(canary?.updater?.metadataRequests >= 1, "updater metadata request was not observed");
+  assertTrue(canary?.updater?.candidateRequests >= 1, "updater candidate download was not observed");
+  assertTrue(
+    canary?.updater?.signatureVerifiedByTauriUpdater === true,
+    "Tauri updater signature verification was not proved",
+  );
+  assertTrue(
+    canary?.updater?.installerLaunchRequested === true,
+    "Tauri updater installer launch was not proved",
+  );
+  assertTrue(
+    canary?.updater?.updaterDrivenRelaunch === true,
+    "Tauri updater-driven relaunch was not proved",
+  );
+  for (const [label, evidence] of [
+    ["handoff", canary?.updater?.handoffReceipt],
+    ["runtime", canary?.updater?.runtimeReceipt],
+  ]) {
+    assertTrue(Boolean(evidence?.file), `updater ${label} receipt filename is missing`);
+    assertTrue(
+      Number.isInteger(evidence?.bytes) && evidence.bytes > 0,
+      `updater ${label} receipt byte count is missing or invalid`,
+    );
+    assertTrue(
+      /^[0-9a-f]{64}$/i.test(String(evidence?.sha256 || "")),
+      `updater ${label} receipt hash is missing or malformed`,
+    );
+  }
+  assertTimestampedSignature(canary?.installed?.signature, "updater-installed executable");
+  assertEqual(canary?.installed?.version, expectedVersion, "updater-installed version");
+  assertTrue(canary?.installed?.resourcesPresent === true, "updater-installed resources were not proved");
+  assertTrue(canary?.rendererReady === true, "updater-installed renderer readiness was not proved");
+  assertEqual(canary?.postRestartVersion, expectedVersion, "updater post-restart version");
+  assertTrue(
+    /^[0-9a-f]{64}$/i.test(String(canary?.installed?.sha256 || "")),
+    "updater-installed executable hash is missing or malformed",
+  );
+
+  if (allowInitialSignedChannel) {
+    assertEqual(canary?.mode, "self-reinstall", "first-channel updater mode");
+    assertTrue(
+      canary?.initialSignedChannelWaiverUsed === true,
+      "first-channel updater canary did not record its waiver",
+    );
+    assertEqual(canary?.fromVersion, expectedVersion, "first-channel updater baseline version");
+    assertTrue(
+      canary?.upgradePersistenceProved === false,
+      "first-channel self-reinstall cannot claim an older-version upgrade",
+    );
+  } else {
+    assertEqual(canary?.mode, "upgrade", "updater mode");
+    assertTrue(
+      canary?.initialSignedChannelWaiverUsed === false,
+      "normal updater gate used the first-channel waiver",
+    );
+    assertTrue(
+      isOlderVersion(canary?.fromVersion, expectedVersion),
+      "updater canary did not start from an older version",
+    );
+    assertTrue(
+      canary?.upgradePersistenceProved === true,
+      "updater canary did not prove upgrade persistence",
+    );
+  }
+}
+
+function isOlderVersion(actual, expected) {
+  const parse = (value) => {
+    const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(String(value || ""));
+    return match ? match.slice(1, 4).map(Number) : null;
+  };
+  const left = parse(actual);
+  const right = parse(expected);
+  if (!left || !right) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return left[index] < right[index];
+  }
+  return false;
+}
+
+function assertPhysicalSeal(seal) {
+  assertEqual(seal?.schemaVersion, 1, "physical gate seal schema");
+  assertEqual(seal?.status, "physical-release-gate-passed", "physical gate seal status");
+  assertEqual(seal?.releaseTag, releaseTag, "physical gate seal release tag");
+  assertEqual(seal?.expectedVersion, expectedVersion, "physical gate seal expected version");
+  assertEqual(String(seal?.sourceSha || "").toLowerCase(), sourceSha, "physical gate seal source SHA");
+  assertEqual(String(seal?.githubRunId || ""), physicalGateRunId, "physical gate seal GitHub run ID");
+  assertEqual(
+    String(seal?.githubRunAttempt || ""),
+    physicalGateRunAttempt,
+    "physical gate seal GitHub run attempt",
+  );
+  assertEqual(seal?.runnerName, physicalGateRunnerName, "physical gate seal runner name");
+  assertTrue(
+    !Number.isNaN(Date.parse(seal?.generatedAt)),
+    "physical gate seal generatedAt timestamp is missing or invalid",
+  );
+
+  assertReceiptEqual(seal?.manifest, receipt(manifestPath), "physical gate manifest");
+  assertReceiptEqual(
+    seal?.evidence?.runnerPreflight,
+    receipt(runnerPreflightPath),
+    "sealed runner preflight",
+  );
+  assertReceiptEqual(seal?.evidence?.candidate, receipt(candidatePath), "sealed candidate");
+  assertReceiptEqual(seal?.evidence?.updater, receipt(updaterPath), "sealed updater canary");
+  assertReceiptEqual(seal?.evidence?.provider, receipt(providerFile.path), "sealed provider");
+  assertReceiptEqual(seal?.evidence?.packages, receipt(packagePath), "sealed package proof");
+}
+
+function assertReceiptEqual(actual, expected, label) {
+  assertEqual(actual?.file, expected.file, `${label} filename`);
+  assertEqual(actual?.bytes, expected.bytes, `${label} byte size`);
+  assertEqual(String(actual?.sha256 || "").toLowerCase(), expected.sha256, `${label} SHA-256`);
 }
 
 function fail(message) {

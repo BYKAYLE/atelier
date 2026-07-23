@@ -40,6 +40,7 @@ mod runtime_receipt;
 mod ssh_workspaces;
 mod stella;
 mod subscription_usage;
+mod updater_canary;
 
 use serde::Serialize;
 use tauri::{Emitter, Manager};
@@ -58,6 +59,10 @@ pub fn run_oauth_browser_url(url: &str) -> Result<(), String> {
 
 pub fn run_renderer_ready_probe() -> Result<(), String> {
     runtime_receipt::run_renderer_ready_probe()
+}
+
+pub fn run_updater_canary(config_path: &str) -> Result<(), String> {
+    updater_canary::run(config_path)
 }
 
 #[cfg(feature = "orca-atelier-cli")]

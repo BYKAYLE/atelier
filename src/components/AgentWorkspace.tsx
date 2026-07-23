@@ -35,6 +35,7 @@ import {
 import type { StellaFactoryCommand } from "../lib/stellaFactory";
 import { safeLocalStorageGet, safeLocalStorageSet } from "../lib/storage";
 import { findUrl, isAutoReviewablePreviewUrl, restoreAutoPreviewUrl } from "../lib/previewUrl";
+import { resolvePreviewVisibilityFallback } from "../lib/previewSessionState";
 import {
   buildTaskPreviewEvidence,
   previewDiagnosticsMatchPreview,
@@ -3107,7 +3108,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   const [quickOpenIndexedEntries, setQuickOpenIndexedEntries] = useState<AgentQuickOpenIndexEntry[]>([]);
   const quickOpenInputRef = useRef<HTMLInputElement>(null);
   const [showPreview, setShowPreview] = useState(
-    () => safeLocalStorageGet(PREVIEW_VISIBLE_KEY) === "1" || safeLocalStorageGet(DEV_SCREEN_VISIBLE_KEY) === "1",
+    () => resolvePreviewVisibilityFallback(
+      safeLocalStorageGet(PREVIEW_VISIBLE_KEY),
+      safeLocalStorageGet(DEV_SCREEN_VISIBLE_KEY),
+    ),
   );
   const [previewUrl, setPreviewUrl] = useState(() => cleanStoredPreviewUrl(safeLocalStorageGet(PREVIEW_KEY) || ""));
   const previewUrlRef = useRef(previewUrl);
@@ -3905,7 +3909,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     previewHydratedSessionIdRef.current = active.id;
     // URL/서비스 명령은 세션별 고유 데이터 — 글로벌 폴백 없이 비어 있으면 빈 상태로 둔다.
     // 뷰포트/폭은 UI 환경설정이지만 표시 여부는 수동 opt-in으로만 복원한다.
-    const fallbackVisible = safeLocalStorageGet(PREVIEW_VISIBLE_KEY) === "1" || safeLocalStorageGet(DEV_SCREEN_VISIBLE_KEY) === "1";
+    const fallbackVisible = resolvePreviewVisibilityFallback(
+      safeLocalStorageGet(PREVIEW_VISIBLE_KEY),
+      safeLocalStorageGet(DEV_SCREEN_VISIBLE_KEY),
+    );
     const fallbackVPRaw = safeLocalStorageGet(PREVIEW_VP_KEY);
     const fallbackVP: PreviewViewport =
       fallbackVPRaw === "mobile" || fallbackVPRaw === "tablet" || fallbackVPRaw === "desktop"
@@ -3940,7 +3947,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   useEffect(() => {
     if (!active) return;
     if (previewHydratedSessionIdRef.current !== active.id) return;
-    const fallbackVisible = safeLocalStorageGet(PREVIEW_VISIBLE_KEY) === "1";
+    const fallbackVisible = resolvePreviewVisibilityFallback(
+      safeLocalStorageGet(PREVIEW_VISIBLE_KEY),
+      safeLocalStorageGet(DEV_SCREEN_VISIBLE_KEY),
+    );
     const fallbackVPRaw = safeLocalStorageGet(PREVIEW_VP_KEY);
     const fallbackVP: PreviewViewport =
       fallbackVPRaw === "mobile" || fallbackVPRaw === "tablet" || fallbackVPRaw === "desktop"
@@ -4318,6 +4328,23 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     event.preventDefault();
     composerResizeRef.current = { startY: event.clientY, startH: composerHeight };
     setResizingComposer(true);
+  };
+
+  const handleComposerResizeKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    event.preventDefault();
+    const delta = event.key === "ArrowUp" ? 24 : -24;
+    setComposerHeight((height) =>
+      clampNumber(height + delta, composerMinHeight(), composerMaxHeight()),
+    );
+  };
+
+  const handlePreviewResizeKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const max = clampNumber(window.innerWidth - 640, 360, 920);
+    const delta = event.key === "ArrowLeft" ? 24 : -24;
+    setPreviewWidth((width) => clampNumber(width + delta, 320, max));
   };
 
   const scheduleSmoothOutput = () => {
@@ -9118,11 +9145,16 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
             >
               <div className={cls("atelier-composer-panel relative w-full max-w-[920px] mx-auto rounded-[9px] border p-2", dark ? "bg-dmuted border-dline" : "bg-surface border-line")}>
                 <div
-                  role="separator"
-                  aria-orientation="horizontal"
-                  aria-label={tw.language === "en" ? "Resize chat input" : "채팅 입력창 크기 조절"}
-                  title={tw.language === "en" ? "Drag to resize chat input" : "드래그해서 채팅 입력창 크기 조절"}
-                  onPointerDown={startComposerResize}
+	                  role="separator"
+	                  aria-orientation="horizontal"
+	                  aria-label={tw.language === "en" ? "Resize chat input" : "채팅 입력창 크기 조절"}
+	                  aria-valuemin={composerMinHeight()}
+	                  aria-valuemax={composerMaxHeight()}
+	                  aria-valuenow={Math.round(composerHeight)}
+	                  tabIndex={0}
+	                  title={tw.language === "en" ? "Drag to resize chat input" : "드래그해서 채팅 입력창 크기 조절"}
+	                  onPointerDown={startComposerResize}
+	                  onKeyDown={handleComposerResizeKeyDown}
                   className={cls("atelier-composer-resize-handle", resizingComposer ? "atelier-composer-resize-handle-active" : "")}
                 />
                 {(pendingAttachments.length > 0 || isPastingImage || pasteError || (devScreenSelectionAttached && devScreenElementSelection)) && (
@@ -9400,7 +9432,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                       send().catch(console.error);
                     }
                   }}
-                  placeholder={copy.placeholder}
+	                  placeholder={copy.placeholder}
+	                  aria-label={copy.placeholder}
                   className={cls(
                     "atelier-composer-textarea w-full min-h-[44px] resize-none bg-transparent outline-none text-[13px] leading-[1.6] px-1",
                     dark ? "text-dink placeholder:text-dsub" : "text-ink placeholder:text-sub",
@@ -9629,9 +9662,15 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
               style={{ width: previewWidth }}
             >
               <div
-                role="separator"
-                aria-orientation="vertical"
-                onPointerDown={startPreviewResize}
+	                role="separator"
+	                aria-orientation="vertical"
+	                aria-label={tw.language === "en" ? "Resize preview" : "프리뷰 크기 조절"}
+	                aria-valuemin={320}
+	                aria-valuemax={Math.round(clampNumber(window.innerWidth - 640, 360, 920))}
+	                aria-valuenow={Math.round(previewWidth)}
+	                tabIndex={0}
+	                onPointerDown={startPreviewResize}
+	                onKeyDown={handlePreviewResizeKeyDown}
                 className={cls(
                   "absolute left-[-4px] top-0 z-20 h-full w-2 cursor-col-resize",
                   resizingPreview ? "bg-terra/30" : "hover:bg-terra/20",

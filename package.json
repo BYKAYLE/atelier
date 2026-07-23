@@ -52,6 +52,8 @@
     "smoke:automations": "node --experimental-strip-types tools/automations-smoke.ts",
     "smoke:devscreen-picker": "node --experimental-strip-types tools/devscreen-element-picker-smoke.ts",
     "smoke:preview-url": "node --experimental-strip-types tools/preview-url-smoke.ts",
+    "smoke:preview-session-state": "node --experimental-strip-types tools/preview-session-state-smoke.ts",
+    "smoke:updater-install": "node --experimental-strip-types tools/updater-install-smoke.ts",
     "smoke:preview-evidence": "node --experimental-strip-types tools/preview-evidence-smoke.ts",
     "smoke:gajae-routing": "node --experimental-strip-types tools/gajae-command-routing-smoke.ts",
     "smoke:session-inbox": "node --experimental-strip-types tools/session-inbox-smoke.ts",

@@ -49,6 +49,7 @@ axum = "0.8"
 axum-server = { version = "0.7.2", features = ["tls-rustls"] }
 rcgen = "0.13.2"
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+semver = "1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

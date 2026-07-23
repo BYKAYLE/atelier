@@ -46,6 +46,17 @@ fn main() {
         }
         return;
     }
+    if let Some(index) = args
+        .iter()
+        .position(|arg| arg == "--atelier-updater-canary")
+    {
+        let config_path = args.get(index + 1).map(String::as_str).unwrap_or_default();
+        if let Err(error) = atelier_lib::run_updater_canary(config_path) {
+            eprintln!("Atelier updater canary failed: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if let Some(result) = atelier_lib::run_atelier_cli(&args) {
         if let Err(error) = result {
             eprintln!("Atelier CLI failed: {error}");

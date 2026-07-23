@@ -1110,6 +1110,95 @@ fn app_support_dir() -> Option<PathBuf> {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct HermesInstallRecord {
+    spec: String,
+    executable: String,
+}
+
+fn hermes_provider_root() -> Option<PathBuf> {
+    Some(app_support_dir()?.join("providers").join("hermes"))
+}
+
+fn hermes_install_record_path() -> Option<PathBuf> {
+    Some(hermes_provider_root()?.join("install.json"))
+}
+
+fn hermes_uv_tool_dir() -> Option<PathBuf> {
+    Some(hermes_provider_root()?.join("uv-tools"))
+}
+
+fn hermes_uv_bin_dir() -> Option<PathBuf> {
+    Some(hermes_provider_root()?.join("bin"))
+}
+
+fn load_hermes_install_record() -> Option<HermesInstallRecord> {
+    let text = std::fs::read_to_string(hermes_install_record_path()?).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+fn save_hermes_install_record(executable: &Path) -> Result<(), String> {
+    let path = hermes_install_record_path()
+        .ok_or_else(|| "Could not resolve the Atelier Hermes state directory.".to_string())?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Could not resolve the Atelier Hermes state directory.".to_string())?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("create {}: {error}", parent.display()))?;
+    let executable = std::fs::canonicalize(executable).unwrap_or_else(|_| executable.to_path_buf());
+    let record = HermesInstallRecord {
+        spec: HERMES_GIT_SPEC.to_string(),
+        executable: executable.to_string_lossy().into_owned(),
+    };
+    let text = serde_json::to_string_pretty(&record)
+        .map_err(|error| format!("serialize Hermes install record: {error}"))?;
+    std::fs::write(&path, format!("{text}\n"))
+        .map_err(|error| format!("write {}: {error}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+fn hermes_managed_executable_path() -> Option<PathBuf> {
+    let bin = hermes_uv_bin_dir()?;
+    let names: &[&str] = if cfg!(target_os = "windows") {
+        &["hermes.exe", "hermes.cmd", "hermes.bat", "hermes"]
+    } else {
+        &["hermes"]
+    };
+    names.iter().find_map(|name| {
+        let candidate = bin.join(name);
+        candidate
+            .is_file()
+            .then(|| std::fs::canonicalize(&candidate).unwrap_or(candidate))
+    })
+}
+
+pub fn hermes_executable_path() -> Option<PathBuf> {
+    if let Some(path) = hermes_managed_executable_path() {
+        return Some(path);
+    }
+    if let Some(record) = load_hermes_install_record() {
+        let path = PathBuf::from(record.executable);
+        if path.is_file() {
+            return Some(std::fs::canonicalize(&path).unwrap_or(path));
+        }
+    }
+    let discovered = crate::agent_process::resolve_cli_executable("hermes");
+    discovered
+        .is_file()
+        .then(|| std::fs::canonicalize(&discovered).unwrap_or(discovered))
+}
+
+fn hermes_install_record_is_current() -> bool {
+    load_hermes_install_record().is_some_and(|record| {
+        record.spec == HERMES_GIT_SPEC && PathBuf::from(record.executable).is_file()
+    })
+}
+
 pub fn gajecode_cli_name() -> &'static str {
     "gjc"
 }
@@ -1475,6 +1564,19 @@ fn cli_runs_for_provider(provider: &str, cli: &str) -> bool {
 fn provider_cli_installed(provider: &str, meta: &ProviderMeta) -> bool {
     if provider == "gajecode" {
         return gajecode_cli_installed();
+    }
+    if provider == "hermes" {
+        let Some(executable) = hermes_executable_path() else {
+            return false;
+        };
+        let mut command = cli_command(&executable.to_string_lossy());
+        command
+            .arg("--version")
+            .env("PATH", crate::augmented_cli_path());
+        return matches!(
+            command_output_timeout(command, Duration::from_secs(8)),
+            Ok(Some(output)) if output.status.success()
+        );
     }
     meta.cli
         .map(|cli| cli_runs_for_provider(provider, cli))
@@ -2500,6 +2602,14 @@ fn install_npm_cli(label: &'static str, pkg: &'static str) -> Result<(), String>
 
 fn install_hermes_cli() -> Result<(), String> {
     if which("uv") {
+        let tool_dir = hermes_uv_tool_dir()
+            .ok_or_else(|| "Could not resolve the Atelier Hermes tool directory.".to_string())?;
+        let bin_dir = hermes_uv_bin_dir()
+            .ok_or_else(|| "Could not resolve the Atelier Hermes binary directory.".to_string())?;
+        std::fs::create_dir_all(&tool_dir)
+            .map_err(|error| format!("create {}: {error}", tool_dir.display()))?;
+        std::fs::create_dir_all(&bin_dir)
+            .map_err(|error| format!("create {}: {error}", bin_dir.display()))?;
         let mut command = cli_command("uv");
         command.args([
             "tool",
@@ -2509,12 +2619,28 @@ fn install_hermes_cli() -> Result<(), String> {
             "3.11",
             HERMES_GIT_SPEC,
         ]);
-        return run_cli_installer(command, "hermes");
+        command
+            .env("UV_TOOL_DIR", &tool_dir)
+            .env("UV_TOOL_BIN_DIR", &bin_dir);
+        run_cli_installer(command, "hermes")?;
+        let executable = hermes_managed_executable_path().ok_or_else(|| {
+            format!(
+                "Hermes installer completed, but no executable was found in {}",
+                bin_dir.display()
+            )
+        })?;
+        save_hermes_install_record(&executable)?;
+        return Ok(());
     }
     if which("pipx") {
         let mut command = cli_command("pipx");
         command.args(["install", "--force", HERMES_GIT_SPEC]);
-        return run_cli_installer(command, "hermes");
+        run_cli_installer(command, "hermes")?;
+        let executable = hermes_executable_path().ok_or_else(|| {
+            "Hermes installer completed, but the executable could not be resolved.".to_string()
+        })?;
+        save_hermes_install_record(&executable)?;
+        return Ok(());
     }
 
     let python = ["python3", "python", "py"]
@@ -2536,7 +2662,11 @@ fn install_hermes_cli() -> Result<(), String> {
         "--upgrade",
         HERMES_GIT_SPEC,
     ]);
-    run_cli_installer(command, "hermes")
+    run_cli_installer(command, "hermes")?;
+    let executable = hermes_executable_path().ok_or_else(|| {
+        "Hermes installer completed, but the executable could not be resolved.".to_string()
+    })?;
+    save_hermes_install_record(&executable)
 }
 
 fn install_gajecode_cli() -> Result<(), String> {
@@ -2685,10 +2815,10 @@ pub async fn hermes_check_update() -> Result<HermesUpdateStatus, String> {
         commits_behind: None,
         message: None,
     };
-    if !which("hermes") {
+    let Some(executable) = hermes_executable_path() else {
         return Ok(empty);
-    }
-    let mut command = cli_command("hermes");
+    };
+    let mut command = cli_command(&executable.to_string_lossy());
     command
         .arg("--version")
         .env("PATH", crate::augmented_cli_path());
@@ -2701,65 +2831,35 @@ pub async fn hermes_check_update() -> Result<HermesUpdateStatus, String> {
     combined.push('\n');
     combined.push_str(&String::from_utf8_lossy(&output.stderr));
     let mut current_version: Option<String> = None;
-    let mut update_available = false;
-    let mut commits_behind: Option<u32> = None;
-    let mut message: Option<String> = None;
+    if !output.status.success() {
+        return Ok(empty);
+    }
     for line in combined.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("Hermes Agent ") {
             current_version = Some(rest.to_string());
         }
-        if trimmed.starts_with("Update available")
-            || trimmed.contains("commits behind")
-            || trimmed.contains("commit behind")
-        {
-            update_available = true;
-            message = Some(trimmed.to_string());
-            for token in trimmed.split_whitespace() {
-                if let Ok(n) = token.parse::<u32>() {
-                    commits_behind = Some(n);
-                    break;
-                }
-            }
-        }
     }
+    let update_available = !hermes_install_record_is_current();
+    let message = update_available.then(|| {
+        "Reinstall the Atelier-pinned Hermes build to restore a verified runtime.".to_string()
+    });
     Ok(HermesUpdateStatus {
         installed: true,
         current_version,
         update_available,
-        commits_behind,
+        commits_behind: None,
         message,
     })
 }
 
-/// `hermes update --yes` 를 백그라운드 실행. `--yes` 가 모든 확인 프롬프트(설정 마이그레이션,
-/// API 키 추가, 의존성 설치 등)를 자동 승인해 주므로 stdin 닫혀 있어도 막히지 않는다.
-/// UI 는 즉시 반환되고 완료 후 다시 check 하면 반영된다.
+/// Mutable upstream updates can silently change the runtime after release. Reinstall the
+/// immutable Hermes commit selected by this Atelier build and return only after verification.
 #[tauri::command]
 pub async fn hermes_update() -> Result<(), String> {
-    if !which("hermes") {
-        return Err("hermes not found".into());
-    }
-    std::thread::spawn(|| {
-        let mut command = cli_command("hermes");
-        command
-            .arg("update")
-            .arg("--yes")
-            .env("PATH", crate::augmented_cli_path())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .stdin(Stdio::null());
-        configure_background_command(&mut command);
-        match command.spawn() {
-            Ok(mut child) => match child.wait() {
-                Ok(status) if status.success() => log::info!("hermes update completed"),
-                Ok(status) => log::warn!("hermes update exited with {status}"),
-                Err(e) => log::warn!("hermes update wait: {e}"),
-            },
-            Err(e) => log::warn!("hermes update spawn: {e}"),
-        }
-    });
-    Ok(())
+    tauri::async_runtime::spawn_blocking(install_hermes_cli)
+        .await
+        .map_err(|error| format!("Hermes reinstall task failed: {error}"))?
 }
 
 fn should_inject_agent_api_key(provider: &str, state: &CredentialState) -> bool {

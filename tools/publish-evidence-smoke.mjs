@@ -1,4 +1,11 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -21,31 +28,32 @@ const runAttempt = "4";
 const runnerName = "atelier-physical-windows-01";
 const installedPath = "C:\\Program Files\\Atelier\\Atelier.exe";
 const candidatePath = join(evidence, "windows-release-candidate.json");
+const updaterPath = join(evidence, "windows-updater-canary.json");
 const providerPath = join(evidence, "atelier-provider-smoke-20260722-120000.json");
 const packagePath = join(evidence, "windows-package-smoke.json");
 const runnerPreflightPath = join(evidence, "windows-runner-preflight.json");
+const physicalSealPath = join(evidence, "physical-gate-receipt.json");
+const manifestPath = join(assets, "release-manifest.json");
 
-writeJson(join(assets, "release-manifest.json"), {
-  schemaVersion: 2,
-  status: "signed-draft-candidate",
-  releaseChannel: "github-draft",
-  releaseRepository,
-  releaseTag: tag,
-  version,
-  sourceSha,
-  primaryAssets: {
-    windowsMsi: `Atelier_${version}_x64_en-US.msi`,
-    windowsNsis: `Atelier_${version}_x64-setup.exe`,
-  },
-  assets: [
-    { name: `Atelier_${version}_x64_en-US.msi`, bytes: 42, sha256: msiSha },
-    { name: `Atelier_${version}_x64-setup.exe`, bytes: 43, sha256: nsisSha },
-  ],
-});
+writeManifest();
 
 try {
   resetValidUpgrade();
   run(true, "valid upgrade evidence");
+
+  resetValidUpgrade();
+  writePhysicalSeal();
+  const manifest = readJson(manifestPath);
+  manifest.sealTamperProbe = true;
+  writeJson(manifestPath, manifest);
+  run(false, "candidate manifest changed after the physical gate", false, false);
+
+  resetValidUpgrade();
+  writePhysicalSeal();
+  const seal = readJson(physicalSealPath);
+  seal.manifest.sha256 = "f".repeat(64);
+  writeJson(physicalSealPath, seal);
+  run(false, "physical gate seal contains the wrong manifest hash", false, false);
 
   let preflight = readJson(runnerPreflightPath);
   preflight.githubRunAttempt = "5";
@@ -128,18 +136,59 @@ try {
   run(false, "provider receipt for a different installed executable");
 
   resetValidUpgrade();
-  const candidate = candidateFixture();
+  let updater = readJson(updaterPath);
+  updater.githubRunId = "987654321";
+  writeJson(updaterPath, updater);
+  run(false, "updater receipt from another run");
+
+  resetValidUpgrade();
+  updater = readJson(updaterPath);
+  updater.updater.signatureVerifiedByTauriUpdater = false;
+  writeJson(updaterPath, updater);
+  run(false, "updater without Tauri signature verification");
+
+  resetValidUpgrade();
+  updater = readJson(updaterPath);
+  updater.updater.updaterDrivenRelaunch = false;
+  writeJson(updaterPath, updater);
+  run(false, "updater without updater-driven relaunch");
+
+  resetValidUpgrade();
+  updater = readJson(updaterPath);
+  updater.candidate.sha256 = "f".repeat(64);
+  writeJson(updaterPath, updater);
+  run(false, "updater for a different candidate MSI");
+
+  resetValidUpgrade();
+  updater = readJson(updaterPath);
+  updater.installed.sha256 = "f".repeat(64);
+  writeJson(updaterPath, updater);
+  run(false, "updater for a different installed executable");
+
+  resetValidUpgrade();
+  updater = readJson(updaterPath);
+  updater.mode = "self-reinstall";
+  updater.fromVersion = version;
+  updater.initialSignedChannelWaiverUsed = true;
+  updater.upgradePersistenceProved = false;
+  writeJson(updaterPath, updater);
+  run(false, "unapproved updater self-reinstall");
+
+  resetValidUpgrade();
+  let candidate = readJson(candidatePath);
   candidate.githubRunId = "987654321";
   writeJson(candidatePath, candidate);
   run(false, "candidate receipt from another run");
 
   resetValidUpgrade();
+  candidate = readJson(candidatePath);
   candidate.githubRunId = runId;
   candidate.githubRunAttempt = 5;
   writeJson(candidatePath, candidate);
   run(false, "candidate receipt from another run attempt");
 
   resetValidUpgrade();
+  candidate = readJson(candidatePath);
   candidate.githubRunAttempt = Number(runAttempt);
   candidate.runnerName = "another-runner";
   writeJson(candidatePath, candidate);
@@ -167,7 +216,8 @@ try {
   run(true, "approved first-channel waiver", true);
   run(false, "unapproved first-channel waiver", false);
 
-  const contradictory = candidateFixture();
+  resetValidUpgrade();
+  const contradictory = readJson(candidatePath);
   contradictory.initialSignedChannelWaiverUsed = true;
   writeJson(candidatePath, contradictory);
   run(false, "contradictory upgrade and waiver", true);
@@ -203,21 +253,24 @@ try {
 }
 
 function resetValidUpgrade() {
+  writeManifest();
   writeJson(runnerPreflightPath, runnerPreflightFixture());
-  writeJson(candidatePath, candidateFixture());
+  writeJson(updaterPath, updaterFixture());
+  writeJson(candidatePath, candidateFixture(fileReceipt(updaterPath)));
   writeJson(providerPath, providerFixture());
   writeJson(packagePath, packageFixture());
 }
 
 function resetWaiverCandidate() {
-  resetValidUpgrade();
-  const candidate = candidateFixture();
-  candidate.initialSignedChannelWaiverUsed = true;
-  candidate.upgradePersistenceProved = false;
-  writeJson(candidatePath, candidate);
+  writeManifest();
+  writeJson(runnerPreflightPath, runnerPreflightFixture());
+  writeJson(updaterPath, updaterFixture(true));
+  writeJson(candidatePath, candidateFixture(fileReceipt(updaterPath), true));
+  writeJson(providerPath, providerFixture());
+  writeJson(packagePath, packageFixture());
 }
 
-function candidateFixture() {
+function candidateFixture(updaterReceipt, allowWaiver = false) {
   const signature = signatureFixture();
   return {
     schemaVersion: 1,
@@ -228,7 +281,8 @@ function candidateFixture() {
     githubRunAttempt: Number(runAttempt),
     runnerName,
     interactiveDesktop: true,
-    initialSignedChannelWaiverUsed: false,
+    initialSignedChannelWaiverUsed: allowWaiver,
+    installationPath: allowWaiver ? "direct-msi" : "in-app-updater",
     installer: { sha256: msiSha, signature },
     installed: {
       path: installedPath,
@@ -239,7 +293,70 @@ function candidateFixture() {
     },
     rendererReady: true,
     postRestartVersion: version,
-    upgradePersistenceProved: true,
+    upgradePersistenceProved: !allowWaiver,
+    updaterEvidence: allowWaiver
+      ? null
+      : {
+          mode: "upgrade",
+          sha256: updaterReceipt.sha256,
+          signatureVerifiedByTauriUpdater: true,
+          updaterDrivenRelaunch: true,
+        },
+  };
+}
+
+function updaterFixture(allowWaiver = false) {
+  const signature = signatureFixture();
+  return {
+    schemaVersion: 1,
+    status: "passed",
+    generatedAt: "2026-07-22T11:59:50.000Z",
+    releaseTag: tag,
+    sourceSha,
+    expectedVersion: version,
+    githubRunId: runId,
+    githubRunAttempt: Number(runAttempt),
+    runnerName,
+    mode: allowWaiver ? "self-reinstall" : "upgrade",
+    interactiveDesktop: true,
+    fromVersion: allowWaiver ? version : previousVersion(version),
+    initialSignedChannelWaiverUsed: allowWaiver,
+    candidate: {
+      path: `C:\\release\\Atelier_${version}_x64_en-US.msi`,
+      sha256: msiSha,
+      bytes: 42,
+      authenticode: signature,
+      tauriSignaturePath: `C:\\release\\Atelier_${version}_x64_en-US.msi.sig`,
+      tauriSignatureSha256: "e".repeat(64),
+    },
+    updater: {
+      metadataRequests: 1,
+      candidateRequests: 1,
+      downloadedBytes: 42,
+      signatureVerifiedByTauriUpdater: true,
+      installerLaunchRequested: true,
+      updaterDrivenRelaunch: true,
+      handoffReceipt: {
+        file: "updater-handoff.json",
+        sha256: "1".repeat(64),
+        bytes: 256,
+      },
+      runtimeReceipt: {
+        file: "updater-runtime.json",
+        sha256: "2".repeat(64),
+        bytes: 384,
+      },
+    },
+    installed: {
+      path: installedPath,
+      sha256: installedSha,
+      version,
+      signature,
+      resourcesPresent: true,
+    },
+    rendererReady: true,
+    postRestartVersion: version,
+    upgradePersistenceProved: !allowWaiver,
   };
 }
 
@@ -399,7 +516,8 @@ function signatureFixture() {
   };
 }
 
-function run(shouldPass, label, allowWaiver = false) {
+function run(shouldPass, label, allowWaiver = false, reseal = true) {
+  if (reseal) writePhysicalSeal();
   const result = spawnSync(process.execPath, [".github/scripts/validate-publish-evidence.mjs"], {
     cwd: process.cwd(),
     encoding: "utf8",
@@ -423,8 +541,69 @@ function run(shouldPass, label, allowWaiver = false) {
   }
 }
 
+function writeManifest() {
+  writeJson(manifestPath, {
+    schemaVersion: 2,
+    status: "signed-draft-candidate",
+    releaseChannel: "github-draft",
+    releaseRepository,
+    releaseTag: tag,
+    version,
+    sourceSha,
+    primaryAssets: {
+      windowsMsi: `Atelier_${version}_x64_en-US.msi`,
+      windowsNsis: `Atelier_${version}_x64-setup.exe`,
+    },
+    assets: [
+      { name: `Atelier_${version}_x64_en-US.msi`, bytes: 42, sha256: msiSha },
+      { name: `Atelier_${version}_x64-setup.exe`, bytes: 43, sha256: nsisSha },
+    ],
+  });
+}
+
+function writePhysicalSeal() {
+  const result = spawnSync(process.execPath, [".github/scripts/seal-physical-release-evidence.mjs"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      EVIDENCE_DIR: evidence,
+      RELEASE_ASSETS_DIR: assets,
+      PHYSICAL_GATE_SEAL: physicalSealPath,
+      RELEASE_TAG: tag,
+      EXPECTED_VERSION: version,
+      RELEASE_SOURCE_SHA: sourceSha,
+      GITHUB_RUN_ID: runId,
+      GITHUB_RUN_ATTEMPT: runAttempt,
+      RUNNER_NAME: runnerName,
+    },
+  });
+  if (result.status !== 0) {
+    throw new Error(`physical seal fixture failed:\n${result.stdout}\n${result.stderr}`);
+  }
+}
+
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function fileReceipt(path) {
+  const data = readFileSync(path);
+  return {
+    file: path.split(/[\\/]/).pop(),
+    bytes: data.byteLength,
+    sha256: createHash("sha256").update(data).digest("hex"),
+  };
+}
+
+function previousVersion(value) {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(value);
+  if (!match) throw new Error(`invalid fixture version: ${value}`);
+  const [major, minor, patch] = match.slice(1).map(Number);
+  if (patch > 0) return `${major}.${minor}.${patch - 1}`;
+  if (minor > 0) return `${major}.${minor - 1}.0`;
+  if (major > 0) return `${major - 1}.0.0`;
+  throw new Error("fixture version has no older semantic version");
 }
 
 function writeJson(path, value) {

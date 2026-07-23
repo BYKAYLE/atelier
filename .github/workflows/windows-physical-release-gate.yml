@@ -135,13 +135,13 @@ jobs:
           powershell.exe @arguments
           if ($LASTEXITCODE -ne 0) { throw "Signed Windows package proof failed." }
 
-      - name: Install and restart the exact signed candidate
-        id: install-gate
+      - name: Install the first signed-channel baseline
+        if: ${{ inputs.allow_initial_signed_channel }}
+        id: initial-install-gate
         shell: pwsh
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
           EXPECTED_VERSION: ${{ inputs.expected_version }}
-          ALLOW_INITIAL_SIGNED_CHANNEL: ${{ inputs.allow_initial_signed_channel }}
         run: |
           $sourceSha = (git rev-parse HEAD).Trim()
           $arguments = @(
@@ -154,20 +154,75 @@ jobs:
             "-SourceSha", $sourceSha,
             "-RunId", $env:GITHUB_RUN_ID,
             "-RunAttempt", $env:GITHUB_RUN_ATTEMPT,
-            "-EvidenceDir", "artifacts/windows-release-candidate"
+            "-EvidenceDir", "artifacts/windows-release-candidate",
+            "-AllowInitialSignedChannel"
+          )
+          powershell.exe @arguments
+          if ($LASTEXITCODE -ne 0) { throw "First signed-channel baseline installation failed." }
+
+      - name: Run the exact signed candidate through the in-app updater
+        id: updater-gate
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          ALLOW_INITIAL_SIGNED_CHANNEL: ${{ inputs.allow_initial_signed_channel }}
+        run: |
+          $sourceSha = (git rev-parse HEAD).Trim()
+          $arguments = @(
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", "tools/windows-updater-canary.ps1",
+            "-BundleRoot", "candidate-assets",
+            "-ExpectedVersion", $env:EXPECTED_VERSION,
+            "-ReleaseTag", $env:RELEASE_TAG,
+            "-SourceSha", $sourceSha,
+            "-RunId", $env:GITHUB_RUN_ID,
+            "-RunAttempt", $env:GITHUB_RUN_ATTEMPT,
+            "-EvidenceDir", "artifacts/windows-updater-canary"
           )
           if ($env:ALLOW_INITIAL_SIGNED_CHANNEL -eq "true") {
             $arguments += "-AllowInitialSignedChannel"
           }
           powershell.exe @arguments
-          if ($LASTEXITCODE -ne 0) { throw "Signed candidate installation gate failed." }
+          if ($LASTEXITCODE -ne 0) { throw "In-app updater canary failed." }
+
+      - name: Verify the updater-installed candidate
+        if: ${{ !inputs.allow_initial_signed_channel }}
+        id: install-gate
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          UPDATER_EVIDENCE: ${{ steps.updater-gate.outputs.evidence_json }}
+        run: |
+          $sourceSha = (git rev-parse HEAD).Trim()
+          if (-not $env:UPDATER_EVIDENCE) {
+            throw "The in-app updater gate did not return its evidence path."
+          }
+          $arguments = @(
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", "tools/windows-release-candidate-gate.ps1",
+            "-BundleRoot", "candidate-assets",
+            "-ExpectedVersion", $env:EXPECTED_VERSION,
+            "-ReleaseTag", $env:RELEASE_TAG,
+            "-SourceSha", $sourceSha,
+            "-RunId", $env:GITHUB_RUN_ID,
+            "-RunAttempt", $env:GITHUB_RUN_ATTEMPT,
+            "-EvidenceDir", "artifacts/windows-release-candidate",
+            "-VerifyInstalledOnly",
+            "-UpdaterEvidencePath", $env:UPDATER_EVIDENCE
+          )
+          powershell.exe @arguments
+          if ($LASTEXITCODE -ne 0) { throw "Updater-installed candidate verification failed." }
 
       - name: Run strict provider and visible-browser gate
         shell: pwsh
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
           EXPECTED_VERSION: ${{ inputs.expected_version }}
-          ATELIER_EXE: ${{ steps.install-gate.outputs.atelier_exe }}
+          ATELIER_EXE: ${{ steps.updater-gate.outputs.atelier_exe }}
           REQUIRE_SMART_APP_CONTROL_EVIDENCE: ${{ inputs.require_smart_app_control_evidence }}
         run: |
           $sourceSha = (git rev-parse HEAD).Trim()
@@ -200,6 +255,18 @@ jobs:
           powershell.exe @arguments
           if ($LASTEXITCODE -ne 0) { throw "Strict Windows provider gate failed." }
 
+      - name: Seal the exact candidate and physical evidence
+        shell: pwsh
+        env:
+          EVIDENCE_DIR: artifacts
+          RELEASE_ASSETS_DIR: candidate-assets
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+        run: |
+          $env:RELEASE_SOURCE_SHA = (git rev-parse HEAD).Trim()
+          node .github/scripts/seal-physical-release-evidence.mjs
+          if ($LASTEXITCODE -ne 0) { throw "Could not seal the physical release evidence." }
+
       - name: Upload physical gate evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -208,6 +275,8 @@ jobs:
           path: |
             artifacts/windows-runner-preflight/*
             artifacts/windows-release-candidate/*
+            artifacts/windows-updater-canary/*
+            artifacts/windows-release-seal/*
             artifacts/windows-package-smoke/*
             artifacts/windows-provider-current/*
           if-no-files-found: error

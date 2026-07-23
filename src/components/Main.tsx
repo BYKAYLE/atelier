@@ -12,6 +12,8 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { autoInstallExecutable } from "../lib/cliInstallers";
 import {
+  estimateTerminalGrid,
+  isStablePtyGrid,
   normalizeTerminalSplitRatio,
   isTerminalSurfaceMeasurable,
   parseTerminalLayout,
@@ -430,18 +432,28 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
     }
     try {
       tab.fit.fit();
-      const approxCharW = Math.max(6, tw.terminalFontPx * 0.62);
-      const approxCharH = Math.max(12, tw.terminalFontPx * 1.2);
-      const approxCols = Math.max(80, Math.floor(host.clientWidth / approxCharW) - 1);
-      const approxRows = Math.max(24, Math.floor(host.clientHeight / approxCharH) - 1);
+      const { cols: approxCols, rows: approxRows } = estimateTerminalGrid(
+        host.clientWidth,
+        host.clientHeight,
+        tw.terminalFontPx,
+      );
       if (tab.term.cols < approxCols * 0.85) {
         tab.term.resize(approxCols, approxRows);
         imeLogPush({ kind: `fit-${label}-override`, tabId: tab.id, fitCols: tab.term.cols, approxCols, hostW: host.clientWidth, at: Date.now() });
       } else {
         imeLogPush({ kind: `fit-${label}`, tabId: tab.id, rows: tab.term.rows, cols: tab.term.cols, hostW: host.clientWidth, at: Date.now() });
       }
-      if (notifyPty && isTauri() && tab.ptyId && tab.term.cols >= 80) {
+      const fittedGrid = { cols: tab.term.cols, rows: tab.term.rows };
+      if (notifyPty && isTauri() && tab.ptyId && isStablePtyGrid(fittedGrid)) {
         ptyResize(tab.ptyId, tab.term.cols, tab.term.rows).catch(() => {});
+      } else if (notifyPty && tab.ptyId && !isStablePtyGrid(fittedGrid)) {
+        imeLogPush({
+          kind: `fit-${label}-pty-resize-deferred`,
+          tabId: tab.id,
+          rows: tab.term.rows,
+          cols: tab.term.cols,
+          at: Date.now(),
+        });
       }
       return true;
     } catch {
@@ -1078,7 +1090,7 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
     hostEl.style.display = "none";
 
     term.onResize(({ cols, rows }) => {
-      if (tauri && ptyId && cols >= 80 && isTerminalHostMeasurable(hostEl)) {
+      if (tauri && ptyId && cols > 0 && rows > 0 && isTerminalHostMeasurable(hostEl)) {
         ptyResize(ptyId, cols, rows).catch(console.error);
       }
     });
@@ -1622,7 +1634,7 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
         tab.term.options.fontFamily = "monospace";
         tab.term.options.fontFamily = ff;
         fitVisibleTab(tab, "font-loaded", false);
-        if (isTauri() && tab.ptyId && tab.term.cols >= 80) {
+        if (isTauri() && tab.ptyId && tab.term.cols > 0 && tab.term.rows > 0) {
           ptyResize(tab.ptyId, tab.term.cols, tab.term.rows).catch(() => {});
         }
       } catch {}
@@ -1654,14 +1666,14 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
       // 폰트 늦게 로딩돼 cols 오산 가능 → 추가 fit + claude에 SIGWINCH 효과를 위한 resize 통보.
       window.setTimeout(() => {
         runFit("retry");
-        if (isTauri() && tab.ptyId && tab.term.cols >= 80) {
+        if (isTauri() && tab.ptyId && tab.term.cols > 0 && tab.term.rows > 0) {
           ptyResize(tab.ptyId, tab.term.cols, tab.term.rows).catch(() => {});
         }
       }, 500);
     }, 50);
     const onResize = () => {
       runFit("window-resize");
-      if (isTauri() && tab.ptyId && tab.term.cols >= 80) {
+      if (isTauri() && tab.ptyId && tab.term.cols > 0 && tab.term.rows > 0) {
         ptyResize(tab.ptyId, tab.term.cols, tab.term.rows).catch(() => {});
       }
     };

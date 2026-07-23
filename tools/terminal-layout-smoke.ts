@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import {
   buildBalancedTerminalLayout,
   collectTerminalLayoutLeaves,
+  estimateTerminalGrid,
+  isStablePtyGrid,
   isTerminalSurfaceMeasurable,
   parseTerminalLayout,
   reconcileTerminalLayout,
@@ -59,10 +61,20 @@ assert.equal(isTerminalSurfaceMeasurable({ ...measurableSurface, active: false }
 assert.equal(isTerminalSurfaceMeasurable({ ...measurableSurface, display: "none" }), false);
 assert.equal(isTerminalSurfaceMeasurable({ ...measurableSurface, width: 0, height: 0 }), false);
 
+const narrowGrid = estimateTerminalGrid(240, 120, 14);
+assert.ok(narrowGrid.cols > 0 && narrowGrid.cols < 80);
+assert.ok(narrowGrid.rows > 0 && narrowGrid.rows < 24);
+assert.equal(isStablePtyGrid(narrowGrid), false);
+assert.equal(isStablePtyGrid({ cols: 80, rows: 12 }), true);
+assert.equal(isStablePtyGrid({ cols: 79, rows: 24 }), false);
+assert.deepEqual(estimateTerminalGrid(0, 0, Number.NaN), { cols: 2, rows: 1 });
+
 console.log(JSON.stringify({
   ok: true,
   leaves: collectTerminalLayoutLeaves(reconciled),
   persistedRatio: 0.85,
   malformedRejected: true,
   hiddenRendererDeferred: true,
+  narrowPtyResizeDeferred: true,
+  narrowGrid,
 }));

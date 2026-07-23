@@ -13,7 +13,9 @@ param(
   [string]$RunAttempt,
   [string]$EvidenceDir = "artifacts/windows-release-candidate",
   [int]$StartupTimeoutSec = 45,
-  [switch]$AllowInitialSignedChannel
+  [switch]$AllowInitialSignedChannel,
+  [switch]$VerifyInstalledOnly,
+  [string]$UpdaterEvidencePath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -186,40 +188,94 @@ if (-not $installerSignature.timestamped) {
   throw "Candidate MSI Authenticode signature is valid but is not timestamped."
 }
 
-$baselineExe = Find-InstalledAtelier
+$installerHash = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+$baselineExe = $null
 $baselineVersion = $null
-if ($baselineExe) {
-  $baselineVersion = Invoke-AtelierProbe -ExePath $baselineExe -Argument "--atelier-version-probe"
-}
 $baselineIsOlder = $false
-if ($baselineVersion) {
-  $baselineIsOlder = [version]$baselineVersion -lt [version]$ExpectedVersion
-  if ([version]$baselineVersion -gt [version]$ExpectedVersion) {
-    throw "Refusing to downgrade Atelier from $baselineVersion to $ExpectedVersion."
+$waiverUsed = $false
+$updaterEvidence = $null
+
+if ($VerifyInstalledOnly) {
+  if ($AllowInitialSignedChannel) {
+    throw "VerifyInstalledOnly cannot be combined with AllowInitialSignedChannel."
   }
-}
-$waiverUsed = -not $baselineIsOlder
-if ($waiverUsed -and -not $AllowInitialSignedChannel) {
-  $state = if ($baselineVersion) { "installed version is $baselineVersion" } else { "no direct-channel baseline is installed" }
-  throw "A real older-version upgrade baseline is required ($state). Use AllowInitialSignedChannel only for the first signed channel release."
-}
+  if ([string]::IsNullOrWhiteSpace($UpdaterEvidencePath) -or -not (Test-Path -LiteralPath $UpdaterEvidencePath -PathType Leaf)) {
+    throw "VerifyInstalledOnly requires a Windows updater canary receipt."
+  }
+  $updaterEvidence = Get-Content -LiteralPath $UpdaterEvidencePath -Raw | ConvertFrom-Json
+  if ($updaterEvidence.schemaVersion -ne 1 -or $updaterEvidence.status -ne "passed") {
+    throw "The Windows updater canary receipt is not a passing schema version 1 receipt."
+  }
+  if (
+    $updaterEvidence.releaseTag -ne $ReleaseTag -or
+    ([string]$updaterEvidence.sourceSha).ToLowerInvariant() -ne $SourceSha.ToLowerInvariant() -or
+    $updaterEvidence.expectedVersion -ne $ExpectedVersion -or
+    ([string]$updaterEvidence.githubRunId) -ne $RunId -or
+    ([int]$updaterEvidence.githubRunAttempt) -ne ([int]$RunAttempt) -or
+    $updaterEvidence.runnerName -ne ([string]$env:RUNNER_NAME)
+  ) {
+    throw "The Windows updater canary receipt identity does not match this physical gate run."
+  }
+  if (
+    $updaterEvidence.mode -ne "upgrade" -or
+    $updaterEvidence.initialSignedChannelWaiverUsed -eq $true -or
+    $updaterEvidence.upgradePersistenceProved -ne $true -or
+    $updaterEvidence.updater.signatureVerifiedByTauriUpdater -ne $true -or
+    $updaterEvidence.updater.installerLaunchRequested -ne $true -or
+    $updaterEvidence.updater.updaterDrivenRelaunch -ne $true
+  ) {
+    throw "The Windows updater canary did not prove a real signed in-app upgrade and relaunch."
+  }
+  if (
+    ([string]$updaterEvidence.candidate.sha256).ToLowerInvariant() -ne $installerHash -or
+    ([long]$updaterEvidence.candidate.bytes) -ne ([long]$installer.Length)
+  ) {
+    throw "The Windows updater canary receipt refers to a different MSI candidate."
+  }
+  $baselineVersion = [string]$updaterEvidence.fromVersion
+  if (([version]$baselineVersion) -ge ([version]$ExpectedVersion)) {
+    throw "The Windows updater canary baseline is not older than the candidate."
+  }
+  $baselineIsOlder = $true
+  $installedExe = [IO.Path]::GetFullPath([string]$updaterEvidence.installed.path)
+  if (-not (Test-Path -LiteralPath $installedExe -PathType Leaf)) {
+    throw "The updater-installed Atelier.exe could not be located: $installedExe"
+  }
+  Write-Host "Verifying the candidate installed by Atelier's in-app updater: $installedExe"
+} else {
+  $baselineExe = Find-InstalledAtelier
+  if ($baselineExe) {
+    $baselineVersion = Invoke-AtelierProbe -ExePath $baselineExe -Argument "--atelier-version-probe"
+  }
+  if ($baselineVersion) {
+    $baselineIsOlder = ([version]$baselineVersion) -lt ([version]$ExpectedVersion)
+    if (([version]$baselineVersion) -gt ([version]$ExpectedVersion)) {
+      throw "Refusing to downgrade Atelier from $baselineVersion to $ExpectedVersion."
+    }
+  }
+  $waiverUsed = -not $baselineIsOlder
+  if ($waiverUsed -and -not $AllowInitialSignedChannel) {
+    $state = if ($baselineVersion) { "installed version is $baselineVersion" } else { "no direct-channel baseline is installed" }
+    throw "A real older-version upgrade baseline is required ($state). Use AllowInitialSignedChannel only for the first signed channel release."
+  }
 
-if ($baselineExe) { Stop-ExactAtelierProcesses $baselineExe }
-Write-Host "Installing signed candidate MSI: $($installer.FullName)"
-$arguments = "/i `"$($installer.FullName)`" /qn /norestart"
-$install = Start-Process -FilePath "msiexec.exe" -ArgumentList $arguments -Wait -PassThru -NoNewWindow
-if ($install.ExitCode -notin @(0, 3010)) {
-  throw "Candidate MSI installation failed with exit code $($install.ExitCode)."
-}
+  if ($baselineExe) { Stop-ExactAtelierProcesses $baselineExe }
+  Write-Host "Installing signed candidate MSI: $($installer.FullName)"
+  $arguments = "/i `"$($installer.FullName)`" /qn /norestart"
+  $install = Start-Process -FilePath "msiexec.exe" -ArgumentList $arguments -Wait -PassThru -NoNewWindow
+  if ($install.ExitCode -notin @(0, 3010)) {
+    throw "Candidate MSI installation failed with exit code $($install.ExitCode)."
+  }
 
-$installedExe = $null
-for ($attempt = 0; $attempt -lt 45; $attempt++) {
-  $installedExe = Find-InstalledAtelier
-  if ($installedExe) { break }
-  Start-Sleep -Seconds 1
-}
-if (-not $installedExe) {
-  throw "The candidate MSI completed, but installed Atelier.exe could not be located."
+  $installedExe = $null
+  for ($attempt = 0; $attempt -lt 45; $attempt++) {
+    $installedExe = Find-InstalledAtelier
+    if ($installedExe) { break }
+    Start-Sleep -Seconds 1
+  }
+  if (-not $installedExe) {
+    throw "The candidate MSI completed, but installed Atelier.exe could not be located."
+  }
 }
 
 $installedSignature = Get-AuthenticodeEvidence $installedExe
@@ -275,7 +331,15 @@ if ($postRestartVersion -ne $ExpectedVersion) {
   throw "Candidate version did not persist after restart: expected $ExpectedVersion, found $postRestartVersion."
 }
 
-$mode = if ($baselineIsOlder) { "upgrade" } elseif ($baselineVersion) { "reinstall" } else { "clean-install" }
+$mode = if ($VerifyInstalledOnly) {
+  "in-app-upgrade"
+} elseif ($baselineIsOlder) {
+  "direct-upgrade"
+} elseif ($baselineVersion) {
+  "direct-reinstall"
+} else {
+  "direct-clean-install"
+}
 $evidencePath = [IO.Path]::GetFullPath($EvidenceDir)
 New-Item -ItemType Directory -Force -Path $evidencePath | Out-Null
 $summary = [ordered]@{
@@ -288,6 +352,7 @@ $summary = [ordered]@{
   githubRunAttempt = [int]$RunAttempt
   runnerName = [string]$env:RUNNER_NAME
   mode = $mode
+  installationPath = if ($VerifyInstalledOnly) { "in-app-updater" } else { "direct-msi" }
   interactiveDesktop = $true
   baseline = [ordered]@{
     executable = $baselineExe
@@ -297,7 +362,7 @@ $summary = [ordered]@{
   initialSignedChannelWaiverUsed = $waiverUsed
   installer = [ordered]@{
     path = $installer.FullName
-    sha256 = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    sha256 = $installerHash
     signature = $installerSignature
   }
   installed = [ordered]@{
@@ -310,7 +375,22 @@ $summary = [ordered]@{
   rendererReady = $true
   rendererReceipt = $rendererReceipt
   postRestartVersion = $postRestartVersion
-  upgradePersistenceProved = $baselineIsOlder -and $postRestartVersion -eq $ExpectedVersion
+  upgradePersistenceProved = if ($VerifyInstalledOnly) {
+    $updaterEvidence.upgradePersistenceProved -eq $true -and $postRestartVersion -eq $ExpectedVersion
+  } else {
+    $baselineIsOlder -and $postRestartVersion -eq $ExpectedVersion
+  }
+  updaterEvidence = if ($VerifyInstalledOnly) {
+    [ordered]@{
+      path = [IO.Path]::GetFullPath($UpdaterEvidencePath)
+      sha256 = (Get-FileHash -LiteralPath $UpdaterEvidencePath -Algorithm SHA256).Hash.ToLowerInvariant()
+      mode = $updaterEvidence.mode
+      signatureVerifiedByTauriUpdater = $updaterEvidence.updater.signatureVerifiedByTauriUpdater
+      updaterDrivenRelaunch = $updaterEvidence.updater.updaterDrivenRelaunch
+    }
+  } else {
+    $null
+  }
 }
 $jsonPath = Join-Path $evidencePath "windows-release-candidate.json"
 $summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $jsonPath -Encoding UTF8

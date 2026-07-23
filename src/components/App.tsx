@@ -412,6 +412,24 @@ const App: React.FC = () => {
             <button
               type="button"
               onClick={() => setTw({ dark: !tw.dark })}
+              aria-label={
+                language === "en"
+                  ? tw.dark
+                    ? "Switch to light theme"
+                    : "Switch to dark theme"
+                  : tw.dark
+                    ? "라이트 테마로 전환"
+                    : "다크 테마로 전환"
+              }
+              title={
+                language === "en"
+                  ? tw.dark
+                    ? "Switch to light theme"
+                    : "Switch to dark theme"
+                  : tw.dark
+                    ? "라이트 테마로 전환"
+                    : "다크 테마로 전환"
+              }
               className={cls(
                 "h-9 rounded-[8px] border text-[12px] font-medium transition-colors flex items-center justify-center gap-2",
                 tw.dark
@@ -426,6 +444,8 @@ const App: React.FC = () => {
             </button>
             <button
               type="button"
+              aria-label={language === "en" ? "Open settings" : "설정 열기"}
+              title={language === "en" ? "Open settings" : "설정 열기"}
               onClick={() =>
                 openNav({
                   id: "appearance",

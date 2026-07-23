@@ -926,7 +926,6 @@ const ProviderCard: React.FC<CardProps> = ({
           return;
         }
       }
-      onInstalled();
       setErrorMsg(copy.installTimeout);
       setInstalling(false);
     } catch (e) {
@@ -1144,31 +1143,15 @@ const HermesCard: React.FC<{
 
   async function runUpdate() {
     setUpdating(true);
-    const versionBefore = updateStatus?.current_version ?? null;
+    setInstallError(null);
     try {
       await hermesUpdate();
-      // hermes update --yes 는 백그라운드(git pull + pip install + 노드 의존성)로
-      // 보통 30초~3분. 5초마다 폴링해서 (a) 버전이 바뀌거나 (b) update_available 가
-      // false 가 되면 완료로 간주. 5분이 지나도 변화 없으면 타임아웃.
-      const start = Date.now();
-      const timer = window.setInterval(async () => {
-        try {
-          const s = await hermesCheckUpdate();
-          setUpdateStatus(s);
-          const versionChanged = versionBefore && s.current_version && s.current_version !== versionBefore;
-          if (!s.update_available || versionChanged) {
-            window.clearInterval(timer);
-            setUpdating(false);
-          }
-        } catch {
-          // 일시적 실패는 무시 — 다음 tick 에서 재시도
-        }
-        if (Date.now() - start > 5 * 60 * 1000) {
-          window.clearInterval(timer);
-          setUpdating(false);
-        }
-      }, 5000);
-    } catch {
+      const next = await hermesCheckUpdate();
+      setUpdateStatus(next);
+      onInstalled();
+    } catch (error) {
+      setInstallError(String(error));
+    } finally {
       setUpdating(false);
     }
   }
@@ -1189,7 +1172,6 @@ const HermesCard: React.FC<{
           return;
         }
       }
-      onInstalled();
       setInstallError(copy.installTimeout);
       setInstalling(false);
     } catch (e) {
