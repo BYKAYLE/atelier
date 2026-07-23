@@ -28,6 +28,7 @@ const cargoSource = readFileSync(manifest, "utf8");
 const packageSource = readFileSync("package.json", "utf8");
 const releasePreflightSource = readFileSync("tools/release-preflight.mjs", "utf8");
 const releasePreflightSmokeSource = readFileSync("tools/release-preflight-smoke.mjs", "utf8");
+const releaseReadinessProbeSource = readFileSync("tools/release-readiness-probes.mjs", "utf8");
 const storeBuildSource = readFileSync("tools/windows-store/build-msix.ps1", "utf8");
 const windowsProviderSmokeSource = readFileSync("tools/windows-provider-smoke.ps1", "utf8");
 const windowsPackageSmokeSource = readFileSync("tools/windows-package-smoke.ps1", "utf8");
@@ -661,6 +662,8 @@ const sourceInvariants = [
   {
     ok:
       packageSource.includes('"release:preflight"') &&
+      packageSource.includes('"release:readiness"') &&
+      packageSource.includes('"release:readiness:strict"') &&
       packageSource.includes('"smoke:release-preflight"') &&
       releaseWorkflowSource.includes("npm run smoke:release-preflight") &&
       releaseWorkflowSource.includes("node tools/release-preflight.mjs") &&
@@ -668,13 +671,22 @@ const sourceInvariants = [
       releaseWorkflowSource.includes('--repository "$GITHUB_REPOSITORY"') &&
       releaseWorkflowSource.includes("--output release-preflight.json") &&
       releaseWorkflowSource.includes("name: release-source-preflight") &&
-      releasePreflightSource.includes('phase: "source-preflight"') &&
+      releasePreflightSource.includes('"source-preflight"') &&
+      releasePreflightSource.includes('"release-infrastructure-preflight"') &&
       releasePreflightSource.includes("RELEASE_CREDENTIAL_NAMES") &&
       releasePreflightSource.includes("store-updater-isolation") &&
       releasePreflightSource.includes("tracked-source-clean") &&
-      releasePreflightSmokeSource.includes("source-preflight-passed"),
+      releasePreflightSource.includes("--inspect-host") &&
+      releasePreflightSource.includes("--inspect-github") &&
+      releasePreflightSmokeSource.includes("source-preflight-passed") &&
+      releasePreflightSmokeSource.includes("release-infrastructure-preflight-passed") &&
+      releaseReadinessProbeSource.includes("REQUIRED_REPOSITORY_SECRET_NAMES") &&
+      releaseReadinessProbeSource.includes("macos-developer-id-identity") &&
+      releaseReadinessProbeSource.includes("github-production-reviewer") &&
+      releaseReadinessProbeSource.includes("github-windows-runner-online") &&
+      !releaseReadinessProbeSource.includes("secret.value"),
     message:
-      "Local and CI release preflight must share one fail-closed evaluator and preserve its evidence",
+      "Local and CI release preflight must share one redacted evaluator and inspect external release infrastructure",
   },
   {
     ok:

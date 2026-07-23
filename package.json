@@ -29,6 +29,8 @@
     "harness:parallel-agent": "node tools/parallel-agent-harness.mjs",
     "audit:release": "node tools/release-security-audit.mjs",
     "release:preflight": "node tools/release-preflight.mjs",
+    "release:readiness": "node tools/release-preflight.mjs --inspect-host --inspect-github --output artifacts/release-readiness-preflight.json",
+    "release:readiness:strict": "node tools/release-preflight.mjs --strict --inspect-host --inspect-github --output artifacts/release-readiness-preflight.json",
     "store:msix": "powershell -ExecutionPolicy Bypass -File tools/windows-store/build-msix.ps1",
     "smoke:windows-providers": "powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1",
     "smoke:pty-supervisor": "node tools/pty-supervisor-smoke.mjs",

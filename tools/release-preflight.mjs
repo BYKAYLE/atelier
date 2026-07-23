@@ -3,6 +3,13 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  collectGitHubReleaseSnapshot,
+  collectHostReleaseSnapshot,
+  evaluateGitHubReleaseReadiness,
+  evaluateHostReleaseReadiness,
+} from "./release-readiness-probes.mjs";
+
 export const RELEASE_CREDENTIAL_NAMES = Object.freeze([
   "APPLE_CERTIFICATE",
   "APPLE_CERTIFICATE_PASSWORD",
@@ -56,6 +63,9 @@ export function evaluateReleasePreflight({
   repository = null,
   sourceCommit = null,
   trackedSourceClean = null,
+  hostReleaseSnapshot = null,
+  githubReleaseSnapshot = null,
+  requireEnvironmentCredentials = true,
 }) {
   const packageVersion = packageJson.version ?? null;
   const cargoVersion = parseCargoPackageVersion(cargoToml);
@@ -72,6 +82,7 @@ export function evaluateReleasePreflight({
     (name) => typeof env[name] !== "string" || env[name].trim() === "",
   );
 
+  const deepInspection = hostReleaseSnapshot !== null || githubReleaseSnapshot !== null;
   const checks = [
     check(
       "version-alignment",
@@ -138,41 +149,77 @@ export function evaluateReleasePreflight({
           trackedSourceClean,
           "tracked source must be clean before a release tag is created",
         ),
-    check(
-      "release-credentials",
-      missingCredentials.length === 0,
-      "all macOS notarization, updater signing, and SignPath credentials must be present",
-      { missing: missingCredentials, presentCount: RELEASE_CREDENTIAL_NAMES.length - missingCredentials.length },
-    ),
+    requireEnvironmentCredentials
+      ? check(
+          "release-credentials",
+          missingCredentials.length === 0,
+          "all macOS notarization, updater signing, and SignPath credentials must be present",
+          {
+            missing: missingCredentials,
+            presentCount: RELEASE_CREDENTIAL_NAMES.length - missingCredentials.length,
+          },
+        )
+      : skipped(
+          "release-credentials",
+          "Local credential values are not inspected; GitHub credential names are checked instead",
+        ),
+    ...evaluateHostReleaseReadiness(hostReleaseSnapshot),
+    ...evaluateGitHubReleaseReadiness(githubReleaseSnapshot),
   ];
 
   const blockers = checks.filter((entry) => entry.status === "fail").map((entry) => entry.id);
   return {
-    schemaVersion: 1,
-    phase: "source-preflight",
+    schemaVersion: 2,
+    phase: deepInspection ? "release-infrastructure-preflight" : "source-preflight",
     generatedAt: new Date().toISOString(),
     version: packageVersion,
     releaseRepository,
     sourceCommit,
     tag,
     checks,
-    missingCredentials,
+    missingCredentials: requireEnvironmentCredentials ? missingCredentials : [],
+    environmentCredentialsInspected: requireEnvironmentCredentials,
     blockers,
     pendingDistributionGates: [
       "macos-developer-id-notarization",
       "windows-signpath-timestamped-signature",
       "physical-windows-oauth-and-updater-receipt",
     ],
-    verdict: blockers.length === 0 ? "source-preflight-passed" : "blocked",
+    evaluatedScopes: [
+      "source",
+      ...(hostReleaseSnapshot !== null ? ["release-host"] : []),
+      ...(githubReleaseSnapshot !== null ? ["github-infrastructure"] : []),
+    ],
+    verdict:
+      blockers.length > 0
+        ? "blocked"
+        : deepInspection
+          ? "release-infrastructure-preflight-passed"
+          : "source-preflight-passed",
   };
 }
 
 function parseArgs(argv) {
-  const options = { strict: false, tag: null, repository: null, output: null };
+  const options = {
+    strict: false,
+    inspectHost: false,
+    inspectGitHub: false,
+    tag: null,
+    repository: null,
+    output: null,
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--strict") {
       options.strict = true;
+      continue;
+    }
+    if (argument === "--inspect-host") {
+      options.inspectHost = true;
+      continue;
+    }
+    if (argument === "--inspect-github") {
+      options.inspectGitHub = true;
       continue;
     }
     if (["--tag", "--repository", "--output"].includes(argument)) {
@@ -204,6 +251,10 @@ export function runReleasePreflight({ cwd = process.cwd(), argv = process.argv.s
   );
   const sourceCommit = runGit(cwd, ["rev-parse", "HEAD"]);
   const trackedStatus = runGit(cwd, ["status", "--porcelain", "--untracked-files=no"]);
+  const releaseRepository = normalizeGitHubRepository(packageJson.repository?.url);
+  if (options.inspectGitHub && !releaseRepository) {
+    throw new Error("package.json does not identify a GitHub repository for inspection");
+  }
   const report = evaluateReleasePreflight({
     packageJson,
     cargoToml,
@@ -214,6 +265,13 @@ export function runReleasePreflight({ cwd = process.cwd(), argv = process.argv.s
     repository: options.repository,
     sourceCommit,
     trackedSourceClean: trackedStatus === "",
+    hostReleaseSnapshot: options.inspectHost
+      ? collectHostReleaseSnapshot({ env })
+      : null,
+    githubReleaseSnapshot: options.inspectGitHub
+      ? collectGitHubReleaseSnapshot({ repository: releaseRepository })
+      : null,
+    requireEnvironmentCredentials: !options.inspectGitHub,
   });
 
   const rendered = `${JSON.stringify(report, null, 2)}\n`;

@@ -6,6 +6,12 @@ import {
   normalizeGitHubRepository,
   parseCargoPackageVersion,
 } from "./release-preflight.mjs";
+import {
+  REQUIRED_REPOSITORY_SECRET_NAMES,
+  REQUIRED_REPOSITORY_VARIABLE_NAMES,
+  evaluateGitHubReleaseReadiness,
+  evaluateHostReleaseReadiness,
+} from "./release-readiness-probes.mjs";
 
 const repository = "BYKAYLE/atelier";
 const version = "9.8.7";
@@ -52,6 +58,74 @@ assert.ok(
   "preflight report must not serialize credential values",
 );
 
+const releaseHostSnapshot = {
+  platform: "darwin",
+  inspected: true,
+  applicable: true,
+  tools: {
+    security: true,
+    codesign: true,
+    spctl: true,
+    hdiutil: true,
+    notarytool: true,
+    stapler: true,
+  },
+  developerIdApplicationIdentities: ["Developer ID Application: Atelier (TEAM123456)"],
+  configuredSigningIdentityPresent: true,
+  configuredSigningIdentityAvailable: true,
+  errors: [],
+};
+const githubReleaseSnapshot = {
+  repository,
+  inspected: true,
+  secretNames: [...REQUIRED_REPOSITORY_SECRET_NAMES],
+  variableNames: [...REQUIRED_REPOSITORY_VARIABLE_NAMES],
+  environmentNames: ["production-release"],
+  productionEnvironment: {
+    name: "production-release",
+    requiredReviewerCount: 1,
+    branchPolicyProtected: true,
+  },
+  runners: [
+    {
+      name: "physical-windows-release",
+      status: "online",
+      busy: false,
+      labels: ["self-hosted", "windows", "x64"],
+    },
+  ],
+  errors: [],
+};
+assert.ok(evaluateHostReleaseReadiness(releaseHostSnapshot).every((entry) => entry.status !== "fail"));
+assert.ok(
+  evaluateGitHubReleaseReadiness(githubReleaseSnapshot).every((entry) => entry.status !== "fail"),
+);
+
+const infrastructurePassing = evaluateReleasePreflight({
+  packageJson,
+  cargoToml,
+  tauriConfig,
+  storeConfig,
+  env: credentialEnv,
+  tag: `v${version}`,
+  repository,
+  sourceCommit: "abc123",
+  trackedSourceClean: true,
+  hostReleaseSnapshot: releaseHostSnapshot,
+  githubReleaseSnapshot,
+  requireEnvironmentCredentials: false,
+});
+assert.equal(infrastructurePassing.verdict, "release-infrastructure-preflight-passed");
+assert.equal(infrastructurePassing.phase, "release-infrastructure-preflight");
+assert.deepEqual(infrastructurePassing.evaluatedScopes, [
+  "source",
+  "release-host",
+  "github-infrastructure",
+]);
+assert.equal(infrastructurePassing.environmentCredentialsInspected, false);
+assert.deepEqual(infrastructurePassing.missingCredentials, []);
+assert.ok(!JSON.stringify(infrastructurePassing).includes(credentialSentinel));
+
 const blocked = evaluateReleasePreflight({
   packageJson: { ...packageJson, version: "9.8.6" },
   cargoToml,
@@ -78,5 +152,48 @@ for (const expected of [
   assert.ok(blocked.blockers.includes(expected), `missing expected blocker ${expected}`);
 }
 assert.deepEqual(blocked.missingCredentials, RELEASE_CREDENTIAL_NAMES);
+
+const infrastructureBlocked = evaluateReleasePreflight({
+  packageJson,
+  cargoToml,
+  tauriConfig,
+  storeConfig,
+  env: credentialEnv,
+  trackedSourceClean: true,
+  hostReleaseSnapshot: {
+    platform: "darwin",
+    inspected: true,
+    applicable: true,
+    tools: { security: true, codesign: true, spctl: true, hdiutil: true, notarytool: false, stapler: false },
+    developerIdApplicationIdentities: [],
+    configuredSigningIdentityPresent: true,
+    configuredSigningIdentityAvailable: false,
+    errors: [],
+  },
+  githubReleaseSnapshot: {
+    repository,
+    inspected: true,
+    secretNames: [],
+    variableNames: [],
+    environmentNames: [],
+    productionEnvironment: null,
+    runners: [],
+    errors: [],
+  },
+  requireEnvironmentCredentials: false,
+});
+for (const expected of [
+  "macos-release-tools",
+  "macos-developer-id-identity",
+  "macos-configured-signing-identity",
+  "github-release-secrets",
+  "github-release-variables",
+  "github-production-environment",
+  "github-production-reviewer",
+  "github-windows-runner-registration",
+  "github-windows-runner-online",
+]) {
+  assert.ok(infrastructureBlocked.blockers.includes(expected), `missing infrastructure blocker ${expected}`);
+}
 
 console.log("release preflight smoke: pass");

@@ -26,6 +26,7 @@ Run the local gates before creating a tag:
 npm ci
 npm run smoke:release-preflight
 npm run release:preflight -- --output artifacts/release-preflight.json
+npm run release:readiness
 npm run build
 npm run gate:orca-features
 npm run smoke:updater-contract
@@ -44,6 +45,18 @@ inspection does not return a failing exit code merely because release
 credentials are intentionally absent. The tag workflow runs the same evaluator
 with `--strict`, the exact tag and repository, and preserves
 `release-preflight.json` as a workflow artifact even when the gate blocks.
+
+`npm run release:readiness` extends the same evaluator with read-only release
+infrastructure checks. On macOS it verifies the local signing, Gatekeeper,
+packaging, notarization, stapling tools and requires a Developer ID Application
+identity. On GitHub it checks only credential names, never values, and verifies
+the SignPath variables, protected `production-release` reviewer gate, and an
+online self-hosted Windows x64 runner. The report is written to
+`artifacts/release-readiness-preflight.json`. Use
+`npm run release:readiness:strict` when a nonzero exit is required for any
+missing prerequisite. Passing this preflight means the infrastructure can run;
+it does not replace the signed, notarized, or physical-device receipts from the
+later stages.
 
 Version metadata, release notes, and the reviewed commit must agree before the
 version tag is pushed.
