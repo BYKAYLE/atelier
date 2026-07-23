@@ -42,12 +42,14 @@ function run(command, args, options = {}) {
   });
 
   if (result.error) {
-    console.error(`[orca-feature-gate] failed to start ${label}: ${result.error.message}`);
-    process.exit(1);
+    const error = new Error(`failed to start ${label}: ${result.error.message}`);
+    error.exitCode = 1;
+    throw error;
   }
   if (result.status !== 0) {
-    console.error(`[orca-feature-gate] ${label} exited with ${result.status ?? "no status"}`);
-    process.exit(result.status || 1);
+    const error = new Error(`${label} exited with ${result.status ?? "no status"}`);
+    error.exitCode = result.status || 1;
+    throw error;
   }
 }
 
@@ -59,30 +61,58 @@ function runNpm(args, options = {}) {
   run("npm", args, options);
 }
 
-for (const script of smokeScripts) {
-  runNpm(["run", script]);
+let gateError;
+let restrictedBuildStarted = false;
+
+try {
+  for (const script of smokeScripts) {
+    runNpm(["run", script]);
+  }
+
+  restrictedBuildStarted = true;
+  runNpm(["run", "build"], {
+    env: { VITE_ATELIER_FEATURES: "atelier-cli" },
+  });
+  runNpm(["run", "smoke:feature-bundle"]);
+
+  runNpm(["run", "build"], {
+    env: { VITE_ATELIER_FEATURES: "mobile-control" },
+  });
+  runNpm(["run", "smoke:feature-dependency-bundle"]);
+
+  run(cargo, ["check", "--manifest-path", manifest, "--no-default-features"]);
+  for (const feature of cargoFeatures) {
+    run(cargo, [
+      "check",
+      "--manifest-path",
+      manifest,
+      "--no-default-features",
+      "--features",
+      feature,
+    ]);
+  }
+} catch (error) {
+  gateError = error;
+} finally {
+  if (restrictedBuildStarted) {
+    try {
+      console.log("\n[orca-feature-gate] Restore full production frontend bundle");
+      runNpm(["run", "build"], {
+        env: { VITE_ATELIER_FEATURES: "" },
+      });
+    } catch (restoreError) {
+      if (gateError) {
+        console.error(`[orca-feature-gate] production bundle restore also failed: ${restoreError.message}`);
+      } else {
+        gateError = restoreError;
+      }
+    }
+  }
 }
 
-runNpm(["run", "build"], {
-  env: { VITE_ATELIER_FEATURES: "atelier-cli" },
-});
-runNpm(["run", "smoke:feature-bundle"]);
-
-runNpm(["run", "build"], {
-  env: { VITE_ATELIER_FEATURES: "mobile-control" },
-});
-runNpm(["run", "smoke:feature-dependency-bundle"]);
-
-run(cargo, ["check", "--manifest-path", manifest, "--no-default-features"]);
-for (const feature of cargoFeatures) {
-  run(cargo, [
-    "check",
-    "--manifest-path",
-    manifest,
-    "--no-default-features",
-    "--features",
-    feature,
-  ]);
+if (gateError) {
+  console.error(`[orca-feature-gate] ${gateError.message}`);
+  process.exitCode = gateError.exitCode || 1;
+} else {
+  console.log(`\nOrca feature release gate passed (${smokeScripts.length + 2} contract smokes, ${cargoFeatures.length} removable backend features).`);
 }
-
-console.log(`\nOrca feature release gate passed (${smokeScripts.length + 2} contract smokes, ${cargoFeatures.length} removable backend features).`);

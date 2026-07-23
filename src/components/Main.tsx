@@ -8,7 +8,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
-import { CanvasAddon } from "@xterm/addon-canvas";
+import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { autoInstallExecutable } from "../lib/cliInstallers";
 import {
@@ -696,9 +696,19 @@ const Main: React.FC<Props> = ({ tw, isActive = true }) => {
     // 미적용 시 xterm 기본 v6는 일부 한글 음절을 1cell 처리해 폰트와 어긋날 수 있음.
     const unicode11 = new Unicode11Addon();
     term.loadAddon(unicode11);
-    // 라운드 #18: Canvas renderer — DOM renderer가 claude alternate buffer redraw 깨뜨림.
-    // canvas는 viewport 전체를 한 번에 그려 ANSI cursor 이동/erase sequence 정확 처리.
-    try { term.loadAddon(new CanvasAddon()); } catch (e) { console.warn("canvas addon", e); }
+    // WebGL 렌더러는 xterm 6과 호환되는 공식 가속 경로다. WebGL을 사용할 수 없거나
+    // 컨텍스트를 잃으면 addon을 해제해 xterm 기본 렌더러로 즉시 복귀한다.
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => {
+        console.warn("xterm WebGL context lost; falling back to the default renderer");
+        webgl.dispose();
+        term.refresh(0, Math.max(0, term.rows - 1));
+      });
+      term.loadAddon(webgl);
+    } catch (error) {
+      console.warn("xterm WebGL unavailable; using the default renderer", error);
+    }
     (term as unknown as { unicode: { activeVersion: string } }).unicode.activeVersion = "11";
     // 검증 전 workbench에서는 링크를 preview로 보냈고, 안정화 모드에서는 OS 기본
     // 브라우저로 연다. 숨겨진 preview state만 바뀌어 링크가 사라지는 상태를 막는다.

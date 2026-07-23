@@ -53,8 +53,8 @@ assertEqual(String(candidate.sourceSha || "").toLowerCase(), sourceSha, "candida
 assertEqual(candidate.expectedVersion, expectedVersion, "candidate expected version");
 assertEqual(String(candidate.githubRunId || ""), physicalGateRunId, "candidate GitHub run ID");
 assertTrue(candidate.interactiveDesktop === true, "candidate was not tested in an interactive desktop session");
-assertEqual(candidate.installer?.signature?.status, "Valid", "candidate installer Authenticode status");
-assertEqual(candidate.installed?.signature?.status, "Valid", "installed executable Authenticode status");
+assertTimestampedSignature(candidate.installer?.signature, "candidate installer");
+assertTimestampedSignature(candidate.installed?.signature, "installed executable");
 assertEqual(candidate.installed?.version, expectedVersion, "installed candidate version");
 assertTrue(candidate.installed?.resourcesPresent === true, "installed design-engine resources were not proved");
 assertTrue(candidate.rendererReady === true, "candidate renderer-ready receipt is missing");
@@ -103,12 +103,14 @@ for (const [kind, asset] of [["msi", msiAsset], ["nsis", nsisAsset]]) {
   assertTrue(Boolean(proof), `package receipt is missing ${kind.toUpperCase()} proof`);
   assertEqual(String(proof.sha256 || "").toLowerCase(), String(asset.sha256 || "").toLowerCase(), `${kind} package hash`);
   assertEqual(proof.signatureStatus, "Valid", `${kind} package Authenticode status`);
+  assertTimestampedSignature(proof.signature, `${kind} package`);
   assertTrue(proof.payload?.resourcesPresent === true, `${kind} payload resources were not proved`);
   assertTrue(
     String(proof.payload?.version || "").startsWith(expectedVersion),
     `${kind} payload version does not match ${expectedVersion}`,
   );
   assertEqual(proof.payload?.signatureStatus, "Valid", `${kind} payload Authenticode status`);
+  assertTimestampedSignature(proof.payload?.signature, `${kind} payload`);
 }
 
 assertEqual(provider.schemaVersion, 1, "provider receipt schema");
@@ -121,6 +123,7 @@ assertTrue(provider.installedApp?.found === true, "provider gate did not find th
 assertTrue(provider.installedApp?.versionOk === true, "provider gate did not prove the installed version");
 assertEqual(provider.installedApp?.version, expectedVersion, "provider installed version");
 assertTrue(provider.installedApp?.signatureOk === true, "provider gate did not prove Authenticode");
+assertTimestampedSignature(provider.installedApp?.signatureEvidence, "provider installed executable");
 assertTrue(provider.installedApp?.restartOk === true, "provider gate did not prove restart");
 assertTrue(provider.installedApp?.rendererReadyOk === true, "provider gate did not prove renderer readiness");
 assertEqual(
@@ -139,8 +142,7 @@ assertEqual(
 );
 assertTrue(provider.browserProbe === true, "native OAuth browser probe failed");
 assertTrue(provider.browserHelperProbe === true, "signed OAuth browser helper probe failed");
-assertTrue(provider.browserProcessEvidence?.observed === true, "no browser process was observed");
-assertTrue(provider.browserProcessEvidence?.visibleWindow === true, "no visible browser window was observed");
+assertBrowserProcessEvidence(provider.browserProcessEvidence);
 for (const key of ["codexFlowExitOk", "codexAuthOk", "claudeFlowExitOk", "claudeAuthOk"]) {
   assertTrue(provider.loginResults?.[key] === true, `provider login evidence is false: ${key}`);
 }
@@ -232,6 +234,65 @@ function assertEqual(actual, expected, label) {
 
 function assertTrue(condition, message) {
   if (!condition) fail(message);
+}
+
+function assertTimestampedSignature(signature, label) {
+  assertEqual(signature?.status, "Valid", `${label} Authenticode status`);
+  assertTrue(Boolean(signature?.signerThumbprint), `${label} signer thumbprint is missing`);
+  assertTrue(Boolean(signature?.signerNotBefore), `${label} signer validity start is missing`);
+  assertTrue(Boolean(signature?.signerNotAfter), `${label} signer validity end is missing`);
+  assertTrue(signature?.timestamped === true, `${label} is not timestamped`);
+  assertTrue(Boolean(signature?.timestamperThumbprint), `${label} timestamper thumbprint is missing`);
+  assertTrue(Boolean(signature?.timestamperNotBefore), `${label} timestamper validity start is missing`);
+  assertTrue(Boolean(signature?.timestamperNotAfter), `${label} timestamper validity end is missing`);
+}
+
+function assertBrowserProcessEvidence(evidence) {
+  assertTrue(evidence?.observed === true, "no browser process was observed");
+  assertTrue(evidence?.visibleWindow === true, "no visible browser window was observed");
+  const allowedModes = new Set([
+    "new-or-recent-process",
+    "existing-visible-default-browser",
+  ]);
+  assertTrue(
+    allowedModes.has(evidence?.observationMode),
+    `invalid browser observation mode: ${evidence?.observationMode || "missing"}`,
+  );
+
+  const processes = Array.isArray(evidence?.processes) ? evidence.processes : [];
+  assertTrue(processes.length > 0, "browser process evidence has no process records");
+  const visibleProcesses = processes.filter(
+    (process) =>
+      process &&
+      typeof process.name === "string" &&
+      process.name.trim() &&
+      Number.isInteger(process.id) &&
+      process.id > 0 &&
+      process.visibleWindow === true &&
+      !Number.isNaN(Date.parse(process.startedAt)),
+  );
+  assertTrue(
+    visibleProcesses.length > 0,
+    "browser process evidence has no complete visible process record",
+  );
+
+  if (evidence.observationMode === "existing-visible-default-browser") {
+    const defaultBrowserNames = Array.isArray(evidence.defaultBrowserProcessNames)
+      ? evidence.defaultBrowserProcessNames
+          .filter((name) => typeof name === "string" && name.trim())
+          .map((name) => name.trim().toLowerCase())
+      : [];
+    assertTrue(
+      defaultBrowserNames.length > 0,
+      "existing browser evidence is missing the default-browser process name",
+    );
+    assertTrue(
+      visibleProcesses.some((process) =>
+        defaultBrowserNames.includes(process.name.trim().toLowerCase()),
+      ),
+      "existing browser evidence does not match the configured default browser",
+    );
+  }
 }
 
 function fail(message) {

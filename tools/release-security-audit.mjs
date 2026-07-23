@@ -60,6 +60,14 @@ const publishEvidenceSource = readFileSync(
 const ptySupervisorSmokeSource = readFileSync("tools/pty-supervisor-smoke.mjs", "utf8");
 const agentHarnessSource = readFileSync("tools/atelier-agent-harness.mjs", "utf8");
 const connectionsSource = readFileSync("src/components/ConnectionsPanel.tsx", "utf8");
+const oauthLoginFlowSource = readFileSync(
+  "src/features/connections/oauthLoginFlow.ts",
+  "utf8",
+);
+const oauthLoginFlowSmokeSource = readFileSync(
+  "tools/oauth-login-flow-smoke.ts",
+  "utf8",
+);
 const settingsSource = readFileSync("src/components/Settings.tsx", "utf8");
 const agentWorkspaceSource = readFileSync("src/components/AgentWorkspace.tsx", "utf8");
 const indexCssSource = readFileSync("src/index.css", "utf8");
@@ -530,10 +538,15 @@ const sourceInvariants = [
       const fallbackIndex = handoff.indexOf('@tauri-apps/plugin-shell');
       return nativeIndex >= 0
         && fallbackIndex > nativeIndex
-        && handoff.includes('parsed.protocol === "https:"')
-        && handoff.includes('host.endsWith(`.${root}`)')
-        && handoff.includes('["claude.ai", "claude.com", "anthropic.com"]')
-        && handoff.includes('["openai.com", "chatgpt.com"]');
+        && handoff.includes("isAllowedOauthLoginUrl(provider, url)")
+        && oauthLoginFlowSource.includes('parsed.protocol !== "https:"')
+        && oauthLoginFlowSource.includes("parsed.username || parsed.password")
+        && oauthLoginFlowSource.includes('host.endsWith(`.${root}`)')
+        && oauthLoginFlowSource.includes('["claude.ai", "claude.com", "anthropic.com"]')
+        && oauthLoginFlowSource.includes('["openai.com", "chatgpt.com"]')
+        && oauthLoginFlowSmokeSource.includes('"http://auth.openai.com/codex/device"')
+        && oauthLoginFlowSmokeSource.includes('"https://claude.ai.evil.example/login"')
+        && oauthLoginFlowSmokeSource.includes('"https://user@example.com@openai.com/login"');
     })(),
     message: "Packaged OAuth browser handoff must validate provider HTTPS hosts, try native open first, then use only the trusted Tauri fallback",
   },
@@ -550,10 +563,18 @@ const sourceInvariants = [
     ok:
       connectionsSource.includes("openLoginUrlWithRetry") &&
       connectionsSource.includes("openingLoginUrlsRef") &&
-      connectionsSource.includes("attempt.count >= 3") &&
+      connectionsSource.includes("planOauthLoginUrlAttempt(") &&
       connectionsSource.includes("if (nextUrl && loginState.browser_opened)") &&
       connectionsSource.includes("if (result.browser_opened) openedLoginUrlsRef.current") &&
-      connectionsSource.includes("else void openLoginUrlWithRetry"),
+      connectionsSource.includes("else void openLoginUrlWithRetry") &&
+      oauthLoginFlowSource.includes("OAUTH_LOGIN_RETRY_LIMIT = 3") &&
+      oauthLoginFlowSource.includes("OAUTH_LOGIN_RETRY_COOLDOWN_MS = 2_000") &&
+      oauthLoginFlowSource.includes("previous?.url === url") &&
+      oauthLoginFlowSource.includes("if (!force && current.count >= OAUTH_LOGIN_RETRY_LIMIT)") &&
+      oauthLoginFlowSmokeSource.includes('plan.reason, "cooldown"') &&
+      oauthLoginFlowSmokeSource.includes(').reason,\n  "limit"') &&
+      oauthLoginFlowSmokeSource.includes("const forced = planOauthLoginUrlAttempt") &&
+      oauthLoginFlowSmokeSource.includes("const changed = planOauthLoginUrlAttempt"),
     message:
       "OAuth browser handoff must preserve native success, retry bounded failures, and prevent concurrent duplicate opens",
   },
@@ -563,9 +584,18 @@ const sourceInvariants = [
   },
   {
     ok:
-      !workflowSource.includes("npm install --legacy-peer-deps") &&
-      (workflowSource.match(/npm ci --legacy-peer-deps/g) || []).length >= 4,
+      !workflowSource.includes("legacy-peer-deps") &&
+      (workflowSource.match(/\bnpm ci\b/g) || []).length >= 5,
     message: "Release workflows must install the locked npm dependency graph with npm ci",
+  },
+  {
+    ok:
+      packageSource.includes('"@microsoft/winappcli": "0.3.1"') &&
+      storeBuildSource.includes('node_modules\\@microsoft\\winappcli\\dist\\cli.js') &&
+      !storeBuildSource.includes("Get-Command winapp") &&
+      !storeBuildSource.includes("npm install -g"),
+    message:
+      "Microsoft Store packaging must execute the exact repository-pinned winapp CLI instead of a mutable global installation",
   },
   {
     ok:
@@ -573,6 +603,14 @@ const sourceInvariants = [
         .length === 2,
     message:
       "macOS and Windows release jobs must restore the full production bundle after restricted feature builds",
+  },
+  {
+    ok:
+      orcaFeatureGateSource.includes("finally {") &&
+      orcaFeatureGateSource.includes("Restore full production frontend bundle") &&
+      orcaFeatureGateSource.includes('VITE_ATELIER_FEATURES: ""'),
+    message:
+      "Orca feature gate must restore the full production frontend bundle after success or failure",
   },
   {
     ok:

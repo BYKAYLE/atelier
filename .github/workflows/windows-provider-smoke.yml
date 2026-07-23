@@ -36,7 +36,7 @@ jobs:
       - name: Install dependencies and build the Atelier browser helper
         shell: pwsh
         run: |
-          npm ci --legacy-peer-deps
+          npm ci
           npm run build
           npm run gate:orca-features
           cargo build --manifest-path src-tauri/Cargo.toml

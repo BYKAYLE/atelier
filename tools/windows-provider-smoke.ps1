@@ -346,13 +346,72 @@ function Open-SystemBrowserProbe {
 }
 
 $script:BrowserProcessNames = @(
+  "arc",
   "brave",
   "chrome",
+  "chromium",
   "firefox",
   "iexplore",
   "msedge",
-  "opera"
+  "opera",
+  "vivaldi",
+  "whale"
 )
+
+function Get-DefaultBrowserProcessNames {
+  $names = [System.Collections.Generic.List[string]]::new()
+  $progId = $null
+  try {
+    $choice = Get-ItemProperty -LiteralPath "HKCU:\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice" -ErrorAction Stop
+    $progId = [string]$choice.ProgId
+  } catch {}
+
+  if (-not [string]::IsNullOrWhiteSpace($progId)) {
+    $registryPaths = @(
+      "Registry::HKEY_CURRENT_USER\Software\Classes\$progId\shell\open\command",
+      "Registry::HKEY_CLASSES_ROOT\$progId\shell\open\command",
+      "Registry::HKEY_LOCAL_MACHINE\Software\Classes\$progId\shell\open\command"
+    )
+    foreach ($registryPath in $registryPaths) {
+      try {
+        $command = [string](Get-Item -LiteralPath $registryPath -ErrorAction Stop).GetValue("")
+        if ([string]::IsNullOrWhiteSpace($command)) { continue }
+        $match = [regex]::Match($command.Trim(), '^(?:"([^"]+)"|([^\s]+))')
+        if (-not $match.Success) { continue }
+        $executable = if ($match.Groups[1].Success) { $match.Groups[1].Value } else { $match.Groups[2].Value }
+        $name = [IO.Path]::GetFileNameWithoutExtension([Environment]::ExpandEnvironmentVariables($executable))
+        if (-not [string]::IsNullOrWhiteSpace($name) -and -not $names.Contains($name.ToLowerInvariant())) {
+          $names.Add($name.ToLowerInvariant())
+        }
+      } catch {}
+    }
+
+    $knownProgIds = [ordered]@{
+      "arc" = "arc"
+      "brave" = "brave"
+      "chrome" = "chrome"
+      "chromium" = "chromium"
+      "firefox" = "firefox"
+      "microsoftedge" = "msedge"
+      "mse" = "msedge"
+      "opera" = "opera"
+      "vivaldi" = "vivaldi"
+      "whale" = "whale"
+    }
+    foreach ($entry in $knownProgIds.GetEnumerator()) {
+      if ($progId.ToLowerInvariant().Contains($entry.Key) -and -not $names.Contains($entry.Value)) {
+        $names.Add($entry.Value)
+      }
+    }
+  }
+
+  foreach ($name in $names) {
+    if ($script:BrowserProcessNames -notcontains $name) {
+      $script:BrowserProcessNames += $name
+    }
+  }
+  return @($names)
+}
 
 function Test-IsBrowserProcessName {
   param([string]$Name)
@@ -381,25 +440,44 @@ function Wait-BrowserProcessEvidence {
   param(
     [int[]]$InitialProcessIds = @(),
     [datetime]$ProbeStartedAt,
+    [string[]]$PreferredProcessNames = @(),
+    [switch]$AllowExistingVisibleProcess,
     [int]$TimeoutSec = 20
   )
   $initial = [System.Collections.Generic.HashSet[int]]::new()
   foreach ($id in $InitialProcessIds) { [void]$initial.Add([int]$id) }
   $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(1, $TimeoutSec))
   $observed = @()
+  $observationMode = "none"
+  $preferred = @($PreferredProcessNames | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() } | Select-Object -Unique)
   do {
     $current = @(Get-BrowserProcessRecords)
     $observed = @($current | Where-Object {
       $started = [datetime]::Parse($_.startedAt).ToUniversalTime()
       -not $initial.Contains([int]$_.id) -or $started -ge $ProbeStartedAt.AddSeconds(-2)
     })
-    if ($observed.Count -gt 0) { break }
+    if ($observed.Count -gt 0) {
+      $observationMode = "new-or-recent-process"
+      break
+    }
+    if ($AllowExistingVisibleProcess -and $preferred.Count -gt 0) {
+      $reused = @($current | Where-Object {
+        $_.visibleWindow -and $preferred -contains $_.name.ToLowerInvariant()
+      })
+      if ($reused.Count -gt 0) {
+        $observed = $reused
+        $observationMode = "existing-visible-default-browser"
+        break
+      }
+    }
     Start-Sleep -Milliseconds 500
   } while ([DateTime]::UtcNow -lt $deadline)
 
   return [pscustomobject][ordered]@{
     observed = ($observed.Count -gt 0)
     visibleWindow = (@($observed | Where-Object { $_.visibleWindow }).Count -gt 0)
+    observationMode = $observationMode
+    defaultBrowserProcessNames = $preferred
     timeoutSec = $TimeoutSec
     processes = @($observed)
   }
@@ -507,6 +585,29 @@ function Get-SmartAppControlEvidence {
   return [pscustomobject]$result
 }
 
+function Get-AuthenticodeEvidence {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  $signature = Get-AuthenticodeSignature -LiteralPath $Path
+  $signer = $signature.SignerCertificate
+  $timestamper = $signature.TimeStamperCertificate
+  return [pscustomobject][ordered]@{
+    status = [string]$signature.Status
+    statusMessage = [string]$signature.StatusMessage
+    signerSubject = if ($signer) { [string]$signer.Subject } else { $null }
+    signerIssuer = if ($signer) { [string]$signer.Issuer } else { $null }
+    signerThumbprint = if ($signer) { [string]$signer.Thumbprint } else { $null }
+    signerSerialNumber = if ($signer) { [string]$signer.SerialNumber } else { $null }
+    signerNotBefore = if ($signer) { $signer.NotBefore.ToUniversalTime().ToString("o") } else { $null }
+    signerNotAfter = if ($signer) { $signer.NotAfter.ToUniversalTime().ToString("o") } else { $null }
+    timestamped = ($null -ne $timestamper)
+    timestamperSubject = if ($timestamper) { [string]$timestamper.Subject } else { $null }
+    timestamperIssuer = if ($timestamper) { [string]$timestamper.Issuer } else { $null }
+    timestamperThumbprint = if ($timestamper) { [string]$timestamper.Thumbprint } else { $null }
+    timestamperNotBefore = if ($timestamper) { $timestamper.NotBefore.ToUniversalTime().ToString("o") } else { $null }
+    timestamperNotAfter = if ($timestamper) { $timestamper.NotAfter.ToUniversalTime().ToString("o") } else { $null }
+  }
+}
+
 function Test-AtelierInstalledRuntime {
   param([string]$ExePath)
 
@@ -534,10 +635,10 @@ function Test-AtelierInstalledRuntime {
     $versionOk = $versionOk -and ($version -eq $ExpectedVersion.TrimStart("v"))
   }
 
-  $signature = Get-AuthenticodeSignature -LiteralPath $ExePath
+  $signature = Get-AuthenticodeEvidence $ExePath
   $installedSha256 = (Get-FileHash -LiteralPath $ExePath -Algorithm SHA256).Hash.ToLowerInvariant()
-  $signatureStatus = [string]$signature.Status
-  $signatureOk = $signature.Status -eq [System.Management.Automation.SignatureStatus]::Valid
+  $signatureStatus = $signature.status
+  $signatureOk = $signature.status -eq "Valid" -and $signature.timestamped
 
   $restartOk = $false
   $restartProcessIds = @()
@@ -611,6 +712,7 @@ function Test-AtelierInstalledRuntime {
     version = $version
     versionOk = [bool]$versionOk
     signatureStatus = $signatureStatus
+    signatureEvidence = $signature
     signatureOk = [bool]$signatureOk
     restartOk = [bool]$restartOk
     restartProcessIds = @($restartProcessIds)
@@ -689,6 +791,9 @@ if ($SelfTest) {
   if (-not (Test-IsBrowserProcessName "msedge") -or (Test-IsBrowserProcessName "explorer")) {
     throw "Windows browser process classification self-test failed"
   }
+  if (-not (Test-IsBrowserProcessName "vivaldi") -or -not (Test-IsBrowserProcessName "arc")) {
+    throw "Windows alternate browser process classification self-test failed"
+  }
   $environmentProbe = [System.Diagnostics.ProcessStartInfo]::new()
   Set-ProcessEnvironmentValue -ProcessStartInfo $environmentProbe -Name "ATELIER_SMOKE_SENTINEL" -Value "ready"
   if (-not (Test-ProcessEnvironmentValue -ProcessStartInfo $environmentProbe -Name "ATELIER_SMOKE_SENTINEL")) {
@@ -743,6 +848,7 @@ try {
     browserProbe = $null
     browserHelperProbe = $null
     browserProcessEvidence = $null
+    defaultBrowserProcessNames = @()
     atelierBrowserProbeExe = $null
     installedApp = $null
     smartAppControl = $null
@@ -823,6 +929,8 @@ try {
     Write-Host "Testing the Windows default-browser handoff used by Atelier."
     $atelierBrowserProbeExe = $atelierExecutable
     $summary.atelierBrowserProbeExe = $atelierBrowserProbeExe
+    $defaultBrowserProcessNames = @(Get-DefaultBrowserProcessNames)
+    $summary.defaultBrowserProcessNames = $defaultBrowserProcessNames
     $browserBaseline = @(Get-BrowserProcessRecords)
     $browserProbeStartedAt = [DateTime]::UtcNow
     if ($atelierBrowserProbeExe) {
@@ -838,9 +946,12 @@ try {
     $summary.browserProcessEvidence = Wait-BrowserProcessEvidence `
       -InitialProcessIds @($browserBaseline | ForEach-Object { $_.id }) `
       -ProbeStartedAt $browserProbeStartedAt `
+      -PreferredProcessNames $defaultBrowserProcessNames `
+      -AllowExistingVisibleProcess:($summary.browserProbe -eq $true -and $summary.browserHelperProbe -eq $true) `
       -TimeoutSec $BrowserProbeTimeoutSec
     Write-Host "Browser process observed: $($summary.browserProcessEvidence.observed)"
     Write-Host "Visible browser window observed: $($summary.browserProcessEvidence.visibleWindow)"
+    Write-Host "Browser observation mode: $($summary.browserProcessEvidence.observationMode)"
   }
 
   if ($Login) {

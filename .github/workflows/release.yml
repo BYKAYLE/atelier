@@ -115,7 +115,7 @@ jobs:
           workspaces: "./src-tauri -> target"
 
       - name: Install npm deps
-        run: npm ci --legacy-peer-deps
+        run: npm ci
 
       - name: Install Rust security audit
         run: cargo install cargo-audit --locked
@@ -131,8 +131,9 @@ jobs:
           npm run smoke:editor-diagnostics
           npm run smoke:devscreen-picker
           npm run smoke:agent-performance
-          # The feature gate intentionally leaves a restricted bundle in dist.
-          # Rebuild the default product before any package is created.
+          npm run smoke:oauth-login-flow
+          # The feature gate restores the full bundle itself. Rebuild once more
+          # at the packaging boundary so a stale restricted dist can never ship.
           npm run gate:orca-features
           npm run build
           npm audit --audit-level=low
@@ -243,7 +244,7 @@ jobs:
           workspaces: "./src-tauri -> target"
 
       - name: Install npm deps
-        run: npm ci --legacy-peer-deps
+        run: npm ci
 
       - name: Install Rust security audit
         run: cargo install cargo-audit --locked
@@ -260,7 +261,9 @@ jobs:
           npm run smoke:editor-diagnostics
           npm run smoke:devscreen-picker
           npm run smoke:agent-performance
-          # Restore the full production bundle after restricted feature builds.
+          npm run smoke:oauth-login-flow
+          # Repeat the full build at the packaging boundary after the gate's
+          # own restoration, so only the default product bundle can ship.
           npm run gate:orca-features
           npm run build
           npm audit --audit-level=low
@@ -320,7 +323,7 @@ jobs:
           node-version: "22"
 
       - name: Install npm deps
-        run: npm ci --legacy-peer-deps
+        run: npm ci
 
       - name: Check SignPath configuration
         id: signpath-config

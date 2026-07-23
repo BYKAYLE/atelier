@@ -51,6 +51,25 @@ try {
 
   resetValidUpgrade();
   provider = readJson(providerPath);
+  provider.browserProcessEvidence.observationMode = "none";
+  writeJson(providerPath, provider);
+  run(false, "invalid browser observation mode");
+
+  resetValidUpgrade();
+  provider = readJson(providerPath);
+  provider.browserProcessEvidence.processes = [];
+  writeJson(providerPath, provider);
+  run(false, "missing browser process records");
+
+  resetValidUpgrade();
+  provider = readJson(providerPath);
+  provider.browserProcessEvidence.observationMode = "existing-visible-default-browser";
+  provider.browserProcessEvidence.defaultBrowserProcessNames = ["firefox"];
+  writeJson(providerPath, provider);
+  run(false, "existing browser does not match default browser");
+
+  resetValidUpgrade();
+  provider = readJson(providerPath);
   provider.loginResults.claudeAuthOk = false;
   writeJson(providerPath, provider);
   run(false, "missing Claude authentication");
@@ -107,6 +126,7 @@ function resetWaiverCandidate() {
 }
 
 function candidateFixture() {
+  const signature = signatureFixture();
   return {
     schemaVersion: 1,
     releaseTag: tag,
@@ -115,12 +135,12 @@ function candidateFixture() {
     githubRunId: runId,
     interactiveDesktop: true,
     initialSignedChannelWaiverUsed: false,
-    installer: { sha256: msiSha, signature: { status: "Valid" } },
+    installer: { sha256: msiSha, signature },
     installed: {
       path: installedPath,
       sha256: installedSha,
       version,
-      signature: { status: "Valid" },
+      signature,
       resourcesPresent: true,
     },
     rendererReady: true,
@@ -130,10 +150,12 @@ function candidateFixture() {
 }
 
 function packageFixture() {
+  const signature = signatureFixture();
   const payload = {
     version,
     resourcesPresent: true,
     signatureStatus: "Valid",
+    signature,
   };
   return {
     schemaVersion: 1,
@@ -142,8 +164,8 @@ function packageFixture() {
     expectedVersion: version,
     githubRunId: runId,
     packages: {
-      msi: { sha256: msiSha, signatureStatus: "Valid", payload },
-      nsis: { sha256: nsisSha, signatureStatus: "Valid", payload },
+      msi: { sha256: msiSha, signatureStatus: "Valid", signature, payload },
+      nsis: { sha256: nsisSha, signatureStatus: "Valid", signature, payload },
       msix: null,
     },
   };
@@ -163,7 +185,21 @@ function providerFixture() {
     ],
     browserProbe: true,
     browserHelperProbe: true,
-    browserProcessEvidence: { observed: true, visibleWindow: true },
+    browserProcessEvidence: {
+      observed: true,
+      visibleWindow: true,
+      observationMode: "new-or-recent-process",
+      defaultBrowserProcessNames: ["msedge"],
+      timeoutSec: 20,
+      processes: [
+        {
+          name: "msedge",
+          id: 4242,
+          startedAt: "2026-07-22T12:00:01.000Z",
+          visibleWindow: true,
+        },
+      ],
+    },
     installedApp: {
       found: true,
       path: installedPath.toUpperCase(),
@@ -171,6 +207,7 @@ function providerFixture() {
       version,
       versionOk: true,
       signatureOk: true,
+      signatureEvidence: signatureFixture(),
       restartOk: true,
       rendererReadyOk: true,
     },
@@ -181,6 +218,19 @@ function providerFixture() {
       claudeFlowExitOk: true,
       claudeAuthOk: true,
     },
+  };
+}
+
+function signatureFixture() {
+  return {
+    status: "Valid",
+    signerThumbprint: "A".repeat(40),
+    signerNotBefore: "2026-01-01T00:00:00.000Z",
+    signerNotAfter: "2027-01-01T00:00:00.000Z",
+    timestamped: true,
+    timestamperThumbprint: "B".repeat(40),
+    timestamperNotBefore: "2026-01-01T00:00:00.000Z",
+    timestamperNotAfter: "2030-01-01T00:00:00.000Z",
   };
 }
 

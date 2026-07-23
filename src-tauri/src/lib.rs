@@ -160,6 +160,7 @@ struct DirEntry {
 #[derive(Serialize)]
 struct RuntimeInstallInfo {
     exe_path: String,
+    windows_package_full_name: Option<String>,
     windows_store_like: bool,
     github_updater_available: bool,
     app_version: String,
@@ -170,12 +171,45 @@ struct RuntimeInstallInfo {
 }
 
 #[cfg(any(target_os = "windows", test))]
-fn windows_store_like_install(exe_path: &str) -> bool {
+fn windows_store_like_install(exe_path: &str, package_full_name: Option<&str>) -> bool {
     if cfg!(feature = "store-build") {
         return true;
     }
+    if package_full_name.is_some_and(|value| !value.trim().is_empty()) {
+        return true;
+    }
     let lower = exe_path.to_ascii_lowercase().replace('/', "\\");
-    lower.contains("\\windowsapps\\") || lower.contains("atelieragent")
+    lower.contains("\\windowsapps\\")
+}
+
+#[cfg(target_os = "windows")]
+fn windows_package_full_name() -> Option<String> {
+    use windows_sys::Win32::Foundation::{
+        APPMODEL_ERROR_NO_PACKAGE, ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS,
+    };
+    use windows_sys::Win32::Storage::Packaging::Appx::GetCurrentPackageFullName;
+
+    let mut length = 0_u32;
+    let status = unsafe { GetCurrentPackageFullName(&mut length, std::ptr::null_mut()) };
+    if status == APPMODEL_ERROR_NO_PACKAGE || length == 0 {
+        return None;
+    }
+    if status != ERROR_INSUFFICIENT_BUFFER {
+        return None;
+    }
+
+    let mut buffer = vec![0_u16; length as usize];
+    let status = unsafe { GetCurrentPackageFullName(&mut length, buffer.as_mut_ptr()) };
+    if status != ERROR_SUCCESS {
+        return None;
+    }
+    let end = buffer
+        .iter()
+        .position(|value| *value == 0)
+        .unwrap_or(buffer.len());
+    String::from_utf16(&buffer[..end])
+        .ok()
+        .filter(|value| !value.is_empty())
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -244,13 +278,21 @@ async fn runtime_install_info() -> std::result::Result<RuntimeInstallInfo, Strin
     let exe_path = exe.to_string_lossy().into_owned();
 
     #[cfg(target_os = "windows")]
-    let windows_store_like = windows_store_like_install(&exe_path);
+    let windows_package_full_name = windows_package_full_name();
+
+    #[cfg(target_os = "windows")]
+    let windows_store_like =
+        windows_store_like_install(&exe_path, windows_package_full_name.as_deref());
 
     #[cfg(not(target_os = "windows"))]
     let windows_store_like = cfg!(feature = "store-build");
 
+    #[cfg(not(target_os = "windows"))]
+    let windows_package_full_name = None;
+
     Ok(RuntimeInstallInfo {
         exe_path,
+        windows_package_full_name,
         windows_store_like,
         github_updater_available: cfg!(not(feature = "store-build")),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -274,12 +316,14 @@ mod runtime_install_tests {
     }
 
     #[test]
-    fn detects_windows_store_paths_and_legacy_store_name() {
+    fn detects_windows_store_paths_and_package_identity() {
         assert!(windows_store_like_install(
-            r"C:\\Program Files\\WindowsApps\\BYKAYLE.Atelier_1.0.0.0_x64__abc\\Atelier.exe"
+            r"C:\\Program Files\\WindowsApps\\BYKAYLE.Atelier_1.0.0.0_x64__abc\\Atelier.exe",
+            None,
         ));
         assert!(windows_store_like_install(
-            r"C:\\Program Files\\AtelierAgent\\Atelier.exe"
+            r"C:\\Program Files\\Atelier\\Atelier.exe",
+            Some("kansic.AtelierAgent_1.0.0.0_x64__publisher"),
         ));
     }
 
@@ -287,7 +331,8 @@ mod runtime_install_tests {
     #[test]
     fn normal_windows_install_is_not_store_like() {
         assert!(!windows_store_like_install(
-            r"C:\\Program Files\\Atelier\\Atelier.exe"
+            r"C:\\Program Files\\Atelier Agent\\Atelier.exe",
+            None,
         ));
     }
 
@@ -295,7 +340,8 @@ mod runtime_install_tests {
     #[test]
     fn store_feature_marks_every_install_store_like() {
         assert!(windows_store_like_install(
-            r"C:\\Program Files\\Atelier\\Atelier.exe"
+            r"C:\\Program Files\\Atelier\\Atelier.exe",
+            None,
         ));
     }
 }

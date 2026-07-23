@@ -30,9 +30,14 @@ function Invoke-Checked {
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 Set-Location $repoRoot
 
-$winapp = Get-Command winapp -ErrorAction SilentlyContinue
-if (-not $winapp) {
-  throw "winapp CLI was not found. Install it with: npm install -g @microsoft/winappcli"
+$node = Get-Command node -ErrorAction SilentlyContinue
+if (-not $node) {
+  throw "Node.js was not found. Install the repository Node.js version and run npm ci before building the Store package."
+}
+
+$winappEntry = Join-Path $repoRoot "node_modules\@microsoft\winappcli\dist\cli.js"
+if (-not (Test-Path -LiteralPath $winappEntry)) {
+  throw "The repository-pinned winapp CLI was not found at $winappEntry. Run npm ci before building the Store package."
 }
 
 $packageJson = Get-Content -Raw -LiteralPath "package.json" | ConvertFrom-Json
@@ -110,7 +115,7 @@ $iconPath = Join-Path $repoRoot "src-tauri\icons\icon.png"
 Push-Location $contentDir
 try {
   Invoke-Checked {
-    winapp manifest generate . `
+    & $node.Source $winappEntry manifest generate . `
       --package-name $PackageName `
       --publisher-name $PublisherName `
       --version $PackageVersion `
@@ -142,11 +147,11 @@ $visualElements.SetAttribute("DisplayName", $AppDisplayName)
 $manifest.Save($manifestPath)
 
 Invoke-Checked {
-  winapp cert generate --manifest $manifestPath --output $devCert --if-exists Overwrite
+  & $node.Source $winappEntry cert generate --manifest $manifestPath --output $devCert --if-exists Overwrite
 } "winapp cert generate"
 
 Invoke-Checked {
-  winapp package $contentDir `
+  & $node.Source $winappEntry package $contentDir `
     --manifest $manifestPath `
     --output $outputMsix `
     --cert $devCert `

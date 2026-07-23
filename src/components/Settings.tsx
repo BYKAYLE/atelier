@@ -1127,6 +1127,7 @@ async function readUpdateInstallInfo(): Promise<UpdateInstallInfo> {
   const [runtime, bundleType] = await Promise.all([
     runtimeInstallInfo().catch(() => ({
       exe_path: "",
+      windows_package_full_name: null,
       windows_store_like: false,
       github_updater_available: false,
       app_version: "",
@@ -1139,13 +1140,8 @@ async function readUpdateInstallInfo(): Promise<UpdateInstallInfo> {
       .then((m) => m.getBundleType())
       .catch(() => null),
   ]);
-  const exePath = runtime.exe_path || "";
-  const exePathLower = exePath.toLowerCase().replace(/\//g, "\\");
-  const windowsStoreLike = runtime.windows_store_like
-    || (isWindowsRuntime() && (exePathLower.includes("\\windowsapps\\") || exePathLower.includes("atelieragent")));
   return {
     ...runtime,
-    windows_store_like: windowsStoreLike,
     bundleType: typeof bundleType === "string" ? bundleType : null,
   };
 }

@@ -55,7 +55,7 @@ Run:
 5. Download the generated `atelier-windows-store-msix` artifact.
 6. Upload the `.msix` package in Partner Center for certification.
 
-The workflow installs `@microsoft/winappcli`, builds the Tauri release
+The workflow installs the lockfile-pinned `@microsoft/winappcli`, builds the Tauri release
 executable, generates an MSIX manifest, creates a development certificate for
 local packaging, and emits the MSIX artifact under `output/windows-store`.
 The development certificate is only for producing and testing the package; the
@@ -66,8 +66,7 @@ Store certification flow controls the trusted public distribution surface.
 Install prerequisites:
 
 ```powershell
-npm install --legacy-peer-deps
-npm install -g @microsoft/winappcli@0.3.1
+npm ci
 ```
 
 Set the final Partner Center identity when available:
@@ -79,6 +78,11 @@ $env:ATELIER_STORE_PUBLISHER_DISPLAY_NAME = "kansic"
 $env:ATELIER_STORE_PACKAGE_VERSION = "0.1.16.0"
 npm run store:msix
 ```
+
+The packaging script executes only the lockfile-pinned
+`node_modules/@microsoft/winappcli` entry point. A globally installed `winapp`
+version is deliberately ignored so local and GitHub builds cannot silently use
+different packaging behavior.
 
 Fallback MSI candidate:
 

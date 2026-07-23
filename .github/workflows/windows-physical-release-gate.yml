@@ -26,10 +26,15 @@ env:
   RELEASE_OWNER: ${{ vars.RELEASE_OWNER || github.repository_owner }}
   RELEASE_REPO: ${{ vars.RELEASE_REPO || github.event.repository.name }}
 
+concurrency:
+  group: windows-physical-release-${{ github.repository }}-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
 jobs:
   physical-release-gate:
     name: Signed candidate install, browser auth, restart, and Smart App Control
     runs-on: [self-hosted, windows, x64]
+    timeout-minutes: 120
     permissions:
       contents: read
     steps:

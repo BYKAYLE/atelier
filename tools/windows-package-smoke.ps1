@@ -11,6 +11,29 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Get-AuthenticodeEvidence {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  $signature = Get-AuthenticodeSignature -LiteralPath $Path
+  $signer = $signature.SignerCertificate
+  $timestamper = $signature.TimeStamperCertificate
+  return [pscustomobject][ordered]@{
+    status = [string]$signature.Status
+    statusMessage = [string]$signature.StatusMessage
+    signerSubject = if ($signer) { [string]$signer.Subject } else { $null }
+    signerIssuer = if ($signer) { [string]$signer.Issuer } else { $null }
+    signerThumbprint = if ($signer) { [string]$signer.Thumbprint } else { $null }
+    signerSerialNumber = if ($signer) { [string]$signer.SerialNumber } else { $null }
+    signerNotBefore = if ($signer) { $signer.NotBefore.ToUniversalTime().ToString("o") } else { $null }
+    signerNotAfter = if ($signer) { $signer.NotAfter.ToUniversalTime().ToString("o") } else { $null }
+    timestamped = ($null -ne $timestamper)
+    timestamperSubject = if ($timestamper) { [string]$timestamper.Subject } else { $null }
+    timestamperIssuer = if ($timestamper) { [string]$timestamper.Issuer } else { $null }
+    timestamperThumbprint = if ($timestamper) { [string]$timestamper.Thumbprint } else { $null }
+    timestamperNotBefore = if ($timestamper) { $timestamper.NotBefore.ToUniversalTime().ToString("o") } else { $null }
+    timestamperNotAfter = if ($timestamper) { $timestamper.NotAfter.ToUniversalTime().ToString("o") } else { $null }
+  }
+}
+
 if ([string]::IsNullOrWhiteSpace($ExpectedVersion)) {
   $package = Get-Content -LiteralPath "package.json" -Raw | ConvertFrom-Json
   $ExpectedVersion = [string]$package.version
@@ -39,10 +62,13 @@ function Assert-AtelierPayload {
   if ($productVersion -and -not $productVersion.StartsWith($ExpectedVersion)) {
     throw "$Kind executable version mismatch: expected $ExpectedVersion, found $productVersion"
   }
+  $signature = Get-AuthenticodeEvidence $exe.FullName
   if ($RequireAuthenticode) {
-    $signature = Get-AuthenticodeSignature -LiteralPath $exe.FullName
-    if ($signature.Status -ne "Valid") {
-      throw "$Kind executable Authenticode signature is not valid: $($signature.Status)"
+    if ($signature.status -ne "Valid") {
+      throw "$Kind executable Authenticode signature is not valid: $($signature.status)"
+    }
+    if (-not $signature.timestamped) {
+      throw "$Kind executable Authenticode signature is valid but is not timestamped."
     }
   }
   Write-Host "$Kind payload OK: $($exe.FullName) version=$productVersion"
@@ -51,7 +77,8 @@ function Assert-AtelierPayload {
     sha256 = (Get-FileHash -LiteralPath $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     version = [string]$productVersion
     resourcesPresent = $true
-    signatureStatus = [string](Get-AuthenticodeSignature -LiteralPath $exe.FullName).Status
+    signatureStatus = $signature.status
+    signature = $signature
   }
 }
 
@@ -60,13 +87,14 @@ function Get-PackageProof {
     [Parameter(Mandatory = $true)][System.IO.FileInfo]$Package,
     [Parameter(Mandatory = $true)]$Payload
   )
-  $signature = Get-AuthenticodeSignature -LiteralPath $Package.FullName
+  $signature = Get-AuthenticodeEvidence $Package.FullName
   return [pscustomobject][ordered]@{
     fileName = $Package.Name
     path = $Package.FullName
     bytes = $Package.Length
     sha256 = (Get-FileHash -LiteralPath $Package.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-    signatureStatus = [string]$signature.Status
+    signatureStatus = $signature.status
+    signature = $signature
     payload = $Payload
   }
 }
@@ -91,9 +119,12 @@ $msi = Get-ChildItem -LiteralPath $BundleRoot -Recurse -File -Filter "*.msi" -Er
   Select-Object -First 1
 if ($msi) {
   if ($RequireAuthenticode) {
-    $signature = Get-AuthenticodeSignature -LiteralPath $msi.FullName
-    if ($signature.Status -ne "Valid") {
-      throw "MSI Authenticode signature is not valid: $($signature.Status)"
+    $signature = Get-AuthenticodeEvidence $msi.FullName
+    if ($signature.status -ne "Valid") {
+      throw "MSI Authenticode signature is not valid: $($signature.status)"
+    }
+    if (-not $signature.timestamped) {
+      throw "MSI Authenticode signature is valid but is not timestamped."
     }
   }
   $extractRoot = Join-Path $env:RUNNER_TEMP "atelier-msi-admin-image"
@@ -124,9 +155,12 @@ if ($nsis) {
     throw "NSIS installer is unexpectedly small: $($nsis.FullName)"
   }
   if ($RequireAuthenticode) {
-    $signature = Get-AuthenticodeSignature -LiteralPath $nsis.FullName
-    if ($signature.Status -ne "Valid") {
-      throw "NSIS Authenticode signature is not valid: $($signature.Status)"
+    $signature = Get-AuthenticodeEvidence $nsis.FullName
+    if ($signature.status -ne "Valid") {
+      throw "NSIS Authenticode signature is not valid: $($signature.status)"
+    }
+    if (-not $signature.timestamped) {
+      throw "NSIS Authenticode signature is valid but is not timestamped."
     }
   }
   $sevenZip = Find-7Zip

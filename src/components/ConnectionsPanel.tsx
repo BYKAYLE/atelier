@@ -8,6 +8,11 @@ import { cls, Tweaks } from "../lib/tokens";
 import { safeLocalStorageGet, safeLocalStorageSet } from "../lib/storage";
 import { FeaturePanels } from "../features/featureRegistry";
 import {
+  isAllowedOauthLoginUrl,
+  LoginUrlAttempt,
+  planOauthLoginUrlAttempt,
+} from "../features/connections/oauthLoginFlow";
+import {
   GajecodeUpdateStatus,
   HermesUpdateStatus,
   ProviderBrowserProbeResult,
@@ -378,20 +383,7 @@ function connectionStatus(
 }
 
 async function openExternalUrl(provider: ProviderId, url: string): Promise<boolean> {
-  const allowedRoots = provider === "claude"
-    ? ["claude.ai", "claude.com", "anthropic.com"]
-    : provider === "codex"
-      ? ["openai.com", "chatgpt.com"]
-      : [];
-  let allowed = false;
-  try {
-    const parsed = new URL(url);
-    const host = parsed.hostname.toLowerCase();
-    allowed = parsed.protocol === "https:" && allowedRoots.some((root) => host === root || host.endsWith(`.${root}`));
-  } catch {
-    allowed = false;
-  }
-  if (!allowed) return false;
+  if (!isAllowedOauthLoginUrl(provider, url)) return false;
 
   // Keep one authoritative desktop path. The Rust command validates the
   // provider host and uses native ShellExecuteExW/open instead of treating a
@@ -467,7 +459,7 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
   const pollRef = useRef<number | null>(null);
   const openedLoginUrlsRef = useRef<Record<string, string | null>>({});
   const openingLoginUrlsRef = useRef<Record<string, string | null>>({});
-  const loginUrlAttemptsRef = useRef<Record<string, { url: string; count: number; lastAt: number }>>({});
+  const loginUrlAttemptsRef = useRef<Record<string, LoginUrlAttempt>>({});
   const openLoginUrlWithRetry = useCallback(async (
     provider: ProviderId,
     url: string,
@@ -476,18 +468,14 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
     if (openedLoginUrlsRef.current[provider] === url) return true;
     if (openingLoginUrlsRef.current[provider] === url) return false;
 
-    const now = Date.now();
-    const previous = loginUrlAttemptsRef.current[provider];
-    const attempt = previous?.url === url
-      ? previous
-      : { url, count: 0, lastAt: 0 };
-    if (!force && (attempt.count >= 3 || now - attempt.lastAt < 2_000)) return false;
-
-    loginUrlAttemptsRef.current[provider] = {
+    const plan = planOauthLoginUrlAttempt(
+      loginUrlAttemptsRef.current[provider],
       url,
-      count: attempt.count + 1,
-      lastAt: now,
-    };
+      Date.now(),
+      force,
+    );
+    loginUrlAttemptsRef.current[provider] = plan.next;
+    if (!plan.shouldOpen) return false;
     openingLoginUrlsRef.current[provider] = url;
     try {
       const opened = await openExternalUrl(provider, url);

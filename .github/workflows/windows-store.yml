@@ -58,7 +58,7 @@ jobs:
           workspaces: "./src-tauri -> target"
 
       - name: Install npm deps
-        run: npm ci --legacy-peer-deps
+        run: npm ci
 
       - name: Install Rust security audit
         run: cargo install cargo-audit --locked
@@ -75,6 +75,7 @@ jobs:
           npm run smoke:editor-diagnostics
           npm run smoke:devscreen-picker
           npm run smoke:agent-performance
+          npm run smoke:oauth-login-flow
           npm run gate:orca-features
           npm audit --audit-level=low
           cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
@@ -85,12 +86,11 @@ jobs:
           cargo build --manifest-path src-tauri/Cargo.toml
           npm run smoke:pty-supervisor
           npm run smoke:updater-contract
+          npm run smoke:release-candidate
+          npm run smoke:publish-evidence
           npm run audit:release
           powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1 -SelfTest
           powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1 -Install -Strict
-
-      - name: Install winapp CLI
-        run: npm install -g @microsoft/winappcli@0.3.1
 
       - name: Build Microsoft Store MSIX package
         shell: pwsh

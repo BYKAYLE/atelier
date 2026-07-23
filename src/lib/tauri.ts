@@ -57,6 +57,7 @@ export interface SessionLogSnapshot {
 
 export interface RuntimeInstallInfo {
   exe_path: string;
+  windows_package_full_name: string | null;
   windows_store_like: boolean;
   github_updater_available: boolean;
   app_version: string;

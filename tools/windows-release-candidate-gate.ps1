@@ -139,11 +139,23 @@ function Stop-ExactAtelierProcesses {
 function Get-AuthenticodeEvidence {
   param([Parameter(Mandatory = $true)][string]$Path)
   $signature = Get-AuthenticodeSignature -LiteralPath $Path
+  $signer = $signature.SignerCertificate
+  $timestamper = $signature.TimeStamperCertificate
   return [pscustomobject][ordered]@{
     status = [string]$signature.Status
     statusMessage = [string]$signature.StatusMessage
-    signerSubject = if ($signature.SignerCertificate) { [string]$signature.SignerCertificate.Subject } else { $null }
-    signerThumbprint = if ($signature.SignerCertificate) { [string]$signature.SignerCertificate.Thumbprint } else { $null }
+    signerSubject = if ($signer) { [string]$signer.Subject } else { $null }
+    signerIssuer = if ($signer) { [string]$signer.Issuer } else { $null }
+    signerThumbprint = if ($signer) { [string]$signer.Thumbprint } else { $null }
+    signerSerialNumber = if ($signer) { [string]$signer.SerialNumber } else { $null }
+    signerNotBefore = if ($signer) { $signer.NotBefore.ToUniversalTime().ToString("o") } else { $null }
+    signerNotAfter = if ($signer) { $signer.NotAfter.ToUniversalTime().ToString("o") } else { $null }
+    timestamped = ($null -ne $timestamper)
+    timestamperSubject = if ($timestamper) { [string]$timestamper.Subject } else { $null }
+    timestamperIssuer = if ($timestamper) { [string]$timestamper.Issuer } else { $null }
+    timestamperThumbprint = if ($timestamper) { [string]$timestamper.Thumbprint } else { $null }
+    timestamperNotBefore = if ($timestamper) { $timestamper.NotBefore.ToUniversalTime().ToString("o") } else { $null }
+    timestamperNotAfter = if ($timestamper) { $timestamper.NotAfter.ToUniversalTime().ToString("o") } else { $null }
   }
 }
 
@@ -155,6 +167,9 @@ $installer = $msiCandidates[0]
 $installerSignature = Get-AuthenticodeEvidence $installer.FullName
 if ($installerSignature.status -ne "Valid") {
   throw "Candidate MSI Authenticode signature is not valid: $($installerSignature.status)"
+}
+if (-not $installerSignature.timestamped) {
+  throw "Candidate MSI Authenticode signature is valid but is not timestamped."
 }
 
 $baselineExe = Find-InstalledAtelier
@@ -196,6 +211,9 @@ if (-not $installedExe) {
 $installedSignature = Get-AuthenticodeEvidence $installedExe
 if ($installedSignature.status -ne "Valid") {
   throw "Installed Atelier Authenticode signature is not valid: $($installedSignature.status)"
+}
+if (-not $installedSignature.timestamped) {
+  throw "Installed Atelier Authenticode signature is valid but is not timestamped."
 }
 $installedVersion = Invoke-AtelierProbe -ExePath $installedExe -Argument "--atelier-version-probe"
 if ($installedVersion -ne $ExpectedVersion) {
