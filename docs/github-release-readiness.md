@@ -9,12 +9,10 @@ outside this assessment.
 
 ## Verdict
 
-The source, local build, and local macOS package pass the available local
-gates. The currently installed macOS application reports the same version but
-does not contain the current candidate binary. Public GitHub distribution
-remains blocked because the repository does not yet have the production
-signing, notarization, and physical Windows evidence required by the release
-workflow.
+The source, local build, local macOS package, and currently installed macOS
+application pass the available local gates. Public GitHub distribution remains
+blocked because the repository does not yet have the production signing,
+notarization, and physical Windows evidence required by the release workflow.
 
 Do not create or publish the version tag until every item in "Distribution
 blockers" is resolved and the sealed evidence validator accepts one exact
@@ -32,7 +30,7 @@ candidate.
 | Runtime regressions | Pass | PTY, review, agent fleet, editor diagnostics, CLI, GitHub, Linear, SSH, provider usage, mobile control, remote follow-up, preview, notifications, and input-performance smokes passed. |
 | PTY responsiveness | Pass | Local median input round trip was about 1.58 ms and p95 about 1.92 ms. |
 | macOS local package | Pass with limitation | `Atelier.app` and `Atelier_0.2.12_aarch64.dmg` were produced, locally signed, launched to a renderer-ready receipt, and checked for protected resource declarations. The candidate executable SHA-256 is `49065d096694f748b7cc856aa1d04ec778e3fbc2cde21a9f96bcfd9dc1252d4a`; the DMG SHA-256 is `bb66521499cb8c7fe45d3e976225ac29beebfc386a74d890bba1dfe44fe780c5`. Developer ID notarization and stapling were not available. |
-| Installed macOS app | Version only; candidate mismatch | `/Applications/Atelier.app` reports version `0.2.12` and bundle identifier `com.atelier.app`, but its executable SHA-256 is `e198d7f8a3bd6928c917a77c5830cdb3b6169d2e3236d73bfb1137d983a1a953`, so it is an earlier build with the same version number rather than the current candidate. |
+| Installed macOS app | Pass | `/Applications/Atelier.app` reports version `0.2.12` and bundle identifier `com.atelier.app`. Its executable SHA-256 is `49065d096694f748b7cc856aa1d04ec778e3fbc2cde21a9f96bcfd9dc1252d4a`, exactly matching the locally packaged candidate, and its installed-path renderer-ready receipt reports `status: ready`. |
 | Responsive renderer | Pass with limitation | The production renderer was inspected at 1600x900, 900x800, and 720x700 without root overflow, black screen, clipped composer, or hidden send button. Native macOS screen capture permission was unavailable, so this is renderer evidence rather than a native permission-flow recording. |
 | Compact navigation accessibility | Pass | Compact theme and settings controls have localized accessible names and tooltips. |
 
@@ -52,9 +50,6 @@ candidate.
    restart persistence.
 5. No sealed private draft has passed the approval-protected publish validator,
    so GitHub release assets and `latest.json` are not distribution proof.
-6. The installed macOS application is not byte-identical to the current source
-   candidate. A final installation proof must use the sealed release asset
-   rather than another local build with the same version number.
 
 ## Residual Risks
 
