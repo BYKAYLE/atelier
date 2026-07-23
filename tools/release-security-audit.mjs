@@ -26,6 +26,7 @@ const libSource = readFileSync("src-tauri/src/lib.rs", "utf8");
 const mainSource = readFileSync("src-tauri/src/main.rs", "utf8");
 const cargoSource = readFileSync(manifest, "utf8");
 const packageSource = readFileSync("package.json", "utf8");
+const tauriConfigSource = readFileSync("src-tauri/tauri.conf.json", "utf8");
 const readmeSource = readFileSync("README.md", "utf8");
 const securityPolicySource = readFileSync("SECURITY.md", "utf8");
 const supportSource = readFileSync("SUPPORT.md", "utf8");
@@ -155,6 +156,30 @@ const workflowSource = [
   windowsRunnerDoctorWorkflowSource,
   publishReleaseWorkflowSource,
 ].join("\n");
+
+function workflowJobSource(source, jobName) {
+  const marker = `\n  ${jobName}:\n`;
+  const start = source.indexOf(marker);
+  if (start < 0) return "";
+  const bodyStart = start + marker.length;
+  const remainder = source.slice(bodyStart);
+  const nextJob = remainder.search(/\n  [A-Za-z0-9_-]+:\n/);
+  return nextJob < 0 ? remainder : remainder.slice(0, nextJob);
+}
+
+const credentialBearingReleaseJobs = [
+  "release-preflight",
+  "build-macos",
+  "build-windows-unsigned",
+  "sign-windows",
+  "seal-release-candidate",
+];
+const credentialBearingReleaseJobsAreProtected = credentialBearingReleaseJobs.every(
+  (jobName) =>
+    workflowJobSource(releaseWorkflowSource, jobName).includes(
+      "environment: production-release",
+    ),
+);
 const openLoginBrowserSource = credentialSource
   .split("fn open_login_url_in_browser", 2)[1]
   ?.split("fn watch_and_open_login_url", 1)[0] || "";
@@ -775,6 +800,7 @@ const sourceInvariants = [
       releaseWorkflowSource.includes('tags:\n      - "v*"') &&
       releaseWorkflowSource.includes("group: release-${{ github.ref_name }}") &&
       releaseWorkflowSource.includes("release-preflight:") &&
+      credentialBearingReleaseJobsAreProtected &&
       releaseWorkflowSource.includes("git merge-base --is-ancestor") &&
       releaseWorkflowSource.includes('test "$RELEASE_OWNER/$RELEASE_REPO" = "$GITHUB_REPOSITORY"') &&
       (releaseWorkflowSource.match(/needs: release-preflight/g) || []).length === 2 &&
@@ -802,7 +828,7 @@ const sourceInvariants = [
       releaseCandidateVerifySource.includes('manifest.status !== "signed-draft-candidate"') &&
       releaseCandidateVerifySource.includes("signature changed after sealing"),
     message:
-      "Tag builds must remain private drafts until the complete signed candidate manifest is sealed",
+      "Credential-bearing tag jobs must require protected approval and remain private drafts until the complete signed candidate manifest is sealed",
   },
   {
     ok:
@@ -939,6 +965,11 @@ const sourceInvariants = [
       securityPolicySource.includes("Do not disclose credentials") &&
       supportSource.includes("GitHub Releases page") &&
       supportSource.includes("remove API keys, tokens") &&
+      supportSource.includes("does not transmit the report automatically") &&
+      settingsSource.includes("template: \"bug_report.yml\"") &&
+      !settingsSource.includes("formsubmit.co") &&
+      !settingsSource.includes("BUG_REPORT_ENDPOINT") &&
+      !tauriConfigSource.includes("formsubmit.co") &&
       contributingSource.includes("A successful source build is not proof") &&
       contributingSource.includes("Do not delete databases or user data") &&
       bugReportTemplateSource.includes("id: install-channel") &&

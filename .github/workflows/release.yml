@@ -19,6 +19,7 @@ env:
 jobs:
   release-preflight:
     name: Verify release identity and signing configuration
+    environment: production-release
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -90,6 +91,7 @@ jobs:
   build-macos:
     name: Build macOS release
     needs: release-preflight
+    environment: production-release
     permissions:
       contents: write
     runs-on: macos-latest
@@ -220,6 +222,7 @@ jobs:
   build-windows-unsigned:
     name: Build unsigned Windows bundle
     needs: release-preflight
+    environment: production-release
     permissions:
       contents: read
     runs-on: windows-latest
@@ -311,6 +314,7 @@ jobs:
     needs:
       - build-macos
       - build-windows-unsigned
+    environment: production-release
     permissions:
       actions: read
       contents: write
@@ -439,6 +443,7 @@ jobs:
     needs:
       - build-macos
       - sign-windows
+    environment: production-release
     permissions:
       contents: write
     runs-on: ubuntu-latest

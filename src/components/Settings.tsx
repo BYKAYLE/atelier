@@ -574,9 +574,6 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
   const [patchUrl, setPatchUrl] = React.useState("");
   const [patchError, setPatchError] = React.useState("");
   const [patchNotes, setPatchNotes] = React.useState<PreviewPatchNote[]>([]);
-  const [bugSending, setBugSending] = React.useState(false);
-  const [bugSendStatus, setBugSendStatus] = React.useState("");
-  const [bugSendError, setBugSendError] = React.useState("");
   const copy = React.useMemo(() => language === "en"
     ? {
         title: "Patches & feedback",
@@ -590,7 +587,7 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
         patchOpenRelease: "Open release",
         patchFallbackError: (message: string) => `Using embedded notes because release notes could not be loaded: ${message}`,
         bugTitle: "Report a bug",
-        bugHint: "Attach what happened, what you expected, and any visible error text.",
+        bugHint: "Describe the issue, remove credentials and private paths, then copy it into the official GitHub issue form.",
         titleLabel: "Title",
         titlePlaceholder: "Short description of the issue",
         areaLabel: "Area",
@@ -598,11 +595,7 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
         bodyPlaceholder: "Steps, expected result, actual result, screenshot notes, console or preview errors...",
         copyReport: "Copy report",
         copied: "Copied",
-        emailReport: "Email report",
-        sendingReport: "Sending...",
-        reportSent: "Report sent to indra850@gmail.com.",
-        reportFailed: (message: string) => `Email report failed: ${message}`,
-        openIssue: "Open GitHub issue",
+        openIssue: "Copy & open GitHub issue",
         emptyTitle: "Untitled bug report",
         version: "Version",
         areas: [
@@ -647,7 +640,7 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
         patchOpenRelease: "릴리스 열기",
         patchFallbackError: (message: string) => `릴리스 노트를 불러오지 못해 설치본 내장 노트를 표시합니다: ${message}`,
         bugTitle: "버그 제보",
-        bugHint: "발생한 상황, 기대한 동작, 실제 결과, 보이는 에러 문구를 남겨주세요.",
+        bugHint: "문제를 적고 자격증명과 개인 경로를 제거한 뒤 공식 GitHub 이슈 폼에 붙여넣어 주세요.",
         titleLabel: "제목",
         titlePlaceholder: "문제를 짧게 적어주세요",
         areaLabel: "영역",
@@ -655,11 +648,7 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
         bodyPlaceholder: "재현 순서, 기대 결과, 실제 결과, 스크린샷 설명, 콘솔/프리뷰 에러 문구...",
         copyReport: "제보 내용 복사",
         copied: "복사됨",
-        emailReport: "메일로 제보",
-        sendingReport: "전송 중…",
-        reportSent: "indra850@gmail.com으로 제보를 보냈습니다.",
-        reportFailed: (message: string) => `메일 제보 실패: ${message}`,
-        openIssue: "GitHub 이슈 열기",
+        openIssue: "복사 후 GitHub 이슈 열기",
         emptyTitle: "제목 없는 버그 제보",
         version: "버전",
         areas: [
@@ -760,58 +749,26 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
     bugBody.trim() || "-",
   ].join("\n");
 
-  const copyBugReport = async () => {
+  const copyBugReport = async (): Promise<boolean> => {
     try {
       await navigator.clipboard.writeText(reportBody);
       setBugCopied(true);
       window.setTimeout(() => setBugCopied(false), 1400);
+      return true;
     } catch {
       setBugCopied(false);
+      return false;
     }
   };
 
   const openGithubIssue = async () => {
+    await copyBugReport();
     const params = new URLSearchParams({
+      template: "bug_report.yml",
       title: `[Bug] ${reportTitle}`,
-      body: reportBody,
     });
     const url = `https://github.com/${ATELIER_GITHUB_REPO}/issues/new?${params.toString()}`;
     await openExternalUrl(url);
-  };
-
-  const sendBugReportEmail = async () => {
-    setBugSending(true);
-    setBugSendStatus("");
-    setBugSendError("");
-    try {
-      const res = await fetch(BUG_REPORT_ENDPOINT, {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          _captcha: "false",
-          _subject: `[Atelier Bug] ${reportTitle}`,
-          _template: "box",
-          app: "Atelier",
-          version: currentVersion ? `v${currentVersion}` : "dev",
-          area: selectedArea,
-          title: reportTitle,
-          details: bugBody.trim() || "-",
-          report: reportBody,
-        }),
-      });
-      const text = await res.text();
-      if (!res.ok) {
-        throw new Error(text.slice(0, 180) || `HTTP ${res.status}`);
-      }
-      setBugSendStatus(copy.reportSent);
-    } catch (err) {
-      setBugSendError(copy.reportFailed(String(err instanceof Error ? err.message : err)));
-    } finally {
-      setBugSending(false);
-    }
   };
 
   return (
@@ -971,27 +928,7 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
           >
             {copy.openIssue}
           </button>
-          <button
-            type="button"
-            onClick={() => void sendBugReportEmail()}
-            disabled={bugSending}
-            className="h-9 px-3 rounded-[7px] border text-[12.5px] bg-[var(--accent)] text-white border-[var(--accent-hover)] hover:opacity-90 disabled:opacity-45"
-          >
-            {bugSending ? copy.sendingReport : copy.emailReport}
-          </button>
         </div>
-        {(bugSendStatus || bugSendError) && (
-          <div
-            className={cls(
-              "mt-2 text-[12px] text-right",
-              bugSendError
-                ? dark ? "text-[#ffb3b3]" : "text-[#9a342f]"
-                : dark ? "text-[#9fd0a9]" : "text-[#2c7a43]",
-            )}
-          >
-            {bugSendError || bugSendStatus}
-          </div>
-        )}
         </section>
       </div>
     </>
@@ -1002,8 +939,6 @@ const ATELIER_GITHUB_REPO = "BYKAYLE/atelier";
 const ATELIER_GITHUB_API_BASE = `https://api.github.com/repos/${ATELIER_GITHUB_REPO}`;
 const ATELIER_GITHUB_API = `${ATELIER_GITHUB_API_BASE}/releases/latest`;
 const ATELIER_GITHUB_RELEASES = `https://github.com/${ATELIER_GITHUB_REPO}/releases/latest`;
-const BUG_REPORT_EMAIL = "indra850@gmail.com";
-const BUG_REPORT_ENDPOINT = `https://formsubmit.co/ajax/${BUG_REPORT_EMAIL}`;
 
 type GithubReleaseInfo = {
   version: string;

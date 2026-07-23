@@ -6,6 +6,10 @@ proof, and public distribution. A successful build is not a public release.
 ## One-Time GitHub Configuration
 
 - Configure the `production-release` environment with required reviewers.
+- Keep every credential-bearing tag-build job bound to that environment. A
+  pushed tag may queue the workflow, but signing, notarization, release-token,
+  and SignPath credentials must remain unavailable until a reviewer approves
+  the protected environment.
 - Register an interactive self-hosted Windows x64 runner. A service session is
   rejected because it cannot prove that a browser window was visible. Install
   7-Zip on that runner so both the MSI and NSIS payloads can be extracted and
@@ -88,7 +92,9 @@ process.
 ## Stage 2: Sealed Private Draft
 
 Pushing the version tag starts `.github/workflows/release.yml`. The workflow
-must finish with all of these properties:
+first waits for approval on every credential-bearing job in the protected
+`production-release` environment. It must then finish with all of these
+properties:
 
 - `macos-release-evidence.json` proves that the built app, the app embedded in
   the DMG, and the app embedded in the updater archive have the same version

@@ -22,8 +22,10 @@ Before attaching logs:
 - do not attach credential-store exports or complete environment files;
 - keep only the smallest log excerpt needed to reproduce the issue.
 
-The in-app **Patch & Report** form sends a bug report to the project contact. It
-does not replace the private security-reporting path in `SECURITY.md`.
+The in-app **Patch & Report** form copies a redacted report and opens the
+official GitHub issue form. Atelier does not transmit the report automatically.
+Review the copied text before pasting it. This flow does not replace the private
+security-reporting path in `SECURITY.md`.
 
 ## Security Reports
 
