@@ -18,6 +18,8 @@ release_publication_gate_hardened_at: 2026-07-23T00:19:08+09:00
 
 release_evidence_binding_hardened_at: 2026-07-23T00:45:00+09:00
 
+release_preflight_centralized_at: 2026-07-23T09:27:15+09:00
+
 > Release publication gate update: version tags now create only a sealed
 > private draft. `release-manifest.json` binds the complete macOS and Windows
 > asset set, updater signatures, byte lengths, SHA-256 hashes, version, tag,
@@ -44,15 +46,23 @@ release_evidence_binding_hardened_at: 2026-07-23T00:45:00+09:00
 > updater contract, npm audit, and release security audit. The locally signed
 > macOS package is installed at `/Applications/Atelier.app`; packaged and
 > installed executable SHA-256 values both equal
-> `2f0a1ab865eaa98edd2c69ede60608300581d060771ff23b00eaf67145233549`,
+> `e198d7f8a3bd6928c917a77c5830cdb3b6169d2e3236d73bfb1137d983a1a953`,
 > and the DMG SHA-256 is
-> `097a42df0f98ac265dbc4abe6c46a9de5fcb7ff838a04fa71931cd1235eb4332`.
+> `e19cff033a99b62ec68534591de5faead4acabe872f6082130111d7f8cb7bf42`.
 > Installer hardening, preview route fidelity, Hermes workload reflection,
 > keyboard menus, compact composer containment, installed renderer readiness,
 > and installed WindowServer metadata are verified. Public macOS distribution
 > remains blocked on Developer ID notarization. Public Windows distribution
 > remains blocked on signing and physical OAuth/browser, Smart App Control,
 > updater, relaunch, and persistence evidence.
+
+> Shared release preflight update: local and CI release decisions now use the
+> same version, repository, updater, clean-source, and credential contract. At
+> commit `d51eac1`, every source-bound check passes and the strict decision is
+> blocked only by the missing production credential set. GitHub currently has
+> the two Tauri updater signing secrets; Apple Developer ID/notarization and
+> SignPath credentials are not configured. GitHub also reports no registered
+> self-hosted runner and no physical Windows gate execution history.
 
 > Modular feature-package update: the ten adopted Orca-informed capabilities
 > now own `feature.manifest.json` contracts that drive frontend inclusion,

@@ -1,6 +1,6 @@
 # Evidence Map
 
-updated_at: 2026-07-22T22:56:31+09:00
+updated_at: 2026-07-23T09:27:15+09:00
 
 | Capability | Source evidence | Runtime/package evidence | Status |
 |---|---|---|---|
@@ -27,7 +27,7 @@ updated_at: 2026-07-22T22:56:31+09:00
 | Development-service ownership | `src-tauri/src/dev_services.rs`, `src/components/dev-services/` | macOS, Windows, and Linux parser fixtures; PID-bound stop approval | ready_source |
 | In-process automations | `src-tauri/src/automations.rs`, `src/components/automations/` | manual, interval, and daily schedules; bounded missed-run handling; queue dispatch and receipts | ready_local |
 | Removable feature packages | `src/components/*/feature.manifest.json`, `vite.config.ts`, `src-tauri/Cargo.toml` | 10 isolated frontend/backend builds plus declared dependency-expansion smoke | ready |
-| macOS package/install reflection | `tools/build-macos-bundle.sh`, `tools/verify-macos-bundle.sh` | `Atelier_0.2.12_aarch64.dmg`; packaged and installed executable SHA-256 `2f0a1ab865eaa98edd2c69ede60608300581d060771ff23b00eaf67145233549`; DMG SHA-256 `097a42df0f98ac265dbc4abe6c46a9de5fcb7ff838a04fa71931cd1235eb4332`; strict local signature, installed renderer receipt, and WindowServer window metadata pass | ready_local |
+| macOS package/install reflection | `tools/build-macos-bundle.sh`, `tools/verify-macos-bundle.sh` | `Atelier_0.2.12_aarch64.dmg`; packaged and installed executable SHA-256 `e198d7f8a3bd6928c917a77c5830cdb3b6169d2e3236d73bfb1137d983a1a953`; DMG SHA-256 `e19cff033a99b62ec68534591de5faead4acabe872f6082130111d7f8cb7bf42`; strict local signature, installed renderer receipt, and WindowServer window metadata pass | ready_local |
 | Windows normal/Store source and link | workflows, `tools/windows-provider-smoke.ps1` | two PE32+ x86-64 links and strict cargo-xwin Clippy | ready_cross_target |
 | Physical Windows OAuth/Smart App Control/update survival | hosted process-observation and manual visible-window workflows | source contract passes; no registered physical runner or Windows execution receipt | validation_required |
 | Public signing and notarization | release workflows | SignPath/Developer ID credentials not available locally | external_gate |

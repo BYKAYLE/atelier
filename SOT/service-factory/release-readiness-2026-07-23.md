@@ -1,7 +1,7 @@
 # Atelier 0.2.12 Release Readiness Evidence
 
-generated_at: 2026-07-23T09:06:47+09:00
-source_commit: 6d5fe145755a39ba64bf55c27535aef56e0254c7
+generated_at: 2026-07-23T09:27:15+09:00
+source_commit: d51eac19c0adc6de0da21f82f4ca8c4bfdecc1c9
 branch: codex/release-readiness-final
 
 ## Source And Automated Gates
@@ -47,6 +47,15 @@ branch: codex/release-readiness-final
   compilation but cannot complete on macOS without the Windows SDK/MSVC headers
   (`assert.h` and `windows.h`). This is recorded as a host-toolchain limitation,
   not as Windows source or physical-runtime proof.
+- The shared release preflight passed version, repository, updater, tag,
+  workflow-repository, and clean-source checks at commit `d51eac1`. Its only
+  blocker was the release credential set. The report contains credential names
+  and presence state only.
+- The GitHub repository currently has only
+  `TAURI_SIGNING_PRIVATE_KEY` and
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. No repository variables or
+  `production-release` environment credentials are configured. The local
+  shell has none of the 11 release credentials required by the strict gate.
 
 ## Local macOS Package
 
@@ -55,9 +64,9 @@ branch: codex/release-readiness-final
 - DMG:
   `src-tauri/target/release/bundle/dmg/Atelier_0.2.12_aarch64.dmg`
 - DMG SHA-256:
-  `3c0ab0cbbc41fcfa149580ae1e766b3c731c50e131276b2c3ea66896d6954fb7`
-- DMG bytes: `13478098`
-- DMG built at: `2026-07-23T09:01:00+0900`
+  `e19cff033a99b62ec68534591de5faead4acabe872f6082130111d7f8cb7bf42`
+- DMG bytes: `13478053`
+- DMG built at: `2026-07-23T09:23:57+0900`
 - Bundle verification: strict code-signature verification passed.
 - Renderer readiness: passed for the packaged and installed executables.
 - Signing identity: `Atelier Local Code Signing`.
@@ -70,16 +79,16 @@ branch: codex/release-readiness-final
 - Installed path: `/Applications/Atelier.app`
 - Installed version: `0.2.12`
 - Running executable: `/Applications/Atelier.app/Contents/MacOS/atelier`
-- Running PID at evidence time: `90097`
-- Renderer receipt: version `0.2.12`, PID `90097`, window `main`, status `ready`.
+- Running PID at evidence time: `33720`
+- Renderer receipt: version `0.2.12`, PID `33720`, window `main`, status `ready`.
 - Packaged executable SHA-256:
-  `0bddffc993bd7849176fc77e97e3470eb3ffdfa6bd98c9b0248fba7f3459d159`
+  `e198d7f8a3bd6928c917a77c5830cdb3b6169d2e3236d73bfb1137d983a1a953`
 - Installed executable SHA-256:
-  `0bddffc993bd7849176fc77e97e3470eb3ffdfa6bd98c9b0248fba7f3459d159`
+  `e198d7f8a3bd6928c917a77c5830cdb3b6169d2e3236d73bfb1137d983a1a953`
 - Reflection verdict: exact match.
-- Previous installed bundle was preserved at
-  `/tmp/Atelier.app.pre-release-20260723-090155`; no user data or database was
-  deleted.
+- The installed application bundle was replaced with the verified candidate
+  after the prior process exited. Application Support, credentials, user data,
+  and databases were not modified or deleted.
 
 ## Residual Engineering Debt
 
@@ -99,10 +108,16 @@ branch: codex/release-readiness-final
 1. `physical-windows`: no physical Windows execution receipt exists for visible
    Claude/Codex browser login, authenticated CLI state, Smart App Control,
    timestamped signed-installer launch, and exact-version restart survival.
+   GitHub currently reports no registered self-hosted runner and no execution
+   history for `windows-physical-release-gate.yml`.
 2. `windows-public-signing`: SignPath credentials, project configuration, and a
    timestamped signed final installer receipt are absent.
 3. `mac-public-notarization`: Developer ID Application identity, notarization
    credentials, notarization acceptance, and stapling receipts are absent.
+
+The macOS keychain currently contains an Atelier local signing identity and an
+Apple Development identity. Neither is a Developer ID Application identity for
+public distribution.
 
 ## Distribution Boundary
 
