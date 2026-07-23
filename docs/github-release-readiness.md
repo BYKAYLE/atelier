@@ -25,7 +25,8 @@ candidate.
 | Source metadata | Pass | `package.json`, `Cargo.toml`, `Cargo.lock`, and `tauri.conf.json` resolve to `0.2.12`. |
 | Frontend production build | Pass | TypeScript and Vite production build completed. The largest JavaScript chunk is about 1.42 MB before gzip and remains a performance debt. |
 | Rust backend | Pass | `cargo check`, formatting, and the complete test suite passed: 188 passed, 0 failed, 1 ignored live subscription test. |
-| Security and release contracts | Pass | Release audit, updater contract, publish evidence, candidate evidence, OAuth flow, Windows runner doctor, and workflow lint gates passed. |
+| Security and release contracts | Pass | Release audit, updater contract, publish evidence, candidate evidence, OAuth flow, Windows runner doctor, and workflow lint gates passed. The publication validator now rejects UI-login evidence from a different tag, source commit, GitHub run, attempt, or runner. |
+| Windows in-app provider gate | Pass in source; physical run pending | The physical Windows workflow launches the installed app with a loopback-only WebView2 debugging port, clicks the real Providers navigation and Claude/Codex subscription-login buttons, observes the pending login UI, waits for authenticated and connected states, and seals that receipt into the candidate evidence. The Node witness and PowerShell orchestration are source-audited, but this path has not yet run on a registered physical Windows release runner. |
 | Optional feature isolation | Pass | Ten optional modules were removed individually from frontend and Rust builds, dependency expansion was checked, and the complete bundle was restored. |
 | Runtime regressions | Pass | PTY, review, agent fleet, editor diagnostics, CLI, GitHub, Linear, SSH, provider usage, mobile control, remote follow-up, preview, notifications, and input-performance smokes passed. |
 | PTY responsiveness | Pass | Local median input round trip was about 1.58 ms and p95 about 1.92 ms. |
@@ -45,9 +46,11 @@ candidate.
    `SIGNPATH_PROJECT_SLUG`.
 3. No online interactive self-hosted Windows x64 release runner is registered.
 4. No physical Windows evidence currently proves the exact candidate's
-   Authenticode signature, native Claude/Codex browser login, real Tauri updater
-   installation, updater-driven relaunch, installed executable hash, and
-   restart persistence.
+   Authenticode signature, real in-app Claude/Codex login-button flow and
+   browser handoff, real Tauri updater installation, updater-driven relaunch,
+   installed executable hash, and restart persistence. The gate now requires
+   all of these surfaces from one tag, source commit, GitHub run, attempt, and
+   runner; it still needs an actual Windows execution.
 5. No sealed private draft has passed the approval-protected publish validator,
    so GitHub release assets and `latest.json` are not distribution proof.
 

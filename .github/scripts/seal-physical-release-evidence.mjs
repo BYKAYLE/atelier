@@ -36,11 +36,21 @@ const manifestPath = join(assetsDir, "release-manifest.json");
 const candidatePath = findExactlyOne("windows-release-candidate.json");
 const updaterPath = findExactlyOne("windows-updater-canary.json");
 const providerPath = findExactlyOne(/^atelier-provider-smoke-.*\.json$/);
+const inAppLoginPath = findExactlyOne(/^atelier-in-app-login-.*\.json$/);
 const packagePath = findExactlyOne("windows-package-smoke.json");
 const runnerPreflightPath = findExactlyOne("windows-runner-preflight.json");
+const provider = readJson(providerPath);
+const inAppLogin = readJson(inAppLoginPath);
+
+assertReleaseMetadata(provider, "provider");
+assertReleaseMetadata(inAppLogin, "in-app login");
+assertInAppLoginReceipt(inAppLogin);
+if (canonicalJson(provider.inAppLogin) !== canonicalJson(inAppLogin)) {
+  fail("provider receipt does not embed the exact in-app login receipt");
+}
 
 const seal = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   status: "physical-release-gate-passed",
   releaseTag,
   expectedVersion,
@@ -55,6 +65,7 @@ const seal = {
     candidate: receipt(candidatePath),
     updater: receipt(updaterPath),
     provider: receipt(providerPath),
+    inAppLogin: receipt(inAppLoginPath),
     packages: receipt(packagePath),
   },
 };
@@ -96,6 +107,59 @@ function receipt(path) {
     bytes: statSync(path).size,
     sha256: createHash("sha256").update(data).digest("hex"),
   };
+}
+
+function readJson(path) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, ""));
+  } catch (error) {
+    fail(`invalid JSON in ${path}: ${error.message}`);
+  }
+}
+
+function canonicalJson(value) {
+  return JSON.stringify(value, (_key, current) => {
+    if (!current || typeof current !== "object" || Array.isArray(current)) return current;
+    return Object.fromEntries(
+      Object.entries(current).sort(([left], [right]) => left.localeCompare(right)),
+    );
+  });
+}
+
+function assertReleaseMetadata(payload, label) {
+  if (payload?.releaseTag !== releaseTag) fail(`${label} release tag mismatch`);
+  if (payload?.expectedVersion !== expectedVersion) fail(`${label} expected version mismatch`);
+  if (String(payload?.sourceSha || "").toLowerCase() !== sourceSha) {
+    fail(`${label} source SHA mismatch`);
+  }
+  if (String(payload?.githubRunId || "") !== githubRunId) {
+    fail(`${label} GitHub run ID mismatch`);
+  }
+  if (String(payload?.githubRunAttempt || "") !== githubRunAttempt) {
+    fail(`${label} GitHub run attempt mismatch`);
+  }
+  if (payload?.runnerName !== runnerName) fail(`${label} runner name mismatch`);
+}
+
+function assertInAppLoginReceipt(payload) {
+  if (payload?.schemaVersion !== 1) fail("in-app login receipt schema mismatch");
+  if (payload?.ok !== true) fail("in-app login receipt did not pass");
+  if (payload?.failure != null) fail("in-app login receipt contains a failure");
+  const providers = Array.isArray(payload?.providers) ? payload.providers : [];
+  if (providers.length !== 2) fail("in-app login receipt must contain exactly two providers");
+  for (const providerName of ["codex", "claude"]) {
+    const witness = providers.find((entry) => entry?.provider === providerName);
+    if (
+      !witness ||
+      witness.loginButtonClicked !== true ||
+      witness.loginModalObserved !== true ||
+      witness.loginPendingStateObserved !== true ||
+      witness.authenticatedStateObserved !== true ||
+      witness.connectedStateObserved !== true
+    ) {
+      fail(`in-app login receipt is incomplete for ${providerName}`);
+    }
+  }
 }
 
 function requireEnv(name) {

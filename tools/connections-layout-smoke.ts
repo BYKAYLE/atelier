@@ -11,6 +11,15 @@ for (const contract of [
   'data-testid="connection-provider-picker"',
   'data-testid="selected-connection-provider"',
   'data-connection-provider={provider.id}',
+  'data-provider-card={def.id}',
+  'data-provider-connected={connected ? "true" : "false"}',
+  'data-provider-oauth-connected={oauthLoggedIn ? "true" : "false"}',
+  'data-provider-oauth-action={def.id}',
+  'data-testid="provider-login-modal"',
+  'data-provider={provider}',
+  'data-provider-login-detected={detected ? "true" : "false"}',
+  'data-testid="connection-panel-error"',
+  'data-testid="connection-panel-notice"',
   "selectedProviderId",
   'data-testid="browser-handoff-diagnostics"',
   'data-testid="connection-tools"',
@@ -18,6 +27,15 @@ for (const contract of [
 ]) {
   assertContains(contract, "compact connections layout");
 }
+
+assertContains(
+  "if (s.oauth_logged_in)",
+  "subscription login completion must require OAuth rather than an API key",
+);
+assert.ok(
+  !source.includes("if (s.oauth_logged_in || s.api_key_present)"),
+  "subscription login must not report success from API-key presence alone",
+);
 
 assert.equal(
   (source.match(/<ProviderCard/g) ?? []).length,

@@ -31,6 +31,10 @@ const releasePreflightSmokeSource = readFileSync("tools/release-preflight-smoke.
 const releaseReadinessProbeSource = readFileSync("tools/release-readiness-probes.mjs", "utf8");
 const storeBuildSource = readFileSync("tools/windows-store/build-msix.ps1", "utf8");
 const windowsProviderSmokeSource = readFileSync("tools/windows-provider-smoke.ps1", "utf8");
+const windowsConnectionsUiWitnessSource = readFileSync(
+  "tools/windows-connections-ui-witness.mjs",
+  "utf8",
+);
 const windowsPackageSmokeSource = readFileSync("tools/windows-package-smoke.ps1", "utf8");
 const windowsPhysicalRunnerPreflightSource = readTextIfExists(
   windowsPhysicalRunnerPreflightPath,
@@ -185,12 +189,23 @@ const sourceInvariants = [
       windowsProviderSmokeSource.includes('1 { return "On" }') &&
       windowsProviderSmokeSource.includes('2 { return "Evaluation" }') &&
       windowsProviderSmokeSource.includes("SelfTest") &&
+      windowsProviderSmokeSource.includes("InAppLogin") &&
+      windowsProviderSmokeSource.includes("windows-connections-ui-witness.mjs") &&
+      windowsProviderSmokeSource.includes("--remote-debugging-address=127.0.0.1") &&
+      windowsConnectionsUiWitnessSource.includes('button[aria-label="Providers"]') &&
+      windowsConnectionsUiWitnessSource.includes("data-provider-oauth-action") &&
+      windowsConnectionsUiWitnessSource.includes("data-provider-oauth-connected") &&
+      windowsConnectionsUiWitnessSource.includes("provider-login-modal") &&
+      windowsConnectionsUiWitnessSource.includes("loginPendingStateObserved") &&
+      windowsConnectionsUiWitnessSource.includes("authenticatedStateObserved") &&
       windowsPhysicalGateSource.includes("self-hosted") &&
       windowsPhysicalGateSource.includes("windows") &&
       windowsPhysicalGateSource.includes("-RestartApplication") &&
       windowsPhysicalGateSource.includes("-RequireRendererReadyEvidence") &&
       windowsPhysicalGateSource.includes("-RequireBrowserProcessEvidence") &&
       windowsPhysicalGateSource.includes("-RequireVisibleBrowserWindowEvidence") &&
+      windowsPhysicalGateSource.includes("-InAppLogin") &&
+      windowsPhysicalGateSource.includes("node --check tools/windows-connections-ui-witness.mjs") &&
       windowsPhysicalGateSource.includes("-SelfTest") &&
       windowsPhysicalGateSource.includes("verify-release-candidate.mjs") &&
       windowsPhysicalGateSource.includes("windows-release-candidate-gate.ps1") &&
@@ -804,6 +819,10 @@ const sourceInvariants = [
       publishEvidenceSource.includes("windows-runner-preflight.json") &&
       publishEvidenceSource.includes("expected exactly one Windows runner preflight receipt") &&
       publishEvidenceSource.includes("expected exactly one Windows provider receipt") &&
+      publishEvidenceSource.includes("expected exactly one Windows in-app login receipt") &&
+      publishEvidenceSource.includes("provider embedded in-app login receipt") &&
+      publishEvidenceSource.includes("loginPendingStateObserved") &&
+      publishEvidenceSource.includes("authenticatedStateObserved") &&
       publishEvidenceSource.includes("package GitHub run ID") &&
       publishEvidenceSource.includes('["nsis", nsisAsset]') &&
       publishEvidenceSource.includes("${kind} package hash") &&
@@ -816,6 +835,9 @@ const sourceInvariants = [
       publishEvidenceSource.includes("updater/candidate installed executable hash") &&
       physicalEvidenceSealSource.includes("windows-updater-canary.json") &&
       physicalEvidenceSealSource.includes("updater: receipt(updaterPath)") &&
+      physicalEvidenceSealSource.includes("atelier-in-app-login-") &&
+      physicalEvidenceSealSource.includes("inAppLogin: receipt(inAppLoginPath)") &&
+      physicalEvidenceSealSource.includes("provider receipt does not embed the exact in-app login receipt") &&
       publishEvidenceSource.includes(
         'assertEqual(manifest.releaseRepository, releaseRepository.slug, "release manifest repository")',
       ),
@@ -859,6 +881,7 @@ const sourceInvariants = [
       windowsPhysicalGateSource.includes("artifacts/windows-updater-canary/*") &&
       windowsPhysicalGateSource.includes("Upload physical gate evidence") &&
       windowsPhysicalGateSource.includes('"-Install",') &&
+      windowsPhysicalGateSource.includes('"-InAppLogin",') &&
       windowsPhysicalGateSource.includes('"-LogDir", "artifacts/windows-provider-current"') &&
       windowsPhysicalGateSource.includes("windows-package-smoke.json") &&
       !windowsPhysicalGateSource.includes("collect-windows-provider-evidence.ps1") &&

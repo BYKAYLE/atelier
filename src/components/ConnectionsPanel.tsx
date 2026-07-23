@@ -527,7 +527,7 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
       if (cancelled) return;
       if (s) {
         setStatuses((prev) => ({ ...prev, [loginProvider]: s }));
-        if (s.oauth_logged_in || s.api_key_present) {
+        if (s.oauth_logged_in) {
           setLoginModal((m) => (m?.provider === loginProvider ? { ...m, detected: true, failed: null } : m));
           setTimeout(() => setLoginModal(null), 1400);
           stopPolling();
@@ -790,6 +790,7 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
 
       {panelError && (
         <div
+          data-testid="connection-panel-error"
           className={cls(
             "text-[12px] px-3 py-2 rounded-md border",
             dark ? "border-red-700/40 bg-red-900/20 text-red-300" : "border-red-200 bg-red-50 text-red-700",
@@ -800,6 +801,7 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
       )}
       {panelNotice && (
         <div
+          data-testid="connection-panel-notice"
           className={cls(
             "text-[12px] px-3 py-2 rounded-md border",
             dark ? "border-dline bg-dbg text-dsub" : "border-line bg-cream text-sub",
@@ -936,6 +938,9 @@ const ProviderCard: React.FC<CardProps> = ({
 
   return (
     <div
+      data-provider-card={def.id}
+      data-provider-connected={connected ? "true" : "false"}
+      data-provider-oauth-connected={oauthLoggedIn ? "true" : "false"}
       className={cls(
         "rounded-lg border p-4 transition-colors",
         dark ? "border-dline bg-dpanel" : "border-line bg-panel",
@@ -958,6 +963,7 @@ const ProviderCard: React.FC<CardProps> = ({
           <div className="flex items-center gap-2 flex-wrap">
             {supportsOauth && (
               <button
+                data-provider-oauth-action={def.id}
                 onClick={() => {
                   if (!cliInstalled) {
                     setErrorMsg(`${copy.installPrompt} ${def.installHelp?.[lang] ?? ""}`.trim());
@@ -1571,6 +1577,9 @@ const LoginModal: React.FC<{
     <div
       role="dialog"
       aria-modal="true"
+      data-testid="provider-login-modal"
+      data-provider={provider}
+      data-provider-login-detected={detected ? "true" : "false"}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();

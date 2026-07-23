@@ -226,6 +226,8 @@ jobs:
           REQUIRE_SMART_APP_CONTROL_EVIDENCE: ${{ inputs.require_smart_app_control_evidence }}
         run: |
           $sourceSha = (git rev-parse HEAD).Trim()
+          node --check tools/windows-connections-ui-witness.mjs
+          if ($LASTEXITCODE -ne 0) { throw "Windows in-app login witness syntax check failed." }
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1 -SelfTest
           if ($LASTEXITCODE -ne 0) { throw "Windows provider smoke self-test failed." }
           if (-not $env:ATELIER_EXE) { throw "Candidate gate did not return the installed Atelier.exe path." }
@@ -235,6 +237,7 @@ jobs:
             "-File", "tools/windows-provider-smoke.ps1",
             "-Install",
             "-Login",
+            "-InAppLogin",
             "-Strict",
             "-RestartApplication",
             "-RequireRendererReadyEvidence",

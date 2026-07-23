@@ -46,6 +46,10 @@ const providerFiles = findFiles(evidenceDir, /^atelier-provider-smoke-.*\.json$/
 if (providerFiles.length !== 1) {
   fail(`expected exactly one Windows provider receipt, found ${providerFiles.length}`);
 }
+const inAppLoginFiles = findFiles(evidenceDir, /^atelier-in-app-login-.*\.json$/);
+if (inAppLoginFiles.length !== 1) {
+  fail(`expected exactly one Windows in-app login receipt, found ${inAppLoginFiles.length}`);
+}
 const packageFiles = findFiles(evidenceDir, "windows-package-smoke.json");
 if (packageFiles.length !== 1) {
   fail(`expected exactly one Windows package receipt, found ${packageFiles.length}`);
@@ -59,6 +63,7 @@ if (physicalSealFiles.length !== 1) {
   fail(`expected exactly one physical gate seal, found ${physicalSealFiles.length}`);
 }
 const providerFile = { path: providerFiles[0], payload: readJson(providerFiles[0]) };
+const inAppLoginPath = inAppLoginFiles[0];
 const candidatePath = candidateFiles[0];
 const updaterPath = updaterFiles[0];
 const packagePath = packageFiles[0];
@@ -68,6 +73,7 @@ const candidate = readJson(candidatePath);
 const updater = readJson(updaterPath);
 const packageProof = readJson(packagePath);
 const provider = providerFile.payload;
+const inAppLogin = readJson(inAppLoginPath);
 const runnerPreflight = readJson(runnerPreflightPath);
 const physicalSeal = readJson(physicalSealPath);
 const manifestPath = join(assetsDir, "release-manifest.json");
@@ -76,6 +82,7 @@ const manifest = readJson(manifestPath);
 assertRunnerPreflight(runnerPreflight);
 assertPhysicalSeal(physicalSeal);
 assertUpdaterCanary(updater);
+assertInAppLoginReceipt(inAppLogin);
 
 assertEqual(candidate.schemaVersion, 1, "candidate receipt schema");
 assertEqual(candidate.releaseTag, releaseTag, "candidate release tag");
@@ -195,6 +202,12 @@ assertEqual(
   "provider GitHub run attempt",
 );
 assertEqual(provider.runnerName, physicalGateRunnerName, "provider runner name");
+assertTrue(provider.inAppLoginRequested === true, "provider gate did not request the in-app login flow");
+assertEqual(
+  canonicalJson(provider.inAppLogin),
+  canonicalJson(inAppLogin),
+  "provider embedded in-app login receipt",
+);
 
 assertTrue(provider.installedApp?.found === true, "provider gate did not find the installed candidate");
 assertTrue(provider.installedApp?.versionOk === true, "provider gate did not prove the installed version");
@@ -262,6 +275,7 @@ const report = {
     candidate: receipt(candidatePath),
     updater: receipt(updaterPath),
     provider: receipt(providerFile.path),
+    inAppLogin: receipt(inAppLoginPath),
     packages: receipt(packagePath),
     manifest: receipt(manifestPath),
     physicalGateSeal: receipt(physicalSealPath),
@@ -364,6 +378,51 @@ function assertBrowserProcessEvidence(evidence) {
     visibleProcesses.length > 0,
     "browser process evidence has no complete visible process record",
   );
+}
+
+function assertInAppLoginReceipt(evidence) {
+  assertEqual(evidence?.schemaVersion, 1, "in-app login receipt schema");
+  assertEqual(evidence?.releaseTag, releaseTag, "in-app login release tag");
+  assertEqual(evidence?.expectedVersion, expectedVersion, "in-app login expected version");
+  assertEqual(
+    String(evidence?.sourceSha || "").toLowerCase(),
+    sourceSha,
+    "in-app login source SHA",
+  );
+  assertEqual(String(evidence?.githubRunId || ""), physicalGateRunId, "in-app login GitHub run ID");
+  assertEqual(
+    String(evidence?.githubRunAttempt || ""),
+    physicalGateRunAttempt,
+    "in-app login GitHub run attempt",
+  );
+  assertEqual(evidence?.runnerName, physicalGateRunnerName, "in-app login runner name");
+  assertTrue(!Number.isNaN(Date.parse(evidence?.generatedAt)), "in-app login timestamp is invalid");
+  assertTrue(evidence?.ok === true, "in-app login receipt did not pass");
+  assertTrue(evidence?.failure == null, "in-app login receipt contains a failure");
+  const providers = Array.isArray(evidence?.providers) ? evidence.providers : [];
+  assertEqual(providers.length, 2, "in-app login provider count");
+  for (const providerName of ["codex", "claude"]) {
+    const witness = providers.find((entry) => entry?.provider === providerName);
+    assertTrue(Boolean(witness), `in-app login receipt is missing ${providerName}`);
+    for (const field of [
+      "loginButtonClicked",
+      "loginModalObserved",
+      "loginPendingStateObserved",
+      "authenticatedStateObserved",
+      "connectedStateObserved",
+    ]) {
+      assertTrue(witness?.[field] === true, `${providerName} in-app login evidence is false: ${field}`);
+    }
+  }
+}
+
+function canonicalJson(value) {
+  return JSON.stringify(value, (_key, current) => {
+    if (!current || typeof current !== "object" || Array.isArray(current)) return current;
+    return Object.fromEntries(
+      Object.entries(current).sort(([left], [right]) => left.localeCompare(right)),
+    );
+  });
 }
 
 function assertRunnerPreflight(preflight) {
@@ -563,7 +622,7 @@ function isOlderVersion(actual, expected) {
 }
 
 function assertPhysicalSeal(seal) {
-  assertEqual(seal?.schemaVersion, 1, "physical gate seal schema");
+  assertEqual(seal?.schemaVersion, 2, "physical gate seal schema");
   assertEqual(seal?.status, "physical-release-gate-passed", "physical gate seal status");
   assertEqual(seal?.releaseTag, releaseTag, "physical gate seal release tag");
   assertEqual(seal?.expectedVersion, expectedVersion, "physical gate seal expected version");
@@ -589,6 +648,11 @@ function assertPhysicalSeal(seal) {
   assertReceiptEqual(seal?.evidence?.candidate, receipt(candidatePath), "sealed candidate");
   assertReceiptEqual(seal?.evidence?.updater, receipt(updaterPath), "sealed updater canary");
   assertReceiptEqual(seal?.evidence?.provider, receipt(providerFile.path), "sealed provider");
+  assertReceiptEqual(
+    seal?.evidence?.inAppLogin,
+    receipt(inAppLoginPath),
+    "sealed in-app login receipt",
+  );
   assertReceiptEqual(seal?.evidence?.packages, receipt(packagePath), "sealed package proof");
 }
 

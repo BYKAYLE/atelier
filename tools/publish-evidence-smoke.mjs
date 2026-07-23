@@ -30,6 +30,7 @@ const installedPath = "C:\\Program Files\\Atelier\\Atelier.exe";
 const candidatePath = join(evidence, "windows-release-candidate.json");
 const updaterPath = join(evidence, "windows-updater-canary.json");
 const providerPath = join(evidence, "atelier-provider-smoke-20260722-120000.json");
+const inAppLoginPath = join(evidence, "atelier-in-app-login-20260722-120000.json");
 const packagePath = join(evidence, "windows-package-smoke.json");
 const runnerPreflightPath = join(evidence, "windows-runner-preflight.json");
 const physicalSealPath = join(evidence, "physical-gate-receipt.json");
@@ -112,22 +113,45 @@ try {
   run(false, "missing Claude authentication");
 
   resetValidUpgrade();
+  const inAppLogin = readJson(inAppLoginPath);
+  inAppLogin.providers.find((entry) => entry.provider === "codex").loginButtonClicked = false;
+  writeJson(inAppLoginPath, inAppLogin);
+  writePhysicalSeal(false, "missing installed Codex login button proof");
+
+  resetValidUpgrade();
+  provider = readJson(providerPath);
+  provider.inAppLogin.providers.find(
+    (entry) => entry.provider === "claude",
+  ).authenticatedStateObserved = false;
+  writeJson(providerPath, provider);
+  writePhysicalSeal(false, "provider embeds a different in-app login receipt");
+
+  resetValidUpgrade();
+  const crossRunLogin = readJson(inAppLoginPath);
+  crossRunLogin.githubRunId = "987654321";
+  writeJson(inAppLoginPath, crossRunLogin);
+  const crossRunProvider = readJson(providerPath);
+  crossRunProvider.inAppLogin = crossRunLogin;
+  writeJson(providerPath, crossRunProvider);
+  writePhysicalSeal(false, "in-app login receipt from another run");
+
+  resetValidUpgrade();
   provider = readJson(providerPath);
   provider.githubRunId = "987654321";
   writeJson(providerPath, provider);
-  run(false, "provider receipt from another run");
+  writePhysicalSeal(false, "provider receipt from another run");
 
   resetValidUpgrade();
   provider = readJson(providerPath);
   provider.githubRunAttempt = 5;
   writeJson(providerPath, provider);
-  run(false, "provider receipt from another run attempt");
+  writePhysicalSeal(false, "provider receipt from another run attempt");
 
   resetValidUpgrade();
   provider = readJson(providerPath);
   provider.runnerName = "another-runner";
   writeJson(providerPath, provider);
-  run(false, "provider receipt from another runner");
+  writePhysicalSeal(false, "provider receipt from another runner");
 
   resetValidUpgrade();
   provider = readJson(providerPath);
@@ -257,7 +281,9 @@ function resetValidUpgrade() {
   writeJson(runnerPreflightPath, runnerPreflightFixture());
   writeJson(updaterPath, updaterFixture());
   writeJson(candidatePath, candidateFixture(fileReceipt(updaterPath)));
-  writeJson(providerPath, providerFixture());
+  const inAppLogin = inAppLoginFixture();
+  writeJson(inAppLoginPath, inAppLogin);
+  writeJson(providerPath, providerFixture(inAppLogin));
   writeJson(packagePath, packageFixture());
 }
 
@@ -266,7 +292,9 @@ function resetWaiverCandidate() {
   writeJson(runnerPreflightPath, runnerPreflightFixture());
   writeJson(updaterPath, updaterFixture(true));
   writeJson(candidatePath, candidateFixture(fileReceipt(updaterPath), true));
-  writeJson(providerPath, providerFixture());
+  const inAppLogin = inAppLoginFixture();
+  writeJson(inAppLoginPath, inAppLogin);
+  writeJson(providerPath, providerFixture(inAppLogin));
   writeJson(packagePath, packageFixture());
 }
 
@@ -450,7 +478,39 @@ function runnerPreflightFixture() {
   };
 }
 
-function providerFixture() {
+function inAppLoginFixture() {
+  return {
+    schemaVersion: 1,
+    generatedAt: "2026-07-22T12:00:00.000Z",
+    releaseTag: tag,
+    expectedVersion: version,
+    sourceSha,
+    githubRunId: runId,
+    githubRunAttempt: Number(runAttempt),
+    runnerName,
+    debugPort: 9223,
+    target: {
+      id: "atelier-webview2",
+      title: "Atelier",
+      url: "https://tauri.localhost/",
+    },
+    providers: ["codex", "claude"].map((provider) => ({
+      provider,
+      startedAt: "2026-07-22T12:00:00.000Z",
+      completedAt: "2026-07-22T12:00:05.000Z",
+      connectedBefore: false,
+      loginButtonClicked: true,
+      loginModalObserved: true,
+      loginPendingStateObserved: true,
+      authenticatedStateObserved: true,
+      connectedStateObserved: true,
+    })),
+    ok: true,
+    failure: null,
+  };
+}
+
+function providerFixture(inAppLogin = inAppLoginFixture()) {
   return {
     schemaVersion: 1,
     generatedAt: "2026-07-22T12:00:00.000Z",
@@ -460,6 +520,8 @@ function providerFixture() {
     githubRunId: runId,
     githubRunAttempt: Number(runAttempt),
     runnerName,
+    inAppLoginRequested: true,
+    inAppLogin,
     providers: [
       { command: "codex", exists: true, versionOk: true, authOk: true },
       { command: "claude", exists: true, versionOk: true, authOk: true },
@@ -561,7 +623,7 @@ function writeManifest() {
   });
 }
 
-function writePhysicalSeal() {
+function writePhysicalSeal(shouldPass = true, label = "physical seal fixture") {
   const result = spawnSync(process.execPath, [".github/scripts/seal-physical-release-evidence.mjs"], {
     cwd: process.cwd(),
     encoding: "utf8",
@@ -578,8 +640,8 @@ function writePhysicalSeal() {
       RUNNER_NAME: runnerName,
     },
   });
-  if (result.status !== 0) {
-    throw new Error(`physical seal fixture failed:\n${result.stdout}\n${result.stderr}`);
+  if ((result.status === 0) !== shouldPass) {
+    throw new Error(`${label} produced unexpected status ${result.status}:\n${result.stdout}\n${result.stderr}`);
   }
 }
 

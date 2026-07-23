@@ -1,6 +1,7 @@
 param(
   [switch]$Install,
   [switch]$Login,
+  [switch]$InAppLogin,
   [switch]$Strict,
   [switch]$RestartApplication,
   [switch]$RequireAuthenticode,
@@ -12,6 +13,8 @@ param(
   [switch]$SelfTest,
   [int]$InstallTimeoutSec = 1800,
   [int]$BrowserProbeTimeoutSec = 20,
+  [int]$InAppLoginTimeoutSec = 600,
+  [int]$WebViewDebugPort = 9223,
   [string]$AtelierExe = "",
   [string]$ExpectedVersion = "",
   [string]$ReleaseTag = "",
@@ -673,7 +676,27 @@ function Test-AtelierInstalledRuntime {
     }
     Start-Sleep -Seconds 1
     try {
-      $started = Start-Process -FilePath $ExePath -PassThru -ErrorAction Stop
+      $previousWebViewArguments = $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
+      if ($InAppLogin) {
+        $baseWebViewArguments = (
+          [string]$previousWebViewArguments -replace '(?i)--remote-debugging-port(?:=|\s+)\d+', ''
+        ).Trim()
+        $baseWebViewArguments = (
+          [string]$baseWebViewArguments -replace '(?i)--remote-debugging-address(?:=|\s+)\S+', ''
+        ).Trim()
+        $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = (
+          "$baseWebViewArguments --remote-debugging-address=127.0.0.1 --remote-debugging-port=$WebViewDebugPort"
+        ).Trim()
+      }
+      try {
+        $started = Start-Process -FilePath $ExePath -PassThru -ErrorAction Stop
+      } finally {
+        if ($null -eq $previousWebViewArguments) {
+          Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue
+        } else {
+          $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = $previousWebViewArguments
+        }
+      }
       for ($attempt = 0; $attempt -lt 15; $attempt++) {
         $runningAfterRestart = @(& $findExactProcesses)
         if ($runningAfterRestart.Count -gt 0) {
@@ -815,6 +838,16 @@ if ($SelfTest) {
   exit 0
 }
 
+if ($InAppLogin -and -not $Login) {
+  throw "InAppLogin requires Login."
+}
+if ($InAppLogin -and -not $RestartApplication) {
+  throw "InAppLogin requires RestartApplication so Atelier can expose a bounded WebView2 diagnostic port."
+}
+if ($InAppLogin -and ($WebViewDebugPort -lt 1 -or $WebViewDebugPort -gt 65535)) {
+  throw "WebViewDebugPort must be a valid TCP port."
+}
+
 $hasReleaseEvidenceMetadata = (
   -not [string]::IsNullOrWhiteSpace($ReleaseTag) -or
   -not [string]::IsNullOrWhiteSpace($SourceSha) -or
@@ -865,6 +898,7 @@ try {
     runnerName = if ($hasReleaseEvidenceMetadata) { [string]$env:RUNNER_NAME } else { $null }
     installRequested = [bool]$Install
     loginRequested = [bool]$Login
+    inAppLoginRequested = [bool]$InAppLogin
     providers = @()
     hermesAuth = $null
     browserProbe = $null
@@ -875,6 +909,7 @@ try {
     installedApp = $null
     smartAppControl = $null
     loginResults = $null
+    inAppLogin = $null
     logPath = $logPath
   }
 
@@ -946,6 +981,45 @@ try {
     Write-Host "Smart App Control source: $($summary.smartAppControl.source)"
   }
 
+  if ($InAppLogin) {
+    Write-Section "Installed Atelier subscription-login UI"
+    $inAppLoginReceiptPath = Join-Path $LogDir "atelier-in-app-login-$stamp.json"
+    $inAppLoginTimeoutMs = $InAppLoginTimeoutSec * 1000
+    $inAppWitnessTimeoutSec = ($InAppLoginTimeoutSec * 2) + 90
+    $inAppWitnessArgs = @(
+      "tools/windows-connections-ui-witness.mjs",
+      "--port", $WebViewDebugPort.ToString(),
+      "--providers", "codex,claude",
+      "--timeout-ms", $inAppLoginTimeoutMs.ToString(),
+      "--output", $inAppLoginReceiptPath
+    )
+    if ($hasReleaseEvidenceMetadata) {
+      $inAppWitnessArgs += @(
+        "--release-tag", $ReleaseTag,
+        "--expected-version", $ExpectedVersion,
+        "--source-sha", $SourceSha,
+        "--run-id", $RunId,
+        "--run-attempt", $RunAttempt,
+        "--runner-name", ([string]$env:RUNNER_NAME)
+      )
+    }
+    $inAppWitness = Invoke-Captured `
+      "Atelier in-app subscription login witness" `
+      "node" `
+      $inAppWitnessArgs `
+      $inAppWitnessTimeoutSec
+    if (Test-Path -LiteralPath $inAppLoginReceiptPath) {
+      try {
+        $summary.inAppLogin = Get-Content -LiteralPath $inAppLoginReceiptPath -Raw | ConvertFrom-Json
+      } catch {
+        Write-Host "Atelier in-app login receipt was not valid JSON: $($_.Exception.Message)"
+      }
+    }
+    if (-not $inAppWitness.ok) {
+      Write-Host "Atelier in-app subscription login witness did not complete successfully."
+    }
+  }
+
   if ($Login -or $ProbeBrowserHandoff) {
     Write-Section $(if ($Login) { "Interactive subscription login" } else { "Browser handoff probe" })
     Write-Host "Testing the Windows default-browser handoff used by Atelier."
@@ -976,7 +1050,7 @@ try {
     Write-Host "Browser observation mode: $($summary.browserProcessEvidence.observationMode)"
   }
 
-  if ($Login) {
+  if ($Login -and -not $InAppLogin) {
     Write-Host "Running the same official login flows used by Atelier."
     # setup-token can print an inference token. Pause the transcript so no
     # authentication code or token is persisted in the diagnostic log.
@@ -1009,6 +1083,32 @@ try {
       } elseif ($status.command -eq "claude") {
         $status.authOk = [bool]$claudeAuthAfterLogin.ok
         $status.authNote = if ($claudeAuthAfterLogin.ok) { "authenticated after setup-token login" } else { "setup-token login did not produce an authenticated session" }
+      }
+    }
+  } elseif ($Login -and $InAppLogin) {
+    Write-Host "Re-checking provider auth status after the installed Atelier UI login flow..."
+    $codexAuthAfterLogin = Invoke-ProviderCaptured "Codex login status after Atelier UI login" "codex" @("login", "status") 60
+    $claudeAuthAfterLogin = Invoke-ProviderCaptured "Claude auth status after Atelier UI login" "claude" @("auth", "status") 60
+    $inAppProviders = if ($summary.inAppLogin -and $summary.inAppLogin.providers) {
+      @($summary.inAppLogin.providers)
+    } else {
+      @()
+    }
+    $codexWitness = @($inAppProviders | Where-Object { $_.provider -eq "codex" }) | Select-Object -First 1
+    $claudeWitness = @($inAppProviders | Where-Object { $_.provider -eq "claude" }) | Select-Object -First 1
+    $summary.loginResults = [pscustomobject][ordered]@{
+      codexFlowExitOk = [bool]$codexWitness.authenticatedStateObserved
+      codexAuthOk = [bool]$codexAuthAfterLogin.ok
+      claudeFlowExitOk = [bool]$claudeWitness.authenticatedStateObserved
+      claudeAuthOk = [bool]$claudeAuthAfterLogin.ok
+    }
+    foreach ($status in $summary.providers) {
+      if ($status.command -eq "codex") {
+        $status.authOk = [bool]$codexAuthAfterLogin.ok
+        $status.authNote = if ($codexAuthAfterLogin.ok) { "authenticated through installed Atelier UI" } else { "Atelier UI login did not produce an authenticated Codex session" }
+      } elseif ($status.command -eq "claude") {
+        $status.authOk = [bool]$claudeAuthAfterLogin.ok
+        $status.authNote = if ($claudeAuthAfterLogin.ok) { "authenticated through installed Atelier UI" } else { "Atelier UI login did not produce an authenticated Claude session" }
       }
     }
   }
@@ -1069,6 +1169,25 @@ try {
       }
     }
     if ($Login) {
+      if ($InAppLogin) {
+        if (-not $summary.inAppLogin) {
+          throw "Windows provider smoke did not produce an installed Atelier subscription-login UI receipt"
+        }
+        if ($summary.inAppLogin.ok -ne $true) {
+          throw "Windows provider smoke did not complete the installed Atelier subscription-login UI witness"
+        }
+        $uiWitnessFailed = @($summary.inAppLogin.providers | Where-Object {
+          $_.provider -notin @("codex", "claude") -or
+          $_.loginButtonClicked -ne $true -or
+          $_.loginModalObserved -ne $true -or
+          $_.loginPendingStateObserved -ne $true -or
+          $_.authenticatedStateObserved -ne $true -or
+          $_.connectedStateObserved -ne $true
+        })
+        if (@($summary.inAppLogin.providers).Count -ne 2 -or $uiWitnessFailed.Count -gt 0) {
+          throw "Windows provider smoke did not prove both installed Atelier subscription-login button paths"
+        }
+      }
       $authFailed = @($summary.providers | Where-Object {
         $_.command -in @("codex", "claude") -and -not $_.authOk
       })
