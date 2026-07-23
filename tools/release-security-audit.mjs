@@ -44,6 +44,10 @@ const windowsPhysicalGateSource = readFileSync(
   ".github/workflows/windows-physical-release-gate.yml",
   "utf8",
 );
+const windowsRunnerDoctorWorkflowSource = readFileSync(
+  ".github/workflows/windows-release-runner-doctor.yml",
+  "utf8",
+);
 const publishReleaseWorkflowSource = readFileSync(
   ".github/workflows/publish-release.yml",
   "utf8",
@@ -66,6 +70,10 @@ const releaseCandidateVerifySource = readFileSync(
 );
 const publishEvidenceSource = readFileSync(
   ".github/scripts/validate-publish-evidence.mjs",
+  "utf8",
+);
+const windowsRunnerDoctorSmokeSource = readFileSync(
+  "tools/windows-runner-doctor-smoke.mjs",
   "utf8",
 );
 const ptySupervisorSmokeSource = readFileSync("tools/pty-supervisor-smoke.mjs", "utf8");
@@ -116,6 +124,7 @@ const workflowSource = [
   readFileSync(".github/workflows/windows-store.yml", "utf8"),
   windowsProviderWorkflowSource,
   windowsPhysicalGateSource,
+  windowsRunnerDoctorWorkflowSource,
   publishReleaseWorkflowSource,
 ].join("\n");
 const openLoginBrowserSource = credentialSource
@@ -189,8 +198,8 @@ const sourceInvariants = [
       windowsPhysicalRunnerPreflightSource.includes("schemaVersion = 1") &&
       windowsPhysicalRunnerPreflightSource.includes("githubRunId = $RunId") &&
       windowsPhysicalRunnerPreflightSource.includes("githubRunAttempt = $safeRunAttempt") &&
-      windowsPhysicalRunnerPreflightSource.includes("name = [string]$env:RUNNER_NAME") &&
-      windowsPhysicalRunnerPreflightSource.includes("os = [string]$env:RUNNER_OS") &&
+      windowsPhysicalRunnerPreflightSource.includes("name = $reportedRunnerName") &&
+      windowsPhysicalRunnerPreflightSource.includes("os = $reportedRunnerOs") &&
       windowsPhysicalRunnerPreflightSource.includes("[Environment]::UserInteractive") &&
       windowsPhysicalRunnerPreflightSource.includes("$sessionId -eq 0") &&
       windowsPhysicalRunnerPreflightSource.includes("Get-Process -Name explorer") &&
@@ -208,6 +217,27 @@ const sourceInvariants = [
       windowsPhysicalRunnerPreflightSource.includes("blockers"),
     message:
       "Windows physical runner preflight must fail closed on desktop, tooling, installer, browser, and receipt identity prerequisites",
+  },
+  {
+    ok:
+      packageSource.includes('"smoke:windows-runner-doctor"') &&
+      releaseWorkflowSource.includes("npm run smoke:windows-runner-doctor") &&
+      windowsRunnerDoctorWorkflowSource.includes("workflow_dispatch:") &&
+      windowsRunnerDoctorWorkflowSource.includes("runs-on: [self-hosted, windows, x64]") &&
+      windowsRunnerDoctorWorkflowSource.includes('"-Doctor"') &&
+      windowsRunnerDoctorWorkflowSource.includes('"-RequireGitHubRunner"') &&
+      windowsRunnerDoctorWorkflowSource.includes('"-Strict"') &&
+      windowsRunnerDoctorWorkflowSource.includes("if: always()") &&
+      windowsRunnerDoctorWorkflowSource.includes("windows-runner-doctor.json") &&
+      !windowsRunnerDoctorWorkflowSource.includes("gh release download") &&
+      !windowsRunnerDoctorWorkflowSource.includes("--draft=false") &&
+      windowsPhysicalRunnerPreflightSource.includes(
+        'phase = if ($isDoctor) { "windows-runner-doctor" } else { "windows-runner-preflight" }',
+      ) &&
+      windowsPhysicalRunnerPreflightSource.includes("if (-not $isDoctor -or $RequireGitHubRunner)") &&
+      windowsRunnerDoctorSmokeSource.includes("runner doctor must not download or publish release assets"),
+    message:
+      "Windows runner doctor must verify the interactive host before tagging while remaining distinct from candidate and publication evidence",
   },
   {
     ok:

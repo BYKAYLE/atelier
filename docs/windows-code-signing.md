@@ -65,6 +65,10 @@ The direct-download release has three independent stages:
    proves version persistence, renderer startup, visible Claude/Codex browser
    login, CLI authentication, and optional Smart App Control state. Dispatch
    the workflow from the exact release tag; a branch-dispatched run is refused.
+   Before creating a tag, `.github/workflows/windows-release-runner-doctor.yml`
+   exercises the same host checks without a candidate. The runner must be
+   started with `run.cmd` in the logged-in, unlocked desktop, not installed as
+   a Windows service.
 3. `.github/workflows/publish-release.yml` downloads the evidence from one
    explicitly selected successful physical-gate run. The protected
    `production-release` environment and an exact `PUBLISH <tag>` confirmation

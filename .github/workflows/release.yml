@@ -263,6 +263,7 @@ jobs:
           npm run smoke:devscreen-picker
           npm run smoke:agent-performance
           npm run smoke:oauth-login-flow
+          npm run smoke:windows-runner-doctor
           # Repeat the full build at the packaging boundary after the gate's
           # own restoration, so only the default product bundle can ship.
           npm run gate:orca-features

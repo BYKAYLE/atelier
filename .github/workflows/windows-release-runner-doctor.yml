@@ -1,0 +1,63 @@
+name: Windows Release Runner Doctor
+
+on:
+  workflow_dispatch:
+    inputs:
+      allow_initial_signed_channel:
+        description: "Do not require an older direct-channel Atelier baseline"
+        required: false
+        type: boolean
+        default: false
+      require_smart_app_control_evidence:
+        description: "Require readable Smart App Control state evidence"
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: windows-release-runner-doctor-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  doctor:
+    name: Inspect interactive Windows release runner
+    runs-on: [self-hosted, windows, x64]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout runner diagnostics
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Inspect release runner without downloading a candidate
+        shell: pwsh
+        env:
+          ALLOW_INITIAL_SIGNED_CHANNEL: ${{ inputs.allow_initial_signed_channel }}
+          REQUIRE_SMART_APP_CONTROL_EVIDENCE: ${{ inputs.require_smart_app_control_evidence }}
+        run: |
+          $arguments = @(
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", "tools/windows-physical-runner-preflight.ps1",
+            "-Doctor",
+            "-RequireGitHubRunner",
+            "-EvidencePath", "artifacts/windows-runner-doctor/windows-runner-doctor.json",
+            "-Strict"
+          )
+          if ($env:ALLOW_INITIAL_SIGNED_CHANNEL -eq "true") {
+            $arguments += "-AllowInitialSignedChannel"
+          }
+          if ($env:REQUIRE_SMART_APP_CONTROL_EVIDENCE -eq "true") {
+            $arguments += "-RequireSmartAppControlEvidence"
+          }
+          powershell.exe @arguments
+          if ($LASTEXITCODE -ne 0) { throw "Windows release runner doctor failed." }
+
+      - name: Upload runner doctor report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: atelier-windows-release-runner-doctor-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/windows-runner-doctor/windows-runner-doctor.json
+          if-no-files-found: error
+          retention-days: 30

@@ -1,14 +1,19 @@
+[CmdletBinding(DefaultParameterSetName = "Release")]
 param(
-  [Parameter(Mandatory = $true)]
+  [Parameter(Mandatory = $true, ParameterSetName = "Release")]
   [string]$ReleaseTag,
-  [Parameter(Mandatory = $true)]
+  [Parameter(Mandatory = $true, ParameterSetName = "Release")]
   [string]$ExpectedVersion,
-  [Parameter(Mandatory = $true)]
+  [Parameter(Mandatory = $true, ParameterSetName = "Release")]
   [string]$SourceSha,
-  [Parameter(Mandatory = $true)]
+  [Parameter(Mandatory = $true, ParameterSetName = "Release")]
   [string]$RunId,
-  [Parameter(Mandatory = $true)]
+  [Parameter(Mandatory = $true, ParameterSetName = "Release")]
   [string]$RunAttempt,
+  [Parameter(Mandatory = $true, ParameterSetName = "Doctor")]
+  [switch]$Doctor,
+  [Parameter(ParameterSetName = "Doctor")]
+  [switch]$RequireGitHubRunner,
   [string]$EvidencePath = "artifacts/windows-runner-preflight/windows-runner-preflight.json",
   [int]$MinFreeSpaceGiB = 6,
   [switch]$AllowInitialSignedChannel,
@@ -18,6 +23,14 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
+$isDoctor = $PSCmdlet.ParameterSetName -eq "Doctor"
+if ($isDoctor) {
+  $ReleaseTag = "doctor"
+  $ExpectedVersion = ""
+  $SourceSha = ""
+  $RunId = if ($env:GITHUB_RUN_ID) { [string]$env:GITHUB_RUN_ID } else { "0" }
+  $RunAttempt = if ($env:GITHUB_RUN_ATTEMPT) { [string]$env:GITHUB_RUN_ATTEMPT } else { "1" }
+}
 $ExpectedVersion = $ExpectedVersion.TrimStart("v")
 $script:Failures = [System.Collections.Generic.List[string]]::new()
 
@@ -318,12 +331,19 @@ $providerInstallation = [ordered]@{
 }
 
 $workspacePath = if ($env:GITHUB_WORKSPACE) { $env:GITHUB_WORKSPACE } else { (Get-Location).Path }
-$runnerTempWritable = Test-WritableDirectory $env:RUNNER_TEMP
+$runnerTempPath = if ($env:RUNNER_TEMP) {
+  $env:RUNNER_TEMP
+} elseif ($isDoctor) {
+  [IO.Path]::GetTempPath()
+} else {
+  $null
+}
+$runnerTempWritable = Test-WritableDirectory $runnerTempPath
 $workspaceWritable = Test-WritableDirectory $workspacePath
 $localAppDataWritable = Test-WritableDirectory $env:LOCALAPPDATA
 $evidenceDirWritable = Test-WritableDirectory $evidenceDirectory
 $systemDrive = Get-DriveEvidence $env:WINDIR "system"
-$runnerTempDrive = Get-DriveEvidence $env:RUNNER_TEMP "runner-temp"
+$runnerTempDrive = Get-DriveEvidence $runnerTempPath "runner-temp"
 $requiredFreeBytes = [int64]$MinFreeSpaceGiB * 1GB
 $driveFreeBytes = @($systemDrive.freeBytes, $runnerTempDrive.freeBytes) | Where-Object { $null -ne $_ }
 $freeBytes = if ($driveFreeBytes.Count -gt 0) { [int64]($driveFreeBytes | Measure-Object -Minimum).Minimum } else { 0 }
@@ -350,12 +370,16 @@ try {
   $trustProbeStatus = "Unavailable"
 }
 
-if ($ReleaseTag -ne "v$ExpectedVersion") { Add-Failure "Release tag and expected version do not match." }
-if ($SourceSha -notmatch "^[0-9a-fA-F]{40}$") { Add-Failure "SourceSha must be a full Git commit SHA." }
-if ($RunId -notmatch "^[0-9]+$") { Add-Failure "RunId must be numeric." }
-if ($RunAttempt -notmatch "^[1-9][0-9]*$") { Add-Failure "RunAttempt must be a positive integer." }
-if ([string]::IsNullOrWhiteSpace($env:RUNNER_NAME)) { Add-Failure "RUNNER_NAME is required." }
-if ([string]$env:RUNNER_OS -ne "Windows") { Add-Failure "RUNNER_OS must be Windows." }
+if (-not $isDoctor) {
+  if ($ReleaseTag -ne "v$ExpectedVersion") { Add-Failure "Release tag and expected version do not match." }
+  if ($SourceSha -notmatch "^[0-9a-fA-F]{40}$") { Add-Failure "SourceSha must be a full Git commit SHA." }
+  if ($RunId -notmatch "^[0-9]+$") { Add-Failure "RunId must be numeric." }
+  if ($RunAttempt -notmatch "^[1-9][0-9]*$") { Add-Failure "RunAttempt must be a positive integer." }
+}
+if (-not $isDoctor -or $RequireGitHubRunner) {
+  if ([string]::IsNullOrWhiteSpace($env:RUNNER_NAME)) { Add-Failure "RUNNER_NAME is required." }
+  if ([string]$env:RUNNER_OS -ne "Windows") { Add-Failure "RUNNER_OS must be Windows." }
+}
 if ($env:GITHUB_RUN_ID -and $env:GITHUB_RUN_ID -ne $RunId) { Add-Failure "RunId does not match GITHUB_RUN_ID." }
 if ($env:GITHUB_RUN_ATTEMPT -and $env:GITHUB_RUN_ATTEMPT -ne $RunAttempt) { Add-Failure "RunAttempt does not match GITHUB_RUN_ATTEMPT." }
 if (-not $isWindows) { Add-Failure "Runner is not Windows." }
@@ -384,9 +408,11 @@ if ($RequireSmartAppControlEvidence -and -not $smartAppControl.available) { Add-
 $safeRunAttempt = if ($RunAttempt -match "^[1-9][0-9]*$") { [int]$RunAttempt } else { 0 }
 $safeSourceSha = if ($SourceSha) { $SourceSha.ToLowerInvariant() } else { "" }
 $normalizedArchitecture = if ([Environment]::Is64BitOperatingSystem -and [Environment]::Is64BitProcess) { "x64" } else { [string]$env:RUNNER_ARCH }
+$reportedRunnerName = if ($env:RUNNER_NAME) { [string]$env:RUNNER_NAME } elseif ($isDoctor) { [string]$env:COMPUTERNAME } else { "" }
+$reportedRunnerOs = if ($env:RUNNER_OS) { [string]$env:RUNNER_OS } elseif ($isDoctor -and $isWindows) { "Windows" } else { "" }
 $receipt = [ordered]@{
   schemaVersion = 1
-  phase = "windows-runner-preflight"
+  phase = if ($isDoctor) { "windows-runner-doctor" } else { "windows-runner-preflight" }
   generatedAt = (Get-Date).ToUniversalTime().ToString("o")
   status = if ($script:Failures.Count -eq 0) { "ready" } else { "blocked" }
   overall = if ($script:Failures.Count -eq 0) { "ok" } else { "blocked" }
@@ -397,10 +423,11 @@ $receipt = [ordered]@{
   githubRunId = $RunId
   githubRunAttempt = $safeRunAttempt
   runner = [ordered]@{
-    name = [string]$env:RUNNER_NAME
-    os = [string]$env:RUNNER_OS
+    name = $reportedRunnerName
+    os = $reportedRunnerOs
     architecture = $normalizedArchitecture
     osVersion = [Environment]::OSVersion.VersionString
+    githubContextPresent = -not [string]::IsNullOrWhiteSpace($env:RUNNER_NAME)
   }
   desktop = [ordered]@{
     sessionId = $sessionId
@@ -458,4 +485,8 @@ if ($script:Failures.Count -gt 0) {
   if ($Strict) { throw "Windows physical runner preflight failed with $($script:Failures.Count) blocker(s)." }
   exit 1
 }
-Write-Host "Windows physical runner preflight passed."
+if ($isDoctor) {
+  Write-Host "Windows release runner doctor passed."
+} else {
+  Write-Host "Windows physical runner preflight passed."
+}

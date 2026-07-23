@@ -10,6 +10,15 @@ proof, and public distribution. A successful build is not a public release.
   rejected because it cannot prove that a browser window was visible. Install
   7-Zip on that runner so both the MSI and NSIS payloads can be extracted and
   verified rather than trusting only the outer installer signature.
+- Configure the Windows runner without service mode and start it with
+  `run.cmd` from the logged-in, unlocked release account. GitHub's Windows
+  `config.cmd` prompt can install the runner as a service; decline that option
+  for this browser-visible release gate. After registration, run the
+  `Windows Release Runner Doctor` workflow before creating a release tag. It
+  checks the interactive desktop, runner identity, required tools, writable
+  storage, pending reboot, baseline installation, default browser,
+  Authenticode trust and optional Smart App Control without downloading or
+  publishing a release candidate.
 - Add the Apple Developer ID, notarization, Tauri updater, and SignPath secrets
   and variables required by `.github/workflows/release.yml`.
 - Keep branch and tag protection enabled. The release tag must point to the
@@ -25,6 +34,7 @@ Run the local gates before creating a tag:
 ```bash
 npm ci
 npm run smoke:release-preflight
+npm run smoke:windows-runner-doctor
 npm run release:preflight -- --output artifacts/release-preflight.json
 npm run release:readiness
 npm run build
@@ -82,6 +92,11 @@ must finish with all of these properties:
 No partial platform release is public if a later job fails.
 
 ## Stage 3: Physical Windows Evidence
+
+Before dispatching the candidate gate, require a successful `Windows Release
+Runner Doctor` run on the same runner. A doctor report is preparation evidence
+only: its phase is `windows-runner-doctor`, so it cannot be accepted as physical
+candidate or publication evidence.
 
 Manually run `Windows Physical Release Gate` with the exact private-draft tag
 and version. Select that same tag in GitHub's `Use workflow from` control; a

@@ -33,6 +33,7 @@
     "release:readiness:strict": "node tools/release-preflight.mjs --strict --inspect-host --inspect-github --output artifacts/release-readiness-preflight.json",
     "store:msix": "powershell -ExecutionPolicy Bypass -File tools/windows-store/build-msix.ps1",
     "smoke:windows-providers": "powershell -ExecutionPolicy Bypass -File tools/windows-provider-smoke.ps1",
+    "smoke:windows-runner-doctor": "node tools/windows-runner-doctor-smoke.mjs",
     "smoke:pty-supervisor": "node tools/pty-supervisor-smoke.mjs",
     "smoke:terminal-layout": "node --experimental-strip-types tools/terminal-layout-smoke.ts",
     "smoke:diff-review": "node --experimental-strip-types tools/diff-review-smoke.ts",
