@@ -204,6 +204,8 @@ const sourceInvariants = [
       windowsPhysicalGateSource.includes("-RequireRendererReadyEvidence") &&
       windowsPhysicalGateSource.includes("-RequireBrowserProcessEvidence") &&
       windowsPhysicalGateSource.includes("-RequireVisibleBrowserWindowEvidence") &&
+      (windowsPhysicalGateSource.match(/-RequireSmartAppControlEvidence/g) || []).length >= 2 &&
+      !windowsPhysicalGateSource.includes("require_smart_app_control_evidence:") &&
       windowsPhysicalGateSource.includes("-InAppLogin") &&
       windowsPhysicalGateSource.includes("node --check tools/windows-connections-ui-witness.mjs") &&
       windowsPhysicalGateSource.includes("-SelfTest") &&
@@ -800,6 +802,7 @@ const sourceInvariants = [
       publishReleaseWorkflowSource.includes("job.runner_name") &&
       publishReleaseWorkflowSource.includes("job.labels") &&
       publishReleaseWorkflowSource.includes("PHYSICAL_GATE_RUNNER_NAME") &&
+      !publishReleaseWorkflowSource.includes("require_smart_app_control_evidence:") &&
       publishReleaseWorkflowSource.includes("final-candidate-assets") &&
       publishReleaseWorkflowSource.includes("CANDIDATE_MANIFEST_SHA") &&
       publishReleaseWorkflowSource.includes('--repo "$RELEASE_OWNER/$RELEASE_REPO"') &&
@@ -833,6 +836,7 @@ const sourceInvariants = [
       publishEvidenceSource.includes("updater-driven relaunch was not proved") &&
       publishEvidenceSource.includes("updater/candidate installed executable path") &&
       publishEvidenceSource.includes("updater/candidate installed executable hash") &&
+      publishEvidenceSource.includes("const requireSmartAppControl = true") &&
       physicalEvidenceSealSource.includes("windows-updater-canary.json") &&
       physicalEvidenceSealSource.includes("updater: receipt(updaterPath)") &&
       physicalEvidenceSealSource.includes("atelier-in-app-login-") &&

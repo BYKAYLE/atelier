@@ -12,10 +12,7 @@ const physicalGateRunId = requireEnv("PHYSICAL_GATE_RUN_ID");
 const physicalGateRunAttempt = requireEnv("PHYSICAL_GATE_RUN_ATTEMPT");
 const physicalGateRunnerName = requireEnv("PHYSICAL_GATE_RUNNER_NAME");
 const allowInitialSignedChannel = parseBoolean(process.env.ALLOW_INITIAL_SIGNED_CHANNEL);
-const requireSmartAppControl = parseBoolean(
-  process.env.REQUIRE_SMART_APP_CONTROL_EVIDENCE,
-  true,
-);
+const requireSmartAppControl = true;
 const releaseRepository = resolveReleaseRepository();
 
 if (!/^v\d+\.\d+\.\d+(?:[-+].+)?$/.test(releaseTag)) {

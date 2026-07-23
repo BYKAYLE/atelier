@@ -270,6 +270,9 @@ try {
   preflight.smartAppControl.ok = false;
   writeJson(runnerPreflightPath, preflight);
   run(false, "required Smart App Control unavailable");
+  run(false, "Smart App Control cannot be disabled by environment", false, true, {
+    REQUIRE_SMART_APP_CONTROL_EVIDENCE: "false",
+  });
 
   console.log("publish evidence smoke passed");
 } finally {
@@ -578,7 +581,7 @@ function signatureFixture() {
   };
 }
 
-function run(shouldPass, label, allowWaiver = false, reseal = true) {
+function run(shouldPass, label, allowWaiver = false, reseal = true, envOverrides = {}) {
   if (reseal) writePhysicalSeal();
   const result = spawnSync(process.execPath, [".github/scripts/validate-publish-evidence.mjs"], {
     cwd: process.cwd(),
@@ -596,6 +599,7 @@ function run(shouldPass, label, allowWaiver = false, reseal = true) {
       PHYSICAL_GATE_RUNNER_NAME: runnerName,
       ALLOW_INITIAL_SIGNED_CHANNEL: String(allowWaiver),
       REQUIRE_SMART_APP_CONTROL_EVIDENCE: "true",
+      ...envOverrides,
     },
   });
   if ((result.status === 0) !== shouldPass) {

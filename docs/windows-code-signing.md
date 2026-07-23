@@ -63,8 +63,9 @@ The direct-download release has three independent stages:
    the manifest and Authenticode signatures, extracts both MSI and NSIS payloads
    with 7-Zip, installs the exact MSI, restarts the installed executable, and
    proves version persistence, renderer startup, visible Claude/Codex browser
-   login, CLI authentication, and optional Smart App Control state. Dispatch
-   the workflow from the exact release tag; a branch-dispatched run is refused.
+   login, CLI authentication, and Smart App Control state. This evidence is
+   mandatory for direct GitHub publication and cannot be disabled at dispatch.
+   Dispatch the workflow from the exact release tag; a branch-dispatched run is refused.
    Before creating a tag, `.github/workflows/windows-release-runner-doctor.yml`
    exercises the same host checks without a candidate. The runner must be
    started with `run.cmd` in the logged-in, unlocked desktop, not installed as

@@ -20,11 +20,6 @@ on:
         required: false
         type: boolean
         default: false
-      require_smart_app_control_evidence:
-        description: "Require readable Smart App Control state evidence"
-        required: false
-        type: boolean
-        default: true
 
 concurrency:
   group: publish-${{ inputs.release_tag }}
@@ -180,7 +175,6 @@ jobs:
           RELEASE_ASSETS_DIR: candidate-assets
           RELEASE_TAG: ${{ inputs.release_tag }}
           ALLOW_INITIAL_SIGNED_CHANNEL: ${{ inputs.allow_initial_signed_channel }}
-          REQUIRE_SMART_APP_CONTROL_EVIDENCE: ${{ inputs.require_smart_app_control_evidence }}
           PHYSICAL_GATE_RUN_ID: ${{ inputs.physical_gate_run_id }}
           PHYSICAL_GATE_RUN_ATTEMPT: ${{ env.PHYSICAL_GATE_RUN_ATTEMPT }}
           PHYSICAL_GATE_RUNNER_NAME: ${{ env.PHYSICAL_GATE_RUNNER_NAME }}

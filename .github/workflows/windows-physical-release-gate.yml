@@ -16,11 +16,6 @@ on:
         required: false
         type: boolean
         default: false
-      require_smart_app_control_evidence:
-        description: "Fail when Windows cannot report Smart App Control state"
-        required: false
-        type: boolean
-        default: true
 
 env:
   RELEASE_OWNER: ${{ vars.RELEASE_OWNER || github.repository_owner }}
@@ -55,7 +50,6 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
           EXPECTED_VERSION: ${{ inputs.expected_version }}
           ALLOW_INITIAL_SIGNED_CHANNEL: ${{ inputs.allow_initial_signed_channel }}
-          REQUIRE_SMART_APP_CONTROL_EVIDENCE: ${{ inputs.require_smart_app_control_evidence }}
         run: |
           $sourceSha = (git rev-parse HEAD).Trim()
           $arguments = @(
@@ -68,13 +62,11 @@ jobs:
             "-RunId", $env:GITHUB_RUN_ID,
             "-RunAttempt", $env:GITHUB_RUN_ATTEMPT,
             "-EvidencePath", "artifacts/windows-runner-preflight/windows-runner-preflight.json",
-            "-Strict"
+            "-Strict",
+            "-RequireSmartAppControlEvidence"
           )
           if ($env:ALLOW_INITIAL_SIGNED_CHANNEL -eq "true") {
             $arguments += "-AllowInitialSignedChannel"
-          }
-          if ($env:REQUIRE_SMART_APP_CONTROL_EVIDENCE -eq "true") {
-            $arguments += "-RequireSmartAppControlEvidence"
           }
           powershell.exe @arguments
           if ($LASTEXITCODE -ne 0) { throw "Windows physical runner preflight failed." }
@@ -223,7 +215,6 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
           EXPECTED_VERSION: ${{ inputs.expected_version }}
           ATELIER_EXE: ${{ steps.updater-gate.outputs.atelier_exe }}
-          REQUIRE_SMART_APP_CONTROL_EVIDENCE: ${{ inputs.require_smart_app_control_evidence }}
         run: |
           $sourceSha = (git rev-parse HEAD).Trim()
           node --check tools/windows-connections-ui-witness.mjs
@@ -244,6 +235,7 @@ jobs:
             "-RequireAuthenticode",
             "-RequireBrowserProcessEvidence",
             "-RequireVisibleBrowserWindowEvidence",
+            "-RequireSmartAppControlEvidence",
             "-ExpectedVersion", $env:EXPECTED_VERSION,
             "-AtelierExe", $env:ATELIER_EXE,
             "-ReleaseTag", $env:RELEASE_TAG,
@@ -252,9 +244,6 @@ jobs:
             "-RunAttempt", $env:GITHUB_RUN_ATTEMPT,
             "-LogDir", "artifacts/windows-provider-current"
           )
-          if ($env:REQUIRE_SMART_APP_CONTROL_EVIDENCE -eq "true") {
-            $arguments += "-RequireSmartAppControlEvidence"
-          }
           powershell.exe @arguments
           if ($LASTEXITCODE -ne 0) { throw "Strict Windows provider gate failed." }
 

@@ -17,7 +17,7 @@ proof, and public distribution. A successful build is not a public release.
   `Windows Release Runner Doctor` workflow before creating a release tag. It
   checks the interactive desktop, runner identity, required tools, writable
   storage, pending reboot, baseline installation, default browser,
-  Authenticode trust and optional Smart App Control without downloading or
+  Authenticode trust and Smart App Control readiness without downloading or
   publishing a release candidate.
 - Add the Apple Developer ID, notarization, Tauri updater, and SignPath secrets
   and variables required by `.github/workflows/release.yml`.
@@ -122,7 +122,9 @@ pre-existing copy.
 Required proof includes the installer and installed-executable signatures,
 exact installed path, version, and executable SHA-256, renderer-ready receipt,
 restart persistence, visible native browser handoff, and successful Claude and
-Codex CLI authentication. The source gate separately proves that the connection
+Codex CLI authentication. Smart App Control state must also be readable on the
+release runner; neither the physical nor publication gate provides a bypass for
+this requirement. The source gate separately proves that the connection
 UI accepts only supported provider URLs and follows the bounded browser retry
 contract. The physical gate then proves that the installed native executable
 opens the real browser and completes authentication; neither proof substitutes
@@ -176,6 +178,7 @@ Do not publish when any of the following is missing or inconsistent:
 - one of the required macOS or Windows assets;
 - exact tag, version, source commit, manifest hash, or installed-path binding;
 - interactive visible-browser and provider-authentication evidence;
+- readable Smart App Control evidence from the physical Windows runner;
 - restart/update persistence evidence;
 - protected-environment reviewer approval.
 
