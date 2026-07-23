@@ -2,6 +2,8 @@ name: Windows Package Verification
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
 
@@ -46,7 +48,7 @@ jobs:
 
       - name: Inspect packaged payloads
         shell: pwsh
-        run: powershell -ExecutionPolicy Bypass -File tools/windows-package-smoke.ps1
+        run: powershell -ExecutionPolicy Bypass -File tools/windows-package-smoke.ps1 -RequirePayloadExtraction
 
       - name: Install package and prove installed identity
         shell: pwsh

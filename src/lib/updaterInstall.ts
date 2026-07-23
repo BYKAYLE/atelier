@@ -17,9 +17,8 @@ export function resolveWindowsUpdaterTarget(
   const bundleType = identity?.bundleType?.trim().toLowerCase();
   if (bundleType === "msi") return "windows-x86_64-msi";
   if (bundleType === "nsis") return "windows-x86_64-nsis";
-  // Older Atelier builds do not always report their bundle type. Omitting an
-  // explicit target lets Tauri use the signed `windows-x86_64` compatibility
-  // entry, which the release pipeline intentionally maps to the MSI updater.
+  // Never guess the installer family. An MSI update applied to an NSIS install
+  // can create a second application identity and reopen an older installation.
   return undefined;
 }
 
@@ -28,9 +27,11 @@ export function canUseInAppUpdaterForRuntime(
   identity: UpdaterInstallIdentity | null,
 ): boolean {
   if (!isWindows) return identity?.githubUpdaterAvailable ?? true;
+  const bundleType = identity?.bundleType?.trim().toLowerCase();
   return Boolean(
     identity &&
     identity.githubUpdaterAvailable &&
-    !identity.windowsStoreLike
+    !identity.windowsStoreLike &&
+    (bundleType === "msi" || bundleType === "nsis")
   );
 }

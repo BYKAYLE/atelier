@@ -149,7 +149,7 @@ const PROVIDERS: ProviderDef[] = [
   },
 ];
 
-type HermesBackend = "openai-codex" | "openrouter" | "alibaba";
+type HermesBackend = "openai-codex" | "anthropic" | "openrouter" | "alibaba";
 
 const HERMES_BACKENDS: Array<{
   value: HermesBackend;
@@ -162,6 +162,12 @@ const HERMES_BACKENDS: Array<{
     label: "Codex (OpenAI)",
     credentialProvider: "codex",
     desc: { ko: "위 Codex 자격증명 사용", en: "Uses the Codex credential above" },
+  },
+  {
+    value: "anthropic",
+    label: "Claude (Anthropic)",
+    credentialProvider: "claude",
+    desc: { ko: "위 Claude 구독 또는 API 자격증명 사용", en: "Uses the Claude subscription or API credential above" },
   },
   {
     value: "openrouter",
@@ -1327,7 +1333,7 @@ const HermesCard: React.FC<{
         <div className={cls("text-[11.5px] uppercase tracking-wider font-semibold mb-2", dark ? "text-dsub" : "text-sub")}>
           {copy.hermesBackendLabel}
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
           {HERMES_BACKENDS.map((b) => {
             const s = statuses[b.credentialProvider];
             const ok = !!s && (s.oauth_logged_in || s.api_key_present);

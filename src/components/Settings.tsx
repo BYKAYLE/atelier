@@ -617,8 +617,8 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
             tag: "Chat",
           },
           {
-            title: "Hermes backend cleanup",
-            body: "Hermes now offers Codex and OpenRouter only; old Claude backend values are normalized to Codex.",
+            title: "Claude for Hermes",
+            body: "Hermes can now run Claude through its native Anthropic provider using the existing Claude subscription or API credential.",
             tag: "Hermes",
           },
           {
@@ -670,8 +670,8 @@ const PreviewSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({ da
             tag: "채팅",
           },
           {
-            title: "Hermes 백엔드 정리",
-            body: "Hermes 하위 provider에서 Claude를 제거하고 Codex/OpenRouter만 남겼습니다.",
+            title: "Hermes Claude 지원",
+            body: "기존 Claude 구독 또는 API 자격증명을 사용해 Hermes의 Anthropic provider에서 Claude 모델을 실행할 수 있습니다.",
             tag: "Hermes",
           },
           {
@@ -1144,6 +1144,8 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
         installFailed: (message: string) => `Install failed: ${message}`,
         unsupportedInstall:
           "This is the Microsoft Store app (Atelier Agent). GitHub installers use a separate desktop package identity and would create another Atelier app instead of updating Atelier Agent. Update Atelier Agent through Microsoft Store / Partner Center, or uninstall the Store build before switching to the GitHub build.",
+        unknownInstall:
+          "Atelier could not identify whether this Windows app was installed with MSI or NSIS. In-app update is disabled to prevent a second app or an old installation from reopening. Open the GitHub release and reinstall the latest package once.",
         availableTitle: (version: string) => `v${version} available`,
         installing: "Installing...",
         install: "Install + restart",
@@ -1181,6 +1183,8 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
         installFailed: (message: string) => `설치 실패: ${message}`,
         unsupportedInstall:
           "현재 설치본은 Microsoft Store용 Atelier Agent입니다. GitHub 설치 파일은 별도 데스크탑 패키지라서 Atelier Agent를 버전업하지 못하고 새로운 Atelier 앱을 하나 더 만들 수 있습니다. Atelier Agent는 Microsoft Store/Partner Center 패키지로 업데이트하거나, GitHub 빌드로 전환하려면 Store 설치본을 먼저 제거해야 합니다.",
+        unknownInstall:
+          "현재 Windows 설치본이 MSI인지 NSIS인지 식별할 수 없습니다. 앱이 중복 설치되거나 이전 설치본이 다시 열리는 일을 막기 위해 인앱 업데이트를 차단했습니다. GitHub 릴리스에서 최신 설치 파일을 한 번 직접 설치해 주세요.",
         availableTitle: (version: string) => `v${version} 사용 가능`,
         installing: "설치 중…",
         install: "지금 설치 + 재시작",
@@ -1202,6 +1206,10 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
   const [currentPatchDate, setCurrentPatchDate] = React.useState<string>("");
   const [installInfo, setInstallInfo] = React.useState<UpdateInstallInfo | null>(null);
   const updateInstallUnsupported = isWindowsRuntime() && !!installInfo && !canUseInAppUpdater(installInfo);
+  const updateInstallUnsupportedReason = React.useMemo(
+    () => installInfo?.windows_store_like ? copy.unsupportedInstall : copy.unknownInstall,
+    [copy.unknownInstall, copy.unsupportedInstall, installInfo],
+  );
 
   const installChannelLabel = React.useMemo(() => {
     if (!installInfo) return copy.detectingChannel;
@@ -1275,7 +1283,7 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
         const { check } = await import("@tauri-apps/plugin-updater");
         const target = windowsUpdaterTarget(installInfo);
         if (!canUseInAppUpdater(installInfo)) {
-          setError(copy.checkFailed(copy.unsupportedInstall));
+          setError(copy.checkFailed(updateInstallUnsupportedReason));
           setStatus("");
           return;
         }
@@ -1312,7 +1320,10 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
       }
       const target = windowsUpdaterTarget(activeInstallInfo);
       if (!canUseInAppUpdater(activeInstallInfo)) {
-        setError(copy.installFailed(copy.unsupportedInstall));
+        const unsupportedReason = activeInstallInfo?.windows_store_like
+          ? copy.unsupportedInstall
+          : copy.unknownInstall;
+        setError(copy.installFailed(unsupportedReason));
         setStatus("");
         return;
       }
@@ -1471,7 +1482,7 @@ const UpdatesSection: React.FC<{ dark: boolean; language: AppLanguage }> = ({
           )}
           {updateInstallUnsupported && (
             <div className="mb-3 p-3 rounded-[6px] border border-red-300/40 bg-red-50/10 text-[12px] text-red-500">
-              {copy.unsupportedInstall}
+              {updateInstallUnsupportedReason}
             </div>
           )}
           <button

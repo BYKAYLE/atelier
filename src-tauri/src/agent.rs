@@ -1477,8 +1477,17 @@ fn normalize_hermes_provider(provider: Option<String>) -> String {
         "openrouter" => "openrouter".to_string(),
         "alibaba" | "alibaba-cloud" | "dashscope" | "aliyun" => "alibaba".to_string(),
         "openai-codex" | "codex" => "openai-codex".to_string(),
-        "anthropic" | "claude" => "openai-codex".to_string(),
+        "anthropic" | "claude" => "anthropic".to_string(),
         _ => "openai-codex".to_string(),
+    }
+}
+
+fn default_hermes_model(provider: &str) -> &'static str {
+    match provider {
+        "anthropic" => "claude-opus-4-8",
+        "openrouter" => "openai/gpt-5.5",
+        "alibaba" => "qwen3.8-max-preview",
+        _ => "gpt-5.5",
     }
 }
 
@@ -2738,19 +2747,25 @@ fn run_hermes<R: Runtime>(
     let effort = normalize_hermes_effort(effort);
     let prompt = apply_hermes_workload_prompt(prompt, effort.as_deref());
     let permission_mode = normalize_agent_permission_mode(permission_mode);
-    let model = model.unwrap_or_else(|| "gpt-5.5".to_string());
+    let model = model
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| default_hermes_model(&hermes_provider).to_string());
     let mut cmd = command_for_hermes();
     // Hermes 의 sub-provider 별로 그에 맞는 사용자 키를 주입.
-    let hermes_credential_provider = match hermes_provider.as_str() {
-        "openai-codex" => "codex",
-        "openrouter" => "openrouter",
-        "alibaba" => "alibaba",
-        _ => "openrouter",
-    };
     // Hermes owns its provider authentication and can import the canonical
-    // Codex CLI credential itself. Atelier must not copy provider credentials
-    // into Hermes state, even temporarily.
-    inject_backend_credential_env(&mut cmd, hermes_credential_provider);
+    // provider credential itself. Atelier passes credentials only in the child
+    // process environment and never copies them into Hermes state.
+    if hermes_provider == "anthropic" {
+        inject_agent_cli_credential_env(&mut cmd, "claude");
+    } else {
+        let hermes_credential_provider = match hermes_provider.as_str() {
+            "openai-codex" => "codex",
+            "openrouter" => "openrouter",
+            "alibaba" => "alibaba",
+            _ => "openai-codex",
+        };
+        inject_backend_credential_env(&mut cmd, hermes_credential_provider);
+    }
     if hermes_provider == "alibaba" {
         cmd.env("DASHSCOPE_BASE_URL", ALIBABA_TOKEN_PLAN_OPENAI_BASE_URL);
     }
@@ -4546,6 +4561,17 @@ export ANTHROPIC_API_KEY="tc-example"
             ALIBABA_TOKEN_PLAN_OPENAI_BASE_URL,
             "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"
         );
+    }
+
+    #[test]
+    fn hermes_claude_aliases_route_to_anthropic() {
+        for alias in ["anthropic", "claude"] {
+            assert_eq!(
+                normalize_hermes_provider(Some(alias.to_string())),
+                "anthropic"
+            );
+        }
+        assert_eq!(default_hermes_model("anthropic"), "claude-opus-4-8");
     }
 
     #[test]

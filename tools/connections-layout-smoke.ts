@@ -2,9 +2,15 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 const source = readFileSync("src/components/ConnectionsPanel.tsx", "utf8");
+const workspaceSource = readFileSync("src/components/AgentWorkspace.tsx", "utf8");
+const agentSource = readFileSync("src-tauri/src/agent.rs", "utf8");
+
+function assertContainsIn(haystack: string, needle: string, context: string) {
+  assert.ok(haystack.includes(needle), `${context}: missing ${needle}`);
+}
 
 function assertContains(needle: string, context: string) {
-  assert.ok(source.includes(needle), `${context}: missing ${needle}`);
+  assertContainsIn(source, needle, context);
 }
 
 for (const contract of [
@@ -31,6 +37,39 @@ for (const contract of [
 assertContains(
   "if (s.oauth_logged_in)",
   "subscription login completion must require OAuth rather than an API key",
+);
+assertContains(
+  'type HermesBackend = "openai-codex" | "anthropic" | "openrouter" | "alibaba"',
+  "Hermes must expose Claude as a first-class backend",
+);
+assertContains(
+  'credentialProvider: "claude"',
+  "Hermes Claude backend must reuse the canonical Claude credential",
+);
+assertContainsIn(
+  workspaceSource,
+  '{ value: "anthropic", label: "Claude" }',
+  "Hermes workspace provider picker must expose Claude",
+);
+assertContainsIn(
+  workspaceSource,
+  'if (provider === "hermes" && hermesProvider === "anthropic") return "claude"',
+  "Hermes Claude sessions must use Claude subscription usage",
+);
+assertContainsIn(
+  workspaceSource,
+  '? liveClaudeModels',
+  "Hermes Claude must reuse the live Claude model catalog",
+);
+assertContainsIn(
+  agentSource,
+  '"anthropic" | "claude" => "anthropic".to_string()',
+  "Hermes Claude aliases must route to the native Anthropic provider",
+);
+assertContainsIn(
+  agentSource,
+  'inject_agent_cli_credential_env(&mut cmd, "claude")',
+  "Hermes Claude must receive the canonical Claude credential at runtime",
 );
 assert.ok(
   !source.includes("if (s.oauth_logged_in || s.api_key_present)"),

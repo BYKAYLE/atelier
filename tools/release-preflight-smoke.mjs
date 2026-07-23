@@ -5,6 +5,7 @@ import {
   evaluateReleasePreflight,
   normalizeGitHubRepository,
   parseCargoPackageVersion,
+  releaseCredentialPresenceFlag,
 } from "./release-preflight.mjs";
 import {
   REQUIRED_REPOSITORY_SECRET_NAMES,
@@ -33,6 +34,9 @@ const tauriConfig = {
 const storeConfig = { bundle: { createUpdaterArtifacts: false } };
 const credentialSentinel = "super-secret-value";
 const credentialEnv = Object.fromEntries(
+  RELEASE_CREDENTIAL_NAMES.map((name) => [releaseCredentialPresenceFlag(name), "true"]),
+);
+const rawCredentialEnv = Object.fromEntries(
   RELEASE_CREDENTIAL_NAMES.map((name) => [name, credentialSentinel]),
 );
 
@@ -57,6 +61,37 @@ assert.ok(
   !JSON.stringify(passing).includes(credentialSentinel),
   "preflight report must not serialize credential values",
 );
+
+const rawCredentialPassing = evaluateReleasePreflight({
+  packageJson,
+  cargoToml,
+  tauriConfig,
+  storeConfig,
+  env: rawCredentialEnv,
+  tag: `v${version}`,
+  repository,
+  trackedSourceClean: true,
+});
+assert.deepEqual(rawCredentialPassing.missingCredentials, []);
+assert.ok(
+  !JSON.stringify(rawCredentialPassing).includes(credentialSentinel),
+  "local raw credentials must remain redacted",
+);
+
+const explicitMissingCredential = evaluateReleasePreflight({
+  packageJson,
+  cargoToml,
+  tauriConfig,
+  storeConfig,
+  env: {
+    ...rawCredentialEnv,
+    [releaseCredentialPresenceFlag("APPLE_CERTIFICATE")]: "false",
+  },
+  tag: `v${version}`,
+  repository,
+  trackedSourceClean: true,
+});
+assert.deepEqual(explicitMissingCredential.missingCredentials, ["APPLE_CERTIFICATE"]);
 
 const releaseHostSnapshot = {
   platform: "darwin",

@@ -24,6 +24,18 @@ export const RELEASE_CREDENTIAL_NAMES = Object.freeze([
   "SIGNPATH_PROJECT_SLUG",
 ]);
 
+export function releaseCredentialPresenceFlag(name) {
+  return `ATELIER_HAS_${name}`;
+}
+
+function releaseCredentialIsPresent(env, name) {
+  const presence = env[releaseCredentialPresenceFlag(name)];
+  if (presence !== undefined) {
+    return ["1", "true", "yes"].includes(String(presence).trim().toLowerCase());
+  }
+  return typeof env[name] === "string" && env[name].trim() !== "";
+}
+
 function check(id, passed, message, actual = undefined) {
   return {
     id,
@@ -79,7 +91,7 @@ export function evaluateReleasePreflight({
     : null;
   const updaterEndpoints = tauriConfig.plugins?.updater?.endpoints ?? [];
   const missingCredentials = RELEASE_CREDENTIAL_NAMES.filter(
-    (name) => typeof env[name] !== "string" || env[name].trim() === "",
+    (name) => !releaseCredentialIsPresent(env, name),
   );
 
   const deepInspection = hostReleaseSnapshot !== null || githubReleaseSnapshot !== null;

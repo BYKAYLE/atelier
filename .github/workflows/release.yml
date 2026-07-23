@@ -34,17 +34,17 @@ jobs:
 
       - name: Record and enforce source release preflight
         env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
-          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          ATELIER_HAS_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE != '' }}
+          ATELIER_HAS_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD != '' }}
+          ATELIER_HAS_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY != '' }}
+          ATELIER_HAS_APPLE_ID: ${{ secrets.APPLE_ID != '' }}
+          ATELIER_HAS_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD != '' }}
+          ATELIER_HAS_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID != '' }}
+          ATELIER_HAS_TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          ATELIER_HAS_TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD != '' }}
+          ATELIER_HAS_SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
+          ATELIER_HAS_SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+          ATELIER_HAS_SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG != '' }}
         run: >-
           node tools/release-preflight.mjs
           --strict
@@ -303,14 +303,11 @@ jobs:
 
       - name: Build unsigned Windows installers
         shell: pwsh
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run tauri -- build --ci
+        run: npm run tauri -- build --ci --config src-tauri/tauri.windows-verify.conf.json
 
       - name: Verify Windows installer payloads
         shell: pwsh
-        run: powershell -ExecutionPolicy Bypass -File tools/windows-package-smoke.ps1
+        run: powershell -ExecutionPolicy Bypass -File tools/windows-package-smoke.ps1 -RequirePayloadExtraction
 
       - name: Collect unsigned Windows installers
         shell: pwsh

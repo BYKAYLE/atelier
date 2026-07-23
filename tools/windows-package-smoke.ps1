@@ -7,6 +7,7 @@ param(
   [string]$RunId = "",
   [string]$RunAttempt = "",
   [string]$EvidencePath = "",
+  [switch]$RequirePayloadExtraction,
   [switch]$RequireAuthenticode
 )
 
@@ -166,7 +167,9 @@ if ($nsis) {
   }
   $sevenZip = Find-7Zip
   if (-not $sevenZip) {
-    if ($RequireAuthenticode -or -not [string]::IsNullOrWhiteSpace($EvidencePath)) {
+    if ($RequirePayloadExtraction -or
+        $RequireAuthenticode -or
+        -not [string]::IsNullOrWhiteSpace($EvidencePath)) {
       throw "7-Zip is required to verify the NSIS payload, but 7z.exe was not found."
     }
     Write-Warning "NSIS payload extraction was skipped because 7z.exe was not found."

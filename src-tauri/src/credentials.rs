@@ -1604,6 +1604,22 @@ fn command_output_timeout(mut command: Command, timeout: Duration) -> io::Result
     }
 }
 
+fn oauth_probe_result(cached: bool, detected: Option<bool>) -> bool {
+    detected.unwrap_or(cached)
+}
+
+fn resolve_oauth_probe(provider: &str, detected: Option<bool>) -> bool {
+    if let Some(logged_in) = detected {
+        set_oauth_state(provider, logged_in);
+        logged_in
+    } else {
+        // A timeout or spawn failure is not proof that a valid subscription
+        // session was revoked. Keep the last verified state until the CLI
+        // returns an authoritative logged-in/logged-out result.
+        oauth_probe_result(credential_state(provider).oauth_logged_in, None)
+    }
+}
+
 fn detect_oauth(provider: &str) -> bool {
     if provider == "claude" && keychain_item_exists("claude", "oauth_token") {
         set_oauth_state(provider, true);
@@ -1616,19 +1632,16 @@ fn detect_oauth(provider: &str) -> bool {
             .args(["login", "status"])
             .env("PATH", crate::augmented_cli_path());
         let status = command_output_timeout(command, Duration::from_secs(3));
-        if let Ok(output) = status {
-            let Some(output) = output else {
-                return credential_state(provider).oauth_logged_in;
-            };
-            let logged_in = {
+        let detected = match status {
+            Ok(Some(output)) => {
                 let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
                 combined.push('\n');
                 combined.push_str(&String::from_utf8_lossy(&output.stderr));
-                output.status.success() && combined.to_ascii_lowercase().contains("logged in")
-            };
-            set_oauth_state(provider, logged_in);
-            return logged_in;
-        }
+                Some(output.status.success() && combined.to_ascii_lowercase().contains("logged in"))
+            }
+            Ok(None) | Err(_) => None,
+        };
+        return resolve_oauth_probe(provider, detected);
     }
 
     if provider == "claude" && cli_runs_for_provider(provider, "claude") {
@@ -1637,21 +1650,24 @@ fn detect_oauth(provider: &str) -> bool {
             .args(["auth", "status"])
             .env("PATH", crate::augmented_cli_path());
         let status = command_output_timeout(command, Duration::from_secs(3));
-        if let Ok(output) = status {
-            let Some(output) = output else {
-                return credential_state(provider).oauth_logged_in;
-            };
-            let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
-            combined.push('\n');
-            combined.push_str(&String::from_utf8_lossy(&output.stderr));
-            let logged_in = output.status.success()
-                && serde_json::from_str::<Value>(&combined)
-                    .ok()
-                    .and_then(|value| value.get("loggedIn").and_then(Value::as_bool))
-                    .unwrap_or_else(|| combined.to_ascii_lowercase().contains("loggedin\": true"));
-            set_oauth_state(provider, logged_in);
-            return logged_in;
-        }
+        let detected = match status {
+            Ok(Some(output)) => {
+                let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
+                combined.push('\n');
+                combined.push_str(&String::from_utf8_lossy(&output.stderr));
+                Some(
+                    output.status.success()
+                        && serde_json::from_str::<Value>(&combined)
+                            .ok()
+                            .and_then(|value| value.get("loggedIn").and_then(Value::as_bool))
+                            .unwrap_or_else(|| {
+                                combined.to_ascii_lowercase().contains("loggedin\": true")
+                            }),
+                )
+            }
+            Ok(None) | Err(_) => None,
+        };
+        return resolve_oauth_probe(provider, detected);
     }
 
     // OAuth 상태는 CLI 별로 다르다. Codex는 위에서 실제 CLI 상태를 확인하고,
@@ -2926,6 +2942,14 @@ mod tests {
         assert!(should_inject_agent_api_key("claude", &api_state));
         assert!(should_inject_agent_api_key("codex", &api_state));
         assert!(should_inject_agent_api_key("openrouter", &oauth_state));
+    }
+
+    #[test]
+    fn inconclusive_oauth_probe_preserves_last_verified_state() {
+        assert!(oauth_probe_result(true, None));
+        assert!(!oauth_probe_result(false, None));
+        assert!(!oauth_probe_result(true, Some(false)));
+        assert!(oauth_probe_result(false, Some(true)));
     }
 
     #[test]

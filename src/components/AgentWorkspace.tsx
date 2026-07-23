@@ -209,7 +209,7 @@ type OpenRouterEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
 type CodexEffort = "low" | "medium" | "high" | "xhigh" | "ultra";
 type WorkloadLevel = OpenRouterEffort | CodexEffort;
 type CodexSpeed = "default" | "fast";
-type HermesInferenceProvider = "openai-codex" | "openrouter" | "alibaba";
+type HermesInferenceProvider = "openai-codex" | "anthropic" | "openrouter" | "alibaba";
 type GajaeInferenceProvider = "claude" | "codex" | "alibaba";
 type SlashCommandScope = "atelier" | AgentProvider;
 
@@ -1378,6 +1378,7 @@ const MODEL_OPTIONS: Record<AgentProvider, ModelOption[]> = {
 
 const HERMES_PROVIDERS: Array<{ value: HermesInferenceProvider; label: string }> = [
   { value: "openai-codex", label: "Codex" },
+  { value: "anthropic", label: "Claude" },
   { value: "openrouter", label: "OpenRouter" },
   { value: "alibaba", label: "Alibaba Cloud" },
 ];
@@ -1390,6 +1391,7 @@ const GAJECODE_PROVIDERS: Array<{ value: GajaeInferenceProvider; label: string }
 
 const HERMES_MODEL_OPTIONS: Record<HermesInferenceProvider, ModelOption[]> = {
   "openai-codex": OPENAI_CODEX_MODELS,
+  anthropic: CLAUDE_MODELS,
   openrouter: OPENROUTER_MODELS,
   alibaba: ALIBABA_TOKEN_PLAN_MODELS,
 };
@@ -1462,7 +1464,7 @@ const isProvider = (value: unknown): value is AgentProvider =>
   value === "claude" || value === "hermes" || value === "codex" || value === "gajecode";
 
 const isHermesProvider = (value: unknown): value is HermesInferenceProvider =>
-  value === "openai-codex" || value === "openrouter" || value === "alibaba";
+  value === "openai-codex" || value === "anthropic" || value === "openrouter" || value === "alibaba";
 
 const isGajaeProvider = (value: unknown): value is GajaeInferenceProvider =>
   value === "claude" || value === "codex" || value === "alibaba";
@@ -1527,6 +1529,7 @@ function hermesProviderFromProfile(profile?: Profile) {
 }
 
 function defaultHermesModel(hermesProvider: HermesInferenceProvider) {
+  if (hermesProvider === "anthropic") return CLAUDE_MODELS[0].value;
   if (hermesProvider === "openrouter") return "openai/gpt-5.5";
   if (hermesProvider === "alibaba") return "qwen3.8-max-preview";
   return "gpt-5.5";
@@ -1535,6 +1538,7 @@ function defaultHermesModel(hermesProvider: HermesInferenceProvider) {
 function inferHermesProviderFromModel(model?: string | null) {
   const trimmed = model?.trim();
   if (!trimmed) return DEFAULT_HERMES_PROVIDER;
+  if (/^(?:anthropic\/)?claude-/i.test(trimmed)) return "anthropic";
   if (/^(?:qwen|glm)-?/i.test(trimmed)) return "alibaba";
   if (trimmed.includes("/")) return "openrouter";
   return DEFAULT_HERMES_PROVIDER;
@@ -1555,6 +1559,7 @@ function subscriptionProviderForSession(
   if (provider === "codex") return "codex";
   if (provider === "claude") return "claude";
   if (provider === "hermes" && hermesProvider === "openai-codex") return "codex";
+  if (provider === "hermes" && hermesProvider === "anthropic") return "claude";
   if (provider === "gajecode" && gajaeProvider === "codex") return "codex";
   if (provider === "gajecode" && gajaeProvider === "claude") return "claude";
   return null;
@@ -1580,6 +1585,8 @@ function modelOptionsFor(
   const options = provider === "hermes"
     ? (hermesProvider === "openai-codex"
         ? liveCodexModels
+        : hermesProvider === "anthropic"
+          ? liveClaudeModels
         : hermesProvider === "openrouter"
           ? liveOpenRouterModels
           : HERMES_MODEL_OPTIONS[hermesProvider])
@@ -1913,7 +1920,7 @@ function slashCommandsFor(
         detailEn: "Run a Hermes CLI command",
       },
       {
-        command: "/provider openai-codex|openrouter|alibaba",
+        command: "/provider openai-codex|anthropic|openrouter|alibaba",
         insert: "/provider ",
         scope: "hermes",
         detailKo: `Hermes 하위 provider 변경 (현재 ${hermesProvider})`,
@@ -2255,6 +2262,12 @@ function normalizeModel(provider: AgentProvider, model?: string | null) {
 function normalizeHermesModel(hermesProvider: HermesInferenceProvider, model?: string | null) {
   const trimmed = normalizeModel("hermes", model);
   if (!trimmed || trimmed === providerMeta("hermes").defaultModel) return defaultHermesModel(hermesProvider);
+  if (hermesProvider === "anthropic") {
+    const candidate = trimmed.startsWith("anthropic/")
+      ? trimmed.slice("anthropic/".length)
+      : normalizeModel("claude", trimmed);
+    return candidate || defaultHermesModel(hermesProvider);
+  }
   if (hermesProvider === "alibaba") {
     const aliases: Record<string, string> = {
       "qwen3.8": "qwen3.8-max-preview",
@@ -3482,7 +3495,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
           "/model <model> - change the current CLI model",
           "/workload low|medium|high|xhigh|ultra - change workload",
           "/permission basic|auto|full - change CLI permission mode",
-          "/provider openai-codex|openrouter|alibaba - change Hermes provider",
+          "/provider openai-codex|anthropic|openrouter|alibaba - change Hermes provider",
           "/effort low|medium|high|xhigh - change Codex reasoning effort",
           "/speed default|fast - change Codex speed tier",
         ].join("\n"),
@@ -3692,7 +3705,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
           "/model <model> - 현재 CLI 모델 변경",
           "/workload low|medium|high|xhigh|ultra - 작업량 변경",
           "/permission basic|auto|full - CLI 실행 권한 변경",
-          "/provider openai-codex|openrouter|alibaba - Hermes provider 변경",
+          "/provider openai-codex|anthropic|openrouter|alibaba - Hermes provider 변경",
           "/effort low|medium|high|xhigh - Codex 추론 강도 변경",
           "/speed default|fast - Codex 속도 tier 변경",
         ].join("\n"),
@@ -7306,8 +7319,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
           session.id,
           rawText,
           tw.language === "en"
-            ? "Usage: /provider openai-codex|openrouter|alibaba"
-            : "사용법: /provider openai-codex|openrouter|alibaba",
+            ? "Usage: /provider openai-codex|anthropic|openrouter|alibaba"
+            : "사용법: /provider openai-codex|anthropic|openrouter|alibaba",
         );
         return true;
       }
@@ -7438,6 +7451,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   const runHermesProviderCommandFromPicker = async (hermesProvider: HermesInferenceProvider) => {
     if (!active || active.provider !== "hermes") return;
     if (activeHermesProvider === hermesProvider) return;
+    if (hermesProvider === "anthropic") refreshClaudeRuntimeModels().catch(console.error);
     if (hermesProvider === "openrouter") refreshOpenRouterRuntimeModels().catch(console.error);
     const command = `/provider ${hermesProvider}`;
     setComposerInput(command);
@@ -9586,6 +9600,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                           } else if (activeProvider === "gajecode") {
                             if (activeGajaeProvider === "claude") refreshClaudeRuntimeModels().catch(console.error);
                             if (activeGajaeProvider === "codex") refreshCodexRuntimeModels().catch(console.error);
+                          } else if (activeProvider === "hermes" && activeHermesProvider === "anthropic") {
+                            refreshClaudeRuntimeModels().catch(console.error);
                           } else if (activeProvider === "hermes" && activeHermesProvider === "openrouter") {
                             refreshOpenRouterRuntimeModels().catch(console.error);
                           }

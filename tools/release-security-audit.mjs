@@ -186,6 +186,17 @@ function workflowJobSource(source, jobName) {
   return nextJob < 0 ? remainder : remainder.slice(0, nextJob);
 }
 
+const releasePreflightJobSource = workflowJobSource(releaseWorkflowSource, "release-preflight");
+const unsignedWindowsBuildJobSource = workflowJobSource(
+  releaseWorkflowSource,
+  "build-windows-unsigned",
+);
+const releasePreflightPresenceFlags = (
+  releasePreflightJobSource.match(
+    /ATELIER_HAS_[A-Z0-9_]+:\s*\$\{\{\s*(?:secrets|vars)\.[A-Z0-9_]+\s*!=\s*''\s*\}\}/g,
+  ) || []
+).length;
+
 const credentialBearingReleaseJobs = [
   "release-preflight",
   "build-macos",
@@ -812,12 +823,17 @@ const sourceInvariants = [
       releasePreflightSource.includes('"source-preflight"') &&
       releasePreflightSource.includes('"release-infrastructure-preflight"') &&
       releasePreflightSource.includes("RELEASE_CREDENTIAL_NAMES") &&
+      releasePreflightSource.includes("releaseCredentialPresenceFlag") &&
       releasePreflightSource.includes("store-updater-isolation") &&
       releasePreflightSource.includes("tracked-source-clean") &&
       releasePreflightSource.includes("--inspect-host") &&
       releasePreflightSource.includes("--inspect-github") &&
       releasePreflightSmokeSource.includes("source-preflight-passed") &&
       releasePreflightSmokeSource.includes("release-infrastructure-preflight-passed") &&
+      releasePreflightPresenceFlags === 11 &&
+      !releasePreflightJobSource.match(
+        /^\s+(?:APPLE_|TAURI_SIGNING_|SIGNPATH_)[A-Z0-9_]*:\s*\$\{\{/m,
+      ) &&
       releaseReadinessProbeSource.includes("REQUIRED_REPOSITORY_SECRET_NAMES") &&
       releaseReadinessProbeSource.includes("macos-developer-id-identity") &&
       releaseReadinessProbeSource.includes("github-production-reviewer") &&
@@ -825,6 +841,16 @@ const sourceInvariants = [
       !releaseReadinessProbeSource.includes("secret.value"),
     message:
       "Local and CI release preflight must share one redacted evaluator and inspect external release infrastructure",
+  },
+  {
+    ok:
+      unsignedWindowsBuildJobSource.includes(
+        "--config src-tauri/tauri.windows-verify.conf.json",
+      ) &&
+      !unsignedWindowsBuildJobSource.includes("TAURI_SIGNING_PRIVATE_KEY") &&
+      !unsignedWindowsBuildJobSource.includes("TAURI_SIGNING_PRIVATE_KEY_PASSWORD"),
+    message:
+      "Unsigned Windows packaging must not receive updater signing secrets before the protected final signing stage",
   },
   {
     ok:
@@ -999,10 +1025,18 @@ const sourceInvariants = [
       windowsPackageSmokeSource.includes("githubRunAttempt = [int]$RunAttempt") &&
       windowsPackageSmokeSource.includes("runnerName = [string]$env:RUNNER_NAME") &&
       windowsPackageSmokeSource.includes("Find-7Zip") &&
+      windowsPackageSmokeSource.includes("[switch]$RequirePayloadExtraction") &&
       windowsPackageSmokeSource.includes('Assert-AtelierPayload -Root $extractRoot -Kind "NSIS"') &&
       windowsInstalledPackageSmokeSource.includes('[ValidateSet("nsis", "msi")]') &&
       windowsInstalledPackageSmokeSource.includes("installerKind = $normalizedInstallerKind") &&
       windowsInstalledPackageSmokeSource.includes("msiexec.exe") &&
+      unsignedWindowsBuildJobSource.includes(
+        "windows-package-smoke.ps1 -RequirePayloadExtraction",
+      ) &&
+      windowsPackageVerifyWorkflowSource.includes("push:\n    branches: [main]") &&
+      windowsPackageVerifyWorkflowSource.includes(
+        "windows-package-smoke.ps1 -RequirePayloadExtraction",
+      ) &&
       windowsPackageVerifyWorkflowSource.includes("installer-kind: [nsis, msi]") &&
       windowsPackageVerifyWorkflowSource.includes('-InstallerKind "${{ matrix.installer-kind }}"'),
     message:
