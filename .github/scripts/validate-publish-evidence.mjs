@@ -9,6 +9,8 @@ const releaseTag = requireEnv("RELEASE_TAG");
 const expectedVersion = requireEnv("EXPECTED_VERSION").replace(/^v/, "");
 const sourceSha = requireEnv("RELEASE_SOURCE_SHA").toLowerCase();
 const physicalGateRunId = requireEnv("PHYSICAL_GATE_RUN_ID");
+const physicalGateRunAttempt = requireEnv("PHYSICAL_GATE_RUN_ATTEMPT");
+const physicalGateRunnerName = requireEnv("PHYSICAL_GATE_RUNNER_NAME");
 const allowInitialSignedChannel = parseBoolean(process.env.ALLOW_INITIAL_SIGNED_CHANNEL);
 const requireSmartAppControl = parseBoolean(
   process.env.REQUIRE_SMART_APP_CONTROL_EVIDENCE,
@@ -25,6 +27,12 @@ if (releaseTag !== `v${expectedVersion}`) {
 if (!/^[0-9a-f]{40}$/.test(sourceSha)) {
   fail("RELEASE_SOURCE_SHA must be a full 40-character Git commit SHA");
 }
+if (!/^[1-9][0-9]*$/.test(physicalGateRunAttempt)) {
+  fail("PHYSICAL_GATE_RUN_ATTEMPT must be a positive integer");
+}
+if (physicalGateRunnerName.length > 128 || /[\r\n]/.test(physicalGateRunnerName)) {
+  fail("PHYSICAL_GATE_RUNNER_NAME is invalid");
+}
 
 const candidateFiles = findFiles(evidenceDir, "windows-release-candidate.json");
 if (candidateFiles.length !== 1) {
@@ -38,20 +46,34 @@ const packageFiles = findFiles(evidenceDir, "windows-package-smoke.json");
 if (packageFiles.length !== 1) {
   fail(`expected exactly one Windows package receipt, found ${packageFiles.length}`);
 }
+const runnerPreflightFiles = findFiles(evidenceDir, "windows-runner-preflight.json");
+if (runnerPreflightFiles.length !== 1) {
+  fail(`expected exactly one Windows runner preflight receipt, found ${runnerPreflightFiles.length}`);
+}
 const providerFile = { path: providerFiles[0], payload: readJson(providerFiles[0]) };
 const candidatePath = candidateFiles[0];
 const packagePath = packageFiles[0];
+const runnerPreflightPath = runnerPreflightFiles[0];
 const candidate = readJson(candidatePath);
 const packageProof = readJson(packagePath);
 const provider = providerFile.payload;
+const runnerPreflight = readJson(runnerPreflightPath);
 const manifestPath = join(assetsDir, "release-manifest.json");
 const manifest = readJson(manifestPath);
+
+assertRunnerPreflight(runnerPreflight);
 
 assertEqual(candidate.schemaVersion, 1, "candidate receipt schema");
 assertEqual(candidate.releaseTag, releaseTag, "candidate release tag");
 assertEqual(String(candidate.sourceSha || "").toLowerCase(), sourceSha, "candidate source SHA");
 assertEqual(candidate.expectedVersion, expectedVersion, "candidate expected version");
 assertEqual(String(candidate.githubRunId || ""), physicalGateRunId, "candidate GitHub run ID");
+assertEqual(
+  String(candidate.githubRunAttempt || ""),
+  physicalGateRunAttempt,
+  "candidate GitHub run attempt",
+);
+assertEqual(candidate.runnerName, physicalGateRunnerName, "candidate runner name");
 assertTrue(candidate.interactiveDesktop === true, "candidate was not tested in an interactive desktop session");
 assertTimestampedSignature(candidate.installer?.signature, "candidate installer");
 assertTimestampedSignature(candidate.installed?.signature, "installed executable");
@@ -82,6 +104,12 @@ assertEqual(packageProof.releaseTag, releaseTag, "package release tag");
 assertEqual(String(packageProof.sourceSha || "").toLowerCase(), sourceSha, "package source SHA");
 assertEqual(packageProof.expectedVersion, expectedVersion, "package expected version");
 assertEqual(String(packageProof.githubRunId || ""), physicalGateRunId, "package GitHub run ID");
+assertEqual(
+  String(packageProof.githubRunAttempt || ""),
+  physicalGateRunAttempt,
+  "package GitHub run attempt",
+);
+assertEqual(packageProof.runnerName, physicalGateRunnerName, "package runner name");
 
 const msiName = manifest.primaryAssets?.windowsMsi;
 const msiAsset = Array.isArray(manifest.assets)
@@ -118,6 +146,12 @@ assertEqual(provider.releaseTag, releaseTag, "provider release tag");
 assertEqual(String(provider.sourceSha || "").toLowerCase(), sourceSha, "provider source SHA");
 assertEqual(provider.expectedVersion, expectedVersion, "provider expected version");
 assertEqual(String(provider.githubRunId || ""), physicalGateRunId, "provider GitHub run ID");
+assertEqual(
+  String(provider.githubRunAttempt || ""),
+  physicalGateRunAttempt,
+  "provider GitHub run attempt",
+);
+assertEqual(provider.runnerName, physicalGateRunnerName, "provider runner name");
 
 assertTrue(provider.installedApp?.found === true, "provider gate did not find the installed candidate");
 assertTrue(provider.installedApp?.versionOk === true, "provider gate did not prove the installed version");
@@ -164,11 +198,14 @@ const report = {
   version: expectedVersion,
   sourceSha,
   physicalGateRunId,
+  physicalGateRunAttempt,
+  physicalGateRunnerName,
   validatedAt: new Date().toISOString(),
   initialSignedChannelWaiverAccepted:
     candidate.upgradePersistenceProved !== true && allowInitialSignedChannel,
   smartAppControlRequired: requireSmartAppControl,
   receipts: {
+    runnerPreflight: receipt(runnerPreflightPath),
     candidate: receipt(candidatePath),
     provider: receipt(providerFile.path),
     packages: receipt(packagePath),
@@ -250,13 +287,10 @@ function assertTimestampedSignature(signature, label) {
 function assertBrowserProcessEvidence(evidence) {
   assertTrue(evidence?.observed === true, "no browser process was observed");
   assertTrue(evidence?.visibleWindow === true, "no visible browser window was observed");
-  const allowedModes = new Set([
+  assertEqual(
+    evidence?.observationMode,
     "new-or-recent-process",
-    "existing-visible-default-browser",
-  ]);
-  assertTrue(
-    allowedModes.has(evidence?.observationMode),
-    `invalid browser observation mode: ${evidence?.observationMode || "missing"}`,
+    "browser observation mode",
   );
 
   const processes = Array.isArray(evidence?.processes) ? evidence.processes : [];
@@ -275,23 +309,89 @@ function assertBrowserProcessEvidence(evidence) {
     visibleProcesses.length > 0,
     "browser process evidence has no complete visible process record",
   );
+}
 
-  if (evidence.observationMode === "existing-visible-default-browser") {
-    const defaultBrowserNames = Array.isArray(evidence.defaultBrowserProcessNames)
-      ? evidence.defaultBrowserProcessNames
-          .filter((name) => typeof name === "string" && name.trim())
-          .map((name) => name.trim().toLowerCase())
-      : [];
-    assertTrue(
-      defaultBrowserNames.length > 0,
-      "existing browser evidence is missing the default-browser process name",
-    );
-    assertTrue(
-      visibleProcesses.some((process) =>
-        defaultBrowserNames.includes(process.name.trim().toLowerCase()),
-      ),
-      "existing browser evidence does not match the configured default browser",
-    );
+function assertRunnerPreflight(preflight) {
+  assertEqual(preflight?.schemaVersion, 1, "runner preflight schema");
+  assertEqual(preflight?.phase, "windows-runner-preflight", "runner preflight phase");
+  assertEqual(preflight?.status, "ready", "runner preflight status");
+  assertEqual(preflight?.overall, "ok", "runner preflight overall");
+  assertEqual(preflight?.releaseTag, releaseTag, "runner preflight release tag");
+  assertEqual(preflight?.expectedVersion, expectedVersion, "runner preflight expected version");
+  assertEqual(String(preflight?.sourceSha || "").toLowerCase(), sourceSha, "runner preflight source SHA");
+  assertEqual(String(preflight?.githubRunId || ""), physicalGateRunId, "runner preflight GitHub run ID");
+  assertEqual(
+    String(preflight?.githubRunAttempt || ""),
+    physicalGateRunAttempt,
+    "runner preflight GitHub run attempt",
+  );
+  assertTrue(
+    !Number.isNaN(Date.parse(preflight?.generatedAt)),
+    "runner preflight generatedAt timestamp is missing or invalid",
+  );
+
+  assertTrue(preflight?.desktop?.interactive === true, "runner preflight desktop is not interactive");
+  assertTrue(preflight?.desktop?.serviceSession === false, "runner preflight ran in a service session");
+  assertTrue(preflight?.desktop?.unlocked === true, "runner preflight desktop is locked");
+
+  assertEqual(preflight?.runner?.architecture, "x64", "runner preflight architecture");
+  assertEqual(preflight?.runner?.name, physicalGateRunnerName, "runner preflight runner name");
+  assertEqual(String(preflight?.runner?.os || "").toLowerCase(), "windows", "runner preflight OS");
+
+  for (const toolName of ["powershell", "node", "npm", "git", "bash", "gh", "msiexec", "7z"]) {
+    const tool = preflight?.tools?.[toolName];
+    assertTrue(tool?.ok === true, `runner preflight tool check failed: ${toolName}`);
+    assertTrue(Boolean(tool?.path), `runner preflight tool path is missing: ${toolName}`);
+  }
+  assertTrue(
+    preflight?.providerInstallation?.codexAndClaude?.ok === true,
+    "runner preflight could not install Codex and Claude providers",
+  );
+  assertTrue(
+    preflight?.providerInstallation?.hermes?.ok === true,
+    "runner preflight could not install Hermes",
+  );
+
+  assertTrue(preflight?.storage?.workspaceWritable === true, "runner preflight workspace is not writable");
+  assertTrue(preflight?.storage?.tempWritable === true, "runner preflight temp directory is not writable");
+  assertTrue(preflight?.storage?.ok === true, "runner preflight storage verdict is not ok");
+  assertTrue(
+    Number.isInteger(preflight?.storage?.freeBytes) && preflight.storage.freeBytes > 0,
+    "runner preflight freeBytes is missing or invalid",
+  );
+  assertTrue(
+    Number.isInteger(preflight?.storage?.requiredFreeBytes) && preflight.storage.requiredFreeBytes > 0,
+    "runner preflight requiredFreeBytes is missing or invalid",
+  );
+  assertTrue(
+    preflight.storage.freeBytes >= preflight.storage.requiredFreeBytes,
+    "runner preflight free space is below the required threshold",
+  );
+
+  assertTrue(preflight?.msiService?.ok === true, "runner preflight MSI service check failed");
+  assertTrue(preflight?.msiService?.installed === true, "runner preflight MSI service is not installed");
+  const msiStatus = String(preflight?.msiService?.status || "").replace(/\s+/g, "");
+  assertTrue(
+    ["Running", "Stopped", "StartPending"].includes(msiStatus),
+    `runner preflight MSI service status is invalid: ${preflight?.msiService?.status || "missing"}`,
+  );
+
+  assertTrue(preflight?.browser?.resolved === true, "runner preflight did not resolve the default browser");
+  assertTrue(preflight?.browser?.ok === true, "runner preflight browser verdict is not ok");
+  const defaultBrowserNames = Array.isArray(preflight?.browser?.defaultBrowserProcessNames)
+    ? preflight.browser.defaultBrowserProcessNames
+        .filter((name) => typeof name === "string" && name.trim())
+        .map((name) => name.trim().toLowerCase())
+    : [];
+  assertTrue(defaultBrowserNames.length > 0, "runner preflight default browser process names are missing");
+
+  assertEqual(preflight?.authenticodeProbe?.status, "Valid", "runner preflight Authenticode probe status");
+  assertTrue(preflight?.authenticodeProbe?.trusted === true, "runner preflight Authenticode probe is not trusted");
+  assertTrue(preflight?.authenticodeProbe?.ok === true, "runner preflight Authenticode verdict is not ok");
+
+  if (requireSmartAppControl) {
+    assertTrue(preflight?.smartAppControl?.available === true, "runner preflight Smart App Control is unavailable");
+    assertTrue(preflight?.smartAppControl?.ok === true, "runner preflight Smart App Control verdict is not ok");
   }
 }
 

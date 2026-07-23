@@ -1,7 +1,7 @@
 # Atelier 0.2.12 Release Readiness Evidence
 
-generated_at: 2026-07-23T09:27:15+09:00
-source_commit: d51eac19c0adc6de0da21f82f4ca8c4bfdecc1c9
+generated_at: 2026-07-23T10:33:23+09:00
+source_base_commit: 38b411deaadce1768ccef73a74b8a7829e52f09d
 branch: codex/release-readiness-final
 
 ## Source And Automated Gates
@@ -19,6 +19,11 @@ branch: codex/release-readiness-final
   notarization, stapling, version, renderer readiness, and executable hashes.
 - Windows release evidence requires a timestamped Authenticode signature on the
   installer, packaged payload, and installed executable before publication.
+- Windows publication receipts are now bound to one release tag, source SHA,
+  GitHub run ID, positive run attempt, and named physical runner across the
+  runner preflight, candidate, package, and provider evidence. The publisher
+  also verifies the exact successful physical-gate job and its Windows x64
+  self-hosted labels before accepting those receipts.
 - Windows Store detection now uses the real Appx package identity or the
   `WindowsApps` location. Product-name heuristics no longer suppress the GitHub
   updater for a normal installer.
@@ -26,7 +31,9 @@ branch: codex/release-readiness-final
   entry point. A mutable global CLI cannot silently change package output.
 - Claude and Codex browser-login URLs are HTTPS/provider allowlisted. The UI
   applies a bounded retry plan, while the physical Windows gate separately
-  requires a visible native-browser handoff and authenticated CLI receipt.
+  requires a newly observed visible native-browser process and authenticated
+  CLI receipt. A browser that was already open before the login probe no longer
+  satisfies publication evidence.
 - The Orca feature gate passed 20 contract smokes across 10 removable backend
   features and restores the full production bundle in `finally`, including
   after a restricted-build failure.
@@ -36,6 +43,10 @@ branch: codex/release-readiness-final
   contract smoke, OAuth-login smoke, release security audit, Orca feature gate,
   Rust format, Clippy, tests, and native/store builds passed on this source
   candidate.
+- The final release-evidence hardening pass additionally passed `actionlint`,
+  `git diff --check`, `npm run build`, and the release preflight, OAuth,
+  updater, candidate, publication-evidence, and security-audit smokes. PowerShell
+  execution remains intentionally unclaimed on this macOS host.
 - Rust tests: 188 passed, 0 failed, 1 ignored in both native and store-feature
   configurations.
 - `npm audit --audit-level=low`: 0 known vulnerabilities.

@@ -9,6 +9,8 @@ param(
   [string]$SourceSha,
   [Parameter(Mandatory = $true)]
   [string]$RunId,
+  [Parameter(Mandatory = $true)]
+  [string]$RunAttempt,
   [string]$EvidenceDir = "artifacts/windows-release-candidate",
   [int]$StartupTimeoutSec = 45,
   [switch]$AllowInitialSignedChannel
@@ -26,6 +28,18 @@ if ($SourceSha -notmatch "^[0-9a-fA-F]{40}$") {
 }
 if ($RunId -notmatch "^[0-9]+$") {
   throw "RunId must be the numeric GitHub Actions run ID."
+}
+if ($RunAttempt -notmatch "^[1-9][0-9]*$") {
+  throw "RunAttempt must be a positive GitHub Actions run attempt."
+}
+if ($env:GITHUB_RUN_ID -and $env:GITHUB_RUN_ID -ne $RunId) {
+  throw "RunId does not match GITHUB_RUN_ID."
+}
+if ($env:GITHUB_RUN_ATTEMPT -and $env:GITHUB_RUN_ATTEMPT -ne $RunAttempt) {
+  throw "RunAttempt does not match GITHUB_RUN_ATTEMPT."
+}
+if ([string]::IsNullOrWhiteSpace($env:RUNNER_NAME)) {
+  throw "RUNNER_NAME is required for physical release evidence."
 }
 if (-not [Environment]::UserInteractive -or [System.Diagnostics.Process]::GetCurrentProcess().SessionId -eq 0) {
   throw "The Windows physical release gate must run in an interactive desktop session, not a service session."
@@ -271,6 +285,8 @@ $summary = [ordered]@{
   sourceSha = $SourceSha.ToLowerInvariant()
   expectedVersion = $ExpectedVersion
   githubRunId = $RunId
+  githubRunAttempt = [int]$RunAttempt
+  runnerName = [string]$env:RUNNER_NAME
   mode = $mode
   interactiveDesktop = $true
   baseline = [ordered]@{

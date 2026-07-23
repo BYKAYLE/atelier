@@ -5,6 +5,7 @@ param(
   [string]$ReleaseTag = "",
   [string]$SourceSha = "",
   [string]$RunId = "",
+  [string]$RunAttempt = "",
   [string]$EvidencePath = "",
   [switch]$RequireAuthenticode
 )
@@ -221,9 +222,14 @@ if (-not $msi -and -not $nsis -and -not $msix) {
 if (-not [string]::IsNullOrWhiteSpace($EvidencePath)) {
   if ([string]::IsNullOrWhiteSpace($ReleaseTag) -or
       $SourceSha -notmatch "^[0-9a-fA-F]{40}$" -or
-      $RunId -notmatch "^[0-9]+$") {
-    throw "EvidencePath requires ReleaseTag, a full SourceSha, and a numeric RunId."
+      $RunId -notmatch "^[0-9]+$" -or
+      $RunAttempt -notmatch "^[1-9][0-9]*$" -or
+      [string]::IsNullOrWhiteSpace($env:RUNNER_NAME)) {
+    throw "EvidencePath requires ReleaseTag, a full SourceSha, a numeric RunId, a positive RunAttempt, and RUNNER_NAME."
   }
+  if ($ReleaseTag -ne "v$ExpectedVersion") { throw "ReleaseTag must match ExpectedVersion." }
+  if ($env:GITHUB_RUN_ID -and $env:GITHUB_RUN_ID -ne $RunId) { throw "RunId does not match GITHUB_RUN_ID." }
+  if ($env:GITHUB_RUN_ATTEMPT -and $env:GITHUB_RUN_ATTEMPT -ne $RunAttempt) { throw "RunAttempt does not match GITHUB_RUN_ATTEMPT." }
   $evidenceFullPath = [IO.Path]::GetFullPath($EvidencePath)
   $evidenceDirectory = Split-Path -Parent $evidenceFullPath
   New-Item -ItemType Directory -Force -Path $evidenceDirectory | Out-Null
@@ -234,6 +240,8 @@ if (-not [string]::IsNullOrWhiteSpace($EvidencePath)) {
     sourceSha = $SourceSha.ToLowerInvariant()
     expectedVersion = $ExpectedVersion.TrimStart("v")
     githubRunId = $RunId
+    githubRunAttempt = [int]$RunAttempt
+    runnerName = [string]$env:RUNNER_NAME
     packages = [ordered]@{
       msi = $msiProof
       nsis = $nsisProof

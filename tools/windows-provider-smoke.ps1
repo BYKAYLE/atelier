@@ -17,6 +17,7 @@ param(
   [string]$ReleaseTag = "",
   [string]$SourceSha = "",
   [string]$RunId = "",
+  [string]$RunAttempt = "",
   [string]$LogDir = "$env:LOCALAPPDATA\Atelier\diagnostics"
 )
 
@@ -814,6 +815,25 @@ if ($SelfTest) {
   exit 0
 }
 
+$hasReleaseEvidenceMetadata = (
+  -not [string]::IsNullOrWhiteSpace($ReleaseTag) -or
+  -not [string]::IsNullOrWhiteSpace($SourceSha) -or
+  -not [string]::IsNullOrWhiteSpace($RunId) -or
+  -not [string]::IsNullOrWhiteSpace($RunAttempt)
+)
+if ($hasReleaseEvidenceMetadata) {
+  $normalizedExpectedVersion = $ExpectedVersion.TrimStart("v")
+  if ([string]::IsNullOrWhiteSpace($normalizedExpectedVersion) -or $ReleaseTag -ne "v$normalizedExpectedVersion") {
+    throw "ReleaseTag must match ExpectedVersion when release evidence is requested."
+  }
+  if ($SourceSha -notmatch "^[0-9a-fA-F]{40}$") { throw "SourceSha must be a full Git commit SHA." }
+  if ($RunId -notmatch "^[0-9]+$") { throw "RunId must be numeric." }
+  if ($RunAttempt -notmatch "^[1-9][0-9]*$") { throw "RunAttempt must be a positive integer." }
+  if ([string]::IsNullOrWhiteSpace($env:RUNNER_NAME)) { throw "RUNNER_NAME is required for physical release evidence." }
+  if ($env:GITHUB_RUN_ID -and $env:GITHUB_RUN_ID -ne $RunId) { throw "RunId does not match GITHUB_RUN_ID." }
+  if ($env:GITHUB_RUN_ATTEMPT -and $env:GITHUB_RUN_ATTEMPT -ne $RunAttempt) { throw "RunAttempt does not match GITHUB_RUN_ATTEMPT." }
+}
+
 New-DirectoryIfMissing $LogDir
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $logPath = Join-Path $LogDir "atelier-provider-smoke-$stamp.log"
@@ -841,6 +861,8 @@ try {
     sourceSha = $SourceSha.ToLowerInvariant()
     expectedVersion = $ExpectedVersion.TrimStart("v")
     githubRunId = $RunId
+    githubRunAttempt = if ($RunAttempt -match "^[1-9][0-9]*$") { [int]$RunAttempt } else { $null }
+    runnerName = if ($hasReleaseEvidenceMetadata) { [string]$env:RUNNER_NAME } else { $null }
     installRequested = [bool]$Install
     loginRequested = [bool]$Login
     providers = @()
@@ -947,7 +969,7 @@ try {
       -InitialProcessIds @($browserBaseline | ForEach-Object { $_.id }) `
       -ProbeStartedAt $browserProbeStartedAt `
       -PreferredProcessNames $defaultBrowserProcessNames `
-      -AllowExistingVisibleProcess:($summary.browserProbe -eq $true -and $summary.browserHelperProbe -eq $true) `
+      -AllowExistingVisibleProcess:$false `
       -TimeoutSec $BrowserProbeTimeoutSec
     Write-Host "Browser process observed: $($summary.browserProcessEvidence.observed)"
     Write-Host "Visible browser window observed: $($summary.browserProcessEvidence.visibleWindow)"
@@ -1013,6 +1035,9 @@ try {
   }
   if ($RequireVisibleBrowserWindowEvidence -and $summary.browserProcessEvidence.visibleWindow -ne $true) {
     throw "Windows provider smoke did not observe a visible browser window after the Atelier handoff"
+  }
+  if ($RequireBrowserProcessEvidence -and $summary.browserProcessEvidence.observationMode -ne "new-or-recent-process") {
+    throw "Windows provider smoke did not prove a new or recently created browser process"
   }
   if ($Strict) {
     $failed = @($summary.providers | Where-Object { -not $_.exists -or -not $_.versionOk })

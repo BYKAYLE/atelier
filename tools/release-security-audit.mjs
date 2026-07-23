@@ -1,14 +1,19 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 const manifest = "src-tauri/Cargo.toml";
 const lockfile = "src-tauri/Cargo.lock";
 const excludedVersion = "quick-xml@0.39.2";
+const windowsPhysicalRunnerPreflightPath = "tools/windows-physical-runner-preflight.ps1";
 const releaseTargets = [
   "aarch64-apple-darwin",
   "x86_64-apple-darwin",
   "x86_64-pc-windows-msvc",
 ];
+
+function readTextIfExists(path) {
+  return existsSync(path) ? readFileSync(path, "utf8") : "";
+}
 
 const credentialSource = readFileSync("src-tauri/src/credentials.rs", "utf8");
 const agentSource = readFileSync("src-tauri/src/agent.rs", "utf8");
@@ -26,6 +31,9 @@ const releasePreflightSmokeSource = readFileSync("tools/release-preflight-smoke.
 const storeBuildSource = readFileSync("tools/windows-store/build-msix.ps1", "utf8");
 const windowsProviderSmokeSource = readFileSync("tools/windows-provider-smoke.ps1", "utf8");
 const windowsPackageSmokeSource = readFileSync("tools/windows-package-smoke.ps1", "utf8");
+const windowsPhysicalRunnerPreflightSource = readTextIfExists(
+  windowsPhysicalRunnerPreflightPath,
+);
 const windowsProviderWorkflowSource = readFileSync(
   ".github/workflows/windows-provider-smoke.yml",
   "utf8",
@@ -177,6 +185,31 @@ const sourceInvariants = [
   },
   {
     ok:
+      windowsPhysicalRunnerPreflightSource.includes("schemaVersion = 1") &&
+      windowsPhysicalRunnerPreflightSource.includes("githubRunId = $RunId") &&
+      windowsPhysicalRunnerPreflightSource.includes("githubRunAttempt = $safeRunAttempt") &&
+      windowsPhysicalRunnerPreflightSource.includes("name = [string]$env:RUNNER_NAME") &&
+      windowsPhysicalRunnerPreflightSource.includes("os = [string]$env:RUNNER_OS") &&
+      windowsPhysicalRunnerPreflightSource.includes("[Environment]::UserInteractive") &&
+      windowsPhysicalRunnerPreflightSource.includes("$sessionId -eq 0") &&
+      windowsPhysicalRunnerPreflightSource.includes("Get-Process -Name explorer") &&
+      windowsPhysicalRunnerPreflightSource.includes("Get-Command $Name") &&
+      windowsPhysicalRunnerPreflightSource.includes('@{ key = "gh"') &&
+      windowsPhysicalRunnerPreflightSource.includes("7z.exe") &&
+      windowsPhysicalRunnerPreflightSource.includes('@{ key = "bash"') &&
+      windowsPhysicalRunnerPreflightSource.includes("pendingReboot") &&
+      windowsPhysicalRunnerPreflightSource.includes("msiexec.exe") &&
+      windowsPhysicalRunnerPreflightSource.includes("defaultBrowserProcessNames") &&
+      windowsPhysicalRunnerPreflightSource.includes("providerInstallation") &&
+      windowsPhysicalRunnerPreflightSource.includes("RUNNER_NAME is required") &&
+      windowsPhysicalRunnerPreflightSource.includes("RUNNER_OS must be Windows") &&
+      windowsPhysicalRunnerPreflightSource.includes("overall") &&
+      windowsPhysicalRunnerPreflightSource.includes("blockers"),
+    message:
+      "Windows physical runner preflight must fail closed on desktop, tooling, installer, browser, and receipt identity prerequisites",
+  },
+  {
+    ok:
       agentPreviewSource.includes("redact_preview_output_line") &&
       agentPreviewSource.includes("preview_output_redacts_credentials_before_storage_and_events") &&
       previewEvidenceSource.includes("redactPreviewEvidenceText") &&
@@ -318,7 +351,12 @@ const sourceInvariants = [
       windowsProviderSmokeSource.includes("authenticated after setup-token login") &&
       windowsProviderSmokeSource.includes("did not prove Atelier's native browser handoff and URL fallback") &&
       windowsProviderSmokeSource.includes("Get-BrowserProcessRecords") &&
+      windowsProviderSmokeSource.includes("Get-DefaultBrowserProcessNames") &&
       windowsProviderSmokeSource.includes("Wait-BrowserProcessEvidence") &&
+      windowsProviderSmokeSource.includes("new-or-recent-process") &&
+      windowsProviderSmokeSource.includes("-AllowExistingVisibleProcess:$false") &&
+      windowsProviderSmokeSource.includes("defaultBrowserProcessNames") &&
+      windowsProviderSmokeSource.includes("Browser observation mode") &&
       windowsProviderSmokeSource.includes("RequireBrowserProcessEvidence") &&
       windowsProviderSmokeSource.includes("RequireVisibleBrowserWindowEvidence") &&
       workflowSource.includes("-ProbeBrowserHandoff") &&
@@ -682,6 +720,11 @@ const sourceInvariants = [
       publishReleaseWorkflowSource.includes("physical_gate_run_id") &&
       publishReleaseWorkflowSource.includes("windows-physical-release-gate.yml") &&
       publishReleaseWorkflowSource.includes("run.head_sha") &&
+      publishReleaseWorkflowSource.includes("run.run_attempt") &&
+      publishReleaseWorkflowSource.includes("/jobs?per_page=100") &&
+      publishReleaseWorkflowSource.includes("job.runner_name") &&
+      publishReleaseWorkflowSource.includes("job.labels") &&
+      publishReleaseWorkflowSource.includes("PHYSICAL_GATE_RUNNER_NAME") &&
       publishReleaseWorkflowSource.includes("final-candidate-assets") &&
       publishReleaseWorkflowSource.includes("CANDIDATE_MANIFEST_SHA") &&
       publishReleaseWorkflowSource.includes('--repo "$RELEASE_OWNER/$RELEASE_REPO"') &&
@@ -692,6 +735,14 @@ const sourceInvariants = [
       publishEvidenceSource.includes("claudeAuthOk") &&
       publishEvidenceSource.includes("codexAuthOk") &&
       publishEvidenceSource.includes("PHYSICAL_GATE_RUN_ID") &&
+      publishEvidenceSource.includes("PHYSICAL_GATE_RUN_ATTEMPT") &&
+      publishEvidenceSource.includes("PHYSICAL_GATE_RUNNER_NAME") &&
+      publishEvidenceSource.includes("githubRunAttempt") &&
+      publishEvidenceSource.includes("candidate runner name") &&
+      publishEvidenceSource.includes("package runner name") &&
+      publishEvidenceSource.includes("provider runner name") &&
+      publishEvidenceSource.includes("windows-runner-preflight.json") &&
+      publishEvidenceSource.includes("expected exactly one Windows runner preflight receipt") &&
       publishEvidenceSource.includes("expected exactly one Windows provider receipt") &&
       publishEvidenceSource.includes("package GitHub run ID") &&
       publishEvidenceSource.includes('["nsis", nsisAsset]') &&
@@ -731,15 +782,28 @@ const sourceInvariants = [
     ok:
       windowsPhysicalGateSource.includes('RELEASE_OWNER: ${{ vars.RELEASE_OWNER') &&
       windowsPhysicalGateSource.includes('"-RunId", $env:GITHUB_RUN_ID') &&
+      windowsPhysicalGateSource.includes('GITHUB_RUN_ATTEMPT') &&
+      windowsPhysicalGateSource.includes("windows-physical-runner-preflight.ps1") &&
+      windowsPhysicalGateSource.indexOf("windows-physical-runner-preflight.ps1") <
+        windowsPhysicalGateSource.indexOf("gh release download") &&
+      windowsPhysicalGateSource.includes("artifacts/windows-runner-preflight") &&
+      windowsPhysicalGateSource.includes("Upload physical gate evidence") &&
+      windowsPhysicalGateSource.includes('"-Install",') &&
       windowsPhysicalGateSource.includes('"-LogDir", "artifacts/windows-provider-current"') &&
       windowsPhysicalGateSource.includes("windows-package-smoke.json") &&
       !windowsPhysicalGateSource.includes("collect-windows-provider-evidence.ps1") &&
       releaseCandidateGateSource.includes("githubRunId = $RunId") &&
+      releaseCandidateGateSource.includes("githubRunAttempt = [int]$RunAttempt") &&
+      releaseCandidateGateSource.includes("runnerName = [string]$env:RUNNER_NAME") &&
       windowsProviderSmokeSource.includes("githubRunId = $RunId") &&
+      windowsProviderSmokeSource.includes("githubRunAttempt = if") &&
+      windowsProviderSmokeSource.includes("runnerName = if") &&
+      windowsPackageSmokeSource.includes("githubRunAttempt = [int]$RunAttempt") &&
+      windowsPackageSmokeSource.includes("runnerName = [string]$env:RUNNER_NAME") &&
       windowsPackageSmokeSource.includes("Find-7Zip") &&
       windowsPackageSmokeSource.includes('Assert-AtelierPayload -Root $extractRoot -Kind "NSIS"'),
     message:
-      "Windows publication evidence must be run-local, bind the GitHub run ID, and inspect signed MSI and NSIS payloads",
+      "Windows publication evidence must preflight the runner before candidate download, upload the receipt, bind GitHub run ID and attempt, and inspect signed MSI and NSIS payloads",
   },
   {
     ok:

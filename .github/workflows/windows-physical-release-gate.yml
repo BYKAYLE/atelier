@@ -49,6 +49,36 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Preflight physical runner before candidate download
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          ALLOW_INITIAL_SIGNED_CHANNEL: ${{ inputs.allow_initial_signed_channel }}
+          REQUIRE_SMART_APP_CONTROL_EVIDENCE: ${{ inputs.require_smart_app_control_evidence }}
+        run: |
+          $sourceSha = (git rev-parse HEAD).Trim()
+          $arguments = @(
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", "tools/windows-physical-runner-preflight.ps1",
+            "-ReleaseTag", $env:RELEASE_TAG,
+            "-ExpectedVersion", $env:EXPECTED_VERSION,
+            "-SourceSha", $sourceSha,
+            "-RunId", $env:GITHUB_RUN_ID,
+            "-RunAttempt", $env:GITHUB_RUN_ATTEMPT,
+            "-EvidencePath", "artifacts/windows-runner-preflight/windows-runner-preflight.json",
+            "-Strict"
+          )
+          if ($env:ALLOW_INITIAL_SIGNED_CHANNEL -eq "true") {
+            $arguments += "-AllowInitialSignedChannel"
+          }
+          if ($env:REQUIRE_SMART_APP_CONTROL_EVIDENCE -eq "true") {
+            $arguments += "-RequireSmartAppControlEvidence"
+          }
+          powershell.exe @arguments
+          if ($LASTEXITCODE -ne 0) { throw "Windows physical runner preflight failed." }
+
       - name: Download sealed private draft candidate
         shell: pwsh
         env:
@@ -98,6 +128,7 @@ jobs:
             "-ReleaseTag", $env:RELEASE_TAG,
             "-SourceSha", $sourceSha,
             "-RunId", $env:GITHUB_RUN_ID,
+            "-RunAttempt", $env:GITHUB_RUN_ATTEMPT,
             "-EvidencePath", "artifacts/windows-package-smoke/windows-package-smoke.json",
             "-RequireAuthenticode"
           )
@@ -122,6 +153,7 @@ jobs:
             "-ReleaseTag", $env:RELEASE_TAG,
             "-SourceSha", $sourceSha,
             "-RunId", $env:GITHUB_RUN_ID,
+            "-RunAttempt", $env:GITHUB_RUN_ATTEMPT,
             "-EvidenceDir", "artifacts/windows-release-candidate"
           )
           if ($env:ALLOW_INITIAL_SIGNED_CHANNEL -eq "true") {
@@ -146,6 +178,7 @@ jobs:
             "-NoProfile",
             "-ExecutionPolicy", "Bypass",
             "-File", "tools/windows-provider-smoke.ps1",
+            "-Install",
             "-Login",
             "-Strict",
             "-RestartApplication",
@@ -158,6 +191,7 @@ jobs:
             "-ReleaseTag", $env:RELEASE_TAG,
             "-SourceSha", $sourceSha,
             "-RunId", $env:GITHUB_RUN_ID,
+            "-RunAttempt", $env:GITHUB_RUN_ATTEMPT,
             "-LogDir", "artifacts/windows-provider-current"
           )
           if ($env:REQUIRE_SMART_APP_CONTROL_EVIDENCE -eq "true") {
@@ -172,6 +206,7 @@ jobs:
         with:
           name: atelier-windows-physical-release-gate-${{ inputs.release_tag }}
           path: |
+            artifacts/windows-runner-preflight/*
             artifacts/windows-release-candidate/*
             artifacts/windows-package-smoke/*
             artifacts/windows-provider-current/*

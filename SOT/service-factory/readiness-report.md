@@ -1,6 +1,6 @@
 # Readiness Report
 
-generated_at: 2026-07-23T09:27:15+09:00
+generated_at: 2026-07-23T10:33:23+09:00
 
 ## Goal
 
@@ -17,8 +17,11 @@ blocked until the three unmet Definition of Done items have execution receipts.
 
 ## Truth Surfaces
 
-- Source and automated checks: ready at commit `d51eac1` on
-  `codex/release-readiness-final`.
+- Source and automated checks: the current candidate on
+  `codex/release-readiness-final`, based on commit `38b411d`, passes the release
+  evidence smoke, release security audit, shared preflight smoke, OAuth login
+  flow smoke, updater contract smoke, release-candidate smoke, frontend build,
+  workflow lint, and whitespace audit.
 - Local macOS package: `0.2.12` builds successfully and passes strict bundle,
   DMG payload, renderer-readiness, and local-signing verification.
 - Installed macOS app: `/Applications/Atelier.app` is version `0.2.12`, is
@@ -29,7 +32,9 @@ blocked until the three unmet Definition of Done items have execution receipts.
   Application certificate, and notarization and stapling receipts do not exist.
 - Windows source and workflow gates: ready for CI execution. The release workflow
   now fails closed when Windows signing configuration or required release
-  evidence is absent.
+  evidence is absent. Candidate, package, provider, and runner-preflight receipts
+  must agree on release tag, source SHA, GitHub run ID, run attempt, and physical
+  runner name. Existing browser windows are not accepted as new login evidence.
 - Windows physical proof: blocked until a physical Windows runner proves visible
   Claude/Codex browser login, authenticated CLI state, Smart App Control,
   signed-installer execution, and exact-version restart survival.

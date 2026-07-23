@@ -8303,7 +8303,7 @@
       "id": "mac-installed-reflection",
       "desc": "Locally signed macOS 0.2.12 package is installed and verified at /Applications/Atelier.app.",
       "met": true,
-      "evidence": "SOT/service-factory/release-readiness-2026-07-23.md; installed and packaged signed executable SHA-256 match exactly at 009e3a0926524a4d6b70fff16ce9b59f1fe258d959d1e82bc686d3f898c11997; renderer-ready and strict codesign passed"
+      "evidence": "SOT/service-factory/release-readiness-2026-07-23.md; installed and packaged signed executable SHA-256 match exactly at e198d7f8a3bd6928c917a77c5830cdb3b6169d2e3236d73bfb1137d983a1a953; renderer-ready and strict codesign passed"
     },
     {
       "id": "physical-windows",

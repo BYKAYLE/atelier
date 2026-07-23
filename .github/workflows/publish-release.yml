@@ -110,9 +110,12 @@ jobs:
           PHYSICAL_GATE_RUN_ID: ${{ inputs.physical_gate_run_id }}
         run: |
           run_json="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$PHYSICAL_GATE_RUN_ID")"
+          jobs_json="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$PHYSICAL_GATE_RUN_ID/jobs?per_page=100")"
           # shellcheck disable=SC2016
           node -e '
+            const { appendFileSync } = require("node:fs");
             const run = JSON.parse(process.argv[1]);
+            const jobs = JSON.parse(process.argv[2]);
             if (run.event !== "workflow_dispatch") throw new Error("Physical gate was not manually dispatched");
             if (run.conclusion !== "success") throw new Error(`Physical gate conclusion is ${run.conclusion}`);
             if (run.path !== ".github/workflows/windows-physical-release-gate.yml") {
@@ -124,7 +127,32 @@ jobs:
             if (String(run.head_sha || "").toLowerCase() !== process.env.RELEASE_SOURCE_SHA.toLowerCase()) {
               throw new Error("Physical gate was not dispatched from the exact release source SHA");
             }
-          ' "$run_json"
+            const runAttempt = Number(run.run_attempt);
+            if (!Number.isInteger(runAttempt) || runAttempt < 1) {
+              throw new Error("Physical gate run attempt is missing or invalid");
+            }
+            const expectedJobName = "Signed candidate install, browser auth, restart, and Smart App Control";
+            const job = Array.isArray(jobs.jobs)
+              ? jobs.jobs.find((entry) => entry?.name === expectedJobName)
+              : null;
+            if (!job || job.conclusion !== "success") {
+              throw new Error("The exact Windows physical-gate job did not complete successfully");
+            }
+            const labels = new Set(
+              (Array.isArray(job.labels) ? job.labels : []).map((label) => String(label).toLowerCase()),
+            );
+            for (const label of ["self-hosted", "windows", "x64"]) {
+              if (!labels.has(label)) throw new Error(`Physical-gate job is missing runner label: ${label}`);
+            }
+            const runnerName = String(job.runner_name || "").trim();
+            if (!runnerName || runnerName.length > 128 || /[\r\n]/.test(runnerName)) {
+              throw new Error("Physical-gate runner name is missing or invalid");
+            }
+            appendFileSync(
+              process.env.GITHUB_ENV,
+              `PHYSICAL_GATE_RUN_ATTEMPT=${runAttempt}\nPHYSICAL_GATE_RUNNER_NAME=${runnerName}\n`,
+            );
+          ' "$run_json" "$jobs_json"
 
       - name: Download exact physical gate evidence
         env:
@@ -146,6 +174,8 @@ jobs:
           ALLOW_INITIAL_SIGNED_CHANNEL: ${{ inputs.allow_initial_signed_channel }}
           REQUIRE_SMART_APP_CONTROL_EVIDENCE: ${{ inputs.require_smart_app_control_evidence }}
           PHYSICAL_GATE_RUN_ID: ${{ inputs.physical_gate_run_id }}
+          PHYSICAL_GATE_RUN_ATTEMPT: ${{ env.PHYSICAL_GATE_RUN_ATTEMPT }}
+          PHYSICAL_GATE_RUNNER_NAME: ${{ env.PHYSICAL_GATE_RUNNER_NAME }}
         run: node .github/scripts/validate-publish-evidence.mjs
 
       - name: Retain accepted publication evidence

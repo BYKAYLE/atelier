@@ -54,7 +54,7 @@ runtime supervision, normalized agent lifecycles, optional task worktrees, and
 task-linked preview evidence are now integrated. Encrypted remote control stays
 deferred behind separate permission and device-revocation gates.
 
-The installed macOS 0.2.8 baseline builds on detached PTY supervision with a
+The installed macOS 0.2.12 baseline builds on detached PTY supervision with a
 common agent lifecycle, optional task isolation, and task-linked preview
 evidence. Preview evidence now includes bounded, redacted HTTP response and
 managed-server output alongside PID, restart, DOM, screenshot, browser
