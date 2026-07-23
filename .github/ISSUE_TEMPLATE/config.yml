@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: mailto:indra850@gmail.com?subject=%5BAtelier%20Security%5D
+    about: Do not disclose vulnerabilities or credentials in a public issue.
+  - name: Support guide
+    url: https://github.com/BYKAYLE/atelier/blob/main/SUPPORT.md
+    about: Check installation, diagnostics, and updater reporting guidance.

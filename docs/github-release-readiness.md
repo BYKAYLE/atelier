@@ -34,6 +34,7 @@ candidate.
 | Installed macOS app | Pass | `npm run release:installed-proof:mac` verifies `/Applications/Atelier.app` as version `0.2.12` with bundle identifier `com.atelier.app`. Its executable SHA-256 exactly matches the locally packaged candidate, and its installed-path renderer-ready receipt reports `status: ready`. The machine-readable receipt, including exact hashes, is written to `artifacts/macos-installed-candidate-proof.json`. |
 | Responsive renderer | Pass with limitation | The production renderer was inspected at 1600x900, 900x800, and 720x700 without root overflow, black screen, clipped composer, or hidden send button. Native macOS screen capture permission was unavailable, so this is renderer evidence rather than a native permission-flow recording. |
 | Compact navigation accessibility | Pass | Compact theme and settings controls have localized accessible names and tooltips. |
+| Public support surface | Pass in source | The repository now includes security, support, contribution, bug-report, and pull-request contracts. Public issues reject unredacted credentials by policy, and suspected vulnerabilities use a private email path because GitHub private vulnerability reporting is not enabled. |
 
 ## Distribution Blockers
 

@@ -132,6 +132,9 @@ Windows normal, Store, SignPath 경로는 서로 다른 워크플로로 검증�
 - Release process: [docs/release-process.md](docs/release-process.md)
 - Code signing policy: [docs/code-signing-policy.md](docs/code-signing-policy.md)
 - Privacy policy: [docs/privacy-policy.md](docs/privacy-policy.md)
+- Security policy: [SECURITY.md](SECURITY.md)
+- Support and bug reports: [SUPPORT.md](SUPPORT.md)
+- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## 프로젝트 구조
 

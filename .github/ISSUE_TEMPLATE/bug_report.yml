@@ -1,0 +1,78 @@
+name: Bug report
+description: Report a reproducible Atelier defect
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include API keys, OAuth codes, credentials, private repository contents, or unredacted logs. Report security vulnerabilities by following SECURITY.md instead.
+  - type: input
+    id: version
+    attributes:
+      label: Atelier version
+      description: Copy the version shown in Settings > Updates.
+      placeholder: "0.2.12"
+    validations:
+      required: true
+  - type: dropdown
+    id: install-channel
+    attributes:
+      label: Installation channel
+      options:
+        - GitHub Release DMG
+        - GitHub Release MSI
+        - GitHub Release NSIS
+        - Source or development build
+        - Unknown
+    validations:
+      required: true
+  - type: dropdown
+    id: operating-system
+    attributes:
+      label: Operating system
+      options:
+        - macOS Apple Silicon
+        - macOS Intel
+        - Windows 11 x64
+        - Windows 10 x64
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Give the shortest repeatable sequence.
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: Include the exact visible error text when possible.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics
+      description: Include only the minimum relevant log excerpt. Remove secrets and personal data first.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I searched existing issues for the same problem.
+          required: true
+        - label: I removed credentials, tokens, authorization codes, and private data.
+          required: true

@@ -26,6 +26,22 @@ const libSource = readFileSync("src-tauri/src/lib.rs", "utf8");
 const mainSource = readFileSync("src-tauri/src/main.rs", "utf8");
 const cargoSource = readFileSync(manifest, "utf8");
 const packageSource = readFileSync("package.json", "utf8");
+const readmeSource = readFileSync("README.md", "utf8");
+const securityPolicySource = readFileSync("SECURITY.md", "utf8");
+const supportSource = readFileSync("SUPPORT.md", "utf8");
+const contributingSource = readFileSync("CONTRIBUTING.md", "utf8");
+const bugReportTemplateSource = readFileSync(
+  ".github/ISSUE_TEMPLATE/bug_report.yml",
+  "utf8",
+);
+const issueTemplateConfigSource = readFileSync(
+  ".github/ISSUE_TEMPLATE/config.yml",
+  "utf8",
+);
+const pullRequestTemplateSource = readFileSync(
+  ".github/PULL_REQUEST_TEMPLATE.md",
+  "utf8",
+);
 const releasePreflightSource = readFileSync("tools/release-preflight.mjs", "utf8");
 const releasePreflightSmokeSource = readFileSync("tools/release-preflight-smoke.mjs", "utf8");
 const releaseReadinessProbeSource = readFileSync("tools/release-readiness-probes.mjs", "utf8");
@@ -912,6 +928,29 @@ const sourceInvariants = [
       (releaseWorkflowSource.match(/npm run smoke:release-candidate/g) || []).length >= 2 &&
       (releaseWorkflowSource.match(/npm run smoke:publish-evidence/g) || []).length >= 2,
     message: "macOS and Windows release gates must test candidate sealing and publication evidence",
+  },
+  {
+    ok:
+      readmeSource.includes("[SECURITY.md](SECURITY.md)") &&
+      readmeSource.includes("[SUPPORT.md](SUPPORT.md)") &&
+      readmeSource.includes("[CONTRIBUTING.md](CONTRIBUTING.md)") &&
+      securityPolicySource.includes("latest non-draft release") &&
+      securityPolicySource.includes("indra850@gmail.com") &&
+      securityPolicySource.includes("Do not disclose credentials") &&
+      supportSource.includes("GitHub Releases page") &&
+      supportSource.includes("remove API keys, tokens") &&
+      contributingSource.includes("A successful source build is not proof") &&
+      contributingSource.includes("Do not delete databases or user data") &&
+      bugReportTemplateSource.includes("id: install-channel") &&
+      bugReportTemplateSource.includes("id: operating-system") &&
+      bugReportTemplateSource.includes("id: reproduction") &&
+      bugReportTemplateSource.includes("I removed credentials") &&
+      issueTemplateConfigSource.includes("blank_issues_enabled: false") &&
+      issueTemplateConfigSource.includes("mailto:indra850@gmail.com") &&
+      pullRequestTemplateSource.includes("## Truth Surfaces") &&
+      pullRequestTemplateSource.includes("No database or user-data deletion"),
+    message:
+      "Public GitHub releases must expose security, support, contribution, issue, and pull-request safety contracts",
   },
 ];
 for (const invariant of sourceInvariants) {
