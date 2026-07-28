@@ -16,10 +16,12 @@ assert.match(backend, /actions\.remove\(&action_id\)/);
 assert.match(backend, /task\.dispatch/);
 assert.match(backend, /mobile-followup:/);
 assert.match(backend, /status != "pending" && status != "approving"/);
+assert.doesNotMatch(backend, /"basic"\s*\|\s*"auto"\s*\|\s*"full"/);
 assert.doesNotMatch(mobile, /enqueue_request\(/);
 assert.match(mobile, /\/api\/v1\/followups/);
 assert.match(panel, /정확한 실행 내용 확인/);
 assert.match(panel, /승인하고 작업 큐에 등록/);
+assert.doesNotMatch(panel, /option value="full"/);
 assert.match(bindings, /remoteFollowupExecute/);
 assert.match(app, /remote_followup::remote_followup_execute/);
 

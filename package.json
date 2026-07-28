@@ -1,6 +1,6 @@
 {
   "name": "atelier",
-  "version": "0.2.12",
+  "version": "0.2.15",
   "private": true,
   "type": "module",
   "description": "Atelier — 이미지 붙여넣기가 되는 GUI 터미널",
@@ -42,6 +42,8 @@
     "smoke:agent-fleet": "node --experimental-strip-types tools/agent-fleet-smoke.ts",
     "smoke:editor-diagnostics": "node --experimental-strip-types tools/editor-diagnostics-smoke.ts",
     "smoke:atelier-cli": "node --experimental-strip-types tools/atelier-cli-smoke.ts",
+    "smoke:stella-safety": "node --experimental-strip-types tools/stella-safety-smoke.ts",
+    "smoke:agent-permission-capability": "node --experimental-strip-types tools/agent-permission-capability-smoke.ts",
     "smoke:github-workflows": "node --experimental-strip-types tools/github-workflows-smoke.ts",
     "smoke:linear-workflows": "node --experimental-strip-types tools/linear-workflows-smoke.ts",
     "smoke:ssh-workspaces": "node --experimental-strip-types tools/ssh-workspaces-smoke.ts",
@@ -54,6 +56,7 @@
     "smoke:devscreen-picker": "node --experimental-strip-types tools/devscreen-element-picker-smoke.ts",
     "smoke:preview-url": "node --experimental-strip-types tools/preview-url-smoke.ts",
     "smoke:preview-session-state": "node --experimental-strip-types tools/preview-session-state-smoke.ts",
+    "smoke:preview-capability": "node --experimental-strip-types tools/preview-capability-smoke.ts",
     "smoke:updater-install": "node --experimental-strip-types tools/updater-install-smoke.ts",
     "smoke:preview-evidence": "node --experimental-strip-types tools/preview-evidence-smoke.ts",
     "smoke:gajae-routing": "node --experimental-strip-types tools/gajae-command-routing-smoke.ts",
@@ -109,7 +112,7 @@
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
-    "postcss": "^8.4.49",
+    "postcss": "^8.5.23",
     "tailwindcss": "^3.4.15",
     "typescript": "^5.6.3",
     "vite": "^6.4.3"

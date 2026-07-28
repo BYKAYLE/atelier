@@ -1,11 +1,23 @@
 # Evidence Map
 
-updated_at: 2026-07-23T09:27:15+09:00
+updated_at: 2026-07-26 KST
+
+Current verdict: `supervised local candidate, public release blocked`.
+
+`ready` in this table describes the named capability and evidence surface. It
+does not imply fresh installed-app reflection or public-release approval.
 
 | Capability | Source evidence | Runtime/package evidence | Status |
 |---|---|---|---|
+| `0.2.14` source gates | integrated source candidate | all-feature Rust 230 passed / 3 ignored; Orca 23 smokes / 10 removable features; strict all-target/all-feature Clippy; format/diff; `npm audit` 0; RustSec known vulnerabilities 0 with 18 unmaintained and 2 unsound warnings | ready_source |
+| Permission boundary | guarded permission normalization and UI/runtime contract | Basic default; Auto sandbox plus approvals; visible/raw Full removed | ready_source |
+| Provider-managed capability | provider capability contract plus installed readiness receipts | Claude/Codex managed Basic/Auto; Hermes/Gajaecode pinned Atelier-owned macOS runtimes with isolated skills and sandbox; absent readiness fails before spawn; direct CLI separate/manual/limited | ready_local |
+| Managed provider bootstrap | `credentials.rs`, `agent.rs`, `agent_sandbox.rs`, installed UI | Gajaecode 0.11.7/Bun 1.3.14/4 defaults; Hermes pinned commit/453 durable files/73 installed skills; installed `설치·복구` passes | ready_local |
+| Managed preview truth | backend capability plus UI reflection | managed start fail-closed; separately trusted localhost inspection retained | ready_source |
+| Prompt guard parity | shared Korean/English frontend/Rust prompt corpus | known allow/block/mixed-negation cases pass; phrase denylist is not a complete action guarantee | defense_in_depth |
+| Protected action mediation | planned app-owned action/tool proxy and scoped approval receipts | no action-level proxy receipt | p1_blocker |
 | Detached PTY ownership and reconnect | `src-tauri/src/pty_supervisor.rs`, `src-tauri/src/pty.rs` | `npm run smoke:pty-supervisor`; installed p95 1.932 ms; persistent nested split UI | ready |
-| Packaged renderer readiness | `src-tauri/src/runtime_receipt.rs`, `src/main.tsx` | exact executable/PID/version/window/status receipt; signed package and installed-app probes pass | ready |
+| Packaged renderer readiness | `src-tauri/src/runtime_receipt.rs`, `src/main.tsx` | `0.2.14` exact executable/PID/version/window/status receipt; candidate/install hash match; codesign pass | ready_local |
 | Long-session typing and transcript rendering | `src/components/AgentWorkspace.tsx`, `src/index.css` | `npm run smoke:agent-performance`; all release workflows enforce contract | ready |
 | Persistent terminal pane tree | `src/lib/terminalLayout.ts`, `src/components/Main.tsx` | module smoke plus browser right/down, drag, keyboard, reload, and close-collapse checks | ready |
 | Normalized provider lifecycle and cancel | `src-tauri/src/agent_lifecycle.rs`, `src-tauri/src/agent_registry.rs` | 157-test all-feature Rust suite; fixture harness | ready |
@@ -27,7 +39,7 @@ updated_at: 2026-07-23T09:27:15+09:00
 | Development-service ownership | `src-tauri/src/dev_services.rs`, `src/components/dev-services/` | macOS, Windows, and Linux parser fixtures; PID-bound stop approval | ready_source |
 | In-process automations | `src-tauri/src/automations.rs`, `src/components/automations/` | manual, interval, and daily schedules; bounded missed-run handling; queue dispatch and receipts | ready_local |
 | Removable feature packages | `src/components/*/feature.manifest.json`, `vite.config.ts`, `src-tauri/Cargo.toml` | 10 isolated frontend/backend builds plus declared dependency-expansion smoke | ready |
-| macOS package/install reflection | `tools/build-macos-bundle.sh`, `tools/verify-macos-bundle.sh` | `Atelier_0.2.12_aarch64.dmg`; packaged and installed executable SHA-256 `e198d7f8a3bd6928c917a77c5830cdb3b6169d2e3236d73bfb1137d983a1a953`; DMG SHA-256 `e19cff033a99b62ec68534591de5faead4acabe872f6082130111d7f8cb7bf42`; strict local signature, installed renderer receipt, and WindowServer window metadata pass | ready_local |
+| macOS package/install reflection | `tools/build-macos-bundle.sh`, `tools/verify-macos-bundle.sh`, installed proof JSON | `Atelier_0.2.14_aarch64.dmg`; candidate/installed executable SHA-256 `4ee04fbed757f015c910171f4e7c0c3979ca009d396f90a6abfb890e2e1b1868`; DMG SHA-256 `3f9aba91eee83ec12cb1da2a24d3a470ff5cafd2d2e2668011a37e010563cd5b`; local codesign, renderer-ready, and managed-provider UI evidence pass; dirty worktree means HEAD is not the build identifier | ready_local |
 | Windows normal/Store source and link | workflows, `tools/windows-provider-smoke.ps1` | two PE32+ x86-64 links and strict cargo-xwin Clippy | ready_cross_target |
 | Physical Windows OAuth/Smart App Control/update survival | hosted process-observation and manual visible-window workflows | source contract passes; no registered physical runner or Windows execution receipt | validation_required |
 | Public signing and notarization | release workflows | SignPath/Developer ID credentials not available locally | external_gate |
@@ -48,6 +60,12 @@ updated_at: 2026-07-23T09:27:15+09:00
 - A local signing identity is not a public Gatekeeper/notarization identity.
 - A generated file name is not package reflection unless version, signature,
   hash, and installed executable are checked separately.
+- Passing a prompt corpus is not proof that an external provider tool cannot
+  perform an unmediated protected effect.
+- The `0.2.14` local install is not Developer ID signing, notarization, public
+  distribution, or physical Windows proof.
+- A dirty-worktree HEAD SHA does not uniquely identify the installed candidate;
+  the executable SHA-256 does.
 - A renderer-ready receipt from an already-running process is not proof that a
   newly replaced bundle created a visible window. The current `0.2.12` receipt
   was produced from the newly copied `/Applications/Atelier.app` executable;

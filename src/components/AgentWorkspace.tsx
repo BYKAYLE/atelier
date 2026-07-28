@@ -27,6 +27,7 @@ import {
 } from "../lib/stellaOntology";
 import type { StellaOntologyMode } from "../lib/stellaOntology";
 import {
+  containsProtectedActionIntent,
   detectStellaFactorySafetyBlock,
   formatStellaFactoryPreflightBlock,
   formatStellaFactoryInstruction,
@@ -34,6 +35,23 @@ import {
 } from "../lib/stellaFactory";
 import type { StellaFactoryCommand } from "../lib/stellaFactory";
 import { safeLocalStorageGet, safeLocalStorageSet } from "../lib/storage";
+import {
+  inferGajaeModelProviderFromModel as inferGajaeProviderFromModel,
+  inferHermesModelProviderFromModel as inferHermesProviderFromModel,
+  modelForGajaeProvider,
+  normalizeHermesModelProvider,
+  profileModelOverride,
+  readGajaeModelProviderPreference,
+  readHermesModelProviderPreference,
+  resolveGajaeNewSessionProvider,
+  resolveHermesNewSessionProvider,
+  writeGajaeModelProviderPreference,
+  writeHermesModelProviderPreference,
+} from "../lib/agentProviderPreferences";
+import type {
+  GajaeModelProvider as GajaeInferenceProvider,
+  HermesModelProvider as HermesInferenceProvider,
+} from "../lib/agentProviderPreferences";
 import { findUrl, isAutoReviewablePreviewUrl, restoreAutoPreviewUrl } from "../lib/previewUrl";
 import { resolvePreviewVisibilityFallback } from "../lib/previewSessionState";
 import {
@@ -70,6 +88,7 @@ import {
   agentChangeBaseline,
   agentChangeSummary,
   agentCliCommand,
+  agentRuntimeCapabilities,
 	agentQuickOpenIndex,
 	  agentSend,
   agentUndoChanges,
@@ -86,10 +105,12 @@ import {
   isTauri,
   onAgentEvent,
   onAgentLifecycle,
+  onManagedAgentRuntimeProgress,
   onAgentSubscriptionUsage,
   onAgentTokenUsage,
   onQuickOpenRequested,
   openRouterModelOptions,
+  previewCapability,
   previewHealthCheck,
   previewServiceStart,
   previewServiceStatus,
@@ -112,11 +133,14 @@ import type {
   AgentPermissionMode,
   AgentProvider,
   AgentQuickOpenIndexEntry,
+  AgentRuntimeCapability,
+  ManagedAgentRuntimeProgress,
   AgentStreamEvent,
   AgentTokenUsageEvent,
   AgentWorktreeInfo,
   FsEntry,
   ProviderSubscriptionUsage,
+  PreviewCapability,
   PreviewCheckResult,
   PreviewServiceStatus,
   StellaFactoryStatusResult,
@@ -209,8 +233,6 @@ type OpenRouterEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh"
 type CodexEffort = "low" | "medium" | "high" | "xhigh" | "ultra";
 type WorkloadLevel = OpenRouterEffort | CodexEffort;
 type CodexSpeed = "default" | "fast";
-type HermesInferenceProvider = "openai-codex" | "anthropic" | "openrouter" | "alibaba";
-type GajaeInferenceProvider = "claude" | "codex" | "alibaba";
 type SlashCommandScope = "atelier" | AgentProvider;
 
 type SlashCommandSpec = {
@@ -225,6 +247,8 @@ type GajaeCommandSpec = SlashCommandSpec & {
   primaryLabelKo?: string;
   primaryLabelEn?: string;
 };
+
+type VisiblePermissionMode = Exclude<AgentPermissionMode, "full">;
 
 const GAJAE_CODE_COMMANDS: GajaeCommandSpec[] = [
   {
@@ -689,7 +713,7 @@ const DEFAULT_HERMES_PROVIDER: HermesInferenceProvider = "openai-codex";
 const DEFAULT_WORKLOAD: WorkloadLevel = "xhigh";
 const DEFAULT_CODEX_EFFORT: CodexEffort = DEFAULT_WORKLOAD;
 const DEFAULT_CODEX_SPEED: CodexSpeed = "default";
-const DEFAULT_PERMISSION_MODE: AgentPermissionMode = "auto";
+const DEFAULT_PERMISSION_MODE: AgentPermissionMode = "basic";
 const MAX_RAW_EVENTS = 120;
 const MAX_RAW_EVENT_CHARS = 12000;
 const MAX_PERSISTED_SESSIONS = 24;
@@ -1427,7 +1451,7 @@ const CODEX_SPEEDS: Array<{ value: CodexSpeed; ko: string; en: string }> = [
 ];
 
 const PERMISSION_MODES: Array<{
-  value: AgentPermissionMode;
+  value: VisiblePermissionMode;
   ko: string;
   en: string;
   detailKo: string;
@@ -1438,30 +1462,34 @@ const PERMISSION_MODES: Array<{
     value: "basic",
     ko: "기본 권한",
     en: "Basic permission",
-    detailKo: "확인 중심",
-    detailEn: "Confirm-first",
+    detailKo: "읽기 전용 점검",
+    detailEn: "Read-only inspection",
     icon: I.hand,
   },
   {
     value: "auto",
     ko: "자동 검토",
     en: "Auto review",
-    detailKo: "자동 실행 + 보호",
-    detailEn: "Auto with guardrails",
+    detailKo: "샌드박스 수정 + 위험 명령 승인",
+    detailEn: "Sandboxed edits + command approval",
     icon: I.shieldCheck,
-  },
-  {
-    value: "full",
-    ko: "전체 권한",
-    en: "Full permission",
-    detailKo: "승인 없이 진행",
-    detailEn: "No prompts",
-    icon: I.shieldAlert,
   },
 ];
 
 const isProvider = (value: unknown): value is AgentProvider =>
   value === "claude" || value === "hermes" || value === "codex" || value === "gajecode";
+
+const normalizeSessionProvider = (value: unknown): AgentProvider => {
+  if (isProvider(value)) return value;
+  if (typeof value !== "string") return DEFAULT_PROVIDER;
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "gajae" || normalized === "gajec" || normalized === "gjc" || normalized === "gajaecode") {
+    return "gajecode";
+  }
+  if (normalized === "가재코드") return "gajecode";
+  return DEFAULT_PROVIDER;
+};
 
 const isHermesProvider = (value: unknown): value is HermesInferenceProvider =>
   value === "openai-codex" || value === "anthropic" || value === "openrouter" || value === "alibaba";
@@ -1487,8 +1515,119 @@ const isWorkloadLevel = (value: unknown): value is WorkloadLevel =>
 const isCodexSpeed = (value: unknown): value is CodexSpeed =>
   value === "default" || value === "fast";
 
-const isPermissionMode = (value: unknown): value is AgentPermissionMode =>
-  value === "basic" || value === "auto" || value === "full";
+const PREVIEW_CAPABILITY_FAIL_CLOSED: PreviewCapability = {
+  managed_start: false,
+  external_loopback_inspection: true,
+  managed_start_reason: null,
+};
+
+function managedAgentPermissionDisabledReason(
+  provider: AgentProvider,
+  capability: AgentRuntimeCapability | undefined,
+  language: Tweaks["language"],
+  _capabilityError?: string | null,
+) {
+  // The adapter registry is authoritative. Loading or refreshing this
+  // metadata must not create a blanket composer lock on a supported Mac.
+  if (!capability || capability.supports_managed_agent_send) return null;
+  const unsupportedPlatform = /unsupported|platform|sandbox-exec|macos/i.test(
+    capability.managed_agent_send_disabled_reason || "",
+  );
+  if (provider === "gajecode") {
+    return language === "en"
+      ? unsupportedPlatform
+        ? "Gajae Code managed tasks require Atelier's supported macOS isolated runtime. Direct GJC, Team, and RLM commands remain available."
+        : "Gajae Code needs runtime repair. Open Settings > Connections > Gajae Code and run Install/repair. Direct GJC, Team, and RLM commands remain available."
+      : unsupportedPlatform
+        ? "가재코드 관리 작업은 Atelier가 지원하는 macOS 격리 런타임이 필요합니다. GJC·Team·RLM 직접 명령은 계속 사용할 수 있습니다."
+        : "가재코드 실행 준비를 복구해야 합니다. 설정 > 연결 > 가재코드에서 설치·복구를 실행하세요. GJC·Team·RLM 직접 명령은 계속 사용할 수 있습니다.";
+  }
+  if (provider === "hermes") {
+    return language === "en"
+      ? unsupportedPlatform
+        ? "Hermes managed tasks require Atelier's supported macOS isolated runtime."
+        : "Hermes needs runtime or authentication repair. Open Settings > Connections > Hermes and run Install/repair."
+      : unsupportedPlatform
+        ? "Hermes 관리 작업은 Atelier가 지원하는 macOS 격리 런타임이 필요합니다."
+        : "Hermes 실행 또는 인증 준비를 복구해야 합니다. 설정 > 연결 > Hermes에서 설치·복구를 실행하세요.";
+  }
+  return capability.managed_agent_send_disabled_reason
+    || (language === "en"
+      ? `${providerMeta(provider).label} managed agent execution is unavailable.`
+      : `${providerMeta(provider).label} 관리형 에이전트 실행을 사용할 수 없습니다.`);
+}
+
+function managedPermissionControlDisabledReason(
+  provider: AgentProvider,
+  capability: AgentRuntimeCapability | undefined,
+  language: Tweaks["language"],
+) {
+  if (!capability || capability.supports_permission_mode) return null;
+  return language === "en"
+    ? `${providerMeta(provider).label} cannot apply Atelier Basic/Auto permissions on this runtime.`
+    : `${providerMeta(provider).label}는 현재 실행환경에서 Atelier Basic/Auto 권한을 적용할 수 없습니다.`;
+}
+
+function runtimeCapabilityObservationNotice(
+  provider: AgentProvider,
+  capabilityError: string | null,
+  language: Tweaks["language"],
+) {
+  if (!capabilityError || (provider !== "hermes" && provider !== "gajecode")) return null;
+  return language === "en"
+    ? "Atelier could not refresh runtime readiness. You can still send the task; if preparation fails, use Install/repair in Settings > Connections."
+    : "실행 준비 상태를 새로 확인하지 못했습니다. 작업은 계속 보낼 수 있으며, 준비가 실패하면 설정 > 연결에서 설치·복구를 실행하세요.";
+}
+
+function actionableManagedAgentFailure(
+  provider: AgentProvider,
+  error: unknown,
+  language: Tweaks["language"],
+) {
+  const raw = cleanAgentText(String(error instanceof Error ? error.message : error)).replace(/^Error:\s*/i, "");
+  if (provider !== "hermes" && provider !== "gajecode") return raw;
+  const lower = raw.toLowerCase();
+  const authenticationFailure = /\b401\b|\b403\b|unauthori[sz]ed|authentication|invalid credentials?|api[-_\s]?key|oauth|refresh token|log(?:ged)? in|sign in/.test(lower);
+  if (authenticationFailure) {
+    return language === "en"
+      ? "The selected model provider needs authentication. Open Settings > Connections, reconnect its subscription or API key, then send the task again."
+      : "선택한 모델 공급자의 인증이 필요합니다. 설정 > 연결에서 해당 구독 또는 API 키를 다시 연결한 뒤 작업을 다시 보내세요.";
+  }
+  const runtimeFailure = /managed runtime|runtime readiness|bootstrap|installer|isolated skill|readiness receipt|provenance|executable is missing|runtime preparation/.test(lower);
+  if (runtimeFailure) {
+    const agent = provider === "gajecode" ? (language === "en" ? "Gajae Code" : "가재코드") : "Hermes";
+    return language === "en"
+      ? `${agent} automatic preparation failed. Open Settings > Connections > ${agent}, run Install/repair, then send the task again.`
+      : `${agent} 자동 준비에 실패했습니다. 설정 > 연결 > ${agent}에서 설치·복구를 실행한 뒤 작업을 다시 보내세요.`;
+  }
+  return raw;
+}
+
+function managedRuntimeProgressLabel(
+  progress: ManagedAgentRuntimeProgress | undefined,
+  language: Tweaks["language"],
+) {
+  if (!progress) return "";
+  const labels: Record<ManagedAgentRuntimeProgress["state"], { ko: string; en: string }> = {
+    checking: { ko: "격리 실행환경 확인 중…", en: "Checking isolated runtime…" },
+    installing: { ko: "고정 버전 런타임 설치 중…", en: "Installing pinned runtime…" },
+    bootstrapping_skills: { ko: "전용 기본 스킬 준비 중…", en: "Preparing isolated default skills…" },
+    verifying: { ko: "런타임·스킬 검증 중…", en: "Verifying runtime and skills…" },
+    ready: { ko: "런타임·기본 스킬 준비 완료", en: "Runtime and default skills ready" },
+    failed: { ko: "자동 준비에 확인 필요", en: "Automatic preparation needs attention" },
+  };
+  return labels[progress.state]?.[language] || progress.message;
+}
+
+function isRestrictedDirectGajaeCliInput(rawText: string) {
+  const classified = classifyGajaePrefixedInput(rawText);
+  if (classified.kind === "cli") return true;
+  const command = rawText.trim().split(/\s+/, 1)[0]?.toLowerCase();
+  return command === "/skills" || command === "/mcp" || command === "/status";
+}
+
+const isPermissionMode = (value: unknown): value is VisiblePermissionMode =>
+  value === "basic" || value === "auto";
 
 const providerMeta = (provider?: string | null) =>
   PROVIDERS.find((p) => p.id === provider) || PROVIDERS[0];
@@ -1506,49 +1645,11 @@ function providerFromProfile(profile: Profile): AgentProvider | null {
   return null;
 }
 
-function modelFromProfile(profile: Profile, provider: AgentProvider) {
-  const parts = profile.cmd.trim().split(/\s+/);
-  for (let i = 0; i < parts.length; i++) {
-    const current = parts[i];
-    const next = parts[i + 1];
-    if ((current === "-m" || current === "--model") && next) return next;
-    if (current.startsWith("--model=")) return current.slice("--model=".length);
-  }
-  return providerMeta(provider).defaultModel;
-}
-
-function hermesProviderFromProfile(profile?: Profile) {
-  const parts = profile?.cmd.trim().split(/\s+/) || [];
-  for (let i = 0; i < parts.length; i++) {
-    const current = parts[i];
-    const next = parts[i + 1];
-    if (current === "--provider" && next) return normalizeHermesProvider(next);
-    if (current.startsWith("--provider=")) return normalizeHermesProvider(current.slice("--provider=".length));
-  }
-  return DEFAULT_HERMES_PROVIDER;
-}
-
 function defaultHermesModel(hermesProvider: HermesInferenceProvider) {
   if (hermesProvider === "anthropic") return CLAUDE_MODELS[0].value;
   if (hermesProvider === "openrouter") return "openai/gpt-5.5";
   if (hermesProvider === "alibaba") return "qwen3.8-max-preview";
   return "gpt-5.5";
-}
-
-function inferHermesProviderFromModel(model?: string | null) {
-  const trimmed = model?.trim();
-  if (!trimmed) return DEFAULT_HERMES_PROVIDER;
-  if (/^(?:anthropic\/)?claude-/i.test(trimmed)) return "anthropic";
-  if (/^(?:qwen|glm)-?/i.test(trimmed)) return "alibaba";
-  if (trimmed.includes("/")) return "openrouter";
-  return DEFAULT_HERMES_PROVIDER;
-}
-
-function inferGajaeProviderFromModel(model?: string | null): GajaeInferenceProvider {
-  const selected = model?.trim() || "";
-  if (selected.startsWith("codex/")) return "codex";
-  if (selected.startsWith("alibaba-token-plan/")) return "alibaba";
-  return "claude";
 }
 
 function subscriptionProviderForSession(
@@ -1702,11 +1803,16 @@ function normalizeCodexSpeed(value?: unknown): CodexSpeed {
 }
 
 function normalizeHermesProvider(value?: unknown): HermesInferenceProvider {
-  return isHermesProvider(value) ? value : DEFAULT_HERMES_PROVIDER;
+  return normalizeHermesModelProvider(value);
 }
 
 function normalizePermissionMode(value?: unknown): AgentPermissionMode {
-  return isPermissionMode(value) ? value : DEFAULT_PERMISSION_MODE;
+  if (typeof value !== "string") return DEFAULT_PERMISSION_MODE;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "basic" || normalized === "default") return "basic";
+  if (normalized === "auto" || normalized === "autoreview" || normalized === "auto-review") return "auto";
+  if (normalized === "full" || normalized === "bypass" || normalized === "danger") return "basic";
+  return DEFAULT_PERMISSION_MODE;
 }
 
 function labelForCodexEffort(value: CodexEffort, language: Tweaks["language"]) {
@@ -1779,8 +1885,18 @@ function formatWorkloadAgentPrompt(prompt: string, workload: WorkloadLevel, lang
 }
 
 function labelForPermissionMode(value: AgentPermissionMode, language: Tweaks["language"]) {
-  const option = PERMISSION_MODES.find((item) => item.value === value) || PERMISSION_MODES[0];
+  const option = PERMISSION_MODES.find((item) => item.value === normalizePermissionMode(value)) || PERMISSION_MODES[0];
   return language === "en" ? option.en : option.ko;
+}
+
+function permissionUsageMessage(language: Tweaks["language"]) {
+  return language === "en" ? "Usage: /permission basic|auto" : "사용법: /permission basic|auto";
+}
+
+function permissionFullRejectedMessage(language: Tweaks["language"]) {
+  return language === "en"
+    ? "Atelier no longer exposes /permission full. Legacy full-bypass values fall back to read-only Basic; use Auto Review only for sandboxed workspace edits."
+    : "Atelier는 더 이상 /permission full을 노출하지 않습니다. 기존 full-bypass 값은 읽기 전용 Basic으로 강등되며, 샌드박스 작업공간 수정에만 Auto Review를 사용하세요.";
 }
 
 function findModelOptionValue(options: ModelOption[], input: string) {
@@ -1887,7 +2003,7 @@ function slashCommandsFor(
       detailEn: "Change the working folder",
     },
     {
-      command: "/permission basic|auto|full",
+      command: "/permission basic|auto",
       insert: "/permission ",
       scope: provider,
       detailKo: "CLI 실행 권한 변경",
@@ -2438,7 +2554,7 @@ function loadSessions(): AgentSession[] {
       const shouldResetLegacyStellaDefault = safeLocalStorageGet(FACTORY_DEFAULT_OFF_MIGRATION_KEY) !== "1";
       if (shouldResetLegacyStellaDefault) safeLocalStorageSet(FACTORY_DEFAULT_OFF_MIGRATION_KEY, "1");
       return parsed.map((session: Partial<AgentSession>) => {
-        const provider = isProvider(session.provider) ? session.provider : DEFAULT_PROVIDER;
+        const provider = normalizeSessionProvider(session.provider);
         const meta = providerMeta(provider);
         const hermesProvider = provider === "hermes"
           ? normalizeHermesProvider(session.hermesProvider || inferHermesProviderFromModel(session.model))
@@ -2825,7 +2941,8 @@ function formatCompactAgentContext(
       message.id !== currentUserMessageId
       && message.status !== "queued"
       && message.status !== "streaming"
-      && cleanAgentText(message.text).trim().length > 0,
+      && cleanAgentText(message.text).trim().length > 0
+      && !containsProtectedActionIntent(cleanAgentText(message.text))
     )
     .slice(-MAX_COMPACT_AGENT_CONTEXT_MESSAGES)
     .map((message) => {
@@ -3134,6 +3251,13 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   const [previewChecking, setPreviewChecking] = useState(false);
   const [previewDiagnostics, setPreviewDiagnostics] = useState<PreviewDiagnostic[]>([]);
   const [previewService, setPreviewService] = useState<PreviewServiceStatus | null>(null);
+  const [previewCapabilityState, setPreviewCapabilityState] = useState<PreviewCapability>(PREVIEW_CAPABILITY_FAIL_CLOSED);
+  const [previewCapabilityError, setPreviewCapabilityError] = useState<string | null>(null);
+  const [runtimeCapabilities, setRuntimeCapabilities] = useState<AgentRuntimeCapability[] | null>(null);
+  const [runtimeCapabilityError, setRuntimeCapabilityError] = useState<string | null>(null);
+  const [managedRuntimeProgress, setManagedRuntimeProgress] = useState<
+    Partial<Record<AgentProvider, ManagedAgentRuntimeProgress>>
+  >({});
   const [previewServiceCommand, setPreviewServiceCommand] = useState(() =>
     cleanStoredPreviewServiceCommand(safeLocalStorageGet(PREVIEW_SERVICE_COMMAND_KEY) || ""),
   );
@@ -3232,6 +3356,136 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     }, 5 * 60 * 1000);
     return () => window.clearInterval(timer);
   }, [isActive, refreshClaudeRuntimeModels, refreshCodexRuntimeModels, refreshOpenRouterRuntimeModels]);
+
+  useEffect(() => {
+    if (!isTauri()) {
+      setPreviewCapabilityState(PREVIEW_CAPABILITY_FAIL_CLOSED);
+      setPreviewCapabilityError(null);
+      return;
+    }
+    let cancelled = false;
+    previewCapability()
+      .then((result) => {
+        if (cancelled) return;
+        setPreviewCapabilityState({
+          managed_start: Boolean(result?.managed_start),
+          external_loopback_inspection: result?.external_loopback_inspection !== false,
+          managed_start_reason: result?.managed_start_reason || null,
+        });
+        setPreviewCapabilityError(null);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setPreviewCapabilityState(PREVIEW_CAPABILITY_FAIL_CLOSED);
+        setPreviewCapabilityError(String(error instanceof Error ? error.message : error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) {
+      setRuntimeCapabilities([
+        {
+          id: "claude",
+          label: "Claude Code",
+          cli: "claude",
+          auth_owner: "provider_cli",
+          adapter_provider: "claude",
+          execution_controller: "claude_cli_sandbox",
+          skill_owner: "claude_cli",
+          automatic_online_runtime_bootstrap: false,
+          supports_resume: true,
+          supports_model_catalog: true,
+          supports_permission_mode: true,
+          supports_managed_agent_send: true,
+          managed_agent_send_disabled_reason: null,
+        },
+        {
+          id: "codex",
+          label: "Codex CLI",
+          cli: "codex",
+          auth_owner: "provider_cli",
+          adapter_provider: "codex",
+          execution_controller: "codex_cli_sandbox",
+          skill_owner: "codex_cli",
+          automatic_online_runtime_bootstrap: false,
+          supports_resume: true,
+          supports_model_catalog: true,
+          supports_permission_mode: true,
+          supports_managed_agent_send: true,
+          managed_agent_send_disabled_reason: null,
+        },
+        {
+          id: "hermes",
+          label: "Hermes Agent",
+          cli: "hermes",
+          auth_owner: "provider_or_scoped_backend_bridge",
+          adapter_provider: "hermes",
+          execution_controller: "atelier_macos_sandbox_exec",
+          skill_owner: "atelier_managed_hermes",
+          automatic_online_runtime_bootstrap: true,
+          supports_resume: true,
+          supports_model_catalog: true,
+          supports_permission_mode: true,
+          supports_managed_agent_send: true,
+          managed_agent_send_disabled_reason: null,
+        },
+        {
+          id: "gajecode",
+          label: "Gajae Code",
+          cli: "gjc",
+          auth_owner: "atelier_scoped_provider_bridge",
+          adapter_provider: "gajecode",
+          execution_controller: "atelier_macos_sandbox_exec",
+          skill_owner: "gajecode_isolated",
+          automatic_online_runtime_bootstrap: true,
+          supports_resume: true,
+          supports_model_catalog: true,
+          supports_permission_mode: true,
+          supports_managed_agent_send: true,
+          managed_agent_send_disabled_reason: null,
+        },
+      ]);
+      setRuntimeCapabilityError(null);
+      return;
+    }
+    let cancelled = false;
+    agentRuntimeCapabilities()
+      .then((result) => {
+        if (cancelled) return;
+        setRuntimeCapabilities(result);
+        setRuntimeCapabilityError(null);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setRuntimeCapabilities([]);
+        setRuntimeCapabilityError(String(error instanceof Error ? error.message : error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    onManagedAgentRuntimeProgress((event) => {
+      if (cancelled) return;
+      setManagedRuntimeProgress((current) => ({ ...current, [event.provider]: event }));
+    })
+      .then((dispose) => {
+        if (cancelled) dispose();
+        else unlisten = dispose;
+      })
+      .catch((error) => console.warn("managed runtime progress listener failed", error));
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     sessionsRef.current = sessions;
@@ -3351,6 +3605,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         previewServiceStart: "Start",
         previewServiceStop: "Stop",
         previewServiceStarting: "Starting",
+        previewServicePolicyDisabled: "Atelier-managed start is disabled for security. Run a separately trusted localhost service first, then inspect its URL here.",
         previewServiceStarted: (pid?: number | null) => `Preview service started${pid ? ` · PID ${pid}` : ""}`,
         previewServiceStopped: "Preview service stopped",
         previewServiceStartFailed: (message: string) => `Preview service failed: ${message}`,
@@ -3445,7 +3700,14 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         events: "Events",
         emptyEvents: "No stream events yet.",
         renameHint: "Double-click to rename",
-        providerLabel: "Provider",
+        agentLabel: "Agent",
+        providerLabel: "Model provider",
+        executionLabel: "Execution",
+        skillsLabel: "Skills",
+        runtimeAutomaticPreparation:
+          "Atelier automatically prepares its pinned isolated runtime and adapter-owned default skills on first use. No separate skill install is required.",
+        runtimeSupportedMacPreparation:
+          "Atelier prepares this pinned isolated runtime and its default skills automatically on a supported Mac.",
         modelLabel: "Model",
         workloadLabel: "Workload",
         permissionLabel: "Permission",
@@ -3494,7 +3756,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
           "/cwd <path> - change working folder",
           "/model <model> - change the current CLI model",
           "/workload low|medium|high|xhigh|ultra - change workload",
-          "/permission basic|auto|full - change CLI permission mode",
+          "/permission basic|auto - change CLI permission mode",
           "/provider openai-codex|anthropic|openrouter|alibaba - change Hermes provider",
           "/effort low|medium|high|xhigh - change Codex reasoning effort",
           "/speed default|fast - change Codex speed tier",
@@ -3561,6 +3823,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         previewServiceStart: "시동",
         previewServiceStop: "정지",
         previewServiceStarting: "시동 중",
+        previewServicePolicyDisabled: "Atelier 관리 시동은 보안상 비활성입니다. 별도로 신뢰한 localhost 서비스를 먼저 실행한 뒤 여기서 URL을 검사할 수 있습니다.",
         previewServiceStarted: (pid?: number | null) => `프리뷰 서비스 시동됨${pid ? ` · PID ${pid}` : ""}`,
         previewServiceStopped: "프리뷰 서비스 정지됨",
         previewServiceStartFailed: (message: string) => `프리뷰 서비스 실패: ${message}`,
@@ -3655,7 +3918,14 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         events: "이벤트",
         emptyEvents: "아직 스트림 이벤트가 없습니다.",
         renameHint: "더블클릭해 이름 변경",
-        providerLabel: "제공자",
+        agentLabel: "에이전트",
+        providerLabel: "모델 공급자",
+        executionLabel: "실행",
+        skillsLabel: "스킬",
+        runtimeAutomaticPreparation:
+          "Atelier가 첫 사용 시 고정 버전 격리 런타임과 어댑터 전용 기본 스킬을 자동 준비합니다. 별도 스킬 설치는 필요 없습니다.",
+        runtimeSupportedMacPreparation:
+          "지원되는 Mac에서는 Atelier가 고정 버전 격리 런타임과 기본 스킬을 자동 준비합니다.",
         modelLabel: "모델",
         workloadLabel: "작업량",
         permissionLabel: "권한",
@@ -3704,7 +3974,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
           "/cwd <path> - 작업 폴더 변경",
           "/model <model> - 현재 CLI 모델 변경",
           "/workload low|medium|high|xhigh|ultra - 작업량 변경",
-          "/permission basic|auto|full - CLI 실행 권한 변경",
+          "/permission basic|auto - CLI 실행 권한 변경",
           "/provider openai-codex|anthropic|openrouter|alibaba - Hermes provider 변경",
           "/effort low|medium|high|xhigh - Codex 추론 강도 변경",
           "/speed default|fast - Codex 속도 tier 변경",
@@ -4099,7 +4369,68 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     || (activeProvider === "gajecode" && activeGajaeProvider === "codex");
   const activeCodexToolbarLabel = codexToolbarLabel(activeModelLabel, activeModel);
   const activePermissionMode = normalizePermissionMode(active?.permissionMode);
+  const activeRuntimeCapability = runtimeCapabilities?.find((capability) => capability.id === activeProvider);
+  const activeManagedAgentDisabledReason = managedAgentPermissionDisabledReason(
+    activeProvider,
+    activeRuntimeCapability,
+    tw.language,
+    runtimeCapabilityError,
+  );
+  const activePermissionControlDisabledReason = managedPermissionControlDisabledReason(
+    activeProvider,
+    activeRuntimeCapability,
+    tw.language,
+  );
+  const activeRuntimeObservationNotice = runtimeCapabilityObservationNotice(
+    activeProvider,
+    runtimeCapabilityError,
+    tw.language,
+  );
+  const activeAdapterManagedRuntime = activeProvider === "hermes" || activeProvider === "gajecode";
+  const activeRuntimeProgress = activeAdapterManagedRuntime
+    ? managedRuntimeProgress[activeProvider]
+    : undefined;
+  const activeRuntimeProgressLabel = managedRuntimeProgressLabel(activeRuntimeProgress, tw.language);
+  const activeRuntimeProgressFailure = activeRuntimeProgress?.state === "failed"
+    ? actionableManagedAgentFailure(
+        activeProvider,
+        `managed runtime preparation failed: ${activeRuntimeProgress.message}`,
+        tw.language,
+      )
+    : null;
+  const activeExecutionOwner = activeRuntimeCapability?.execution_controller === "atelier_macos_sandbox_exec"
+    ? (tw.language === "en" ? "Atelier pinned isolated runtime" : "Atelier 고정 격리 런타임")
+    : (tw.language === "en" ? "Atelier isolated runtime" : "Atelier 격리 런타임");
+  const activeSkillOwner = activeProvider === "gajecode"
+    ? (tw.language === "en" ? "Gajae Code isolated defaults" : "가재코드 전용 기본 스킬")
+    : (tw.language === "en" ? "Hermes adapter defaults" : "Hermes 어댑터 기본 스킬");
+  const activeRuntimePreparation = activeRuntimeCapability?.automatic_online_runtime_bootstrap === false
+    ? copy.runtimeSupportedMacPreparation
+    : copy.runtimeAutomaticPreparation;
+  const activeRuntimeIdentitySummary = activeAdapterManagedRuntime
+    ? `${copy.agentLabel} ${activeProviderMeta.label} · ${copy.providerLabel} ${
+        activeProvider === "hermes"
+          ? labelForOption(HERMES_PROVIDERS, activeHermesProvider)
+          : labelForOption(GAJECODE_PROVIDERS, activeGajaeProvider)
+      } · ${copy.executionLabel} ${activeExecutionOwner} · ${copy.skillsLabel} ${activeSkillOwner} · ${activeRuntimePreparation}${
+        activeRuntimeProgressLabel ? ` · ${activeRuntimeProgressLabel}` : ""
+      }`
+    : "";
+  const activeModelSurfaceTitle = activeAdapterManagedRuntime
+    ? `${copy.agentLabel} ${activeProviderMeta.label} · ${copy.providerLabel} ${
+        activeProvider === "hermes"
+          ? labelForOption(HERMES_PROVIDERS, activeHermesProvider)
+          : labelForOption(GAJECODE_PROVIDERS, activeGajaeProvider)
+      }`
+    : activeProviderMeta.label;
+  const directGajaeCliInput = activeProvider === "gajecode"
+    && pendingAttachments.length === 0
+    && isRestrictedDirectGajaeCliInput(input);
+  const managedComposerSendDisabled = Boolean(activeManagedAgentDisabledReason) && !directGajaeCliInput;
   const localPreview = isLocalPreviewUrl(previewUrl);
+  const previewManagedStartEnabled = previewCapabilityState.managed_start;
+  const previewExternalInspectionEnabled = previewCapabilityState.external_loopback_inspection;
+  const previewManagedRunning = Boolean(previewService?.managed && previewService?.running);
   const previewBadgeTone = previewChecking
       ? "checking"
       : previewCheck?.ok
@@ -4125,6 +4456,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       ? copy.previewServiceIdle
       : copy.previewServiceExternal;
   const previewServiceOutput = previewService?.recent_output?.slice(-2) || [];
+  const previewServicePolicyMessage = copy.previewServicePolicyDisabled;
+  const previewServicePolicyReason = previewCapabilityState.managed_start_reason || previewCapabilityError;
   const devScreenBadgeTone = devScreenError
     ? "error"
     : devScreenBusy
@@ -4772,6 +5105,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       ].slice(-5));
       return;
     }
+    if (!previewExternalInspectionEnabled) {
+      setPreviewChecking(false);
+      return;
+    }
     if (!isTauri()) {
       setPreviewChecking(false);
       return;
@@ -4832,7 +5169,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [previewUrl, previewReloadKey, tw.language]);
+  }, [previewUrl, previewReloadKey, previewExternalInspectionEnabled, tw.language]);
 
   const patchSession = (id: string, patcher: (session: AgentSession) => AgentSession) => {
     const next = sessionsRef.current.map((s) => (s.id === id ? patcher(s) : s));
@@ -4847,7 +5184,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     candidateUrl: string,
   ) => {
     const targetUrl = cleanStoredPreviewUrl(candidateUrl);
-    if (!isTauri() || !isLocalPreviewUrl(targetUrl)) return;
+    if (!isTauri() || !previewExternalInspectionEnabled || !isLocalPreviewUrl(targetUrl)) return;
 
     const [healthResult, serviceResult] = await Promise.allSettled([
       previewHealthCheck(targetUrl),
@@ -5252,8 +5589,33 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     const meta = providerMeta(provider);
     const id = nowId("agent");
     const profileName = profile?.name || meta.label;
-    const hermesProvider = provider === "hermes" ? hermesProviderFromProfile(profile) : undefined;
-    const rawModel = profile ? modelFromProfile(profile, provider) : meta.defaultModel;
+    const hermesDefaults = provider === "hermes"
+      ? resolveHermesNewSessionProvider({
+        profileId: profile?.id,
+        profileCommand: profile?.cmd,
+        savedPreference: readHermesModelProviderPreference(),
+      })
+      : null;
+    const gajaeDefaults = provider === "gajecode"
+      ? resolveGajaeNewSessionProvider({
+        profileId: profile?.id,
+        profileCommand: profile?.cmd,
+        savedPreference: readGajaeModelProviderPreference(),
+      })
+      : null;
+    const hermesProvider = hermesDefaults?.provider;
+    const rawGajaeModel = gajaeDefaults?.explicitModel
+      ? (gajaeDefaults.source === "profile-provider"
+        ? modelForGajaeProvider(gajaeDefaults.provider, gajaeDefaults.explicitModel)
+        : gajaeDefaults.explicitModel)
+      : gajaeDefaults
+        ? defaultGajaeModel(gajaeDefaults.provider)
+        : null;
+    const rawModel = hermesDefaults
+      ? hermesDefaults.explicitModel || defaultHermesModel(hermesDefaults.provider)
+      : rawGajaeModel
+        || profileModelOverride(profile?.cmd)
+        || meta.defaultModel;
     const normalizedModel = provider === "hermes"
       ? normalizeHermesModel(hermesProvider || DEFAULT_HERMES_PROVIDER, rawModel)
       : normalizeModel(provider, rawModel);
@@ -5443,7 +5805,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   };
 
   const startManagedPreviewService = async () => {
-    if (!previewUrl || !isLocalPreviewUrl(previewUrl) || previewServiceBusy || !isTauri()) return;
+    if (!previewManagedStartEnabled || !previewUrl || !isLocalPreviewUrl(previewUrl) || previewServiceBusy || !isTauri()) return;
     setPreviewServiceBusy(true);
     pushPreviewDiagnostic({
       source: "preview",
@@ -5557,6 +5919,13 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         updatedAt: Date.now(),
       };
     });
+    if (active.provider === "gajecode") {
+      writeGajaeModelProviderPreference(inferGajaeProviderFromModel(model));
+    } else if (active.provider === "hermes") {
+      writeHermesModelProviderPreference(
+        normalizeHermesProvider(active.hermesProvider || inferHermesProviderFromModel(active.model)),
+      );
+    }
   };
 
   const updateActiveCodexEffort = (effort: CodexEffort) => {
@@ -5574,7 +5943,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     patchSession(active.id, (session) => ({ ...session, codexSpeed: speed, updatedAt: Date.now() }));
   };
 
-  const updateActivePermissionMode = (permissionMode: AgentPermissionMode) => {
+  const updateActivePermissionMode = (permissionMode: VisiblePermissionMode) => {
     if (!active) return;
     patchSession(active.id, (session) => ({ ...session, permissionMode, updatedAt: Date.now() }));
   };
@@ -7051,6 +7420,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       const nextWorkload = session.provider === "hermes" && nextHermesProvider === "openrouter"
         ? coerceOpenRouterEffort(normalizeWorkloadLevel(session.codexEffort), nextModel, nextOptions)
         : normalizeWorkloadLevel(session.codexEffort);
+      if (session.provider === "gajecode") {
+        writeGajaeModelProviderPreference(inferGajaeProviderFromModel(nextModel));
+      } else if (session.provider === "hermes") {
+        writeHermesModelProviderPreference(nextHermesProvider);
+      }
       patchSession(session.id, (current) => ({
         ...current,
         model: nextModel,
@@ -7267,21 +7641,41 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     }
 
     if (command === "/permission") {
-      if (!arg || !isPermissionMode(arg)) {
+      const capability = runtimeCapabilities?.find((item) => item.id === session.provider);
+      const permissionDisabledReason = managedAgentPermissionDisabledReason(
+        session.provider,
+        capability,
+        tw.language,
+        runtimeCapabilityError,
+      ) || managedPermissionControlDisabledReason(session.provider, capability, tw.language);
+      if (permissionDisabledReason) {
+        localAssistantMessage(session.id, rawText, permissionDisabledReason);
+        return true;
+      }
+      const normalizedArg = arg.trim().toLowerCase();
+      if (!arg) {
         localAssistantMessage(
           session.id,
           rawText,
-          tw.language === "en" ? "Usage: /permission basic|auto|full" : "사용법: /permission basic|auto|full",
+          permissionUsageMessage(tw.language),
         );
         return true;
       }
-      patchSession(session.id, (current) => ({ ...current, permissionMode: arg, updatedAt: Date.now() }));
+      if (/^(full|bypass|danger)$/i.test(normalizedArg)) {
+        localAssistantMessage(session.id, rawText, permissionFullRejectedMessage(tw.language));
+        return true;
+      }
+      if (!isPermissionMode(normalizedArg)) {
+        localAssistantMessage(session.id, rawText, permissionUsageMessage(tw.language));
+        return true;
+      }
+      patchSession(session.id, (current) => ({ ...current, permissionMode: normalizedArg, updatedAt: Date.now() }));
       localAssistantMessage(
         session.id,
         rawText,
         tw.language === "en"
-          ? `Permission changed: ${labelForPermissionMode(arg, "en")}`
-          : `권한을 변경했습니다: ${labelForPermissionMode(arg, "ko")}`,
+          ? `Permission changed: ${labelForPermissionMode(normalizedArg, "en")}`
+          : `권한을 변경했습니다: ${labelForPermissionMode(normalizedArg, "ko")}`,
       );
       return true;
     }
@@ -7295,6 +7689,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         const defaultModel = defaultGajaeModel(arg);
         const options = modelOptionsFor("gajecode", defaultModel, DEFAULT_HERMES_PROVIDER, claudeRuntimeModels, codexRuntimeModels, openRouterRuntimeModels);
         const nextModel = options[0]?.value || defaultModel;
+        writeGajaeModelProviderPreference(arg);
         patchSession(session.id, (current) => ({
           ...current,
           model: nextModel,
@@ -7326,6 +7721,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       }
       const providerOptions = modelOptionsFor("hermes", defaultHermesModel(arg), arg, claudeRuntimeModels, codexRuntimeModels, openRouterRuntimeModels);
       const nextModel = providerOptions[0]?.value || defaultHermesModel(arg);
+      writeHermesModelProviderPreference(arg);
       patchSession(session.id, (current) => ({
         ...current,
         hermesProvider: arg,
@@ -7489,6 +7885,37 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     if (busyTurnIdsRef.current[sessionId]) return;
     const session = sessionsRef.current.find((item) => item.id === sessionId);
     if (!session) return;
+    const capability = runtimeCapabilities?.find((item) => item.id === session.provider);
+    const permissionDisabledReason = managedAgentPermissionDisabledReason(
+      session.provider,
+      capability,
+      tw.language,
+      runtimeCapabilityError,
+    );
+    if (permissionDisabledReason) {
+      const assistantId = nowId("assistant");
+      patchSession(sessionId, (current) => ({
+        ...current,
+        messages: finalizeOrphanedStreamingMessages(current.messages)
+          .map((message) =>
+            message.id === payload.userMessageId ? { ...message, status: "done" as const } : message,
+          )
+          .concat({
+            id: assistantId,
+            role: "assistant",
+            text: permissionDisabledReason,
+            createdAt: Date.now(),
+            status: "error",
+          }),
+        updatedAt: Date.now(),
+      }));
+      updateReviewWorkflowStatus(sessionId, payload.reviewRequest, "failed", {
+        responseMessageId: assistantId,
+        responseExcerpt: permissionDisabledReason,
+        error: permissionDisabledReason,
+      });
+      throw new Error(permissionDisabledReason);
+    }
     const meta = providerMeta(session.provider);
     const assistantId = nowId("assistant");
     const turnId = nowId("turn");
@@ -7522,10 +7949,16 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       : (!modelChangedForRun && (!session.providerSessionModel || session.providerSessionModel === runModel)
           ? session.providerSessionId || null
           : null);
-    const explicitlySelectedElementContext = formatDevScreenElementSelectionPrompt(
+    const selectedElementContext = formatDevScreenElementSelectionPrompt(
       payload.elementSelection,
       tw.language,
     );
+    // Do not let a quoted historical/DOM literal turn a safe current request
+    // into a false block at the backend's full executable-prompt guard.
+    const explicitlySelectedElementContext = selectedElementContext
+      && !containsProtectedActionIntent(selectedElementContext)
+      ? selectedElementContext
+      : null;
     const compactContext = useHermesCodexFastPath
       ? formatCompactAgentContext(session.messages, tw.language, payload.userMessageId)
       : null;
@@ -7618,6 +8051,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
           provider: session.provider,
           turnId,
           prompt: formatWorkloadAgentPrompt(basePrompt, runWorkload, tw.language, session.provider),
+          safetySubject: payload.displayText || null,
           resumeSessionId,
           cwd: runCwd || null,
           model: runModel,
@@ -7676,9 +8110,17 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
               return {
                   ...m,
                   text: (() => {
+                    const actionableFailure = result.is_error
+                      ? actionableManagedAgentFailure(
+                          session.provider,
+                          result.error || result.text || "Agent error",
+                          tw.language,
+                        )
+                      : "";
                     finalTextForReveal = cooldownSeconds !== null
                       ? copy.providerCooldownRetry(meta.label, cooldownSeconds, shouldScheduleCooldownRetry)
-                      : cleanAgentText(result.text)
+                      : actionableFailure
+                      || cleanAgentText(result.text)
                       || cleanAgentText(m.text)
                       || (wasStopped ? copy.stoppedResponse : wasInterrupted ? copy.interruptedResponse : "")
                       || cleanAgentText(result.error)
@@ -7781,7 +8223,13 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                 ...m,
                 text: (() => {
                   finalTextForReveal = cleanAgentText(m.text)
-                    || (wasStopped ? copy.stoppedResponse : wasInterrupted ? copy.interruptedResponse : `실행 실패: ${String(err)}`);
+                    || (wasStopped
+                      ? copy.stoppedResponse
+                      : wasInterrupted
+                        ? copy.interruptedResponse
+                        : session.provider === "hermes" || session.provider === "gajecode"
+                          ? actionableManagedAgentFailure(session.provider, err, tw.language)
+                          : `실행 실패: ${String(err)}`);
                   return finalTextForReveal;
                 })(),
                 status: wasStopped || wasInterrupted ? "done" : "error",
@@ -7895,6 +8343,32 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     const academicResearchRequest = !quePrefixedText && !factoryRequest && !gajaePromptText && attachments.length === 0
       ? parseAcademicResearchCommand(userText, tw.language, session.provider)
       : null;
+    if (!quePrefixedText && !factoryRequest && !academicResearchRequest && gajaePrefixedInput.kind === "cli") {
+      setComposerInput("");
+      setPendingAttachments([]);
+      setPasteError(null);
+      await runProviderCliSlashCommand(session, userText, gajaePrefixedInput.args);
+      return;
+    }
+    if (!quePrefixedText && !factoryRequest && !academicResearchRequest && !gajaePromptText && attachments.length === 0 && await handleSlashCommand(session, userText)) {
+      setComposerInput("");
+      setPendingAttachments([]);
+      setPasteError(null);
+      return;
+    }
+    const permissionDisabledReason = managedAgentPermissionDisabledReason(
+      session.provider,
+      runtimeCapabilities?.find((capability) => capability.id === session.provider),
+      tw.language,
+      runtimeCapabilityError,
+    );
+    if (permissionDisabledReason) {
+      localAssistantMessage(session.id, userText, permissionDisabledReason);
+      setComposerInput("");
+      setPendingAttachments([]);
+      setPasteError(null);
+      return;
+    }
     let turnText = quePrefixedText
       ? quePrefixedText
       : factoryRequest
@@ -7940,13 +8414,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     setComposerInput("");
     setPendingAttachments([]);
     setPasteError(null);
-
-    if (!quePrefixedText && !factoryRequest && !academicResearchRequest && gajaePrefixedInput.kind === "cli") {
-      await runProviderCliSlashCommand(session, userText, gajaePrefixedInput.args);
-      return;
-    }
-
-    if (!quePrefixedText && !factoryRequest && !academicResearchRequest && !gajaePromptText && attachments.length === 0 && await handleSlashCommand(session, userText)) return;
 
     const createdAt = Date.now();
     const payload: QueuedAgentTurn = {
@@ -9259,6 +9726,16 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                         </button>
                       );
                     })}
+                    <span
+                      className={cls(
+                        "atelier-factory-launcher-copy min-w-0 flex-1 truncate text-[10.5px]",
+                        dark ? "text-dsub" : "text-sub",
+                      )}
+                      data-testid="agent-runtime-identity"
+                      title={activeRuntimeIdentitySummary}
+                    >
+                      {activeRuntimeIdentitySummary}
+                    </span>
                   </div>
                 )}
                 {activeProvider !== "gajecode" && (
@@ -9284,10 +9761,16 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                         <span className="text-[#e26f4f]">{I.zap}</span>
                         <span>{copy.factoryLabel}</span>
                       </button>
-                      <span className={cls("atelier-factory-launcher-copy min-w-0 truncate text-[11px]", dark ? "text-dsub" : "text-sub")}>
-                        {tw.language === "en"
-                          ? "One launcher for goal, analysis, verification, security, and final audit."
-                          : "목표만 입력하면 계획, 실행, 검증, 보안, 최종감사까지 자동 진행합니다."}
+                      <span
+                        className={cls("atelier-factory-launcher-copy min-w-0 truncate text-[11px]", dark ? "text-dsub" : "text-sub")}
+                        data-testid={activeAdapterManagedRuntime ? "agent-runtime-identity" : undefined}
+                        title={activeAdapterManagedRuntime ? activeRuntimeIdentitySummary : undefined}
+                      >
+                        {activeAdapterManagedRuntime
+                          ? activeRuntimeIdentitySummary
+                          : tw.language === "en"
+                            ? "One launcher for goal, analysis, verification, security, and final audit."
+                            : "목표만 입력하면 계획, 실행, 검증, 보안, 최종감사까지 자동 진행합니다."}
                       </span>
                     </div>
                     <div
@@ -9415,12 +9898,55 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                   </div>,
                   document.body,
                 )}
+                {activeRuntimeProgressFailure && !activeManagedAgentDisabledReason && (
+                  <div
+                    role="status"
+                    data-testid="managed-agent-runtime-bootstrap-failed"
+                    className={cls(
+                      "atelier-factory-launcher-copy mb-2 rounded-[7px] border px-2.5 py-2 text-[11px] leading-[1.45]",
+                      dark
+                        ? "border-[#7a4638] bg-[#2a211e] text-[#f0a38a]"
+                        : "border-[#d7a08a] bg-[#fff4ef] text-[#9a472f]",
+                    )}
+                  >
+                    {activeRuntimeProgressFailure}
+                  </div>
+                )}
+                {activeRuntimeObservationNotice && !activeManagedAgentDisabledReason && !activeRuntimeProgressFailure && (
+                  <div
+                    role="status"
+                    data-testid="managed-agent-runtime-observation"
+                    className={cls(
+                      "atelier-factory-launcher-copy mb-2 rounded-[7px] border px-2.5 py-2 text-[11px] leading-[1.45]",
+                      dark
+                        ? "border-[#4b5f70] bg-[#202a33] text-[#b7cde0]"
+                        : "border-[#9eb9cf] bg-[#f2f8fc] text-[#365e7a]",
+                    )}
+                  >
+                    {activeRuntimeObservationNotice}
+                  </div>
+                )}
+                {activeManagedAgentDisabledReason && (
+                  <div
+                    role="status"
+                    data-testid="managed-agent-runtime-unavailable"
+                    className={cls(
+                      "atelier-factory-launcher-copy mb-2 rounded-[7px] border px-2.5 py-2 text-[11px] leading-[1.45]",
+                      dark
+                        ? "border-[#7a4638] bg-[#2a211e] text-[#f0a38a]"
+                        : "border-[#d7a08a] bg-[#fff4ef] text-[#9a472f]",
+                    )}
+                  >
+                    {activeManagedAgentDisabledReason}
+                  </div>
+                )}
                 <textarea
                   ref={inputRef}
                   defaultValue={inputDraftRef.current}
                   onChange={(e) => {
                     inputRevealPauseUntilRef.current = performance.now() + INPUT_REVEAL_PAUSE_MS;
                     inputDraftRef.current = e.target.value;
+                    setInput(e.target.value);
                     syncComposerUi(e.target.value);
                   }}
                   onKeyDown={(e) => {
@@ -9476,7 +10002,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                           }}
                           disabled={!active || !!busyTurnId}
                           ariaLabel={copy.providerLabel}
-                          title={activeProvider === "hermes" ? "Hermes provider" : "Gajae Code provider"}
+                          title={activeModelSurfaceTitle}
                           triggerClassName="atelier-provider-trigger h-8 min-w-[116px] max-w-[142px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2"
                           menuWidth={180}
                           testId={activeProvider === "hermes" ? "hermes-provider-menu" : "gajecode-provider-menu"}
@@ -9542,9 +10068,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                         icon: option.icon,
                         title: tw.language === "en" ? option.detailEn : option.detailKo,
                       }))}
-                      onChange={(value) => updateActivePermissionMode(value as AgentPermissionMode)}
-                      disabled={!active || !!busyTurnId}
+                      onChange={(value) => updateActivePermissionMode(value as VisiblePermissionMode)}
+                      disabled={!active || !!busyTurnId || Boolean(activeManagedAgentDisabledReason || activePermissionControlDisabledReason)}
                       ariaLabel={copy.permissionLabel}
+                      title={activeManagedAgentDisabledReason || activePermissionControlDisabledReason || copy.permissionLabel}
                       triggerClassName="atelier-permission-trigger h-8 min-w-[112px] max-w-[148px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2"
                       menuWidth={218}
                       testId="permission-menu"
@@ -9558,7 +10085,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                         language={tw.language}
                         disabled={!active || !!busyTurnId}
                         contextKey={`${active?.id || "none"}:${activeProvider}:${activeHermesProvider}`}
-                        title={activeProviderMeta.label}
+                        title={activeModelSurfaceTitle}
                         modelLabel={copy.modelLabel}
                         reasoningLabel={copy.reasoning}
                         speedLabel={copy.speed}
@@ -9608,7 +10135,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                         }}
                         disabled={!active || !!busyTurnId}
                         ariaLabel={copy.modelLabel}
-                        title={activeProviderMeta.label}
+                        title={activeModelSurfaceTitle}
                         triggerClassName="atelier-model-trigger h-8 min-w-[134px] max-w-[190px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2"
                         menuWidth={292}
                         testId="agent-model-menu"
@@ -9661,7 +10188,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                   )}
                   <button
                     type="submit"
-                    disabled={(!composerUi.hasText && pendingAttachments.length === 0) || isPastingImage}
+                    disabled={(!composerUi.hasText && pendingAttachments.length === 0) || isPastingImage || managedComposerSendDisabled}
+                    title={managedComposerSendDisabled ? activeManagedAgentDisabledReason || undefined : undefined}
+                    aria-label={managedComposerSendDisabled ? activeManagedAgentDisabledReason || copy.send : copy.send}
+                    data-testid="agent-send"
                     className="h-8 px-4 rounded-[7px] text-[12px] font-medium text-white disabled:opacity-40"
                     style={{ background: "var(--accent)" }}
                   >
@@ -9723,6 +10253,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                   />
                   <button
                     type="submit"
+                    disabled={!previewExternalInspectionEnabled}
                     className={cls(
                       "shrink-0 h-6 px-2 rounded-[4px] text-[11.5px]",
                       dark ? "bg-dline hover:bg-[#3d3d3b] text-dink" : "bg-line hover:bg-muted text-ink",
@@ -9756,6 +10287,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                 <button
                   type="button"
                   onClick={() => setPreviewReloadKey((n) => n + 1)}
+                  disabled={!previewExternalInspectionEnabled}
                   className={cls(
                     "shrink-0 h-6 w-6 rounded-[4px] text-[12px]",
                     dark ? "text-dsub hover:bg-[#3d3d3b] hover:text-dink" : "text-sub hover:bg-line hover:text-ink",
@@ -9767,6 +10299,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                 <button
                   type="button"
                   onClick={() => setShowDevScreen((value) => !value)}
+                  disabled={!previewExternalInspectionEnabled}
                   className={cls(
                     "shrink-0 h-6 px-2 rounded-[4px] text-[10px]",
                     showDevScreen
@@ -9804,28 +10337,32 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                         <span className="atelier-preview-diagnostic-text">{previewServiceLabel}</span>
                       </div>
                       <div className="atelier-preview-service-controls">
-                        <input
-                          value={previewServiceCommand}
-                          onChange={(e) => setPreviewServiceCommand(e.target.value)}
-                          placeholder={copy.previewServicePlaceholder}
-                          className={cls(
-                            "atelier-preview-service-input",
-                            dark ? "atelier-preview-service-input-dark" : "",
-                          )}
-                          aria-label={copy.previewServiceCommand}
-                        />
-                        <button
-                          type="button"
-                          onClick={startManagedPreviewService}
-                          disabled={previewServiceBusy}
-                          className={cls(
-                            "atelier-preview-service-button",
-                            dark ? "atelier-preview-service-button-dark" : "",
-                          )}
-                        >
-                          {previewServiceBusy ? copy.previewServiceStarting : copy.previewServiceStart}
-                        </button>
-                        {previewService?.running && (
+                        {previewManagedStartEnabled && (
+                          <>
+                            <input
+                              value={previewServiceCommand}
+                              onChange={(e) => setPreviewServiceCommand(e.target.value)}
+                              placeholder={copy.previewServicePlaceholder}
+                              className={cls(
+                                "atelier-preview-service-input",
+                                dark ? "atelier-preview-service-input-dark" : "",
+                              )}
+                              aria-label={copy.previewServiceCommand}
+                            />
+                            <button
+                              type="button"
+                              onClick={startManagedPreviewService}
+                              disabled={previewServiceBusy}
+                              className={cls(
+                                "atelier-preview-service-button",
+                                dark ? "atelier-preview-service-button-dark" : "",
+                              )}
+                            >
+                              {previewServiceBusy ? copy.previewServiceStarting : copy.previewServiceStart}
+                            </button>
+                          </>
+                        )}
+                        {previewManagedRunning && (
                           <button
                             type="button"
                             onClick={stopManagedPreviewService}
@@ -9839,6 +10376,15 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                           </button>
                         )}
                       </div>
+                      {!previewManagedStartEnabled && (
+                        <div className="atelier-preview-diagnostic atelier-preview-diagnostic-info">
+                          <span className="atelier-preview-diagnostic-source">{copy.previewService}</span>
+                          <span className="atelier-preview-diagnostic-text">
+                            {previewServicePolicyMessage}
+                            {previewServicePolicyReason ? ` (${previewServicePolicyReason})` : ""}
+                          </span>
+                        </div>
+                      )}
                       {previewServiceOutput.map((line, index) => (
                         <div key={`${line}-${index}`} className="atelier-preview-diagnostic atelier-preview-diagnostic-info">
                           <span className="atelier-preview-diagnostic-source">log</span>
@@ -10128,7 +10674,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                 </div>
               )}
               <div className={cls("flex-1 min-h-0 relative overflow-auto", previewUrl ? (dark ? "bg-[#11110f]" : "bg-[#e8e6df]") : "bg-black")}>
-                {previewUrl ? (
+                {previewUrl && previewExternalInspectionEnabled ? (
                   previewVP === "desktop" ? (
                     <iframe
                       key={`${previewUrl}#${previewReloadKey}#${previewVP}`}

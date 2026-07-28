@@ -29,11 +29,10 @@ const feature: FeatureModule = {
         ],
       },
       {
-        key: "defaultPermission", kind: "select", label: { ko: "기본 권한", en: "Default permissions" }, defaultValue: "auto",
+        key: "defaultPermission", kind: "select", label: { ko: "기본 권한", en: "Default permissions" }, defaultValue: "basic",
         options: [
           { value: "basic", label: { ko: "기본 권한", en: "Basic" } },
           { value: "auto", label: { ko: "자동 검토", en: "Auto review" } },
-          { value: "full", label: { ko: "전체 권한", en: "Full" } },
         ],
       },
       { key: "defaultStellaMode", kind: "toggle", label: { ko: "스텔라 모드 기본값", en: "Stella mode by default" }, defaultValue: false },

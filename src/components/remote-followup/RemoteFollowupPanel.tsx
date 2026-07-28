@@ -28,11 +28,15 @@ const PROVIDERS: Array<{ value: Provider; label: string }> = [
   { value: "gajecode", label: "Gajae Code" },
 ];
 
+function normalizeRemotePermission(value: unknown): Permission {
+  return value === "basic" ? "basic" : "auto";
+}
+
 const RemoteFollowupPanel: React.FC<Props> = ({ tw }) => {
   const [featureEnabled] = useFeatureSetting<boolean>("remote-followup", "enabled", true);
   const [defaultProvider] = useFeatureSetting<Provider>("remote-followup", "defaultProvider", "codex");
   const [defaultEffort] = useFeatureSetting<Effort>("remote-followup", "defaultEffort", "high");
-  const [defaultPermission] = useFeatureSetting<Permission>("remote-followup", "defaultPermission", "auto");
+  const [defaultPermission] = useFeatureSetting<Permission>("remote-followup", "defaultPermission", "basic");
   const [defaultStellaMode] = useFeatureSetting<boolean>("remote-followup", "defaultStellaMode", false);
   const dark = tw.dark;
   const ko = tw.language === "ko";
@@ -41,7 +45,7 @@ const RemoteFollowupPanel: React.FC<Props> = ({ tw }) => {
   const [provider, setProvider] = useState<Provider>(defaultProvider);
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState<Effort>(defaultEffort);
-  const [permission, setPermission] = useState<Permission>(defaultPermission);
+  const [permission, setPermission] = useState<Permission>(() => normalizeRemotePermission(defaultPermission));
   const [stellaMode, setStellaMode] = useState(defaultStellaMode);
   const [prepared, setPrepared] = useState<RemoteFollowupPreparedAction | null>(null);
   const [busy, setBusy] = useState(false);
@@ -63,7 +67,7 @@ const RemoteFollowupPanel: React.FC<Props> = ({ tw }) => {
   useEffect(() => {
     setProvider(defaultProvider);
     setEffort(defaultEffort);
-    setPermission(defaultPermission);
+    setPermission(normalizeRemotePermission(defaultPermission));
     setStellaMode(defaultStellaMode);
   }, [defaultEffort, defaultPermission, defaultProvider, defaultStellaMode]);
 
@@ -144,7 +148,6 @@ const RemoteFollowupPanel: React.FC<Props> = ({ tw }) => {
         <select className={controlClass} value={permission} onChange={(event) => setPermission(event.target.value as Permission)}>
           <option value="basic">{ko ? "기본 권한" : "Basic permissions"}</option>
           <option value="auto">{ko ? "자동 검토" : "Auto review"}</option>
-          <option value="full">{ko ? "전체 권한" : "Full permissions"}</option>
         </select>
         <label className={cls("flex h-9 items-center gap-2 rounded-md border px-3 text-[12px]", dark ? "border-dline" : "border-line")}>
           <input type="checkbox" checked={stellaMode} onChange={(event) => setStellaMode(event.target.checked)} />

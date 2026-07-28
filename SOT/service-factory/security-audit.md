@@ -1,6 +1,7 @@
 # Stella Factory Security Audit
 
 generated_at: 2026-07-13T09:35:39+09:00
+reconciled_at: 2026-07-26 KST
 
 ## Scope
 
@@ -11,6 +12,9 @@ Windows physical-gate evidence, and release publication gates.
 ## Result
 
 - Known exploitable dependency advisories: 0.
+- `npm audit`: 0 vulnerabilities on the `0.2.14` source candidate.
+- RustSec: 0 known vulnerabilities; 18 unmaintained and 2 unsound upstream
+  warnings remain visible.
 - Release-blocking credential findings: 0.
 - Unsigned public Windows fallback: removed.
 - Public macOS trust: not yet satisfied; external signing gate remains.
@@ -36,22 +40,41 @@ Windows physical-gate evidence, and release publication gates.
   input values, cookies, storage, response bodies, or headers. A second
   host-side normalizer rejects value/URL/event selectors and strips unsafe
   markup attributes even if an inspected page tampers with picker state.
-- Missing or invalid permission state now defaults to automatic workspace
-  access, not full access.
+- Historical `0.2.12` behavior defaulted missing or invalid permission state to
+  automatic workspace access rather than Full.
+- The current permission contract is stricter: Basic is the default; Auto keeps
+  provider sandboxing and approval checks; visible/raw Full bypass is removed.
+- Managed Basic/Auto capability is provider-scoped. Claude/Codex retain their
+  existing paths; Hermes/Gajaecode require verified Atelier-owned macOS
+  runtimes, isolated homes/default skills, and the deny-default sandbox.
+- Gajaecode's four default skills are protected by a per-file SHA-256 manifest.
+  Hermes archive files are checked against the pinned Git objects, durable
+  source uses a SHA-256 manifest, and 73 installed skill hashes must match.
+  Invalid prior trees are quarantined rather than deleted.
+- uv and Bun macOS downloads use embedded official SHA-256 values before atomic
+  publication. Hermes Python resolves inside the provider-local `uv-python`
+  root.
+- Managed preview start fails closed. Inspection is limited to a separately
+  trusted localhost service when Atelier does not own the listener.
+- Frontend and Rust prompt guards are exercised by a shared regression corpus.
 - High-confidence secret scanning found no private key or provider-token
   material across 339 tracked/untracked source files.
-- RustSec reports zero known vulnerabilities. The 17 unmaintained and 2 unsound
-  upstream warnings remain visible rather than being suppressed.
+- The historical audit reported zero known RustSec vulnerabilities and kept its
+  upstream maintenance/quality warnings visible rather than suppressing them.
 - Release Tauri builds no longer enable devtools.
 - Renderer startup receipts are stored per executable-path SHA-256 in the
   private app cache, chmod 0600 on Unix, and accepted only when version, live
   PID, canonical executable, window label, timestamp, and ready status match
   the probing binary. Build candidates cannot overwrite installed-app proof.
+- The locally signed `0.2.14` candidate/installed executable hashes match and
+  codesign plus renderer readiness pass. The proof records a dirty worktree and
+  uses the executable SHA-256, not HEAD, as the build artifact identifier.
 
 ## Residual Risk
 
-- Explicit full permission intentionally bypasses provider sandbox/approval
-  controls.
+- Phrase denylist matching cannot prove or mediate the actual provider
+  tool/action effect. The P1 app-owned action/tool proxy and scoped approval
+  receipts remain required.
 - Interactive Windows OAuth and Smart App Control behavior require target-host
   validation and cannot be proven from macOS.
 - Browser warning/error and resource metadata are captured only in bounded,
@@ -66,3 +89,10 @@ Windows physical-gate evidence, and release publication gates.
 - Production deploy/publication: approval required.
 - Paid API expansion: approval required.
 - External communication and offensive security: approval/scope required.
+
+## Current Verdict
+
+`supervised local candidate, public release blocked`
+
+No public publish, public signing, notarization, deployment, DB/data deletion,
+paid action, or credential mutation was performed in the `0.2.14` cycle.

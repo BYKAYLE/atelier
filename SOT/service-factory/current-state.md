@@ -1,14 +1,45 @@
 # Stella Factory Current State
 
-> Historical snapshot generated on 2026-05-31. It is retained as execution
-> evidence and is not the current release baseline. The active baseline is
-> Atelier 0.2.8 source and installed macOS baseline in
-> `SOT/L1-project-summary.md`, `SOT/tasks.md`, and
-> `SOT/service-factory/orca-adoption-roadmap.md`.
+> The long inventory below is a historical snapshot retained as execution
+> evidence. This reconciliation is the current source truth and does not replace
+> separate package, installed-app, or public-distribution receipts.
 
-active_baseline_at: 2026-07-14T14:40:43+09:00
+active_baseline_at: 2026-07-26 KST
 
 ## Active Baseline
+
+Verdict: `supervised local candidate, public release blocked`.
+
+- Source candidate: Atelier `0.2.14`.
+- Automated gates: all-feature Rust 230 passed / 3 ignored; Orca 23 contract
+  smokes across 10 removable features; strict all-target/all-feature Clippy,
+  format, and diff checks pass; `npm audit` 0 vulnerabilities; RustSec 0 known
+  vulnerabilities with 18 unmaintained and 2 unsound warnings retained.
+- Managed preview start: fail-closed. A separately trusted localhost service can
+  still be inspected.
+- Permission truth: Basic default; Auto keeps sandbox and approval behavior;
+  visible and raw Full bypass paths removed.
+- Provider capability truth: Claude/Codex retain managed Basic/Auto.
+  Hermes/Gajaecode use pinned Atelier-owned macOS runtimes, isolated homes and
+  skills, and fail closed before lifecycle/spawn if readiness is absent. Direct
+  CLI is a separate manual, limited path.
+- Runtime receipts: Gajaecode 0.11.7/Bun 1.3.14 with four defaults; Hermes
+  pinned commit `3ef6bbd…` with 453 durable source files and 73 installed
+  skills.
+- Prompt guard truth: frontend and Rust behavior shares a regression corpus.
+  Phrase matching is defense in depth, not a complete action-level guarantee.
+- P1 blocker: app-owned action/tool proxy with scoped approval receipts.
+- Package/install truth: locally signed `0.2.14` is installed at
+  `/Applications/Atelier.app`; candidate/installed executable SHA-256 values
+  match at
+  `4ee04fbed757f015c910171f4e7c0c3979ca009d396f90a6abfb890e2e1b1868`;
+  codesign and renderer-ready checks pass.
+- The proof records a dirty working tree. HEAD does not uniquely identify the
+  build; the executable SHA-256 is the installed-candidate identifier.
+- Distribution truth: no Developer ID signing, notarization, public publish, or
+  physical Windows proof is claimed.
+
+## Historical 2026-07-14 Baseline
 
 - Source and package metadata: `0.2.8`.
 - Installed application: `/Applications/Atelier.app`, version `0.2.8`, strict

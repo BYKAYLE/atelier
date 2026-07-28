@@ -1,6 +1,7 @@
 # Readiness Report
 
 generated_at: 2026-07-23T20:12:04+09:00
+reconciled_at: 2026-07-26 KST
 
 ## Goal
 
@@ -10,14 +11,32 @@ public distribution state.
 
 ## Current Readiness
 
-`release_candidate_with_external_gates`
+`supervised local candidate, public release blocked`
 
-This is not a public-release completion claim. Stella Factory completion remains
-blocked until the three unmet Definition of Done items have execution receipts.
+This is a supervised local source/package/install statement. Public release
+remains blocked by the P1 action boundary, public signing and notarization, and
+physical Windows evidence.
 
 ## Truth Surfaces
 
-- Source and automated checks: the current candidate on
+- Current `0.2.14` source and automated checks: 230 all-feature Rust tests passed
+  with 3 ignored; the Orca gate passed 23 contract smokes across 10 removable
+  features; strict all-target/all-feature Clippy and format/diff checks passed;
+  `npm audit` reports 0 vulnerabilities; and RustSec reports 0 known
+  vulnerabilities while retaining 18 unmaintained and 2 unsound warnings.
+- Runtime-safety source contract: managed preview start is fail-closed; trusted
+  external localhost inspection remains available. Basic is the default and
+  Auto retains sandboxing and approvals; visible/raw Full bypass is removed.
+  Frontend and Rust guards share a prompt corpus, but phrase matching is not a
+  complete action-level guarantee.
+- Provider capability source: Claude/Codex support managed Basic/Auto.
+  Hermes/Gajaecode use pinned Atelier-owned macOS runtimes, isolated default
+  skills, and sandbox readiness; absent readiness fails before spawn. Direct
+  CLI remains a separate manual, limited path.
+- Installed runtime preparation: Gajaecode 0.11.7/Bun 1.3.14 with four verified
+  defaults; Hermes pinned commit with 453 durable files and 73 installed
+  skills. No user credentials are bundled.
+- Historical `0.2.12` source and automated checks: the candidate on
   `codex/release-readiness-final`, based on commit `eb44c2c`, passes the release
   evidence smoke, release security audit, shared preflight smoke, OAuth login
   flow smoke, updater contract smoke, release-candidate smoke, frontend build,
@@ -28,12 +47,14 @@ blocked until the three unmet Definition of Done items have execution receipts.
   release host, and GitHub configuration without reading secret values. The
   clean-source, macOS toolchain, GitHub API, protected `production-release`
   environment, and required-reviewer checks pass.
-- Local macOS package: `0.2.12` builds successfully and passes strict bundle,
-  DMG payload, renderer-readiness, and local-signing verification.
-- Installed macOS app: `/Applications/Atelier.app` is version `0.2.12`, is
-  running, and its signed executable exactly matches the packaged app executable
-  at SHA-256
-  `0a7b87c262ccdbca8f94b3fc3c31638a620ab2cdfcdae9b513464165343c2c60`.
+- Current local macOS package: `0.2.14` builds successfully and passes codesign,
+  executable-hash, and renderer-readiness verification. DMG SHA-256 is
+  `3f9aba91eee83ec12cb1da2a24d3a470ff5cafd2d2e2668011a37e010563cd5b`.
+- Installed macOS app: `/Applications/Atelier.app` is version `0.2.14`, is
+  renderer-ready, and its executable exactly matches the candidate at SHA-256
+  `4ee04fbed757f015c910171f4e7c0c3979ca009d396f90a6abfb890e2e1b1868`.
+  The proof records a dirty worktree, so HEAD does not uniquely identify the
+  build; the executable SHA-256 does.
 - Public macOS release: blocked. The local certificate is not a Developer ID
   Application certificate, and notarization and stapling receipts do not exist.
 - Windows source and workflow gates: ready for CI execution. The release workflow
@@ -59,8 +80,10 @@ blocked until the three unmet Definition of Done items have execution receipts.
   and both SignPath variables are absent. The local keychain has no Developer ID
   Application identity. No matching self-hosted Windows x64 runner is registered
   or online, so the infrastructure preflight correctly returns `blocked`.
-- Public GitHub distribution: still `v0.1.66`; no `0.2.12` tag or release was
-  published from this unsigned local candidate.
+- Public GitHub distribution at the 2026-07-23 evidence time was `v0.1.66`; no
+  `0.2.12`, `0.2.13`, or `0.2.14` release is claimed by this reconciliation.
+- Current cycle actions: no public publish, public signing, notarization,
+  deployment, DB/data deletion, paid action, or credential mutation occurred.
 
 ## Evidence
 
@@ -69,8 +92,8 @@ candidate evidence and the remaining external gates.
 
 ## Next Executable Action
 
-Provision the production signing identities and CI secrets, register the
-interactive Windows x64 runner, pass `Windows Release Runner Doctor`, run the
-protected release workflow, and attach the macOS notarization/stapling receipt
-plus the physical-Windows OAuth, signature, and restart-survival receipt before
-any tag or public release is created.
+Implement the app-owned action/tool proxy and scoped approval receipts.
+Separately, provision the production signing identities and CI secrets, register the
+interactive Windows x64 runner, pass the protected release gates, and attach
+macOS notarization/stapling plus physical-Windows receipts before any public
+release.

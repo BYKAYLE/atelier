@@ -16,11 +16,10 @@ const INSTALLS: Record<
     executable: "codex",
   },
   gajecode: {
-    executable: "",
+    executable: "gjc",
   },
 };
 
 export function autoInstallExecutable(profile: Profile): string | null {
-  if (profile.autoInstall === "gajecode") return null;
   return profile.autoInstall ? INSTALLS[profile.autoInstall].executable : null;
 }

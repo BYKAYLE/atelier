@@ -1,4 +1,98 @@
 {
+  "current_truth": {
+    "reconciled_at": "2026-07-26 KST",
+    "source_version": "0.2.14",
+    "verdict": "supervised local candidate, public release blocked",
+    "source_gate_receipt_scope": "post_provider_capability_integration",
+    "source_gates": {
+      "rust_passed": 230,
+      "rust_failed": 0,
+      "rust_ignored": 3,
+      "orca_contract_smokes": 23,
+      "orca_features": 10,
+      "strict_all_target_all_feature_clippy": "passed",
+      "format_and_diff_checks": "passed",
+      "npm_audit_vulnerabilities": 0,
+      "rustsec_known_vulnerabilities": 0,
+      "rustsec_upstream_warnings": {
+        "unmaintained": 18,
+        "unsound": 2
+      }
+    },
+    "runtime_safety": {
+      "managed_preview_start": "fail_closed",
+      "external_trusted_localhost_inspection": "available",
+      "default_permission": "basic",
+      "auto_permission": "sandbox_and_approval",
+      "visible_raw_full": "removed",
+      "legacy_full_bypass_danger_normalization": "basic",
+      "managed_provider_capabilities": {
+        "claude": "basic_and_auto",
+        "codex": "basic_and_auto",
+        "hermes": "managed_basic_and_auto_macos_pinned_runtime",
+        "gajaecode": "managed_basic_and_auto_macos_pinned_runtime"
+      },
+      "direct_cli": "separate_manual_limited_path",
+      "prompt_guard_corpus": "shared_frontend_and_rust",
+      "phrase_denylist_guarantee": "defense_in_depth_only",
+      "provider_capability_integration": "source_install_and_runtime_receipts_complete",
+      "managed_runtime_receipts": {
+        "gajaecode": {
+          "runtime_pin": "0.11.7",
+          "dependency_pin": "1.3.14",
+          "verified_skill_count": 4,
+          "skill_namespace": "provider_isolated_gjc"
+        },
+        "hermes": {
+          "runtime_pin": "3ef6bbd201263d354fd83ec55b3c306ded2eb72a",
+          "verified_skill_count": 73,
+          "durable_source_file_count": 453,
+          "python_namespace": "provider_local"
+        }
+      }
+    },
+    "remaining_p1": [
+      "app_owned_action_tool_proxy",
+      "scoped_approval_receipts"
+    ],
+    "remaining_p2": [
+      "production_bundle_code_splitting"
+    ],
+    "distribution": {
+      "fresh_0_2_14_installed_receipt": true,
+      "proof_type": "local-installed-candidate",
+      "proof_status": "verified",
+      "proof_generated_at": "2026-07-25T15:04:28.654Z",
+      "proof_path": "/Users/kansic/.codex/visualizations/2026/07/25/019f98d7-308a-76c0-b5e0-1a9657cf64ea/atelier-0.2.14-installed-proof.json",
+      "ui_evidence": {
+        "hermes_ready": "/Users/kansic/.codex/visualizations/2026/07/25/019f98d7-308a-76c0-b5e0-1a9657cf64ea/atelier-0.2.14-hermes-ready-window.png",
+        "gajaecode_ready": "/Users/kansic/.codex/visualizations/2026/07/25/019f98d7-308a-76c0-b5e0-1a9657cf64ea/atelier-0.2.14-gajae-ready-window.png",
+        "hermes_composer_ready": "/Users/kansic/.codex/visualizations/2026/07/25/019f98d7-308a-76c0-b5e0-1a9657cf64ea/atelier-0.2.14-hermes-composer-ready-window.png",
+        "gajaecode_composer_ready": "/Users/kansic/.codex/visualizations/2026/07/25/019f98d7-308a-76c0-b5e0-1a9657cf64ea/atelier-0.2.14-gajae-composer-ready-window.png"
+      },
+      "source_state": {
+        "head_sha": "35e6b0d92eba33ca5644b4d209ef1eaac75d987b",
+        "working_tree_dirty_at_proof_time": true,
+        "head_sha_uniquely_identifies_build": false
+      },
+      "build_artifact_identifier": {
+        "kind": "executable_sha256",
+        "value": "4ee04fbed757f015c910171f4e7c0c3979ca009d396f90a6abfb890e2e1b1868"
+      },
+      "candidate_app": "/Users/kansic/Service/atelier/src-tauri/target/release/bundle/macos/Atelier.app",
+      "installed_app": "/Applications/Atelier.app",
+      "candidate_installed_hashes_match": true,
+      "codesign_verified": true,
+      "renderer_ready": true,
+      "dmg_sha256": "3f9aba91eee83ec12cb1da2a24d3a470ff5cafd2d2e2668011a37e010563cd5b",
+      "prior_0_2_12_backup": "/Users/kansic/Library/Application Support/Atelier/Backups/Atelier-0.2.12-before-0.2.13.app",
+      "prior_0_2_13_backup": "/Users/kansic/Library/Application Support/Atelier/Backups/Atelier-0.2.13-before-0.2.14.app",
+      "local_signing_only": true,
+      "public_publish_performed": false,
+      "public_signing_performed": false,
+      "notarization_performed": false
+    }
+  },
   "agent_blueprints": [
     {
       "agent_type": "code-mapper",
@@ -8285,7 +8379,7 @@
       "id": "local-runtime",
       "desc": "Detached PTY, normalized agent lifecycle, isolation, review, and cancellation pass automated regression gates.",
       "met": true,
-      "evidence": "SOT/service-factory/release-readiness-2026-07-23.md; frontend and release security gates passed; cargo test 190 passed, 0 failed, 1 ignored in native and store-feature configurations; installed renderer-ready probe passed"
+      "evidence": "SOT/service-factory/release-readiness-2026-07-23.md; all-feature Rust 209 passed, 0 failed, 1 ignored; Orca 23 contract smokes across 10 removable features; strict all-target/all-feature Clippy, format, diff, npm audit, and RustSec vulnerability gates passed"
     },
     {
       "id": "automatic-preview-evidence",
@@ -8301,9 +8395,9 @@
     },
     {
       "id": "mac-installed-reflection",
-      "desc": "Locally signed macOS 0.2.12 package is installed and verified at /Applications/Atelier.app.",
+      "desc": "Locally signed macOS 0.2.13 package is installed and verified at /Applications/Atelier.app.",
       "met": true,
-      "evidence": "SOT/service-factory/release-readiness-2026-07-23.md; installed and packaged signed executable SHA-256 match exactly at 0a7b87c262ccdbca8f94b3fc3c31638a620ab2cdfcdae9b513464165343c2c60; renderer-ready and strict codesign passed"
+      "evidence": "SOT/service-factory/release-readiness-2026-07-23.md; candidate and installed executable SHA-256 match at 3cce1530628decc24ac0d1955082f93ebf9bcebf327926fdc5f085850c3c9acf; codesign and renderer-ready pass; dirty-worktree proof identifies the build by executable SHA-256 rather than HEAD"
     },
     {
       "id": "physical-windows",

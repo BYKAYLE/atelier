@@ -2,6 +2,37 @@
 
 generated_at: 2026-07-13T09:35:39+09:00
 
+reconciled_at: 2026-07-26 KST
+
+## Current Judgment
+
+`supervised local candidate, public release blocked`
+
+- Atelier `0.2.14` source gates pass: all-feature Rust 230 passed / 3 ignored;
+  Orca 23 contract smokes / 10 removable features; strict
+  all-target/all-feature Clippy; format/diff checks; `npm audit` 0; RustSec 0
+  known vulnerabilities with 18 unmaintained and 2 unsound warnings.
+- Managed preview start is fail-closed and separately trusted localhost
+  inspection remains available.
+- Basic is the default; Auto retains sandbox and approval checks; visible/raw
+  Full bypass is removed.
+- Managed permission capability is provider-specific: Claude/Codex support
+  Basic/Auto. Hermes/Gajaecode require pinned Atelier-owned macOS runtimes,
+  isolated skills, and sandbox readiness; absent readiness fails before spawn.
+  Direct CLI remains separate and limited.
+- Installed runtime receipts verify Gajaecode 0.11.7/Bun 1.3.14/four defaults
+  and Hermes pinned commit/453 durable files/73 installed skills.
+- Frontend and Rust guards share a prompt corpus, but phrase matching is not a
+  complete action-level guarantee.
+- The P1 app-owned action/tool proxy and scoped approval receipts remain open.
+- The locally signed `0.2.14` candidate is installed and verified by exact
+  candidate/installed executable SHA-256 equality, codesign, renderer readiness,
+  and UI evidence. The dirty-worktree proof uses the executable SHA-256 as the
+  build identifier; HEAD is not unique build proof.
+- No public publish, Developer ID signing, notarization, deployment, DB/data
+  deletion, paid action, credential mutation, or physical Windows proof
+  occurred.
+
 continuation_verified_at: 2026-07-14T14:40:43+09:00
 
 > Continuation update: Atelier 0.2.8 is now the reflected local macOS baseline.
@@ -113,7 +144,7 @@ gate reject process-only startup without this evidence.
 - `windows_interactive_oauth`: validation required on physical Windows
 - `windows_public_installer`: blocked until SignPath output passes signed smoke
 
-## Final Status
+## Historical 0.2.5 Final Status
 
 `release_candidate_with_external_gates`
 

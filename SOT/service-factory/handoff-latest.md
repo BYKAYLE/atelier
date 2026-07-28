@@ -1,5 +1,41 @@
 # Service Factory Handoff
 
+current_status: supervised_local_candidate_public_release_blocked
+current_updated_at: 2026-07-26 KST
+
+## Current Handoff
+
+- Source candidate `0.2.14` passes 230 all-feature Rust tests with 3 ignored, 23
+  Orca contract smokes across 10 removable features, strict
+  all-target/all-feature Clippy, format/diff checks, `npm audit` 0, and RustSec
+  0 known vulnerabilities with 18 unmaintained and 2 unsound warnings.
+- Managed preview start is fail-closed; separately trusted localhost inspection
+  remains available.
+- Basic is the default. Auto retains sandboxing and approvals; visible/raw Full
+  bypass is removed.
+- Managed capability is provider-specific: Claude/Codex support Basic/Auto;
+  Hermes/Gajaecode require pinned Atelier-owned macOS runtimes, isolated
+  default skills, and sandbox readiness. Direct CLI remains a separate manual,
+  limited path.
+- Installed runtime receipts verify Gajaecode 0.11.7/Bun 1.3.14/four defaults
+  and Hermes pinned commit/453 durable files/73 installed skills.
+- Frontend and Rust guard behavior shares a prompt corpus. Phrase matching is
+  defense in depth, not a complete action/tool guarantee.
+- Successor P1: app-owned action/tool proxy plus scoped, expiring, one-use
+  approval receipts.
+- Locally signed `0.2.14` is installed and independently verified by matching
+  candidate/installed executable SHA-256, codesign, renderer readiness, and UI
+  evidence. The dirty-worktree proof uses the executable SHA-256 as the build
+  identifier; HEAD is not unique build proof.
+- The prior `0.2.13` app was moved, not deleted, to
+  `/Users/kansic/Library/Application Support/Atelier/Backups/Atelier-0.2.13-before-0.2.14.app`.
+- No public publish, Developer ID signing, notarization, or physical Windows
+  proof was performed.
+
+Verdict: `supervised local candidate, public release blocked`.
+
+## Historical Factory Record
+
 factory_id: sf-20260531-133552
 status: validation_required
 state_file: /Users/kansic/Service/atelier/SOT/service-factory-state.json

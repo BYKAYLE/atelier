@@ -10,6 +10,7 @@ mod agent_process;
 mod agent_quick_open;
 mod agent_registry;
 mod agent_rich_preview;
+mod agent_sandbox;
 mod agent_worktree;
 #[cfg(feature = "orca-atelier-cli")]
 mod atelier_cli;
@@ -1594,6 +1595,7 @@ pub fn run() {
             agent_worktree::agent_worktree_prepare,
             agent_worktree::agent_worktree_adopt,
             agent_preview::preview_health_check,
+            agent_preview::preview_capability,
             agent_preview::preview_service_start,
             agent_preview::preview_service_status,
             agent_preview::preview_service_stop,
@@ -1614,6 +1616,7 @@ pub fn run() {
             credentials::provider_open_oauth_login_url,
             credentials::provider_submit_oauth_code,
             credentials::provider_install_cli,
+            credentials::provider_prepare_managed_runtime,
             credentials::hermes_check_update,
             credentials::hermes_update,
             credentials::gajecode_check_update,

@@ -24,6 +24,12 @@ export type StellaFactoryPreflight = {
 
 type Language = "ko" | "en";
 
+type StellaSafetyRule = {
+  labelKo: string;
+  labelEn: string;
+  patterns: RegExp[];
+};
+
 const SOT_PATHS = [
   "SOT/L1-project-summary.md",
   "SOT/autonomous-workspace-contract.md",
@@ -33,6 +39,143 @@ const SOT_PATHS = [
   "SOT/service-factory/",
   "SOT/tasks.md",
   "SOT/evidence-log.md",
+];
+
+const STELLA_SAFETY_RULES: StellaSafetyRule[] = [
+  {
+    labelKo: "DB/테이블 삭제",
+    labelEn: "database/table deletion",
+    patterns: [
+      /\bdrop\s+(database|schema|table)\b/i,
+      /\btruncate\s+(?:table\s+)?[a-z0-9_."`]+\b/i,
+      /\bdelete\s+(the\s+)?database\b/i,
+      /\bdelete\s+from\b/i,
+      /db(?:는|를|가)?\s*삭제/i,
+      /데이터베이스(?:는|를|가)?\s*삭제/i,
+      /스키마(?:는|를|가)?\s*삭제/i,
+      /테이블(?:은|는|을|를|이|가)?\s*(삭제|초기화|비우)/i,
+    ],
+  },
+  {
+    labelKo: "사용자 데이터 삭제",
+    labelEn: "user-data deletion",
+    patterns: [
+      /\b(delete|wipe|erase|remove|purge|destroy|clear)\s+(all\s+)?user\s+data\b/i,
+      /(사용자|유저|회원)\s*데이터(?:는|를)?\s*(삭제|초기화|비우|지워)/i,
+    ],
+  },
+  {
+    labelKo: "프로덕션 배포/제출",
+    labelEn: "production deploy/submission",
+    patterns: [
+      /\bdeploy\s+to\s+prod(uction)?\b/i,
+      /\bdeploy\b.{0,40}\bto\s+prod(uction)?\b/i,
+      /\b(?:release|roll\s+out|push)\b.{0,40}\bto\s+prod(uction)?\b/i,
+      /\bproduction\s+(deploy|release|submit)\b/i,
+      /\bsubmit\s+to\s+app\s+store\b/i,
+      /\bship\s+to\s+production\b/i,
+      /프로덕션\s*(배포|릴리스|제출)/i,
+      /운영\s*배포/i,
+      /스토어\s*(제출|업로드)/i,
+      /실서비스\s*배포/i,
+    ],
+  },
+  {
+    labelKo: "자격증명 노출",
+    labelEn: "credential exposure",
+    patterns: [
+      /(api\s*key|token|secret|password|비밀번호|토큰|시크릿|자격증명).*(print|show|dump|expose|reveal|출력|보여|노출)/i,
+      /(print|show|dump|expose|reveal|출력|보여|노출).*(api\s*key|token|secret|password|비밀번호|토큰|시크릿|자격증명)/i,
+      /\becho\s+\$\{?[a-z0-9_]*(?:api_key|token|secret|password)\}?\b/i,
+      /\bprintf\b[^;\n]{0,80}\$\{?[a-z0-9_]*(?:api_key|token|secret|password)\}?\b/i,
+      /\bprintenv\s+[a-z0-9_]*(?:api_key|token|secret|password)\b/i,
+      /\bcat\s+(?:~\/)?[^\s;]*(?:\.aws\/credentials|\.ssh\/[^\s;]+|\.env)\b/i,
+      /\b(?:less|more|head|tail)\s+(?:~\/)?[^\s;]*(?:\.aws\/credentials|\.ssh\/[^\s;]+|\.env)\b/i,
+    ],
+  },
+  {
+    labelKo: "외부 공개/게시",
+    labelEn: "external publication",
+    patterns: [
+      /\bpublish\s+to\s+(github|npm|pypi)\b/i,
+      /\b(post|upload)\s+publicly\b/i,
+      /\bnpm\s+publish\b/i,
+      /외부\s*(게시|공개)/i,
+      /대외\s*공개/i,
+      /깃허브\s*공개\s*업로드/i,
+    ],
+  },
+  {
+    labelKo: "유료 결제/구매",
+    labelEn: "paid actions",
+    patterns: [
+      /\bpay\s+for\b/i,
+      /\bpay\s+(?:the|an?)\s+(?:invoice|bill)\b/i,
+      /\bcharge\s+the\s+card\b/i,
+      /\b(?:buy|purchase)\s+(?:it|this|now)\b/i,
+      /(?:^|\b(?:please|then|and)\s+)(?:buy|purchase)\s+(?:the|a|an|it|this)\b/i,
+      /\bcomplete\s+(?:the\s+)?purchase\b/i,
+      /\bplace\s+(?:the|an?)\s+order\b/i,
+      /유료\s*결제/i,
+      /결제해/i,
+      /구매해/i,
+      /비용\s*지불/i,
+    ],
+  },
+  {
+    labelKo: "파괴적 Git 작업",
+    labelEn: "destructive git",
+    patterns: [
+      /\bgit\s+reset\s+--hard\b/i,
+      /\bgit\s+(?:(?:(?:-c|-C|--work-tree|--git-dir)\s+\S+|(?:--work-tree|--git-dir)=\S+|--[a-z0-9-]+|-[a-z]+)\s+)*reset\b[^;,.!?\n]*\s--hard\b/i,
+      /\bgit\s+-c\s+\S+\s+reset\s+--hard\b/i,
+      /\bgit\s+(?:(?:(?:-c|-C|--work-tree|--git-dir)\s+\S+|(?:--work-tree|--git-dir)=\S+)\s+)+reset\s+--hard\b/i,
+      /\bgit\s+clean\s+-(?=[a-z]*f)(?=[a-z]*d)[a-z]+\b/i,
+      /\bgit\s+(?:(?:(?:-c|-C|--work-tree|--git-dir)\s+\S+|(?:--work-tree|--git-dir)=\S+|--[a-z0-9-]+|-[a-z]+)\s+)*clean\b(?=[^;,.!?\n]*(?:-f\b|--force\b|-[a-z]*f[a-z]*\b))(?=[^;,.!?\n]*(?:-d\b|--directories\b|-[a-z]*d[a-z]*\b))[^;,.!?\n]*/i,
+      /\bgit\s+(?:(?:(?:-c|-C|--work-tree|--git-dir)\s+\S+|(?:--work-tree|--git-dir)=\S+)\s+)+clean\s+-(?=[a-z]*f)(?=[a-z]*d)[a-z]+\b/i,
+      /\bgit\s+clean\b(?=[^;,.!?\n]*(?:-f\b|--force\b))(?=[^;,.!?\n]*(?:-d\b|--directories\b))[^;,.!?\n]*/i,
+      /\bgit\s+-c\s+\S+\s+clean\b(?=[^;,.!?\n]*(?:-f\b|--force\b))(?=[^;,.!?\n]*(?:-d\b|--directories\b))[^;,.!?\n]*/i,
+      /\bgit\s+(?:(?:(?:-c|-C|--work-tree|--git-dir)\s+\S+|(?:--work-tree|--git-dir)=\S+)\s+)+clean\b(?=[^;,.!?\n]*(?:-f\b|--force\b))(?=[^;,.!?\n]*(?:-d\b|--directories\b))[^;,.!?\n]*/i,
+      /\bgit\s+push\b[^;,.!?\n]*\s--force(?:-with-lease)?\b/i,
+      /\bgit\s+-c\s+\S+\s+push\b[^;,.!?\n]*\s--force(?:-with-lease)?\b/i,
+      /\bgit\s+(?:(?:(?:-c|-C|--work-tree|--git-dir)\s+\S+|(?:--work-tree|--git-dir)=\S+)\s+)+push\b[^;,.!?\n]*\s--force(?:-with-lease)?\b/i,
+      /\bgit\s+push\s+-f\b/i,
+      /\bgit\s+push\b[^;,.!?\n]*\s-f\b/i,
+      /\bgit\s+(?:(?:(?:-c|-C|--work-tree|--git-dir)\s+\S+|(?:--work-tree|--git-dir)=\S+)\s+)+push\b[^;,.!?\n]*\s-f\b/i,
+      /\bforce\s+push\b/i,
+      /강제\s*푸시/i,
+      /하드\s*리셋/i,
+    ],
+  },
+  {
+    labelKo: "되돌릴 수 없는 마이그레이션",
+    labelEn: "irreversible migration",
+    patterns: [
+      /\bdrop\s+(column|index|constraint)\b/i,
+      /\bremove\s+column\b/i,
+      /\bdestructive\s+migration\b/i,
+      /(컬럼|칼럼)\s*삭제/i,
+      /인덱스\s*삭제/i,
+      /제약\s*삭제/i,
+      /마이그레이션.*삭제/i,
+    ],
+  },
+];
+
+const UNSAFE_OVERRIDE_PATTERNS = [
+  /\bdo\s+not\s+(?:hesitate|avoid|refuse)\b/i,
+  /\bdon't\s+(?:hesitate|avoid|refuse)\b/i,
+  /\b(?:ignore|bypass|disable|remove|turn\s+off)\b.{0,32}\b(?:guard|gate|policy|rule|approval)\b/i,
+  /\b(?:ignore|bypass)\b.{0,32}\b(?:restriction|safety|protection)\b/i,
+  /(?:가드|게이트|정책|규칙|승인|안전장치).{0,16}(?:무시|우회|해제|끄|꺼)/,
+  /(?:무시|우회|해제).{0,16}(?:가드|게이트|정책|규칙|승인|안전장치)/,
+  /(?:망설이지|주저하지|피하지)\s*말/,
+  /\b(?:and|then)\s+(?:execute|run|perform|proceed|carry\s+out|do\s+it)\b/i,
+  /\b(?:and|then)\s+(?:implement|follow|launch|start|begin|apply|enact)\b/i,
+  /\b(?:plan|checklist|policy)\s+execution\b/i,
+  /\b(?:plan|checklist|policy)\s+(?:is\s+)?(?:disabled|deactivated|off)\b/i,
+  /\b(?:plan|checklist|policy)\b.{0,80}\b(?:execute|run|perform|proceed|carry\s+out)\b/i,
+  /(?:계획|체크리스트|정책).{0,40}(?:실행|진행|수행|시행)/,
 ];
 
 export function formatStellaFactoryInstruction(args: {
@@ -56,7 +199,7 @@ export function formatStellaFactoryInstruction(args: {
       "- A single implemented feature is not done unless it closes the declared milestone and the readiness report proves no remaining Stella Mode queue is required.",
       "- Before broad edits, inspect the real code, run surfaces, docs, tests, and SOT status. Prefer existing patterns over new architecture.",
       "- Execute safely: small commands first, capture evidence, avoid destructive or irreversible operations.",
-      "- Forbidden without explicit approval: database deletion, user-data deletion, production deploy/submission, credential exposure, paid purchases, and external publication. External network calls are allowed only when required by the user task or dependency verification; state why when used.",
+      "- Protected action classes require explicit Atelier approval: data_loss, production_side_effect, credential_disclosure, paid_action, and external_publication. External network calls are allowed only when required by the user task or dependency verification; state why when used.",
       "- After code edits, verify with the narrowest meaningful checks first, then broader build/test/probe checks when risk justifies it.",
       "- Use role delegation internally: Stella judges priority and scope, Worker implements, Probe verifies, Security reviews risk, Release checks packaging/update readiness, Auditor closes with evidence.",
       "- Keep or update SOT when the work changes project behavior. Preferred files: " + SOT_PATHS.join(", ") + ".",
@@ -75,7 +218,7 @@ export function formatStellaFactoryInstruction(args: {
     "- 단일 기능 구현은 완료가 아닙니다. 선언한 milestone이 닫히고 readiness report가 남은 스텔라 모드 queue가 없음을 증명할 때만 완료입니다.",
     "- 넓은 수정 전에는 실제 코드, 실행 표면, 문서, 테스트, SOT 상태를 먼저 확인하세요. 새 구조보다 기존 패턴을 우선합니다.",
     "- 안전하게 실행하세요: 작은 명령부터 수행하고, 증거를 수집하며, 파괴적/되돌리기 어려운 작업은 피합니다.",
-    "- 명시 승인 없이 금지: DB 삭제, 사용자 데이터 삭제, 프로덕션 배포/제출, 자격증명 노출, 유료 결제, 외부 게시. 외부 네트워크 호출은 사용자 작업 또는 의존성 검증에 필요할 때만 사용하고 이유를 남기세요.",
+    "- 보호 작업 분류는 Atelier의 명시 승인이 필요합니다: data_loss, production_side_effect, credential_disclosure, paid_action, external_publication. 외부 네트워크 호출은 사용자 작업 또는 의존성 검증에 필요할 때만 사용하고 이유를 남기세요.",
     "- 코드 수정 후에는 위험도에 맞게 가장 좁은 검증부터 실행하고, 필요하면 build/test/probe 검증까지 확장하세요.",
     "- 역할 위임을 내부적으로 적용하세요: Stella는 우선순위와 범위를 판단, Worker는 구현, Probe는 검증, Security는 위험 검토, Release는 패키징/업데이트 준비, Auditor는 증거 기반 종료.",
     "- 프로젝트 동작이 바뀌면 SOT를 유지/갱신하세요. 권장 파일: " + SOT_PATHS.join(", ") + ".",
@@ -102,74 +245,48 @@ export function parseStellaFactoryCommand(rawText: string, language: Language): 
 export function detectStellaFactorySafetyBlock(rawText: string, language: Language): StellaFactorySafetyBlock | null {
   const trimmed = rawText.trim();
   if (!isStellaFactoryInvocation(trimmed)) return null;
-  const lower = trimmed.toLowerCase();
-  const normalized = trimmed.replace(/\s+/g, " ");
-  const negated = /하지\s*마|하지\s*말|삭제하지|지우지|금지|do\s+not|don't|without\s+delet/i.test(normalized);
+  const parsed = parseStellaFactoryCommand(trimmed, language);
+  const subject = parsed?.body ?? parseStellaFactoryAlias(trimmed)?.body ?? trimmed;
 
-  const rules = [
-    {
-      labelKo: "DB/테이블 삭제",
-      labelEn: "database/table deletion",
-      patterns: [
-        /\b(drop|truncate)\s+(database|schema|table)\b/i,
-        /\bdelete\s+from\b/i,
-        /db\s*삭제/i,
-        /데이터베이스\s*삭제/i,
-        /테이블\s*(삭제|초기화|비우)/i,
-      ],
-    },
-    {
-      labelKo: "사용자 데이터 삭제",
-      labelEn: "user-data deletion",
-      patterns: [
-        /사용자\s*데이터\s*(삭제|초기화|비우)/i,
-        /유저\s*데이터\s*(삭제|초기화|비우)/i,
-        /\bdelete\s+(all\s+)?user\s+data\b/i,
-        /\bwipe\s+(all\s+)?user\s+data\b/i,
-      ],
-    },
-    {
-      labelKo: "프로덕션 배포/제출",
-      labelEn: "production deploy/submission",
-      patterns: [
-        /프로덕션\s*(배포|제출|릴리스|업로드)/i,
-        /운영\s*(배포|제출|릴리스|업로드)/i,
-        /\bproduction\s+(deploy|submit|release|publish)\b/i,
-        /\bdeploy\s+to\s+prod(uction)?\b/i,
-      ],
-    },
-    {
-      labelKo: "외부 공개/게시",
-      labelEn: "external publication",
-      patterns: [
-        /외부\s*(게시|공개|출판)/i,
-        /(github|npm|pypi|store|스토어).*(publish|upload|release|게시|업로드|릴리스)/i,
-      ],
-    },
-    {
-      labelKo: "자격증명 노출",
-      labelEn: "credential exposure",
-      patterns: [
-        /(api\s*key|token|secret|password|비밀번호|토큰|시크릿|자격증명).*(print|show|expose|dump|출력|보여|노출)/i,
-        /(print|show|expose|dump|출력|보여|노출).*(api\s*key|token|secret|password|비밀번호|토큰|시크릿|자격증명)/i,
-      ],
-    },
-  ];
-
-  for (const rule of rules) {
-    if (negated && !/(deploy|publish|release|submit|배포|제출|릴리스|업로드)/i.test(lower)) continue;
-    if (rule.patterns.some((pattern) => pattern.test(trimmed))) {
-      const label = language === "en" ? rule.labelEn : rule.labelKo;
-      return {
-        label,
-        message: language === "en"
-          ? `Stella Mode safety gate stopped this request before agent execution because it appears to request ${label}. Send a narrower request with explicit approval if this action is truly intended.`
-          : `스텔라 모드 안전 게이트가 에이전트 실행 전에 이 요청을 멈췄습니다. 요청에 ${label} 작업이 포함된 것으로 보입니다. 정말 필요한 작업이면 별도 명시 승인을 포함해 더 좁은 범위로 다시 요청해주세요.`,
-      };
-    }
+  const rule = detectForbiddenStellaSafetyRule(subject);
+  if (rule) {
+    const label = language === "en" ? rule.labelEn : rule.labelKo;
+    return {
+      label,
+      message: language === "en"
+        ? `Stella Mode safety gate stopped this request before agent execution because it appears to request ${label}. Send a narrower request with explicit approval if this action is truly intended.`
+        : `스텔라 모드 안전 게이트가 에이전트 실행 전에 이 요청을 멈췄습니다. 요청에 ${label} 작업이 포함된 것으로 보입니다. 정말 필요한 작업이면 별도 명시 승인을 포함해 더 좁은 범위로 다시 요청해주세요.`,
+    };
   }
 
   return null;
+}
+
+export function containsProtectedActionIntent(rawText: string) {
+  return detectForbiddenStellaSafetyRule(rawText.trim()) !== null;
+}
+
+function detectForbiddenStellaSafetyRule(clause: string) {
+  for (const rule of STELLA_SAFETY_RULES) {
+    for (const pattern of rule.patterns) {
+      const matcher = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`);
+      for (const match of clause.matchAll(matcher)) {
+        if (match.index === undefined) continue;
+        if (!riskMatchHasGuardContext(clause, match.index, match[0].length)) return rule;
+      }
+    }
+  }
+  return null;
+}
+
+function riskMatchHasGuardContext(clause: string, index: number, length: number) {
+  if (UNSAFE_OVERRIDE_PATTERNS.some((pattern) => pattern.test(clause))) return false;
+
+  const before = clause.slice(0, index).trimEnd();
+  const after = clause.slice(index + length).trimStart();
+  const safePrefix = /(?:\bdo\s+not|\bdon't|\bmust\s+not|\bshould\s+not|\bnever|\bavoid|\bprevent(?:s|ing)?|\bblock(?:s|ing)?|\bdisallow(?:s|ing)?|\bforbid(?:s|ding)?|\breject(?:s|ing)?|\bprotect(?:s|ing)?\s+against)(?:\s+(?:accidentally|ever|automatically|directly|silently))?$|(?:\banalyze|\banalyse|\baudit|\breview|\bexplain|\binvestigate|\bwhy|\bdocument|\bdetect|\bcheck\s+whether|\bverify\s+whether|분석|검토|감사|설명|조사|왜|점검)$/i;
+  const safeSuffix = /^(?:is\s+forbidden|must\s+not|should\s+not|must\s+be\s+(?:blocked|prevented|rejected)|prevention\b|checklist\b|policy\b|risks?\b|behaviou?r\b|performance\b|query\b|statement\b|detection\b|protection\b|readiness\b|plan\b|금지|하지|하지\s*마|하지\s*말|하지\s*않|를\s*막|을\s*막|를\s*방지|을\s*방지|방지|차단|체크리스트|정책|위험|동작|성능|쿼리|탐지|보호|준비도|계획)/i;
+  return safePrefix.test(before) || safeSuffix.test(after);
 }
 
 function parseStellaFactoryAlias(trimmed: string): { command: StellaFactoryCommand; body: string } | null {
@@ -213,7 +330,7 @@ export function buildStellaFactoryPrompt(
       "13. Stop only when done_when is satisfied, readiness is pilot_ready/full_ready, or a concrete blocker is proven. Do not stop only because one feature was implemented.",
       "",
       "Hard safety gates:",
-      "- No DB deletion, user-data deletion, production deploy/submission, external publication, credential disclosure, or paid action without explicit approval.",
+      "- Apply the app-owned protected-action policy to data_loss, production_side_effect, external_publication, credential_disclosure, and paid_action.",
       "- Do not overwrite unrelated user changes.",
       "- Do not replace the app architecture unless the existing path is proven impossible.",
     ].join("\n");
@@ -243,7 +360,7 @@ export function buildStellaFactoryPrompt(
     "13. done_when이 충족되거나 readiness가 pilot_ready/full_ready에 도달하거나 구체적인 차단 사유가 증명될 때만 멈춥니다. 단일 기능을 하나 구현했다는 이유만으로 종료하지 않습니다.",
     "",
     "강제 안전 게이트:",
-    "- 명시 승인 없이 DB 삭제, 사용자 데이터 삭제, 프로덕션 배포/제출, 외부 게시, 자격증명 노출, 유료 결제를 하지 않습니다.",
+    "- data_loss, production_side_effect, external_publication, credential_disclosure, paid_action에는 앱이 소유한 보호 작업 정책을 적용합니다.",
     "- 관련 없는 사용자 변경을 덮어쓰지 않습니다.",
     "- 기존 경로가 불가능하다는 근거 없이 앱 구조를 교체하지 않습니다.",
   ].join("\n");

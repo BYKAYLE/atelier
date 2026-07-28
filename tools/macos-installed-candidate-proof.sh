@@ -132,9 +132,13 @@ if [[ -z "$PROBE_OUTPUT" ]]; then
 fi
 
 SOURCE_SHA="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+SOURCE_WORKTREE_DIRTY="false"
+if [[ -n "$(git -C "$ROOT_DIR" status --porcelain --untracked-files=all)" ]]; then
+  SOURCE_WORKTREE_DIRTY="true"
+fi
 mkdir -p "$(dirname "$OUTPUT")"
 
-export OUTPUT SOURCE_SHA EXPECTED_VERSION CANDIDATE_VERSION INSTALLED_VERSION
+export OUTPUT SOURCE_SHA SOURCE_WORKTREE_DIRTY EXPECTED_VERSION CANDIDATE_VERSION INSTALLED_VERSION
 export CANDIDATE_BUNDLE_ID INSTALLED_BUNDLE_ID CANDIDATE_APP INSTALLED_APP
 export CANDIDATE_EXE INSTALLED_EXE CANDIDATE_EXE_SHA INSTALLED_EXE_SHA
 export PROBE_OUTPUT APP_PID
@@ -169,6 +173,14 @@ const evidence = {
   status: "verified",
   proofType: "local-installed-candidate",
   sourceSha: process.env.SOURCE_SHA,
+  sourceState: {
+    headSha: process.env.SOURCE_SHA,
+    workingTreeDirtyAtProofTime: process.env.SOURCE_WORKTREE_DIRTY === "true",
+    buildArtifactIdentifier: {
+      kind: "sha256",
+      value: process.env.CANDIDATE_EXE_SHA,
+    },
+  },
   version: process.env.EXPECTED_VERSION,
   bundleIdentifier: process.env.CANDIDATE_BUNDLE_ID,
   generatedAt: new Date().toISOString(),
@@ -193,6 +205,8 @@ const evidence = {
     executableHashesMatch: true,
   },
   limitations: {
+    headShaUniquelyIdentifiesBuild:
+      process.env.SOURCE_WORKTREE_DIRTY !== "true",
     developerIdNotarizationClaimed: false,
     publicDistributionClaimed: false,
   },

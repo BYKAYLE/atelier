@@ -40,6 +40,24 @@ assert.deepEqual(classifyGajaePrefixedInput("/gjc"), { kind: "empty" });
 assert.deepEqual(classifyGajaePrefixedInput("/codex inspect this"), { kind: "none" });
 
 const workspaceSource = readFileSync(new URL("../src/components/AgentWorkspace.tsx", import.meta.url), "utf8");
+const agentSource = readFileSync(new URL("../src-tauri/src/agent.rs", import.meta.url), "utf8");
+const managedGajae = agentSource.slice(
+  agentSource.indexOf("fn run_gajecode"),
+  agentSource.indexOf("fn run_hermes"),
+);
+assert.doesNotMatch(
+  managedGajae,
+  /\brun_codex\s*\(/,
+  "A Gajaecode task must never bypass isolated GJC when its internal model provider is Codex",
+);
+assert.match(agentSource, /return format!\("openai-codex\/\{model\}"\)/);
+assert.match(agentSource, /\.arg\("--no-tools"\)[\s\S]*\.arg\("--tools"\)[\s\S]*\.arg\("read,search,find"\)/);
+const managedInvocation = agentSource.slice(
+  agentSource.indexOf("fn configure_gajecode_invocation"),
+  agentSource.indexOf("fn is_help_request"),
+);
+assert.doesNotMatch(managedInvocation, /\.arg\("--no-session"\)/);
+assert.match(managedInvocation, /\.arg\("--resume"\)\.arg\(session_id\)/);
 assert.match(
   workspaceSource,
   /\.\.\.GAJAE_CODE_COMMANDS/,

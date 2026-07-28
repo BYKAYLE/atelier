@@ -1,5 +1,118 @@
 # Evidence Log
 
+## 2026-07-26 Gajae provider parity and installed 0.2.15 proof
+
+- Gajae remains an Atelier-owned GJC adapter with isolated HOME/config/session/
+  skill paths. The provider selector changes only the model provider inside
+  Gajae; it does not convert task identity to Codex.
+- Gajae settings expose `Claude`, `Codex`, and `Alibaba Cloud` as new-task
+  defaults. Hermes and Gajae saved defaults are read when a new session is
+  created unless a profile explicitly supplies provider/model flags. An
+  explicit composer change updates that session and the future default without
+  rewriting other existing sessions.
+- Gajae Codex uses the canonical ChatGPT subscription access token only through
+  `OPENAI_CODEX_OAUTH_TOKEN` in the one-time isolated child environment.
+  Refresh tokens, API-key fallback, personal global skills/config, and
+  `agent.db` are not copied.
+- Fresh source/build verification:
+  - provider preference, Gajae routing, settings navigation, and provider usage
+    smokes passed;
+  - production frontend build passed;
+  - Rust library tests: 239 passed, 0 failed, 4 ignored.
+- Final package/install proof:
+  - candidate and installed version: `0.2.15`;
+  - candidate and `/Applications/Atelier.app` executable SHA-256:
+    `d1c433a730536868433140949cf468420dea6ae48cf129edfa5099bd0f72b1a9`;
+  - local codesign and installed renderer-ready pass;
+  - receipt:
+    `artifacts/macos-installed-candidate-proof.json`;
+  - DMG:
+    `src-tauri/target/release/bundle/dmg/Atelier_0.2.15_aarch64.dmg`,
+    SHA-256
+    `003f096d352150c349077ff026ee8592a115697cff8ea72ae3bf459c5a0a427a`.
+- Click-driven installed-app evidence:
+  - selected Gajae Codex, restarted Atelier, and confirmed the Codex selection
+    persisted;
+  - created a new Gajae task without sending a prompt and confirmed its composer
+    opened at model provider `Codex`, model `5.5`;
+  - restored the pre-proof user default to Claude;
+  - screenshots:
+    `/Users/kansic/.codex/visualizations/2026/07/25/019f98d7-308a-76c0-b5e0-1a9657cf64ea/atelier-0.2.15-gajae-model-providers.png`
+    and
+    `/Users/kansic/.codex/visualizations/2026/07/25/019f98d7-308a-76c0-b5e0-1a9657cf64ea/atelier-0.2.15-gajae-codex-default-new-task.png`.
+- Boundary: no prompt was sent during the click proof. A real authenticated
+  provider response, clean second-company-Mac proof, Developer ID
+  notarization, public distribution, and physical Windows proof remain open.
+
+## 2026-07-26 Reproducible managed Hermes and Gajae runtime (Installed 0.2.14)
+
+- Source capability and runtime contract includes:
+  - managed runtime pin policy constants in `credentials.rs`,
+  - `ensure_managed_agent_runtime_blocking_at` state machine with
+    `checking/installing/bootstrapping_skills/verifying/ready/failed`,
+  - readiness receipt writes and `repaired` flag tracking.
+- `agent_send` now requires managed-runtime readiness for Hermes and Gajae and
+  passes the readiness artifact into command execution.
+- `run_gajecode` and `run_hermes` command wrappers use the managed runtime
+  command helper when `managed_runtime` is present and enforce managed-path
+  prerequisites.
+- `agent_sandbox.rs` adds macOS sandbox launch behavior for managed commands with
+  bounded read/write root handling.
+- `agent_registry.rs` now advertises managed runtime execution controller,
+  runtime skill ownership metadata, and automatic online bootstrap for Hermes and
+  Gajae, replacing prior blanket-disabled managed-capability behavior for these
+  providers.
+- `src/lib/tauri.ts`, `src/components/AgentWorkspace.tsx`,
+  and `src/components/ConnectionsPanel.tsx` were updated to expose managed
+  runtime status, progress, unavailable reason, and runtime identity fields.
+- `tools/agent-permission-capability-smoke.ts` and
+  `tools/provider-runtime-identity-smoke.ts` now assert managed progress states,
+  runtime capability identity, and managed API preparation.
+- Real bootstrap defect and recovery:
+  - uv installed pinned Hermes Agent v0.19.0 but its wheel omitted repository
+    `skills/`, so the initial installed UI failed closed on a missing manifest;
+  - Atelier now uses exact-commit `git archive`, Git-object verification, and a
+    durable SHA-256 source manifest;
+  - durable source contains 453 files and produces 73 verified installed
+    skills; invalid prior trees are moved to quarantine;
+  - normal runtime commands clear `HERMES_BUNDLED_SKILLS`; only the repair sync
+    receives the durable source path.
+- Gajaecode isolation proof:
+  - `gjc/0.11.7` and managed Bun `1.3.14`;
+  - four verified defaults: `deep-interview`, `ralplan`, `team`, `ultragoal`;
+  - canonical skill root is
+    `providers/gajecode/home/.gjc/agent/skills`, outside personal global skill
+    roots.
+- Fresh final source verification:
+  - Rust: 230 passed, 0 failed, 3 ignored;
+  - strict all-target/all-feature Clippy, format, and diff hygiene passed;
+  - production frontend build, runtime identity, permission capability, and
+    Gajae routing smokes passed;
+  - Orca: 23 contract smokes, 10 removable backend features;
+  - npm audit: 0 vulnerabilities;
+  - RustSec: 0 vulnerabilities, with 18 unmaintained and 2 unsound upstream
+    warnings retained.
+- Local package/install proof:
+  - app version: `0.2.14`;
+  - candidate and `/Applications/Atelier.app` executable SHA-256:
+    `4ee04fbed757f015c910171f4e7c0c3979ca009d396f90a6abfb890e2e1b1868`;
+  - DMG: 13,649,087 bytes, SHA-256
+    `3f9aba91eee83ec12cb1da2a24d3a470ff5cafd2d2e2668011a37e010563cd5b`;
+  - local codesign, renderer-ready, and 1600 x 900 installed-window checks pass;
+  - installed UI `설치·복구` reports runtime/default-skill ready for Hermes and
+    Gajaecode;
+  - installed Hermes and Gajaecode task composers no longer render the prior
+    blanket-disabled warning and instead expose the Atelier-managed runtime and
+    adapter skill-owner identity.
+- The same source tree now preserves existing platform limits:
+  Hermes/Gajae managed runtime is macOS-enabled; non-macOS remains explicitly
+  unavailable with disabled reason.
+- Scope and boundary:
+  source, local build, installed app, and runtime receipts are verified
+  separately. No authenticated/paid provider response, credential bundling,
+  Developer ID notarization, public distribution, or physical Windows proof is
+  claimed.
+
 ## 2026-07-23 Release Publication Gate Hardening (Source/Workflow)
 
 - The version-tag workflow now keeps macOS and Windows assets in one private
@@ -2201,3 +2314,78 @@ Unclaimed external evidence:
 - Physical signed Windows install, visible browser window, Smart App Control,
   and restart persistence remain unproven because the repository currently has
   no self-hosted Windows runner.
+
+## 2026-07-25 Atelier 0.2.13 Source Candidate
+
+Truth surface: source and automated checks only.
+
+- Version: `0.2.13`.
+- Rust all-features: 209 passed, 0 failed, 1 ignored.
+- Orca feature gate: 23 contract smokes across 10 removable features.
+- Strict all-target/all-feature Clippy: pass.
+- Format and diff checks: pass.
+- `npm audit`: 0 vulnerabilities.
+- RustSec: 0 known vulnerabilities; 18 unmaintained and 2 unsound upstream
+  warnings remain visible.
+- Preview contract: Atelier-managed start is fail-closed; inspection of a
+  separately trusted localhost service remains available.
+- Permission contract: Basic is the default; Auto retains sandboxing and
+  approval checks; visible and raw Full bypass paths are removed.
+- The full-gate counts include provider-capability enforcement: Claude/Codex are
+  the managed Basic/Auto providers; Hermes/Gajaecode managed execution
+  advertises capability false and fails closed before lifecycle/spawn with a
+  visible UI reason. Direct CLI is a separate manual, limited path.
+- Guard contract: frontend and Rust behavior is exercised by a shared prompt
+  corpus. Phrase matching remains defense in depth and is not a complete
+  action-level guarantee.
+- Remaining P1: app-owned action/tool proxy and scoped approval receipts.
+
+Verdict: `supervised local candidate, public release blocked`.
+
+Non-evidence and actions not performed:
+
+- No public publish, public signing, notarization, deployment, DB/data deletion,
+  paid action, or credential mutation occurred.
+
+### Local package and installed-app reflection
+
+- Proof type: `local-installed-candidate`; status: `verified`.
+- Proof generated at: `2026-07-25T12:57:45.010Z`.
+- Proof HEAD SHA: `35e6b0d92eba33ca5644b4d209ef1eaac75d987b`.
+- Source state: `workingTreeDirtyAtProofTime: true`;
+  `headShaUniquelyIdentifiesBuild: false`.
+- Build artifact identifier: executable SHA-256
+  `3cce1530628decc24ac0d1955082f93ebf9bcebf327926fdc5f085850c3c9acf`.
+- Candidate app:
+  `/Users/kansic/Service/atelier/src-tauri/target/release/bundle/macos/Atelier.app`.
+- Installed app: `/Applications/Atelier.app`.
+- Version: `0.2.13` on candidate and installed app.
+- Candidate and installed executable SHA-256:
+  `3cce1530628decc24ac0d1955082f93ebf9bcebf327926fdc5f085850c3c9acf`.
+- DMG:
+  `/Users/kansic/Service/atelier/src-tauri/target/release/bundle/dmg/Atelier_0.2.13_aarch64.dmg`.
+- DMG SHA-256:
+  `d55d6f21e9b4373aa1d83455bcbc6adea447b485eedceb8f380287d3437d5851`.
+- Candidate and installed codesign checks: pass.
+- Installed renderer receipt: version `0.2.13`, PID `74123`, window `main`,
+  status `ready`.
+- Prior installed `0.2.12` was moved without deletion to
+  `/Users/kansic/Library/Application Support/Atelier/Backups/Atelier-0.2.12-before-0.2.13.app`.
+- Machine-readable proof:
+  `/Users/kansic/.codex/visualizations/2026/07/25/019f98d7-308a-76c0-b5e0-1a9657cf64ea/atelier-0.2.13-installed-proof.json`.
+- UI evidence:
+  - installed app:
+    `/Users/kansic/.codex/visualizations/2026/07/25/019f98d7-308a-76c0-b5e0-1a9657cf64ea/atelier-0.2.13-installed.png`;
+  - Basic/Auto permission menu:
+    `/Users/kansic/.codex/visualizations/2026/07/25/019f98d7-308a-76c0-b5e0-1a9657cf64ea/atelier-0.2.13-permission-menu.png`;
+  - Hermes managed-execution block:
+    `/Users/kansic/.codex/visualizations/2026/07/25/019f98d7-308a-76c0-b5e0-1a9657cf64ea/atelier-0.2.13-hermes-blocked.png`;
+  - Gajaecode managed-execution block:
+    `/Users/kansic/.codex/visualizations/2026/07/25/019f98d7-308a-76c0-b5e0-1a9657cf64ea/atelier-0.2.13-gajae-blocked.png`;
+  - preview external-inspection-only state:
+    `/Users/kansic/.codex/visualizations/2026/07/25/019f98d7-308a-76c0-b5e0-1a9657cf64ea/atelier-0.2.13-preview-disabled.png`.
+
+This verifies a locally signed installed candidate only. Developer ID signing,
+notarization, public distribution, and physical Windows behavior remain
+unproven. Because the worktree was dirty at proof time, the HEAD SHA is not the
+candidate identity; the executable SHA-256 is.

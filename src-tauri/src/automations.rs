@@ -310,7 +310,7 @@ fn validate_input(
     let permission_mode = input.permission_mode.trim().to_ascii_lowercase();
     if !matches!(permission_mode.as_str(), "basic" | "auto") {
         return Err(
-            "Scheduled automations allow basic or auto permission only; full permission requires an interactive run."
+            "Scheduled automations allow basic or guarded auto permission only; raw full-bypass permission is not exposed by Atelier."
                 .to_string(),
         );
     }

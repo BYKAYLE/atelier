@@ -745,6 +745,12 @@ export interface PreviewServiceStatus {
   recent_output: string[];
 }
 
+export interface PreviewCapability {
+  managed_start: boolean;
+  external_loopback_inspection: boolean;
+  managed_start_reason?: string | null;
+}
+
 export interface StellaPathStatus {
   path: string;
   exists: boolean;
@@ -883,14 +889,66 @@ export interface AgentRuntimeCapability {
   label: string;
   cli: string;
   auth_owner: string;
+  adapter_provider: string;
+  execution_controller: string;
+  skill_owner: string;
+  automatic_online_runtime_bootstrap: boolean;
   supports_resume: boolean;
   supports_model_catalog: boolean;
   supports_permission_mode: boolean;
+  supports_managed_agent_send: boolean;
+  managed_agent_send_disabled_reason?: string | null;
+}
+
+export interface ManagedAgentRuntimeReadiness {
+  provider: AgentProvider;
+  ready: boolean;
+  repaired: boolean;
+  executable: string;
+  providerRoot: string;
+  homeDir: string;
+  stateDir: string;
+  cacheDir: string;
+  tempDir: string;
+  skillsDir: string;
+  workspaceDir?: string | null;
+  runtimePin: string;
+  dependencyPin?: string | null;
+  policyVersion: string;
+  skillBootstrapVersion: string;
+  receiptPath: string;
+}
+
+export type ManagedAgentRuntimeProgressState =
+  | "checking"
+  | "installing"
+  | "bootstrapping_skills"
+  | "verifying"
+  | "ready"
+  | "failed";
+
+export interface ManagedAgentRuntimeProgress {
+  provider: AgentProvider;
+  state: ManagedAgentRuntimeProgressState;
+  message: string;
+}
+
+export async function onManagedAgentRuntimeProgress(
+  handler: (event: ManagedAgentRuntimeProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<ManagedAgentRuntimeProgress>("managed-agent-runtime-progress", (event) => handler(event.payload));
+}
+
+export async function providerPrepareManagedRuntime(
+  provider: "hermes" | "gajecode",
+): Promise<ManagedAgentRuntimeReadiness> {
+  return invoke("provider_prepare_managed_runtime", { provider });
 }
 
 export async function agentClaudeSend(args: {
   turnId: string;
   prompt: string;
+  safetySubject?: string | null;
   resumeSessionId?: string | null;
   cwd?: string | null;
   model?: string | null;
@@ -903,6 +961,7 @@ export async function agentSend(args: {
   provider: AgentProvider;
   turnId: string;
   prompt: string;
+  safetySubject?: string | null;
   resumeSessionId?: string | null;
   cwd?: string | null;
   model?: string | null;
@@ -1196,6 +1255,10 @@ export async function pluginSkillInstallStatus(): Promise<PluginSkillInstallStat
 
 export async function previewHealthCheck(url: string): Promise<PreviewCheckResult> {
   return invoke("preview_health_check", { url });
+}
+
+export async function previewCapability(): Promise<PreviewCapability> {
+  return invoke("preview_capability");
 }
 
 export async function previewServiceStart(args: {
@@ -1773,7 +1836,7 @@ export interface RemoteFollowupApprovalInput {
   provider: "claude" | "codex" | "hermes" | "gajecode";
   model?: string | null;
   effort?: "low" | "medium" | "high" | "xhigh" | "ultra" | null;
-  permissionMode?: "basic" | "auto" | "full" | null;
+  permissionMode?: Exclude<AgentPermissionMode, "full"> | null;
   stellaMode: boolean;
 }
 

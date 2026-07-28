@@ -2,7 +2,7 @@ import type { FeatureModule } from "../../features/featureRegistry";
 import { getFeatureSetting } from "../../features/featureSettings";
 import { normalizeControlTask } from "./controlRequest";
 
-type PermissionPolicy = "request" | "basic" | "full";
+type PermissionPolicy = "request" | "basic" | "auto" | "full" | "bypass" | "danger";
 
 function normalizeConfiguredControlTask(...args: Parameters<typeof normalizeControlTask>) {
   if (!getFeatureSetting("atelier-cli", "enabled", true)) {
@@ -10,8 +10,14 @@ function normalizeConfiguredControlTask(...args: Parameters<typeof normalizeCont
   }
   const task = normalizeControlTask(...args);
   const permissionPolicy = getFeatureSetting<PermissionPolicy>("atelier-cli", "permissionPolicy", "request");
-  if (permissionPolicy === "basic" || permissionPolicy === "full") {
-    return { ...task, permissionMode: permissionPolicy };
+  if (permissionPolicy === "basic") {
+    return { ...task, permissionMode: "basic" as const };
+  }
+  if (permissionPolicy === "auto") {
+    return { ...task, permissionMode: "auto" as const };
+  }
+  if (permissionPolicy === "full" || permissionPolicy === "bypass" || permissionPolicy === "danger") {
+    return { ...task, permissionMode: "basic" as const };
   }
   return task;
 }
@@ -31,12 +37,12 @@ const feature: FeatureModule = {
         key: "permissionPolicy",
         kind: "select",
         label: { ko: "원격 작업 권한 정책", en: "Remote task permission policy" },
-        hint: { ko: "요청값을 유지하거나 항상 기본/전체 권한으로 제한합니다.", en: "Keep the requested value or force basic/full permissions." },
+        hint: { ko: "요청값을 유지하거나 기본/자동 검토 권한으로 제한합니다.", en: "Keep the requested value or force basic/auto-review permissions." },
         defaultValue: "request",
         options: [
           { value: "request", label: { ko: "요청값 유지", en: "Use request" } },
           { value: "basic", label: { ko: "항상 기본 권한", en: "Always basic" } },
-          { value: "full", label: { ko: "항상 전체 권한", en: "Always full" } },
+          { value: "auto", label: { ko: "항상 자동 검토", en: "Always auto review" } },
         ],
       },
     ],

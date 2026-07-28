@@ -28,9 +28,17 @@ assert.deepEqual(normalizeControlTask(request, "/fallback"), {
   workspace: "/workspace",
   model: "gpt-5.6-sol",
   effort: "high",
-  permissionMode: "default",
+  permissionMode: "basic",
   stellaMode: true,
 });
+
+assert.equal(
+  normalizeControlTask(
+    { ...request, payload: { ...request.payload, permissionMode: "full" } },
+    "/fallback",
+  ).permissionMode,
+  "basic",
+);
 
 assert.throws(
   () => normalizeControlTask({ ...request, payload: { provider: "shell", prompt: "rm" } }, "/workspace"),

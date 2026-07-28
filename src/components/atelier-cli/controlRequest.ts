@@ -1,4 +1,4 @@
-import type { AgentProvider, AtelierControlRequest } from "../../lib/tauri";
+import type { AgentPermissionMode, AgentProvider, AtelierControlRequest } from "../../lib/tauri";
 
 export interface NormalizedControlTask {
   provider: AgentProvider;
@@ -6,7 +6,7 @@ export interface NormalizedControlTask {
   workspace: string;
   model?: string;
   effort?: string;
-  permissionMode?: string;
+  permissionMode?: Exclude<AgentPermissionMode, "full">;
   stellaMode: boolean;
 }
 
@@ -18,6 +18,15 @@ function optionalString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const normalized = value.trim();
   return normalized || undefined;
+}
+
+function normalizeRequestedPermission(value: unknown): Exclude<AgentPermissionMode, "full"> | undefined {
+  const normalized = optionalString(value)?.toLowerCase();
+  if (!normalized) return undefined;
+  if (normalized === "basic" || normalized === "default") return "basic";
+  if (normalized === "auto" || normalized === "autoreview" || normalized === "auto-review") return "auto";
+  if (normalized === "full" || normalized === "bypass" || normalized === "danger") return "basic";
+  throw new Error(`Unsupported permission mode: ${normalized}`);
 }
 
 export function normalizeControlTask(
@@ -41,7 +50,7 @@ export function normalizeControlTask(
     workspace,
     model: optionalString(request.payload.model),
     effort: optionalString(request.payload.effort),
-    permissionMode: optionalString(request.payload.permissionMode),
+    permissionMode: normalizeRequestedPermission(request.payload.permissionMode),
     stellaMode: request.payload.stellaMode === true,
   };
 }

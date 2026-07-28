@@ -1,11 +1,46 @@
 # Atelier Project Summary
 
-Last updated: 2026-07-14
+Last updated: 2026-07-26
 
 ## Identity
 
 Atelier is an already-working Tauri desktop workspace for local terminal and
 coding-agent workflows. It must not be treated as a greenfield rebuild.
+
+## Current Verdict
+
+`supervised local candidate, public release blocked`
+
+- Current source candidate: `0.2.14`.
+- Source gates: 230 all-feature Rust tests passed with 3 ignored; Orca passed 23
+  contract smokes across 10 removable features; strict
+  all-target/all-feature Clippy and format/diff checks passed; `npm audit`
+  reports 0 vulnerabilities; RustSec reports 0 known vulnerabilities with 18
+  unmaintained and 2 unsound upstream warnings retained.
+- Managed preview start is fail-closed. Atelier can still inspect a separately
+  trusted localhost service.
+- Basic is the default permission. Auto keeps sandboxing and approval checks
+  active; visible and raw Full bypass paths are removed.
+- Managed execution is capability-scoped by provider: Claude/Codex support
+  Basic/Auto through their existing paths; Hermes/Gajaecode use pinned,
+  Atelier-owned macOS runtimes, isolated homes/default skills, and the managed
+  sandbox. Direct CLI is a separate manual, limited path.
+- Gajaecode is pinned at 0.11.7 with managed Bun 1.3.14 and four adapter-owned
+  defaults. Hermes is pinned by commit, retains 453 durable bundled-source
+  files, and verifies 73 installed skills.
+- Frontend and Rust prompt guards share a regression corpus, but phrase matching
+  is not a complete action-level guarantee.
+- The locally signed `0.2.14` candidate is installed at
+  `/Applications/Atelier.app`. Candidate and installed executable SHA-256 values
+  match at
+  `4ee04fbed757f015c910171f4e7c0c3979ca009d396f90a6abfb890e2e1b1868`;
+  codesign and renderer-ready checks pass. This is local installed-candidate
+  proof, not Developer ID/notarization/public-distribution proof.
+- The proof was created from a dirty worktree. HEAD
+  `35e6b0d92eba33ca5644b4d209ef1eaac75d987b` does not uniquely identify this
+  build; the installed candidate identifier is the executable SHA-256 above.
+- No public publish, Developer ID signing, notarization, or Windows physical
+  proof was performed or claimed in this cycle.
 
 ## Current Runtime Shape
 
@@ -16,7 +51,8 @@ coding-agent workflows. It must not be treated as a greenfield rebuild.
 - Structured agent surface: `src/components/AgentWorkspace.tsx`.
 - Agent adapters: Claude Code, Codex CLI, Hermes, and Gajae Code through a
   shared registry and normalized lifecycle in `src-tauri/src/agent.rs`.
-- Preview surface: local-only preview health checks and managed preview service.
+- Preview surface: local-only preview health checks, fail-closed Atelier-managed
+  start, and inspection of separately trusted localhost services.
 - Release/update surface: GitHub Releases, Tauri updater `latest.json`, macOS
   DMG/app bundle, Windows MSI/NSIS, optional SignPath and Microsoft Store MSIX.
 
@@ -54,7 +90,7 @@ runtime supervision, normalized agent lifecycles, optional task worktrees, and
 task-linked preview evidence are now integrated. Encrypted remote control stays
 deferred behind separate permission and device-revocation gates.
 
-The installed macOS 0.2.12 baseline builds on detached PTY supervision with a
+The installed macOS `0.2.14` baseline builds on detached PTY supervision with a
 common agent lifecycle, optional task isolation, and task-linked preview
 evidence. Preview evidence now includes bounded, redacted HTTP response and
 managed-server output alongside PID, restart, DOM, screenshot, browser
@@ -94,12 +130,18 @@ contract and remaining completion gates.
 
 ## Current Gap
 
-The public README now matches the implemented product and its safety boundary.
-The local runtime has detached PTY ownership, restart replay, normalized
-provider lifecycle, optional task worktrees, task-linked preview evidence, and
-an enforced long-session rendering contract. The remaining release gap is
-physical Windows proof and public macOS distribution identity, not another
-local-runtime rewrite. The broader P1 product gap still includes syntax-aware
+The current source has detached PTY ownership, restart replay, normalized
+provider lifecycle, optional task worktrees, task-linked preview evidence,
+fail-closed managed preview start, and an enforced long-session rendering
+contract. Its immediate full-gate task is provider-capability truth:
+Claude/Codex managed Basic/Auto only, Hermes/Gajaecode managed fail-closed, and a
+separate manual/limited direct CLI. Its durable P1 safety gap is an app-owned
+action/tool proxy with scoped approval receipts: a prompt phrase denylist cannot
+guarantee what an external provider tool actually executes. The remaining distribution gaps are
+physical Windows proof and public macOS/Windows signing and notarization. The
+broader P1 product gap still includes durable job reattachment, syntax-aware
 editing, diagnostics/autosave, conflict-safe source control, indexed symbols,
-and repeatable browser-backed workbench E2E coverage. The active SOT separates
-source, package, installed-app, and physical-platform truth.
+and repeatable browser-backed workbench E2E coverage. Production bundle code
+splitting remains P2 because the current build still emits a large-chunk
+warning. The active SOT separates source, package, installed-app, and
+physical-platform truth.

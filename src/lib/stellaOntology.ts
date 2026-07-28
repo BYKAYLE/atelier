@@ -56,7 +56,7 @@ export function formatStellaOntologyInstruction(args: {
       "- Keep the normalized ontology private unless the user explicitly asks to see it.",
       "- Atelier concepts: AgentWorkspace, TaskSession, ProviderConnection, PreviewSurface, DevScreen, StoreSubmission, ChangeReview, QueueTurn.",
       "- Truth rules: connected UI is not executable readiness; source build success is not installed-app verification; final answer text is separate from tool/raw diagnostics.",
-      "- Forbidden by default: database deletion, user data deletion, live trade execution, external publication/submission without explicit confirmation.",
+      "- Protected-action policy: data_loss, live_trade, and external_side_effect require explicit Atelier confirmation.",
       "- Completion needs evidence from the relevant surface: code/build/test, app/browser UI, provider execution, preview/dev-screen, or Store/CI status.",
       "- Never print raw routing notes, JSON events, terminal logs, or diff dumps in the final answer.",
     ];
@@ -84,7 +84,7 @@ export function formatStellaOntologyInstruction(args: {
     "- 사용자가 명시적으로 요구하지 않는 한 정규화 YAML 자체는 최종 답변에 노출하지 마세요.",
     "- Atelier 개념: AgentWorkspace, TaskSession, ProviderConnection, PreviewSurface, DevScreen, StoreSubmission, ChangeReview, QueueTurn.",
     "- 진실 규칙: 연결됨 UI와 실제 실행 가능은 다르고, 소스 빌드 성공과 설치 앱 검증은 다르며, 최종 답변 텍스트와 tool/raw 진단은 분리해야 합니다.",
-    "- 기본 금지: DB 삭제, 사용자 데이터 삭제, LIVE 거래 실행, 명시 확인 없는 외부 게시/제출.",
+    "- 보호 작업 정책: data_loss, live_trade, external_side_effect는 Atelier의 명시 확인이 필요합니다.",
     "- 완료는 관련 표면의 증거가 필요합니다: 코드/빌드/테스트, 앱/브라우저 UI, provider 실행, preview/dev-screen, Store/CI 상태.",
     "- 최종 답변에는 내부 라우팅 메모, JSON 이벤트, 터미널 로그, diff dump를 그대로 출력하지 마세요.",
   ];

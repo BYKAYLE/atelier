@@ -285,8 +285,9 @@ Last updated: 2026-07-23
 - Stopped persistent credential fan-out to Gajae Code and Hermes. Gajae gets a
   per-process Claude OAuth token; Hermes receives a staged Codex access token
   that is scrubbed after the run.
-- Changed the default permission policy from full access to automatic
-  workspace access. Explicit full access remains an opt-in mode.
+- Historical `0.1.79` state: changed the default permission policy from full
+  access to automatic workspace access while Full was still opt-in. The
+  `0.2.13` reconciliation below supersedes this behavior and removes Full.
 - Updated Codex invocation to current global sandbox/approval flags and removed
   the deprecated `--full-auto` argument.
 - Added Windows installer/MSIX payload smoke tests, optional Authenticode
@@ -644,9 +645,10 @@ Last updated: 2026-07-23
 
 ## Known Constraints
 
-- Agent CLIs can still execute their own internal tool calls when the user
-  explicitly selects full permission. The default is now automatic workspace
-  access, and full access remains a deliberate bypass choice.
+- Visible and raw Full permission bypasses are removed. Basic is the default and
+  Auto retains sandbox plus approval behavior. Agent CLIs can still perform
+  internal tool calls after launch, so prompt matching alone is not an
+  action-level guarantee.
 - Windows source, packaging scripts, and CI gates are release-candidate ready,
   but interactive Windows OAuth remains `validation_required` until exercised
   on a physical Windows host.
@@ -686,3 +688,62 @@ Last updated: 2026-07-23
   Public macOS notarization remains blocked on external Developer ID/notary
   credentials; neither external gate is inferred from the completed macOS
   source/build/install receipt.
+
+## 2026-07-25 Runtime Safety and Preview Truth Closure
+
+- [x] Apply shared Korean/English prompt guard corpus to frontend and Rust
+  regression behavior.
+- [x] Guard direct CLI input before provider validation/spawn.
+- [x] Remove visible and runtime raw Full bypass behavior.
+- [x] Make Basic the default and keep Auto sandbox plus approval enforcement.
+- [x] Keep managed preview start fail-closed while retaining inspection of a
+  separately trusted localhost service.
+- [x] Resolve the PostCSS advisory.
+- [x] Pass the `0.2.13` source gates: all-feature Rust 209 passed / 1 ignored;
+  Orca 23 contract smokes / 10 removable features; strict
+  all-target/all-feature Clippy; format/diff; `npm audit` 0; RustSec known
+  vulnerabilities 0 with 18 unmaintained and 2 unsound warnings.
+- [ ] P1: put protected provider effects behind an app-owned action/tool proxy
+  and issue scoped, expiring, one-use approval receipts.
+- [x] Implement and focused-verify provider-capability enforcement:
+  Claude/Codex managed Basic/Auto, Hermes and Gajaecode managed on macOS with
+  Atelier-owned runtime/bootstrap and sandboxed execution.
+- [x] Rerun the complete source gate after the provider-capability change and
+  record the final 209/23 receipt.
+- [x] Build and install the locally signed `0.2.13` candidate; verify exact
+  candidate/installed executable hash equality, codesign, renderer readiness,
+  and UI reflection.
+- [ ] Satisfy Developer ID notarization, Windows public signing, and physical
+  Windows evidence before public release.
+- [ ] P2: split the production frontend bundle to resolve the current large
+  chunk warning without regressing startup or feature isolation.
+
+## 2026-07-25 Reproducible managed Hermes and Gajaecode runtime
+
+- [x] Map and align Hermes/Gajae runtime, install, and skill bootstrap contracts
+  to app-support-managed paths.
+- [x] Implement readiness-gated managed start for Hermes and Gajaecode.
+- [x] Add automatic online runtime-bootstrap and repair behavior with managed
+  progress states.
+- [x] Add policy and skill receipts so bootstrap decisions are bounded and
+  auditable.
+- [x] Add macOS sandbox launch boundary for managed run execution.
+- [x] Surface runtime capability identity and bootstrap state in provider and
+  Connections UI.
+- [x] Update managed-runtime smoke assertions for progress and identity fields.
+- [x] Re-run source verification for `0.2.14`: Rust 230 passed / 3 ignored,
+  strict Clippy, build, audits, and Orca 23/10.
+- [x] Build and install 0.2.14, match candidate/installed hashes, and exercise
+  click-driven `설치·복구` for both managed providers.
+- [x] Prove Gajaecode's isolated 0.11.7/Bun 1.3.14 runtime plus four default
+  skills without Mac-global skill import.
+- [x] Reproduce and repair Hermes's missing-wheel-skills state with 453 durable
+  pinned source files and 73 verified installed skills.
+- [ ] Add non-macOS graceful-failure and user-visible guidance tests.
+- [ ] Add a separate clean company Mac, physical Windows integration, and
+  authenticated real model-response proof in phase-3.
+
+Current verdict: `supervised local candidate, public release blocked`.
+
+No public publish, public signing, notarization, deployment, DB/data deletion,
+paid action, or credential mutation was performed in this cycle.

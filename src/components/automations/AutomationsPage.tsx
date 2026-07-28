@@ -49,7 +49,7 @@ function emptyForm(): FormState {
     provider: "codex",
     model: "",
     effort: "",
-    permissionMode: "auto",
+    permissionMode: "basic",
     stellaMode: false,
     enabled: true,
     scheduleKind: "manual",

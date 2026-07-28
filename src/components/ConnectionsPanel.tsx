@@ -5,7 +5,17 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { cls, Tweaks } from "../lib/tokens";
-import { safeLocalStorageGet, safeLocalStorageSet } from "../lib/storage";
+import {
+  gajecodeCredentialReady,
+  readGajaeModelProviderPreference,
+  readHermesModelProviderPreference,
+  writeGajaeModelProviderPreference,
+  writeHermesModelProviderPreference,
+} from "../lib/agentProviderPreferences";
+import type {
+  GajaeModelProvider,
+  HermesModelProvider,
+} from "../lib/agentProviderPreferences";
 import { FeaturePanels } from "../features/featureRegistry";
 import {
   hasOauthLoginSignalTimedOut,
@@ -16,6 +26,8 @@ import {
 import {
   GajecodeUpdateStatus,
   HermesUpdateStatus,
+  ManagedAgentRuntimeProgress,
+  ManagedAgentRuntimeReadiness,
   ProviderBrowserProbeResult,
   ProviderLoginOauthResult,
   ProviderStatus,
@@ -24,11 +36,13 @@ import {
   hermesCheckUpdate,
   hermesUpdate,
   isTauri,
+  onManagedAgentRuntimeProgress,
   providerClearCredentials,
   providerInstallCli,
   providerLoginOauth,
   providerOauthBrowserProbe,
   providerOpenOauthLoginUrl,
+  providerPrepareManagedRuntime,
   providerOauthLoginState,
   providerSaveApiKey,
   providerStatus,
@@ -137,23 +151,21 @@ const PROVIDERS: ProviderDef[] = [
     id: "gajecode",
     name: "가재코드 (Gajae Code)",
     desc: {
-      ko: "Yeachan-Heo/gajae-code 저장소의 gjc CLI를 Atelier 전용 격리 공간에 설치합니다.",
-      en: "Install the gjc CLI from Yeachan-Heo/gajae-code into Atelier's isolated provider space.",
+      ko: "Atelier가 첫 사용 시 고정 버전 gjc 런타임과 가재코드 전용 기본 스킬을 격리 공간에 자동 준비합니다.",
+      en: "On first use, Atelier automatically prepares a pinned gjc runtime and Gajae Code default skills in its isolated space.",
     },
     oauthCta: { ko: "", en: "" },
     apiHelp: { ko: "", en: "" },
     installHelp: {
-      ko: "가재코드 CLI는 Bun 기반으로 설치되며, 기존 Claude/Codex/Hermes 스킬과 분리된 Atelier 전용 HOME에서 실행됩니다.",
-      en: "Gajae Code CLI installs through Bun and runs under an Atelier-only HOME isolated from existing Claude/Codex/Hermes skills.",
+      ko: "Mac의 Claude/Codex/Hermes 스킬은 가져오지 않으며 별도 스킬 설치도 필요 없습니다.",
+      en: "It does not import Mac Claude/Codex/Hermes skills, and no separate skill installation is required.",
     },
     installUrl: "https://github.com/Yeachan-Heo/gajae-code",
   },
 ];
 
-type HermesBackend = "openai-codex" | "anthropic" | "openrouter" | "alibaba";
-
 const HERMES_BACKENDS: Array<{
-  value: HermesBackend;
+  value: HermesModelProvider;
   label: string;
   credentialProvider: ProviderId;
   desc: { ko: string; en: string };
@@ -184,16 +196,56 @@ const HERMES_BACKENDS: Array<{
   },
 ];
 
-const HERMES_PREF_KEY = "atelier.hermes.backend";
+const GAJECODE_BACKENDS: Array<{
+  value: GajaeModelProvider;
+  label: string;
+  credentialProvider: ProviderId;
+  desc: { ko: string; en: string };
+}> = [
+  {
+    value: "claude",
+    label: "Claude",
+    credentialProvider: "claude",
+    desc: { ko: "위 Claude 구독 또는 API 자격증명 사용", en: "Uses the Claude subscription or API credential above" },
+  },
+  {
+    value: "codex",
+    label: "Codex",
+    credentialProvider: "codex",
+    desc: { ko: "위 Codex ChatGPT 구독 로그인 사용", en: "Uses the Codex ChatGPT subscription login above" },
+  },
+  {
+    value: "alibaba",
+    label: "Alibaba Cloud",
+    credentialProvider: "alibaba",
+    desc: { ko: "위 Token Plan API 키 사용", en: "Uses the Token Plan key above" },
+  },
+];
 
 const COPY = {
   ko: {
     title: "연결",
     sub: "사용하실 모델의 구독 또는 API 키를 연결하세요. 키는 OS 보안 저장소(Keychain / Credential Manager)에만 보관됩니다.",
+    agentKind: "에이전트",
+    modelProviderKind: "모델 공급자",
+    serviceKind: "서비스",
     statusOk: "연결됨",
     statusCliReady: "CLI 설치됨",
     statusNoCli: "CLI 미설치",
+    statusAutoPrepare: "첫 사용 자동 준비",
     statusNoKey: "키 미입력",
+    runtimeChecking: "격리 실행환경 확인 중…",
+    runtimeInstalling: "고정 버전 런타임 설치 중…",
+    runtimeSkills: "전용 기본 스킬 준비 중…",
+    runtimeVerifying: "런타임·스킬 검증 중…",
+    runtimeReady: "런타임·기본 스킬 준비 완료",
+    runtimeFailed: "자동 준비 실패 · 설치·복구를 다시 실행하세요.",
+    runtimeEvidence: "준비 증거",
+    runtimePin: "런타임 고정 버전",
+    runtimeDependencyPin: "의존성 고정 버전",
+    runtimePolicy: "실행 정책",
+    runtimeSkillBundle: "기본 스킬 번들",
+    runtimeReceipt: "준비 영수증",
     apiInputLabel: "API 키",
     apiInputPlaceholder: "키를 붙여넣고 저장",
     save: "저장",
@@ -248,15 +300,17 @@ const COPY = {
     loginModalCliOutput: "CLI 출력",
     loginModalFailed: "로그인 진행에 확인이 필요합니다.",
     loginModalTimeout: "5분 동안 연결을 확인하지 못했습니다. 창을 닫고 다시 로그인해 주세요.",
-    hermesTitle: "Hermes (로컬)",
+    hermesTitle: "Hermes",
     hermesDesc:
-      "Hermes는 로컬 binary로 동작하고, AI 호출 시 아래 백엔드 중 선택한 자격증명을 그대로 사용합니다.",
-    hermesBackendLabel: "기본 백엔드",
-    hermesCliLabel: "Hermes Agent CLI",
-    hermesCliReady: "Hermes Agent CLI가 설치되어 있습니다.",
-    hermesCliInstall: "Hermes Agent CLI 설치",
-    hermesCliReinstall: "다시 설치",
-    hermesNotInstalled: "Hermes binary가 설치되어 있지 않습니다.",
+      "Hermes 에이전트는 Atelier가 첫 사용 시 고정 버전 격리 런타임과 어댑터 전용 기본 스킬을 자동 준비합니다. 별도 스킬 설치는 필요 없습니다.",
+    hermesBackendLabel: "새 작업 기본 모델 공급자",
+    modelProviderDefaultHelp:
+      "여기서 바꾸면 다음에 만드는 작업부터 적용됩니다. 진행 중인 작업은 유지되며, 작업 입력창에서 공급자를 바꾸면 이 기본값도 함께 업데이트됩니다.",
+    hermesCliLabel: "실행 · Hermes 격리 런타임",
+    hermesCliReady: "Atelier 전용 Hermes 실행환경이 준비되어 있습니다.",
+    hermesCliInstall: "지금 준비",
+    hermesCliReinstall: "설치·복구",
+    hermesNotInstalled: "첫 작업을 보낼 때 Atelier가 자동으로 준비합니다.",
     hermesNeedCred: (label: string) =>
       `선택된 백엔드(${label})의 자격증명이 없습니다. 위 카드에서 먼저 연결하세요.`,
     hermesUpdateLabel: "업데이트",
@@ -268,9 +322,17 @@ const COPY = {
     hermesUpdateButton: "업데이트",
     hermesRecheck: "다시 확인",
     hermesVersionPrefix: "버전",
-    gajecodeTitle: "가재코드 격리",
+    gajecodeTitle: "가재코드",
     gajecodeDesc:
-      "설치와 실행 모두 Atelier 전용 HOME에서 진행되어 기존 로컬 스킬을 자동으로 사용하지 않습니다.",
+      "가재코드 에이전트는 Atelier 전용 HOME에서 실행됩니다. 첫 사용 시 고정 버전 런타임과 전용 기본 스킬을 자동 준비하므로 Atelier만 설치하면 됩니다.",
+    gajecodeBackendLabel: "새 작업 기본 모델 공급자",
+    gajecodeExecutionLabel: "실행 · GJC 격리 런타임",
+    gajecodeSkillsLabel: "스킬 · 가재코드 전용",
+    gajecodeSkillsReady: "어댑터가 소유한 기본 스킬을 자동 준비합니다. Mac의 공용 스킬을 가져오지 않으며 별도 설치가 필요 없습니다.",
+    gajecodePrepare: "지금 준비",
+    gajecodeRepair: "설치·복구",
+    gajecodePreparing: "준비 중…",
+    gajecodePrepared: "가재코드 실행환경과 기본 스킬 준비를 확인했습니다.",
     gajecodeUpdateLabel: "업데이트",
     gajecodeUpdateChecking: "확인 중…",
     gajecodeUpdateLatest: "최신 버전",
@@ -279,16 +341,34 @@ const COPY = {
     gajecodeUpdateButton: "업데이트",
     gajecodeRecheck: "다시 확인",
     gajecodeVersionPrefix: "버전",
-    gajecodeNotInstalled: "가재코드 CLI가 설치되어 있지 않습니다.",
-    gajecodeInstallIsolation: "설치 후에도 전용 .gjc 폴더만 사용합니다.",
+    gajecodeNotInstalled: "첫 작업을 보낼 때 Atelier가 자동으로 준비합니다.",
+    gajecodeInstallIsolation: "Atelier 전용 .gjc와 고정 버전 실행환경을 사용합니다.",
+    gajecodeNeedCred: (label: string) =>
+      `선택된 모델 공급자(${label})의 자격증명이 없습니다. 위 카드에서 먼저 연결하세요.`,
   },
   en: {
     title: "Connections",
     sub: "Connect a subscription or API key for the providers you want to use. Keys are stored only in the OS secure store (Keychain / Credential Manager).",
+    agentKind: "Agent",
+    modelProviderKind: "Model provider",
+    serviceKind: "Service",
     statusOk: "Connected",
     statusCliReady: "CLI installed",
     statusNoCli: "CLI not installed",
+    statusAutoPrepare: "Auto on first use",
     statusNoKey: "No key",
+    runtimeChecking: "Checking isolated runtime…",
+    runtimeInstalling: "Installing pinned runtime…",
+    runtimeSkills: "Preparing isolated default skills…",
+    runtimeVerifying: "Verifying runtime and skills…",
+    runtimeReady: "Runtime and default skills ready",
+    runtimeFailed: "Automatic preparation failed · run Install/repair again.",
+    runtimeEvidence: "Readiness evidence",
+    runtimePin: "Runtime pin",
+    runtimeDependencyPin: "Dependency pin",
+    runtimePolicy: "Execution policy",
+    runtimeSkillBundle: "Default skill bundle",
+    runtimeReceipt: "Readiness receipt",
     apiInputLabel: "API key",
     apiInputPlaceholder: "Paste your key and save",
     save: "Save",
@@ -343,15 +423,17 @@ const COPY = {
     loginModalCliOutput: "CLI output",
     loginModalFailed: "The sign-in flow needs your attention.",
     loginModalTimeout: "Atelier could not verify the connection within five minutes. Close this dialog and try again.",
-    hermesTitle: "Hermes (local)",
+    hermesTitle: "Hermes",
     hermesDesc:
-      "Hermes runs locally and uses one of the credentials below as the inference backend.",
-    hermesBackendLabel: "Default backend",
-    hermesCliLabel: "Hermes Agent CLI",
-    hermesCliReady: "Hermes Agent CLI is installed.",
-    hermesCliInstall: "Install Hermes Agent CLI",
-    hermesCliReinstall: "Reinstall",
-    hermesNotInstalled: "Hermes binary is not installed.",
+      "On first use, Atelier automatically prepares a pinned isolated Hermes runtime and adapter-owned default skills. No separate skill install is required.",
+    hermesBackendLabel: "Default model provider for new tasks",
+    modelProviderDefaultHelp:
+      "Changes apply to tasks created afterward. Current tasks stay unchanged, and changing the provider in the task composer also updates this default.",
+    hermesCliLabel: "Execution · isolated Hermes runtime",
+    hermesCliReady: "The Atelier-owned Hermes runtime is ready.",
+    hermesCliInstall: "Prepare now",
+    hermesCliReinstall: "Install/repair",
+    hermesNotInstalled: "Atelier prepares it automatically when you send the first task.",
     hermesNeedCred: (label: string) =>
       `No credential for the selected backend (${label}). Connect it in the card above first.`,
     hermesUpdateLabel: "Update",
@@ -363,9 +445,17 @@ const COPY = {
     hermesUpdateButton: "Update",
     hermesRecheck: "Re-check",
     hermesVersionPrefix: "Version",
-    gajecodeTitle: "Gajae Code isolation",
+    gajecodeTitle: "Gajae Code",
     gajecodeDesc:
-      "Install and execution run under Atelier's dedicated HOME, so existing local skills are not auto-used.",
+      "The Gajae Code agent runs under Atelier's dedicated HOME. Its pinned runtime and isolated default skills are prepared automatically on first use, so installing Atelier is enough.",
+    gajecodeBackendLabel: "Default model provider for new tasks",
+    gajecodeExecutionLabel: "Execution · isolated GJC runtime",
+    gajecodeSkillsLabel: "Skills · Gajae Code owned",
+    gajecodeSkillsReady: "The adapter prepares its default skills automatically. Mac-wide skills are not imported, and no separate install is required.",
+    gajecodePrepare: "Prepare now",
+    gajecodeRepair: "Install/repair",
+    gajecodePreparing: "Preparing…",
+    gajecodePrepared: "Gajae Code runtime and default skill readiness verified.",
     gajecodeUpdateLabel: "Update",
     gajecodeUpdateChecking: "Checking…",
     gajecodeUpdateLatest: "Up to date",
@@ -374,8 +464,10 @@ const COPY = {
     gajecodeUpdateButton: "Update",
     gajecodeRecheck: "Re-check",
     gajecodeVersionPrefix: "Version",
-    gajecodeNotInstalled: "Gajae Code CLI is not installed.",
-    gajecodeInstallIsolation: "After install, only the dedicated .gjc folder is used.",
+    gajecodeNotInstalled: "Atelier prepares it automatically when you send the first task.",
+    gajecodeInstallIsolation: "Uses Atelier's dedicated .gjc and pinned runtime.",
+    gajecodeNeedCred: (label: string) =>
+      `No credential for the selected model provider (${label}). Connect it in the card above first.`,
   },
 } as const;
 
@@ -393,9 +485,93 @@ function connectionStatus(
 
   if (connected) return { tone: "ok", label: copy.statusOk };
   if (cliInstalled) return { tone: "info", label: copy.statusCliReady };
+  if (providerId === "hermes" || providerId === "gajecode") {
+    return { tone: "info", label: copy.statusAutoPrepare };
+  }
   if (requiresCli) return { tone: "warn", label: copy.statusNoCli };
   return { tone: "neutral", label: copy.statusNoKey };
 }
+
+function managedRuntimeProgressText(
+  progress: ManagedAgentRuntimeProgress | null,
+  copy: CopyT,
+) {
+  if (!progress) return null;
+  const labels: Record<ManagedAgentRuntimeProgress["state"], string> = {
+    checking: copy.runtimeChecking,
+    installing: copy.runtimeInstalling,
+    bootstrapping_skills: copy.runtimeSkills,
+    verifying: copy.runtimeVerifying,
+    ready: copy.runtimeReady,
+    failed: copy.runtimeFailed,
+  };
+  return labels[progress.state] || progress.message;
+}
+
+function useManagedRuntimeProgress(provider: "hermes" | "gajecode") {
+  const [progress, setProgress] = useState<ManagedAgentRuntimeProgress | null>(null);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    onManagedAgentRuntimeProgress((event) => {
+      if (!cancelled && event.provider === provider) setProgress(event);
+    })
+      .then((dispose) => {
+        if (cancelled) dispose();
+        else unlisten = dispose;
+      })
+      .catch((error) => console.warn("managed runtime progress listener failed", error));
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [provider]);
+  return progress;
+}
+
+const RuntimeReadinessEvidence: React.FC<{
+  readiness: ManagedAgentRuntimeReadiness | null;
+  copy: CopyT;
+  dark: boolean;
+}> = ({ readiness, copy, dark }) => {
+  if (!readiness?.ready) return null;
+  return (
+    <details
+      data-testid="managed-runtime-readiness-receipt"
+      data-runtime-provider={readiness.provider}
+      className={cls("mt-2 rounded-md border px-3 py-2", dark ? "border-dline bg-dbg" : "border-line bg-cream")}
+    >
+      <summary className="cursor-pointer text-[11.5px] font-semibold">
+        {copy.runtimeEvidence} · {copy.runtimeReady}
+      </summary>
+      <dl className={cls("mt-2 grid gap-1 text-[10.5px]", dark ? "text-dsub" : "text-sub")}>
+        <div className="grid grid-cols-[132px_minmax(0,1fr)] gap-2">
+          <dt>{copy.runtimePin}</dt>
+          <dd className="break-all font-mono">{readiness.runtimePin}</dd>
+        </div>
+        {readiness.dependencyPin && (
+          <div className="grid grid-cols-[132px_minmax(0,1fr)] gap-2">
+            <dt>{copy.runtimeDependencyPin}</dt>
+            <dd className="break-all font-mono">{readiness.dependencyPin}</dd>
+          </div>
+        )}
+        <div className="grid grid-cols-[132px_minmax(0,1fr)] gap-2">
+          <dt>{copy.runtimePolicy}</dt>
+          <dd className="break-all font-mono">{readiness.policyVersion}</dd>
+        </div>
+        <div className="grid grid-cols-[132px_minmax(0,1fr)] gap-2">
+          <dt>{copy.runtimeSkillBundle}</dt>
+          <dd className="break-all font-mono">{readiness.skillBootstrapVersion}</dd>
+        </div>
+        <div className="grid grid-cols-[132px_minmax(0,1fr)] gap-2">
+          <dt>{copy.runtimeReceipt}</dt>
+          <dd className="break-all font-mono">{readiness.receiptPath}</dd>
+        </div>
+      </dl>
+    </details>
+  );
+};
 
 async function openExternalUrl(provider: ProviderId, url: string): Promise<boolean> {
   if (!isAllowedOauthLoginUrl(provider, url)) return false;
@@ -686,15 +862,18 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
     }
   }
 
-  const providerChoices: Array<{ id: ProviderId; name: string }> = [
+  const providerChoices: Array<{ id: ProviderId; name: string; kind: string }> = [
     ...PROVIDERS.filter((provider) => provider.id !== "gajecode").map((provider) => ({
       id: provider.id,
       name: provider.name,
+      kind: provider.id === "linear" ? copy.serviceKind : copy.modelProviderKind,
     })),
-    { id: "hermes", name: copy.hermesTitle },
-    { id: "gajecode", name: "가재코드" },
+    { id: "hermes", name: copy.hermesTitle, kind: copy.agentKind },
+    { id: "gajecode", name: copy.gajecodeTitle, kind: copy.agentKind },
   ];
-  const selectedProvider = PROVIDERS.find((provider) => provider.id === selectedProviderId) ?? null;
+  const selectedProvider = selectedProviderId === "gajecode"
+    ? null
+    : PROVIDERS.find((provider) => provider.id === selectedProviderId) ?? null;
 
   return (
     <div className={cls("space-y-4", dark ? "text-dink" : "text-ink")}>
@@ -742,6 +921,9 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
                   : "border-line bg-panel hover:border-[var(--accent-hover)]",
               )}
             >
+              <span className={cls("block truncate text-[9px] uppercase tracking-wider", dark ? "text-dsub" : "text-sub")}>
+                {provider.kind}
+              </span>
               <span className="block truncate text-[12px] font-medium">{provider.name}</span>
               <span className="mt-1 block">
                 <StatusDot tone={status.tone} label={status.label} dark={dark} />
@@ -785,6 +967,7 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
         {selectedProviderId === "gajecode" && (
           <GajecodeCard
             tw={tw}
+            statuses={statuses}
             status={statuses.gajecode}
             onUpdated={() => {
               setTimeout(() => void refresh("gajecode"), 1000);
@@ -1183,16 +1366,13 @@ const HermesCard: React.FC<{
   const hermes = statuses.hermes;
   const installed = hermes?.cli_installed ?? false;
 
-  const [backend, setBackend] = useState<HermesBackend>(() => {
-    const saved = safeLocalStorageGet(HERMES_PREF_KEY);
-    if (saved && HERMES_BACKENDS.some((b) => b.value === saved)) return saved as HermesBackend;
-    if (saved) safeLocalStorageSet(HERMES_PREF_KEY, "openai-codex");
-    return "openai-codex";
-  });
+  const [backend, setBackend] = useState<HermesModelProvider>(
+    readHermesModelProviderPreference,
+  );
 
-  function setAndSave(v: HermesBackend) {
+  function setAndSave(v: HermesModelProvider) {
     setBackend(v);
-    safeLocalStorageSet(HERMES_PREF_KEY, v);
+    writeHermesModelProviderPreference(v);
   }
 
   const [updateStatus, setUpdateStatus] = useState<HermesUpdateStatus | null>(null);
@@ -1200,6 +1380,9 @@ const HermesCard: React.FC<{
   const [updating, setUpdating] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [installError, setInstallError] = useState<string | null>(null);
+  const [runtimeReadiness, setRuntimeReadiness] = useState<ManagedAgentRuntimeReadiness | null>(null);
+  const runtimeProgress = useManagedRuntimeProgress("hermes");
+  const runtimeProgressText = managedRuntimeProgressText(runtimeProgress, copy);
 
   const refreshUpdate = useCallback(async () => {
     setCheckingUpdate(true);
@@ -1223,6 +1406,7 @@ const HermesCard: React.FC<{
     setInstallError(null);
     try {
       await hermesUpdate();
+      setRuntimeReadiness(await providerPrepareManagedRuntime("hermes"));
       const next = await hermesCheckUpdate();
       setUpdateStatus(next);
       onInstalled();
@@ -1234,25 +1418,19 @@ const HermesCard: React.FC<{
   }
 
   async function runInstall() {
-    if (installed) return;
     setInstalling(true);
     setInstallError(null);
     try {
-      await providerInstallCli("hermes");
-      const started = Date.now();
-      while (Date.now() - started < 5 * 60 * 1000) {
-        await new Promise((resolve) => window.setTimeout(resolve, 3000));
-        const next = await providerStatus("hermes").catch(() => null);
-        if (next?.cli_installed) {
-          onInstalled();
-          setInstalling(false);
-          return;
-        }
+      const readiness = await providerPrepareManagedRuntime("hermes");
+      if (!readiness.ready) {
+        throw new Error("Atelier could not verify the isolated Hermes runtime.");
       }
-      setInstallError(copy.installTimeout);
-      setInstalling(false);
+      setRuntimeReadiness(readiness);
+      onInstalled();
+      await refreshUpdate();
     } catch (e) {
       setInstallError(String(e));
+    } finally {
       setInstalling(false);
     }
   }
@@ -1273,8 +1451,8 @@ const HermesCard: React.FC<{
           <div className="flex items-center gap-2">
             <span className="font-medium text-[14px]">{copy.hermesTitle}</span>
             <StatusDot
-              tone={installed ? "ok" : "warn"}
-              label={installed ? copy.statusCliReady : copy.statusNoCli}
+              tone={installed ? "ok" : "info"}
+              label={installed ? copy.statusCliReady : copy.statusAutoPrepare}
               dark={dark}
             />
           </div>
@@ -1297,23 +1475,33 @@ const HermesCard: React.FC<{
           <div className={cls("text-[11.5px] mt-0.5", dark ? "text-dsub" : "text-sub")}>
             {installed ? copy.hermesCliReady : `${copy.hermesNotInstalled} ${copy.installPrompt}`}
           </div>
+          {runtimeProgressText && (
+            <div
+              data-testid="hermes-runtime-progress"
+              data-runtime-state={runtimeProgress?.state}
+              className={cls(
+                "text-[11.5px] mt-1 font-medium",
+                runtimeProgress?.state === "failed" ? "text-red-500" : dark ? "text-dink" : "text-ink",
+              )}
+            >
+              {runtimeProgressText}
+            </div>
+          )}
         </div>
         <button
           onClick={() => void runInstall()}
-          disabled={installing || installed}
+          disabled={installing}
           className={cls(
             "text-[12.5px] h-8 px-3 rounded-md border font-medium transition-colors",
-            installed
-              ? dark
-                ? "border-dline bg-dpanel text-dsub"
-                : "border-line bg-panel text-sub"
-              : "bg-[var(--accent)]/10 text-[var(--accent)] border-[var(--accent)]/40 hover:bg-[var(--accent)]/20",
+            "bg-[var(--accent)]/10 text-[var(--accent)] border-[var(--accent)]/40 hover:bg-[var(--accent)]/20",
             "disabled:opacity-60 disabled:cursor-not-allowed",
           )}
         >
-          {installed ? copy.statusCliReady : installing ? copy.installing : `+ ${copy.hermesCliInstall}`}
+          {installing ? copy.installing : installed ? copy.hermesCliReinstall : `+ ${copy.hermesCliInstall}`}
         </button>
       </div>
+
+      <RuntimeReadinessEvidence readiness={runtimeReadiness} copy={copy} dark={dark} />
 
       {installError && (
         <div
@@ -1398,6 +1586,9 @@ const HermesCard: React.FC<{
         <div className={cls("text-[11.5px] uppercase tracking-wider font-semibold mb-2", dark ? "text-dsub" : "text-sub")}>
           {copy.hermesBackendLabel}
         </div>
+        <div className={cls("text-[11.5px] -mt-1 mb-2", dark ? "text-dsub" : "text-sub")}>
+          {copy.modelProviderDefaultHelp}
+        </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
           {HERMES_BACKENDS.map((b) => {
             const s = statuses[b.credentialProvider];
@@ -1407,6 +1598,10 @@ const HermesCard: React.FC<{
               <button
                 key={b.value}
                 onClick={() => setAndSave(b.value)}
+                data-testid="hermes-default-model-provider"
+                data-model-provider={b.value}
+                data-selected={active ? "true" : "false"}
+                aria-pressed={active}
                 className={cls(
                   "text-left px-3 py-2 rounded-md border transition-colors",
                   active
@@ -1441,15 +1636,34 @@ const HermesCard: React.FC<{
 
 const GajecodeCard: React.FC<{
   tw: Tweaks;
+  statuses: Record<ProviderId, ProviderStatus | null>;
   status: ProviderStatus | null;
   onUpdated: () => void;
-}> = ({ tw, status, onUpdated }) => {
+}> = ({ tw, statuses, status, onUpdated }) => {
   const dark = tw.dark;
+  const lang = tw.language;
   const copy = COPY[tw.language];
   const installed = status?.cli_installed ?? false;
+  const [backend, setBackend] = useState<GajaeModelProvider>(
+    readGajaeModelProviderPreference,
+  );
+  const selectedBackend = GAJECODE_BACKENDS.find((candidate) => candidate.value === backend) ?? GAJECODE_BACKENDS[0];
+  const selectedCredentialStatus = statuses[selectedBackend.credentialProvider];
+  const credConnected = gajecodeCredentialReady(selectedBackend.value, selectedCredentialStatus);
+
+  function setAndSave(v: GajaeModelProvider) {
+    setBackend(v);
+    writeGajaeModelProviderPreference(v);
+  }
   const [updateStatus, setUpdateStatus] = useState<GajecodeUpdateStatus | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [preparing, setPreparing] = useState(false);
+  const [preparationError, setPreparationError] = useState<string | null>(null);
+  const [preparationNotice, setPreparationNotice] = useState<string | null>(null);
+  const [runtimeReadiness, setRuntimeReadiness] = useState<ManagedAgentRuntimeReadiness | null>(null);
+  const runtimeProgress = useManagedRuntimeProgress("gajecode");
+  const runtimeProgressText = managedRuntimeProgressText(runtimeProgress, copy);
 
   const refreshUpdate = useCallback(async () => {
     setCheckingUpdate(true);
@@ -1470,8 +1684,10 @@ const GajecodeCard: React.FC<{
 
   async function runUpdate() {
     setUpdating(true);
+    setPreparationError(null);
     try {
       await gajecodeUpdate();
+      setRuntimeReadiness(await providerPrepareManagedRuntime("gajecode"));
       onUpdated();
       const started = Date.now();
       while (Date.now() - started < 5 * 60 * 1000) {
@@ -1482,8 +1698,30 @@ const GajecodeCard: React.FC<{
           if (!next.update_available) break;
         }
       }
+    } catch (error) {
+      setPreparationError(String(error));
     } finally {
       setUpdating(false);
+    }
+  }
+
+  async function runPrepareOrRepair() {
+    setPreparing(true);
+    setPreparationError(null);
+    setPreparationNotice(null);
+    try {
+      const readiness = await providerPrepareManagedRuntime("gajecode");
+      if (!readiness.ready) {
+        throw new Error("Atelier completed preparation but could not verify the isolated gjc runtime.");
+      }
+      setRuntimeReadiness(readiness);
+      setPreparationNotice(copy.gajecodePrepared);
+      onUpdated();
+      await refreshUpdate();
+    } catch (error) {
+      setPreparationError(String(error));
+    } finally {
+      setPreparing(false);
     }
   }
 
@@ -1499,8 +1737,8 @@ const GajecodeCard: React.FC<{
           <div className="flex items-center gap-2">
             <span className="font-medium text-[14px]">{copy.gajecodeTitle}</span>
             <StatusDot
-              tone={installed ? "ok" : "warn"}
-              label={installed ? copy.statusCliReady : copy.statusNoCli}
+              tone={installed ? "ok" : "info"}
+              label={installed ? copy.statusCliReady : copy.statusAutoPrepare}
               dark={dark}
             />
           </div>
@@ -1518,11 +1756,23 @@ const GajecodeCard: React.FC<{
       >
         <div className="flex-1 min-w-[220px]">
           <div className={cls("text-[11.5px] uppercase tracking-wider font-semibold", dark ? "text-dsub" : "text-sub")}>
-            {copy.gajecodeUpdateLabel}
+            {copy.gajecodeExecutionLabel}
           </div>
           <div className={cls("text-[11.5px] mt-0.5", dark ? "text-dsub" : "text-sub")}>
-            {installed ? copy.gajecodeInstallIsolation : `${copy.gajecodeNotInstalled} ${copy.installPrompt}`}
+            {installed ? copy.gajecodeInstallIsolation : copy.gajecodeNotInstalled}
           </div>
+          {runtimeProgressText && (
+            <div
+              data-testid="gajecode-runtime-progress"
+              data-runtime-state={runtimeProgress?.state}
+              className={cls(
+                "text-[11.5px] mt-1 font-medium",
+                runtimeProgress?.state === "failed" ? "text-red-500" : dark ? "text-dink" : "text-ink",
+              )}
+            >
+              {runtimeProgressText}
+            </div>
+          )}
           {updateStatus?.current_version && (
             <div className={cls("text-[11px] gb-mono mt-1", dark ? "text-dsub" : "text-sub")}>
               {copy.gajecodeVersionPrefix}: {updateStatus.current_version}
@@ -1535,46 +1785,132 @@ const GajecodeCard: React.FC<{
             </div>
           )}
         </div>
+        <button
+          type="button"
+          data-testid="gajecode-install-repair"
+          onClick={() => void runPrepareOrRepair()}
+          disabled={preparing || updating}
+          className={cls(
+            "shrink-0 text-[12.5px] h-8 px-3 rounded-md border font-medium transition-colors",
+            "bg-[var(--accent)]/10 text-[var(--accent)] border-[var(--accent)]/40 hover:bg-[var(--accent)]/20",
+            "disabled:opacity-50 disabled:cursor-not-allowed",
+          )}
+        >
+          {preparing ? copy.gajecodePreparing : installed ? copy.gajecodeRepair : `+ ${copy.gajecodePrepare}`}
+        </button>
+      </div>
 
-        {installed && (
-          <div className="shrink-0 flex items-center gap-1.5">
-            {checkingUpdate ? (
-              <span className={cls("text-[12px]", dark ? "text-dsub" : "text-sub")}>
-                {copy.gajecodeUpdateChecking}
-              </span>
-            ) : updateStatus?.update_available ? (
+      <div
+        data-testid="gajecode-isolated-skills"
+        className={cls(
+          "mt-2 rounded-md border px-3 py-2.5",
+          dark ? "border-dline bg-dbg" : "border-line bg-cream",
+        )}
+      >
+        <div className={cls("text-[11.5px] uppercase tracking-wider font-semibold", dark ? "text-dsub" : "text-sub")}>
+          {copy.gajecodeSkillsLabel}
+        </div>
+        <div className={cls("text-[11.5px] mt-0.5", dark ? "text-dsub" : "text-sub")}>
+          {copy.gajecodeSkillsReady}
+        </div>
+      </div>
+
+      <div className="mt-3">
+        <div className={cls("text-[11.5px] uppercase tracking-wider font-semibold mb-2", dark ? "text-dsub" : "text-sub")}>
+          {copy.gajecodeBackendLabel}
+        </div>
+        <div className={cls("text-[11.5px] -mt-1 mb-2", dark ? "text-dsub" : "text-sub")}>
+          {copy.modelProviderDefaultHelp}
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
+          {GAJECODE_BACKENDS.map((b) => {
+            const s = statuses[b.credentialProvider];
+            const ok = gajecodeCredentialReady(b.value, s);
+            const active = b.value === backend;
+            return (
               <button
-                onClick={() => void runUpdate()}
-                disabled={updating || checkingUpdate}
+                key={b.value}
+                onClick={() => setAndSave(b.value)}
+                data-testid="gajecode-default-model-provider"
+                data-model-provider={b.value}
+                data-selected={active ? "true" : "false"}
+                aria-pressed={active}
                 className={cls(
-                  "text-[12.5px] h-8 px-3 rounded-md border font-medium transition-colors",
-                  "bg-[var(--accent)]/10 text-[var(--accent)] border-[var(--accent)]/40 hover:bg-[var(--accent)]/20",
-                  "disabled:opacity-50 disabled:cursor-not-allowed",
+                  "text-left px-3 py-2 rounded-md border transition-colors",
+                  active
+                    ? "border-[var(--accent)] bg-[var(--accent)]/10"
+                    : dark
+                    ? "border-dline hover:border-[var(--accent-hover)] bg-dbg"
+                    : "border-line hover:border-[var(--accent-hover)] bg-cream",
                 )}
               >
-                {updating ? copy.gajecodeUpdating : copy.gajecodeUpdateButton}
+                <div className="flex items-center justify-between mb-0.5">
+                  <span className="text-[12.5px] font-medium">{b.label}</span>
+                  <span
+                    className="w-1.5 h-1.5 rounded-full"
+                    style={{ background: ok ? "#2f7d5b" : "#94a3b8" }}
+                    aria-label={ok ? copy.statusOk : copy.statusNoKey}
+                  />
+                </div>
+                <div className={cls("text-[10.5px]", dark ? "text-dsub" : "text-sub")}>{b.desc[lang]}</div>
               </button>
-            ) : updateStatus ? (
-              <span className="text-[12px] font-medium" style={{ color: "#2f7d5b" }}>
-                ✓ {copy.gajecodeUpdateLatest}
-              </span>
-            ) : null}
-
-            <button
-              onClick={() => void refreshUpdate()}
-              disabled={checkingUpdate || updating}
-              className={cls(
-                "text-[12px] h-8 px-2.5 rounded-md border transition-colors disabled:opacity-50",
-                dark ? "border-dline text-dsub hover:text-dink" : "border-line text-sub hover:text-ink",
-              )}
-              title={copy.gajecodeRecheck}
-              aria-label={copy.gajecodeRecheck}
-            >
-              ↻
-            </button>
+            );
+          })}
+        </div>
+        {!credConnected && (
+          <div className={cls("text-[11.5px] mt-2", dark ? "text-dsub" : "text-sub")}>
+            {copy.gajecodeNeedCred(selectedBackend.label)}
           </div>
         )}
       </div>
+
+      <RuntimeReadinessEvidence readiness={runtimeReadiness} copy={copy} dark={dark} />
+
+      {preparationNotice && (
+        <div className={cls("mt-2 text-[12px] px-3 py-2 rounded-md border", dark ? "border-emerald-700/40 bg-emerald-900/20 text-emerald-300" : "border-emerald-200 bg-emerald-50 text-emerald-700")}>
+          {preparationNotice}
+        </div>
+      )}
+
+      {preparationError && (
+        <div className={cls("mt-2 text-[12px] px-3 py-2 rounded-md border", dark ? "border-red-700/40 bg-red-900/20 text-red-300" : "border-red-200 bg-red-50 text-red-700")}>
+          {preparationError}
+        </div>
+      )}
+
+      {installed && (
+        <div className="mt-2 flex items-center justify-end gap-1.5">
+          {checkingUpdate ? (
+            <span className={cls("text-[12px]", dark ? "text-dsub" : "text-sub")}>
+              {copy.gajecodeUpdateChecking}
+            </span>
+          ) : updateStatus?.update_available ? (
+            <button
+              onClick={() => void runUpdate()}
+              disabled={updating || checkingUpdate || preparing}
+              className="text-[12.5px] h-8 px-3 rounded-md border font-medium transition-colors bg-[var(--accent)]/10 text-[var(--accent)] border-[var(--accent)]/40 hover:bg-[var(--accent)]/20 disabled:opacity-50"
+            >
+              {updating ? copy.gajecodeUpdating : copy.gajecodeUpdateButton}
+            </button>
+          ) : updateStatus ? (
+            <span className="text-[12px] font-medium" style={{ color: "#2f7d5b" }}>
+              ✓ {copy.gajecodeUpdateLatest}
+            </span>
+          ) : null}
+          <button
+            onClick={() => void refreshUpdate()}
+            disabled={checkingUpdate || updating || preparing}
+            className={cls(
+              "text-[12px] h-8 px-2.5 rounded-md border transition-colors disabled:opacity-50",
+              dark ? "border-dline text-dsub hover:text-dink" : "border-line text-sub hover:text-ink",
+            )}
+            title={copy.gajecodeRecheck}
+            aria-label={copy.gajecodeRecheck}
+          >
+            ↻
+          </button>
+        </div>
+      )}
     </div>
   );
 };

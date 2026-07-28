@@ -487,7 +487,7 @@ fn patch_insane_search_gajecode_skill(skill_md: &Path) -> Result<(), String> {
 <!-- ATELIER_GAJECODE_ADAPTER -->
 > Atelier/Gajae Code adapter: this copy is installed as a Gajae Code-only skill.
 > Before Step 0, if `CLAUDE_PLUGIN_ROOT` is unset, use the isolated skill root:
-> `export CLAUDE_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-${ATELIER_SKILLS_DIR:-$HOME/.gjc/skills}/insane-search}"`
+> `export CLAUDE_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-${ATELIER_SKILLS_DIR:-$HOME/.gjc/agent/skills}/insane-search}"`
 > This keeps setup, engine, and references inside Atelier's dedicated Gajae Code skill space.
 
 "#;

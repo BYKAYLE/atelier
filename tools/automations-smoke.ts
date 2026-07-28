@@ -28,7 +28,8 @@ for (const command of [
 
 assert.match(backend, /enqueue_request\(\s*"task\.dispatch"/);
 assert.doesNotMatch(backend, /Command::new|sh\s*-c|cmd(?:\.exe)?\s*\/C|powershell/i);
-assert.match(backend, /Scheduled automations allow basic or auto permission only/);
+assert.match(backend, /Scheduled automations allow basic or guarded auto permission only/);
+assert.match(backend, /raw full-bypass permission is not exposed by Atelier/);
 assert.match(backend, /missed-run grace/i);
 assert.match(backend, /canonical_workspace/);
 assert.match(page, /automationRunNow/);

@@ -1,10 +1,58 @@
-# Atelier 0.2.12 Release Readiness Evidence
+# Atelier Release Readiness Evidence
 
 generated_at: 2026-07-23T20:12:04+09:00
 source_base_commit: eb44c2c13c0b729aa43190eef77ff437ba9bf0c2
 branch: codex/release-readiness-final
+reconciled_at: 2026-07-26 KST
 
-## Source And Automated Gates
+## Current 0.2.14 Source Reconciliation
+
+- Verdict: `supervised local candidate, public release blocked`.
+- Rust all-features: 230 passed, 0 failed, 3 ignored.
+- Orca gate: 23 contract smokes across 10 removable features.
+- Strict all-target/all-feature Clippy: passed.
+- Format and diff checks: passed.
+- `npm audit`: 0 vulnerabilities.
+- RustSec: 0 known vulnerabilities; 18 unmaintained and 2 unsound upstream
+  warnings remain visible.
+- Managed preview start is fail-closed; a separately trusted localhost service
+  remains inspectable.
+- Basic is the default. Auto retains sandbox and approval behavior; visible and
+  raw Full bypass paths are removed.
+- Managed capability is provider-specific: Claude/Codex support Basic/Auto;
+  Hermes/Gajaecode require verified Atelier-owned macOS runtimes, isolated
+  skills, and sandbox readiness. Direct CLI is a separate manual, limited path.
+- Installed runtime receipts verify Gajaecode 0.11.7/Bun 1.3.14/four defaults
+  and Hermes pinned commit/453 durable files/73 installed skills.
+- Frontend and Rust prompt guards use a shared regression corpus. A phrase
+  denylist is not a complete action/tool execution guarantee.
+- The app-owned action/tool proxy and scoped approval receipts remain P1.
+- This source section does not by itself claim a public signature,
+  notarization, publication, or physical Windows behavior.
+
+## Current 0.2.14 Local Package And Install
+
+- Candidate app:
+  `/Users/kansic/Service/atelier/src-tauri/target/release/bundle/macos/Atelier.app`.
+- Installed app: `/Applications/Atelier.app`.
+- Candidate and installed version: `0.2.14`.
+- Candidate and installed executable SHA-256:
+  `4ee04fbed757f015c910171f4e7c0c3979ca009d396f90a6abfb890e2e1b1868`.
+- DMG SHA-256:
+  `3f9aba91eee83ec12cb1da2a24d3a470ff5cafd2d2e2668011a37e010563cd5b`.
+- Candidate and installed codesign: pass.
+- Renderer receipt: PID `81358`, window `main`, status `ready`.
+- Proof generated at `2026-07-25T15:04:28.654Z`; it records
+  `workingTreeDirtyAtProofTime: true` and
+  `headShaUniquelyIdentifiesBuild: false`.
+- Build artifact identifier: the executable SHA-256 above, not the HEAD SHA.
+- Prior `0.2.13` app remains recoverable at
+  `/Users/kansic/Library/Application Support/Atelier/Backups/Atelier-0.2.13-before-0.2.14.app`.
+- Proof:
+  `/Users/kansic/.codex/visualizations/2026/07/25/019f98d7-308a-76c0-b5e0-1a9657cf64ea/atelier-0.2.14-installed-proof.json`.
+- This is local-signing proof only.
+
+## Historical 0.2.12 Source And Automated Gates
 
 - Release URL, repository, tag, asset, signature, and manifest contracts fail
   closed.
@@ -172,12 +220,16 @@ public distribution.
   updater needs a previous public version and public `latest.json` canary after
   the first signed release establishes the channel.
 
-## Release Decision
+## Current Release Decision
 
-Source candidate: verified.
+Source candidate `0.2.14`: verified for supervised local use with the final
+230/23 source-gate receipt.
 
-Local macOS package and installed application: verified.
+Local macOS package and installed application `0.2.14`: verified by exact
+executable hash equality, codesign, renderer readiness, and UI evidence.
 
-Public distribution: not approved. It remains gated by public macOS signing and
-notarization, timestamped Windows signing, and a physical Windows login/update
-receipt.
+Public distribution: blocked. It remains gated by the P1 app-owned action/tool
+proxy and scoped approvals, a fresh package/install receipt, public macOS
+signing and notarization, timestamped Windows signing, and a physical Windows
+login/update receipt. No public publish, Developer ID signing, or notarization
+was performed in the `0.2.14` reconciliation cycle.

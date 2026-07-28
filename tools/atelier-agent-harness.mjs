@@ -16,7 +16,7 @@ function parseArgs(argv) {
     model: "",
     effort: "xhigh",
     hermesProvider: "openai-codex",
-    permission: "auto",
+    permission: "basic",
     timeoutMs: DEFAULT_TIMEOUT_MS,
     fixture: "",
     json: false,
@@ -92,7 +92,7 @@ Options:
   --model NAME                         Provider model override
   --effort LEVEL                       Codex effort: low|medium|high|xhigh|max|ultra
   --hermes-provider NAME               Hermes backend. Default: openai-codex
-  --permission basic|auto|full         Matches Atelier permission mode. Default: auto
+  --permission basic|auto              Matches Atelier permission mode. Legacy full values fail closed to read-only basic.
   --timeout SECONDS                    Per-provider timeout. Default: 120
   --fixture NAME|all                   Run parser fixture instead of a live CLI
   --json                               Print JSON only
@@ -138,32 +138,32 @@ function augmentedPath() {
 }
 
 function normalizePermission(permission) {
-  const p = String(permission || "auto").trim().toLowerCase();
+  const p = String(permission || "basic").trim().toLowerCase();
   if (p === "basic" || p === "default") return "basic";
   if (p === "auto" || p === "autoreview" || p === "auto-review") return "auto";
-  if (p === "full" || p === "bypass" || p === "danger") return "full";
-  return "auto";
+  if (p === "full" || p === "bypass" || p === "danger") return "basic";
+  return "basic";
 }
 
 function claudePermission(permission) {
   switch (normalizePermission(permission)) {
     case "basic":
-      return "default";
+      return "plan";
     case "auto":
-      return "auto";
+      return "acceptEdits";
     default:
-      return "bypassPermissions";
+      return "plan";
   }
 }
 
 function codexPermissionArgs(permission) {
   switch (normalizePermission(permission)) {
     case "basic":
-      return ["--sandbox", "workspace-write", "--ask-for-approval", "on-request"];
+      return ["--sandbox", "read-only", "--ask-for-approval", "untrusted"];
     case "auto":
-      return ["--sandbox", "workspace-write", "--ask-for-approval", "never"];
+      return ["--sandbox", "workspace-write", "--ask-for-approval", "untrusted"];
     default:
-      return ["--dangerously-bypass-approvals-and-sandbox"];
+      return ["--sandbox", "read-only", "--ask-for-approval", "untrusted"];
   }
 }
 
@@ -392,7 +392,6 @@ function commandForProvider(options) {
         "-q",
         options.prompt,
         ...(normalizePermission(options.permission) === "auto" ? ["--checkpoints"] : []),
-        ...(normalizePermission(options.permission) === "full" ? ["--yolo"] : []),
       ],
       stdin: "",
     };

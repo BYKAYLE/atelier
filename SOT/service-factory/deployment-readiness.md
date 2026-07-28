@@ -2,6 +2,26 @@
 
 generated_at: 2026-07-13T09:35:39+09:00
 
+reconciled_at: 2026-07-26 KST
+
+> Current verdict: `supervised local candidate, public release blocked`.
+> Atelier `0.2.14` passes 230 all-feature Rust tests with 3 ignored, 23 Orca
+> contract smokes across 10 removable features, strict all-target/all-feature
+> Clippy, format/diff checks, `npm audit` with 0 vulnerabilities, and RustSec
+> with 0 known vulnerabilities plus 18 unmaintained and 2 unsound warnings. Managed
+> preview start is fail-closed; trusted external localhost inspection remains
+> available. Basic is the default and Auto retains sandbox plus approvals;
+> visible/raw Full is removed. The shared prompt corpus is defense in depth, not
+> a complete action guarantee. An app-owned action/tool proxy with scoped
+> approval receipts remains P1. Local package/install reflection is verified;
+> Developer ID signing, notarization, publication, and physical Windows proof
+> are not claimed.
+> Managed capability is provider-specific: Claude/Codex support Basic/Auto;
+> Hermes/Gajaecode require pinned Atelier-owned macOS runtimes, isolated skills,
+> and sandbox readiness. Gajaecode verifies four defaults; Hermes verifies 453
+> durable source files and 73 installed skills. Direct CLI is separate and
+> limited.
+
 continuation_verified_at: 2026-07-14T14:40:43+09:00
 
 orca_module_gate_verified_at: 2026-07-18T01:59:32+09:00
@@ -19,6 +39,20 @@ release_publication_gate_hardened_at: 2026-07-23T00:19:08+09:00
 release_evidence_binding_hardened_at: 2026-07-23T00:45:00+09:00
 
 release_preflight_centralized_at: 2026-07-23T09:27:15+09:00
+
+release_candidate_0_2_13_installed_proof_at: 2026-07-25T12:57:45.010Z
+
+release_candidate_0_2_14_installed_proof_at: 2026-07-25T15:04:28.654Z
+
+> Current local install: the locally signed `0.2.14` candidate is installed at
+> `/Applications/Atelier.app`. Candidate/installed executable SHA-256 values
+> match at
+> `4ee04fbed757f015c910171f4e7c0c3979ca009d396f90a6abfb890e2e1b1868`;
+> DMG SHA-256 is
+> `3f9aba91eee83ec12cb1da2a24d3a470ff5cafd2d2e2668011a37e010563cd5b`;
+> codesign and renderer-ready checks pass. The proof records a dirty worktree,
+> so HEAD does not uniquely identify the build; the executable SHA-256 is the
+> artifact identifier. This is not Developer ID/notarization/public proof.
 
 > Release publication gate update: version tags now create only a sealed
 > private draft. `release-manifest.json` binds the complete macOS and Windows
@@ -40,7 +74,7 @@ release_preflight_centralized_at: 2026-07-23T09:27:15+09:00
 > These are source/workflow protections; no external signing or physical-device
 > result is claimed by this record.
 
-> Current 0.2.12 candidate: the complete gate passes 20 contract smokes,
+> Historical 0.2.12 candidate: the complete gate passed 20 contract smokes,
 > ten removable backend feature builds, 188 Rust tests with one live-login test
 > intentionally ignored, strict all-feature Clippy, production frontend build,
 > updater contract, npm audit, and release security audit. The locally signed
@@ -281,6 +315,8 @@ external evidence that this macOS host cannot produce.
 
 ## Required Before Public Release
 
+- Implement the app-owned action/tool proxy and scoped, expiring, one-use
+  approval receipts for protected provider effects.
 - Physical Windows: install the signed package, run Codex device login and
   Claude setup-token login, prove default-browser launch, close/reopen the app,
   prove the updated version survives restart, and record Smart App Control
@@ -295,6 +331,7 @@ external evidence that this macOS host cannot produce.
 
 - No database, user data, provider credential store, production deployment,
   paid action, or external publication was modified in this run.
+- No public signing or notarization was performed for `0.2.13`.
 - Atelier invokes provider-owned authentication flows and stores only its own
   documented setup-token bridge material. It does not read or copy Claude Code,
   Codex, or Hermes refresh-token stores.

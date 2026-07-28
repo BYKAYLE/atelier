@@ -11,6 +11,9 @@ const coreSmokeScripts = [
   "smoke:feature-settings",
   "smoke:settings-navigation",
   "smoke:connections-layout",
+  "smoke:stella-safety",
+  "smoke:agent-permission-capability",
+  "smoke:preview-capability",
   "smoke:preview-evidence",
   "smoke:session-runs",
   "harness:parallel-agent",
@@ -80,6 +83,37 @@ try {
   });
   runNpm(["run", "smoke:feature-dependency-bundle"]);
 
+  run(cargo, ["test", "--manifest-path", manifest, "--lib", "safety_guard_"]);
+  run(cargo, ["test", "--manifest-path", manifest, "--lib", "gajecode_cli_"]);
+  run(cargo, ["test", "--manifest-path", manifest, "--lib", "managed_agent_permission_support_"]);
+  run(cargo, [
+    "test",
+    "--manifest-path",
+    manifest,
+    "--lib",
+    "unsupported_managed_agent_send_fails_closed_before_spawn",
+  ]);
+  run(cargo, [
+    "test",
+    "--manifest-path",
+    manifest,
+    "--lib",
+    "run_agent_cli_command_fails_closed_before_validation_or_spawn",
+  ]);
+  run(cargo, [
+    "test",
+    "--manifest-path",
+    manifest,
+    "--lib",
+    "preview_capability_reports_shared_fail_closed_reason",
+  ]);
+  run(cargo, [
+    "test",
+    "--manifest-path",
+    manifest,
+    "--lib",
+    "managed_preview_execution_fails_closed_before_spawn",
+  ]);
   run(cargo, ["check", "--manifest-path", manifest, "--no-default-features"]);
   for (const feature of cargoFeatures) {
     run(cargo, [

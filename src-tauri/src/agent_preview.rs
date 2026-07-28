@@ -48,6 +48,13 @@ pub struct PreviewServiceStatus {
 }
 
 #[derive(Serialize, Clone)]
+pub struct PreviewCapability {
+    managed_start: bool,
+    external_loopback_inspection: bool,
+    managed_start_reason: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
 struct PreviewServiceEvent {
     id: String,
     url: String,
@@ -77,6 +84,9 @@ struct LocalPreviewUrl {
     port: u16,
     path: String,
 }
+
+const MANAGED_PREVIEW_DISABLED_REASON: &str =
+    "Managed package-script preview is disabled by Atelier's hardened security policy. Start only a separately trusted loopback service, then inspect its URL in the preview panel.";
 
 fn checked_at_ms() -> i64 {
     SystemTime::now()
@@ -816,10 +826,15 @@ fn build_macos_preview_sandbox_profile(
 }
 
 fn ensure_managed_preview_execution_enabled() -> Result<(), String> {
-    Err(
-        "Managed package-script preview is disabled by Atelier's hardened security policy. Start only a separately trusted loopback service, then inspect its URL in the preview panel."
-            .into(),
-    )
+    Err(MANAGED_PREVIEW_DISABLED_REASON.into())
+}
+
+fn preview_capability_snapshot() -> PreviewCapability {
+    PreviewCapability {
+        managed_start: false,
+        external_loopback_inspection: true,
+        managed_start_reason: Some(MANAGED_PREVIEW_DISABLED_REASON.to_string()),
+    }
 }
 
 fn preview_process_command(plan: &PreviewCommandPlan) -> Result<Command, String> {
@@ -1403,6 +1418,11 @@ pub async fn preview_health_check(url: String) -> Result<PreviewCheckResult, Str
     tauri::async_runtime::spawn_blocking(move || run_preview_health_check(url))
         .await
         .map_err(|e| format!("preview health check join: {e}"))
+}
+
+#[tauri::command]
+pub fn preview_capability() -> PreviewCapability {
+    preview_capability_snapshot()
 }
 
 #[tauri::command]
@@ -2095,6 +2115,21 @@ function connectCode() {
         let error = ensure_managed_preview_execution_enabled().unwrap_err();
         assert!(error.contains("disabled"));
         assert!(error.contains("trusted loopback service"));
+    }
+
+    #[test]
+    fn preview_capability_reports_shared_fail_closed_reason() {
+        let capability = preview_capability_snapshot();
+        assert!(!capability.managed_start);
+        assert!(capability.external_loopback_inspection);
+        assert_eq!(
+            capability.managed_start_reason.as_deref(),
+            Some(MANAGED_PREVIEW_DISABLED_REASON)
+        );
+        assert_eq!(
+            ensure_managed_preview_execution_enabled().unwrap_err(),
+            MANAGED_PREVIEW_DISABLED_REASON
+        );
     }
 
     #[cfg(target_os = "macos")]

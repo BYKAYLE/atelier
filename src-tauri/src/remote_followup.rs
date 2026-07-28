@@ -288,7 +288,7 @@ fn normalize_approval_input(
     if input
         .permission_mode
         .as_deref()
-        .is_some_and(|value| !matches!(value, "basic" | "auto" | "full"))
+        .is_some_and(|value| !matches!(value, "basic" | "auto"))
     {
         return Err("Unsupported remote follow-up permission mode.".to_string());
     }
@@ -621,6 +621,19 @@ mod tests {
             model: None,
             effort: None,
             permission_mode: None,
+            stella_mode: false,
+        };
+        assert!(normalize_approval_input(input).is_err());
+        let input = RemoteFollowupApprovalInput {
+            proposal_id: Uuid::new_v4().to_string(),
+            workspace: std::env::current_dir()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            provider: "codex".to_string(),
+            model: None,
+            effort: Some("high".to_string()),
+            permission_mode: Some("full".to_string()),
             stella_mode: false,
         };
         assert!(normalize_approval_input(input).is_err());
