@@ -41,6 +41,9 @@ const GROK_VERSION: &str = "1.0.4";
 const HERMES_GIT_SPEC: &str =
     "hermes-agent[anthropic] @ git+https://github.com/NousResearch/hermes-agent.git@3ef6bbd201263d354fd83ec55b3c306ded2eb72a";
 const HERMES_COMMIT: &str = "3ef6bbd201263d354fd83ec55b3c306ded2eb72a";
+// Upstream release tag that resolves (peeled) to HERMES_COMMIT. Display only —
+// install and readiness stay bound to the exact commit above.
+const HERMES_PINNED_RELEASE_TAG: &str = "v2026.7.20";
 const UV_BOOTSTRAP_VERSION: &str = "0.10.12";
 const MANAGED_RUNTIME_RECEIPT_SCHEMA: u32 = 2;
 const MANAGED_RUNTIME_POLICY_VERSION: &str = "atelier-managed-basic-auto-v1";
@@ -6784,6 +6787,44 @@ pub struct GajecodeUpdateStatus {
     pub latest_version: Option<String>,
     pub update_available: bool,
     pub message: Option<String>,
+    /// Upstream reference only (npm latest). Never feeds `update_available`.
+    pub upstream_latest_version: Option<String>,
+    pub upstream_checked_at: Option<String>,
+    pub upstream_error: Option<String>,
+}
+
+/// Attach the upstream reference to a status without touching pin-based fields.
+fn with_gajecode_upstream(
+    mut status: GajecodeUpdateStatus,
+    upstream: crate::upstream_check::UpstreamReference,
+) -> GajecodeUpdateStatus {
+    status.upstream_latest_version = upstream.latest_version;
+    status.upstream_checked_at = upstream.checked_at;
+    status.upstream_error = upstream.error;
+    status
+}
+
+fn upstream_reference_for(provider: &str, force: bool) -> crate::upstream_check::UpstreamReference {
+    let provider_root = match provider {
+        "gajecode" => gajecode_provider_root(),
+        "hermes" => hermes_provider_root(),
+        "grok" => grok_provider_root(),
+        _ => None,
+    };
+    let managed_bun = if provider == "gajecode" {
+        gajecode_bun_executable_path()
+    } else {
+        None
+    };
+    crate::upstream_check::resolve_upstream_reference(
+        crate::upstream_check::UpstreamLookupContext {
+            provider,
+            provider_root: provider_root.as_deref(),
+            managed_bun: managed_bun.as_deref(),
+            path_env: &crate::augmented_cli_path(),
+            force,
+        },
+    )
 }
 
 fn first_semver_token(text: &str) -> Option<String> {
@@ -6847,6 +6888,9 @@ fn gajecode_update_status(
             latest_version,
             update_available: false,
             message: Some("가재코드 CLI가 설치되어 있지 않습니다.".to_string()),
+            upstream_latest_version: None,
+            upstream_checked_at: None,
+            upstream_error: None,
         };
     }
 
@@ -6860,6 +6904,9 @@ fn gajecode_update_status(
                 "설치된 가재코드 버전을 확인하지 못했습니다. 업데이트로 Atelier 지원 버전을 복구할 수 있습니다."
                     .to_string(),
             ),
+            upstream_latest_version: None,
+            upstream_checked_at: None,
+            upstream_error: None,
         };
     };
 
@@ -6879,14 +6926,23 @@ fn gajecode_update_status(
         latest_version,
         update_available,
         message,
+        upstream_latest_version: None,
+        upstream_checked_at: None,
+        upstream_error: None,
     }
 }
 
 #[tauri::command]
-pub async fn gajecode_check_update() -> Result<GajecodeUpdateStatus, String> {
-    let installed = gajecode_cli_installed();
-    let current_version = installed.then(read_gajecode_current_version).flatten();
-    Ok(gajecode_update_status(installed, current_version))
+pub async fn gajecode_check_update(force: Option<bool>) -> Result<GajecodeUpdateStatus, String> {
+    let force = force.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || {
+        let installed = gajecode_cli_installed();
+        let current_version = installed.then(read_gajecode_current_version).flatten();
+        let status = gajecode_update_status(installed, current_version);
+        with_gajecode_upstream(status, upstream_reference_for("gajecode", force))
+    })
+    .await
+    .map_err(|error| format!("gajecode update check task failed: {error}"))
 }
 
 #[tauri::command]
@@ -6903,6 +6959,30 @@ pub struct GrokUpdateStatus {
     pub latest_version: Option<String>,
     pub update_available: bool,
     pub message: Option<String>,
+    /// Upstream reference only (x.ai stable channel). Never feeds `update_available`.
+    pub upstream_latest_version: Option<String>,
+    pub upstream_checked_at: Option<String>,
+    pub upstream_error: Option<String>,
+}
+
+fn grok_update_status(
+    installed: bool,
+    current_version: Option<String>,
+    ready: bool,
+) -> GrokUpdateStatus {
+    let update_available =
+        installed && (!ready || current_version.as_deref() != Some(GROK_VERSION));
+    GrokUpdateStatus {
+        installed,
+        current_version,
+        latest_version: Some(GROK_VERSION.to_string()),
+        update_available,
+        message: update_available
+            .then(|| "Atelier가 검증한 Grok Build 실행환경으로 복구할 수 있습니다.".to_string()),
+        upstream_latest_version: None,
+        upstream_checked_at: None,
+        upstream_error: None,
+    }
 }
 
 fn read_grok_current_version() -> Option<String> {
@@ -6921,21 +7001,22 @@ fn read_grok_current_version() -> Option<String> {
 }
 
 #[tauri::command]
-pub async fn grok_check_update() -> Result<GrokUpdateStatus, String> {
-    let installed = grok_executable_path().is_some();
-    let current_version = installed.then(read_grok_current_version).flatten();
-    let ready = app_support_dir()
-        .is_some_and(|app_support| verify_managed_runtime_at(&app_support, "grok").is_ok());
-    let update_available =
-        installed && (!ready || current_version.as_deref() != Some(GROK_VERSION));
-    Ok(GrokUpdateStatus {
-        installed,
-        current_version,
-        latest_version: Some(GROK_VERSION.to_string()),
-        update_available,
-        message: update_available
-            .then(|| "Atelier가 검증한 Grok Build 실행환경으로 복구할 수 있습니다.".to_string()),
+pub async fn grok_check_update(force: Option<bool>) -> Result<GrokUpdateStatus, String> {
+    let force = force.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || {
+        let installed = grok_executable_path().is_some();
+        let current_version = installed.then(read_grok_current_version).flatten();
+        let ready = app_support_dir()
+            .is_some_and(|app_support| verify_managed_runtime_at(&app_support, "grok").is_ok());
+        let mut status = grok_update_status(installed, current_version, ready);
+        let upstream = upstream_reference_for("grok", force);
+        status.upstream_latest_version = upstream.latest_version;
+        status.upstream_checked_at = upstream.checked_at;
+        status.upstream_error = upstream.error;
+        status
     })
+    .await
+    .map_err(|error| format!("grok update check task failed: {error}"))
 }
 
 #[tauri::command]
@@ -6952,21 +7033,68 @@ pub struct HermesUpdateStatus {
     pub update_available: bool,
     pub commits_behind: Option<u32>,
     pub message: Option<String>,
+    /// Atelier-pinned commit (short) and its upstream release tag so the card can name the support pin.
+    pub pinned_commit: Option<String>,
+    pub pinned_tag: Option<String>,
+    /// Upstream reference only (highest GitHub release tag). Never feeds `update_available`.
+    pub upstream_latest_version: Option<String>,
+    pub upstream_latest_tag: Option<String>,
+    pub upstream_checked_at: Option<String>,
+    pub upstream_error: Option<String>,
+}
+
+fn hermes_update_status_base(
+    installed: bool,
+    current_version: Option<String>,
+    install_record_current: bool,
+) -> HermesUpdateStatus {
+    let update_available = installed && !install_record_current;
+    let message = update_available.then(|| {
+        "Reinstall the Atelier-pinned Hermes build to restore a verified runtime.".to_string()
+    });
+    HermesUpdateStatus {
+        installed,
+        current_version,
+        update_available,
+        commits_behind: None,
+        message,
+        pinned_commit: Some(HERMES_COMMIT.chars().take(7).collect()),
+        pinned_tag: Some(HERMES_PINNED_RELEASE_TAG.to_string()),
+        upstream_latest_version: None,
+        upstream_latest_tag: None,
+        upstream_checked_at: None,
+        upstream_error: None,
+    }
+}
+
+fn with_hermes_upstream(
+    mut status: HermesUpdateStatus,
+    upstream: crate::upstream_check::UpstreamReference,
+) -> HermesUpdateStatus {
+    status.upstream_latest_version = upstream.latest_version;
+    status.upstream_latest_tag = upstream.latest_tag;
+    status.upstream_checked_at = upstream.checked_at;
+    status.upstream_error = upstream.error;
+    status
 }
 
 /// `hermes --version` 출력을 파싱해 현재 버전과 업데이트 여부를 보고한다.
-/// hermes CLI 가 자체적으로 GitHub 원격 HEAD 와 비교해 "Update available: N commits behind" 를 출력한다.
+/// 업데이트 가능 여부는 설치 기록이 이 빌드의 고정 커밋과 일치하는지로만 판정하고,
+/// 업스트림 최신 태그는 참고용으로만 함께 보고한다.
 #[tauri::command]
-pub async fn hermes_check_update() -> Result<HermesUpdateStatus, String> {
-    let empty = HermesUpdateStatus {
-        installed: false,
-        current_version: None,
-        update_available: false,
-        commits_behind: None,
-        message: None,
-    };
+pub async fn hermes_check_update(force: Option<bool>) -> Result<HermesUpdateStatus, String> {
+    let force = force.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || {
+        let status = hermes_check_update_blocking();
+        with_hermes_upstream(status, upstream_reference_for("hermes", force))
+    })
+    .await
+    .map_err(|error| format!("hermes update check task failed: {error}"))
+}
+
+fn hermes_check_update_blocking() -> HermesUpdateStatus {
     let Some(executable) = hermes_executable_path() else {
-        return Ok(empty);
+        return hermes_update_status_base(false, None, true);
     };
     let mut command = cli_command(&executable.to_string_lossy());
     command
@@ -6975,14 +7103,14 @@ pub async fn hermes_check_update() -> Result<HermesUpdateStatus, String> {
     configure_background_command(&mut command);
     let output = match command.output() {
         Ok(o) => o,
-        Err(_) => return Ok(empty),
+        Err(_) => return hermes_update_status_base(false, None, true),
     };
     let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
     combined.push('\n');
     combined.push_str(&String::from_utf8_lossy(&output.stderr));
     let mut current_version: Option<String> = None;
     if !output.status.success() {
-        return Ok(empty);
+        return hermes_update_status_base(false, None, true);
     }
     for line in combined.lines() {
         let trimmed = line.trim();
@@ -6990,17 +7118,7 @@ pub async fn hermes_check_update() -> Result<HermesUpdateStatus, String> {
             current_version = Some(rest.to_string());
         }
     }
-    let update_available = !hermes_install_record_is_current();
-    let message = update_available.then(|| {
-        "Reinstall the Atelier-pinned Hermes build to restore a verified runtime.".to_string()
-    });
-    Ok(HermesUpdateStatus {
-        installed: true,
-        current_version,
-        update_available,
-        commits_behind: None,
-        message,
-    })
+    hermes_update_status_base(true, current_version, hermes_install_record_is_current())
 }
 
 /// Mutable upstream updates can silently change the runtime after release. Reinstall the
@@ -7187,6 +7305,73 @@ mod tests {
             .message
             .as_deref()
             .is_some_and(|message| message.contains("버전을 확인하지 못했습니다")));
+    }
+
+    #[test]
+    fn upstream_reference_never_changes_pin_based_update_fields() {
+        let newer_upstream = crate::upstream_check::UpstreamReference {
+            latest_version: Some("99.0.0".to_string()),
+            latest_tag: Some("v99.0.0".to_string()),
+            checked_at: Some("2026-08-24T00:00:00Z".to_string()),
+            error: None,
+        };
+        let failed_upstream = crate::upstream_check::UpstreamReference {
+            latest_version: None,
+            latest_tag: None,
+            checked_at: Some("2026-08-24T00:00:00Z".to_string()),
+            error: Some("offline".to_string()),
+        };
+
+        let supported = with_gajecode_upstream(
+            gajecode_update_status(true, Some(GAJAE_CODE_VERSION.to_string())),
+            newer_upstream.clone(),
+        );
+        assert!(
+            !supported.update_available,
+            "upstream newer must not flip update_available"
+        );
+        assert_eq!(
+            supported.latest_version.as_deref(),
+            Some(GAJAE_CODE_VERSION)
+        );
+        assert_eq!(supported.upstream_latest_version.as_deref(), Some("99.0.0"));
+        assert!(supported.upstream_error.is_none());
+
+        let offline = with_gajecode_upstream(
+            gajecode_update_status(true, Some("0.1.0".to_string())),
+            failed_upstream.clone(),
+        );
+        assert!(
+            offline.update_available,
+            "pin comparison survives upstream failure"
+        );
+        assert!(offline.upstream_latest_version.is_none());
+        assert_eq!(offline.upstream_error.as_deref(), Some("offline"));
+
+        let grok = grok_update_status(true, Some(GROK_VERSION.to_string()), true);
+        assert!(!grok.update_available);
+        assert_eq!(grok.latest_version.as_deref(), Some(GROK_VERSION));
+        assert!(grok.upstream_latest_version.is_none());
+        let grok_stale = grok_update_status(true, Some("0.0.1".to_string()), true);
+        assert!(grok_stale.update_available);
+
+        let hermes = with_hermes_upstream(
+            hermes_update_status_base(true, Some("0.20.0".to_string()), true),
+            newer_upstream,
+        );
+        assert!(
+            !hermes.update_available,
+            "install-record match wins over upstream tag"
+        );
+        assert_eq!(hermes.upstream_latest_tag.as_deref(), Some("v99.0.0"));
+        assert_eq!(hermes.pinned_commit.as_deref(), Some(&HERMES_COMMIT[..7]));
+        let hermes_stale = with_hermes_upstream(
+            hermes_update_status_base(true, None, false),
+            failed_upstream,
+        );
+        assert!(hermes_stale.update_available);
+        let hermes_missing = hermes_update_status_base(false, None, true);
+        assert!(!hermes_missing.installed && !hermes_missing.update_available);
     }
 
     #[cfg(unix)]

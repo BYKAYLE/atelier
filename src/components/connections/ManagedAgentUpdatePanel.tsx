@@ -11,6 +11,8 @@ interface Props {
   state: ManagedAgentUpdateState;
   statusText: string | null;
   versionText?: string | null;
+  /** Upstream-latest reference line (informational; never drives the update action). */
+  upstreamText?: string | null;
   message?: string | null;
   updateAvailable: boolean;
   updating: boolean;
@@ -36,6 +38,7 @@ const ManagedAgentUpdatePanel: React.FC<Props> = ({
   state,
   statusText,
   versionText,
+  upstreamText,
   message,
   updateAvailable,
   updating,
@@ -85,6 +88,14 @@ const ManagedAgentUpdatePanel: React.FC<Props> = ({
         {versionText && (
           <div className={cls("text-[11px] gb-mono mt-0.5", dark ? "text-dsub" : "text-sub")}>
             {versionText}
+          </div>
+        )}
+        {upstreamText && (
+          <div
+            data-testid={`${provider}-upstream-reference`}
+            className={cls("text-[11px] gb-mono mt-0.5", dark ? "text-dsub" : "text-sub")}
+          >
+            {upstreamText}
           </div>
         )}
         {message && (

@@ -5,6 +5,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import ManagedAgentUpdatePanel from "./connections/ManagedAgentUpdatePanel";
+import { upstreamReferenceLine } from "../lib/agentUpstreamContract";
 import { cls, Tweaks } from "../lib/tokens";
 import {
   gajecodeCredentialReady,
@@ -370,6 +371,7 @@ const COPY = {
     hermesUpdateButton: "업데이트",
     hermesRecheck: "업데이트 확인",
     hermesVersionPrefix: "버전",
+    hermesPinnedPrefix: "지원 릴리스",
     gajecodeTitle: "가재코드",
     gajecodeDesc:
       "가재코드 에이전트는 Atelier 전용 HOME에서 실행됩니다. 첫 사용 시 고정 버전 런타임과 전용 기본 스킬을 자동 준비하므로 Atelier만 설치하면 됩니다.",
@@ -504,6 +506,7 @@ const COPY = {
     hermesUpdateButton: "Update",
     hermesRecheck: "Check for updates",
     hermesVersionPrefix: "Version",
+    hermesPinnedPrefix: "supported release",
     gajecodeTitle: "Gajae Code",
     gajecodeDesc:
       "The Gajae Code agent runs under Atelier's dedicated HOME. Its pinned runtime and isolated default skills are prepared automatically on first use, so installing Atelier is enough.",
@@ -1568,10 +1571,10 @@ const HermesCard: React.FC<{
   const runtimeProgress = useManagedRuntimeProgress("hermes");
   const runtimeProgressText = managedRuntimeProgressText(runtimeProgress, copy);
 
-  const refreshUpdate = useCallback(async () => {
+  const refreshUpdate = useCallback(async (options: { force?: boolean } = {}) => {
     setCheckingUpdate(true);
     try {
-      const s = await hermesCheckUpdate();
+      const s = await hermesCheckUpdate(options);
       setUpdateStatus(s);
     } catch {
       setUpdateStatus(null);
@@ -1713,8 +1716,19 @@ const HermesCard: React.FC<{
               ? copy.hermesUpdateLatest
               : null}
         versionText={updateStatus?.current_version
-          ? `${copy.hermesVersionPrefix}: ${updateStatus.current_version}`
+          ? `${copy.hermesVersionPrefix}: ${updateStatus.current_version}${
+              updateStatus.pinned_tag
+                ? ` · Atelier ${copy.hermesPinnedPrefix}: ${updateStatus.pinned_tag}`
+                : ""
+            }`
           : null}
+        upstreamText={upstreamReferenceLine({
+          pin: updateStatus?.pinned_commit,
+          pinVersionLabel: updateStatus?.pinned_tag,
+          upstreamLabel: updateStatus?.upstream_latest_tag,
+          status: updateStatus,
+          language: lang,
+        })}
         message={updateStatus?.message}
         updateAvailable={Boolean(updateStatus?.update_available)}
         updating={updating}
@@ -1724,7 +1738,7 @@ const HermesCard: React.FC<{
         updateDisabled={updating || checkingUpdate || installing}
         checkDisabled={checkingUpdate || updating || installing}
         onUpdate={() => void runUpdate()}
-        onCheck={() => void refreshUpdate()}
+        onCheck={() => void refreshUpdate({ force: true })}
       />
 
       {installError && (
@@ -1828,10 +1842,10 @@ const GajecodeCard: React.FC<{
       && updateStatus.current_version === updateStatus.latest_version,
   );
 
-  const refreshUpdate = useCallback(async () => {
+  const refreshUpdate = useCallback(async (options: { force?: boolean } = {}) => {
     setCheckingUpdate(true);
     try {
-      const next = await gajecodeCheckUpdate();
+      const next = await gajecodeCheckUpdate(options);
       setUpdateStatus(next);
     } catch {
       setUpdateStatus(null);
@@ -1980,6 +1994,11 @@ const GajecodeCard: React.FC<{
                 : ""
             }`
           : null}
+        upstreamText={upstreamReferenceLine({
+          pin: updateStatus?.latest_version,
+          status: updateStatus,
+          language: tw.language,
+        })}
         message={updateStatus?.message}
         updateAvailable={Boolean(updateStatus?.update_available)}
         updating={updating}
@@ -1989,7 +2008,7 @@ const GajecodeCard: React.FC<{
         updateDisabled={updating || checkingUpdate || preparing}
         checkDisabled={checkingUpdate || updating || preparing}
         onUpdate={() => void runUpdate()}
-        onCheck={() => void refreshUpdate()}
+        onCheck={() => void refreshUpdate({ force: true })}
       />
 
       {preparationNotice && (
@@ -2087,11 +2106,11 @@ const GrokRuntimeCard: React.FC<{
   const [notice, setNotice] = useState<string | null>(null);
   const [readiness, setReadiness] = useState<ManagedAgentRuntimeReadiness | null>(null);
 
-  const refreshUpdate = useCallback(async () => {
+  const refreshUpdate = useCallback(async (options: { force?: boolean } = {}) => {
     setChecking(true);
     setError(null);
     try {
-      setUpdateStatus(await grokCheckUpdate());
+      setUpdateStatus(await grokCheckUpdate(options));
     } catch (nextError) {
       setUpdateStatus(null);
       setError(String(nextError));
@@ -2169,6 +2188,11 @@ const GrokRuntimeCard: React.FC<{
                 : ""
             }`
           : null}
+        upstreamText={upstreamReferenceLine({
+          pin: updateStatus?.latest_version,
+          status: updateStatus,
+          language: ko ? "ko" : "en",
+        })}
         message={updateStatus?.message}
         updateAvailable={Boolean(updateStatus?.update_available)}
         updating={updating}
@@ -2178,7 +2202,7 @@ const GrokRuntimeCard: React.FC<{
         updateDisabled={checking || updating}
         checkDisabled={checking || updating}
         onUpdate={() => void runUpdate()}
-        onCheck={() => void refreshUpdate()}
+        onCheck={() => void refreshUpdate({ force: true })}
       />
       {notice && (
         <div className={cls("mt-2 text-[12px] px-3 py-2 rounded-md border", dark ? "border-emerald-700/40 bg-emerald-900/20 text-emerald-300" : "border-emerald-200 bg-emerald-50 text-emerald-700")}>

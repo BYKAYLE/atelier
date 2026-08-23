@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { gajecodeUpdateMatchesReadiness } from "../src/lib/gajecodeUpdateContract.ts";
+import {
+  compareUpstreamToPin,
+  upstreamReferenceLine,
+} from "../src/lib/agentUpstreamContract.ts";
 
 const workspace = readFileSync(new URL("../src/components/AgentWorkspace.tsx", import.meta.url), "utf8");
 const connections = readFileSync(new URL("../src/components/ConnectionsPanel.tsx", import.meta.url), "utf8");
@@ -10,6 +14,7 @@ const managedAgentUpdatePanel = readFileSync(
 );
 const tauri = readFileSync(new URL("../src/lib/tauri.ts", import.meta.url), "utf8");
 const credentials = readFileSync(new URL("../src-tauri/src/credentials.rs", import.meta.url), "utf8");
+const upstreamCheck = readFileSync(new URL("../src-tauri/src/upstream_check.rs", import.meta.url), "utf8");
 const cliInstallers = readFileSync(new URL("../src/lib/cliInstallers.ts", import.meta.url), "utf8");
 const styles = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
 const gajecodeCard = connections.slice(
@@ -141,6 +146,7 @@ assert.ok(
   "Grok update panel must follow managed runtime readiness",
 );
 assert.match(connections, /id: "grok"/);
+assert.match(connections, /await grokCheckUpdate\(options\)/);
 assert.match(connections, /await grokCheckUpdate\(\)/);
 assert.match(connections, /const nextReadiness = await grokUpdate\(\)/);
 assert.match(connections, /data-testid="gajecode-isolated-skills"/);
@@ -194,7 +200,61 @@ assert.match(credentials, /const GAJAE_CODE_VERSION: &str = "0\.14\.0"/);
 assert.match(credentials, /const GROK_VERSION: &str = "1\.0\.4"/);
 assert.match(credentials, /GROK_MACOS_AARCH64_SHA256/);
 assert.match(credentials, /Developer ID verification/);
-assert.doesNotMatch(credentials, /read_gajecode_latest_version/);
+// 업스트림 최신 버전은 참고 표시 전용이다. update_available 산출 함수 본문에는
+// upstream 토큰이 등장해선 안 된다 — 설치 대상은 언제나 Atelier 지원 pin.
+function fnBody(source: string, signature: RegExp): string {
+  const start = source.search(signature);
+  assert.ok(start >= 0, `missing ${signature}`);
+  const open = source.indexOf("{", start);
+  let depth = 0;
+  for (let index = open; index < source.length; index += 1) {
+    if (source[index] === "{") depth += 1;
+    if (source[index] === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(open, index + 1);
+    }
+  }
+  throw new Error(`unterminated body for ${signature}`);
+}
+for (const signature of [
+  /fn gajecode_update_status\(/,
+  /fn grok_update_status\(/,
+  /fn hermes_update_status_base\(/,
+  /fn hermes_install_record_is_current\(/,
+]) {
+  const body = fnBody(credentials, signature);
+  assert.ok(
+    !/upstream_latest_version\s*[^:]|upstream_reference_for|resolve_upstream_reference/.test(
+      body.replace(/upstream_(latest_version|latest_tag|checked_at|error): None/g, ""),
+    ),
+    `${signature} must not consult the upstream reference when deciding update_available`,
+  );
+}
+assert.match(credentials, /with_gajecode_upstream\(status, upstream_reference_for\("gajecode", force\)\)/);
+assert.match(credentials, /with_hermes_upstream\(status, upstream_reference_for\("hermes", force\)\)/);
+assert.match(credentials, /upstream_reference_for\("grok", force\)/);
+assert.match(upstreamCheck, /UPSTREAM_CHECK_TIMEOUT: Duration = Duration::from_secs\(5\)/);
+assert.match(upstreamCheck, /UPSTREAM_CACHE_TTL: Duration = Duration::from_secs\(6 \* 60 \* 60\)/);
+assert.match(upstreamCheck, /UPSTREAM_CACHE_FILE: &str = "upstream-check\.json"/);
+assert.doesNotMatch(
+  upstreamCheck.split("\n").filter((line) => !line.trimStart().startsWith("//")).join("\n"),
+  /update_available/,
+  "the upstream lookup module must not know about update_available",
+);
+assert.match(tauri, /upstream_latest_version: string \| null;/);
+assert.match(managedAgentUpdatePanel, /data-testid=\{`\$\{provider\}-upstream-reference`\}/);
+for (const provider of ["hermes", "gajecode", "grok"]) {
+  assert.match(
+    connections,
+    new RegExp(`provider="${provider}"[\\s\\S]{0,2500}upstreamText=\\{upstreamReferenceLine\\(`),
+    `${provider} card must render the upstream reference line`,
+  );
+}
+assert.equal(
+  (connections.match(/onCheck=\{\(\) => void refreshUpdate\(\{ force: true \}\)\}/g) ?? []).length,
+  3,
+  "the manual check button must bypass the upstream cache for all three agents",
+);
 assert.doesNotMatch(credentials, /GAJAE_CODE_PACKAGE_NAME/);
 assert.match(
   credentials,
@@ -229,6 +289,47 @@ assert.equal(
   }),
   false,
   "a support-pin disagreement must never render an update success notice",
+);
+
+// agentUpstreamContract: 순수 비교·문구 계약
+assert.equal(compareUpstreamToPin("0.15.0", "0.14.0"), "ahead");
+assert.equal(compareUpstreamToPin("0.14.0", "0.14.0"), "same");
+assert.equal(compareUpstreamToPin("0.13.9", "0.14.0"), "behind");
+assert.equal(compareUpstreamToPin("2026.8.19", "v2026.7.20"), "ahead");
+assert.equal(compareUpstreamToPin("2026.8.19", "2026.8.9"), "ahead", "date-like tags compare numerically");
+assert.equal(compareUpstreamToPin(null, "0.14.0"), "unknown");
+assert.equal(compareUpstreamToPin("1.0.5", "3ef6bbd"), "unknown");
+assert.equal(upstreamReferenceLine({ pin: "0.14.0", status: null, language: "ko" }), null);
+const upstreamOk = { upstream_latest_version: "0.15.0", upstream_checked_at: "2026-08-24T00:00:00Z", upstream_error: null };
+assert.equal(
+  upstreamReferenceLine({ pin: "0.14.0", status: upstreamOk, language: "ko" }),
+  "업스트림 최신 0.15.0 출시 · Atelier 검증 대기",
+);
+assert.equal(
+  upstreamReferenceLine({ pin: "0.15.0", status: upstreamOk, language: "ko" }),
+  "업스트림 최신 0.15.0 · 업스트림과 동일",
+);
+assert.equal(
+  upstreamReferenceLine({ pin: "0.14.0", status: upstreamOk, language: "en" }),
+  "Upstream latest 0.15.0 released · awaiting Atelier verification",
+);
+assert.equal(
+  upstreamReferenceLine({
+    pin: "0.14.0",
+    status: { upstream_latest_version: null, upstream_checked_at: "2026-08-24T00:00:00Z", upstream_error: "git ls-remote: 5초 내 응답 없음" },
+    language: "ko",
+  }),
+  "업스트림 확인 불가: git ls-remote: 5초 내 응답 없음",
+);
+assert.equal(
+  upstreamReferenceLine({
+    pin: "3ef6bbd",
+    pinVersionLabel: "v2026.7.20",
+    upstreamLabel: "v2026.8.19",
+    status: { upstream_latest_version: "2026.8.19", upstream_latest_tag: "v2026.8.19", upstream_checked_at: "x", upstream_error: null },
+    language: "ko",
+  }),
+  "업스트림 최신 v2026.8.19 출시 · Atelier 검증 대기",
 );
 
 console.log("provider runtime identity smoke: ok");

@@ -1578,15 +1578,29 @@ export async function providerInstallCli(provider: string): Promise<void> {
   return invoke("provider_install_cli", { provider });
 }
 
-export interface HermesUpdateStatus {
+/**
+ * Upstream reference fields shared by every managed-agent update status.
+ * They are informational only: `update_available` and the install target stay
+ * bound to the Atelier support pin.
+ */
+export interface ManagedAgentUpstreamReference {
+  upstream_latest_version: string | null;
+  upstream_checked_at: string | null;
+  upstream_error: string | null;
+}
+
+export interface HermesUpdateStatus extends ManagedAgentUpstreamReference {
   installed: boolean;
   current_version: string | null;
   update_available: boolean;
   commits_behind: number | null;
   message: string | null;
+  pinned_commit: string | null;
+  pinned_tag: string | null;
+  upstream_latest_tag: string | null;
 }
 
-export interface GajecodeUpdateStatus {
+export interface GajecodeUpdateStatus extends ManagedAgentUpstreamReference {
   installed: boolean;
   current_version: string | null;
   latest_version: string | null;
@@ -1596,9 +1610,16 @@ export interface GajecodeUpdateStatus {
 
 export type GrokUpdateStatus = GajecodeUpdateStatus;
 
+export interface ManagedAgentCheckUpdateOptions {
+  /** Ignore the 6h upstream-reference cache (manual "업데이트 확인" button). */
+  force?: boolean;
+}
+
 /** Hermes 관리형 설치가 이 Atelier 빌드의 검증된 고정 커밋과 일치하는지 확인. */
-export async function hermesCheckUpdate(): Promise<HermesUpdateStatus> {
-  return invoke("hermes_check_update");
+export async function hermesCheckUpdate(
+  options: ManagedAgentCheckUpdateOptions = {},
+): Promise<HermesUpdateStatus> {
+  return invoke("hermes_check_update", { force: Boolean(options.force) });
 }
 
 /** `hermes update` 백그라운드 실행. 즉시 반환. */
@@ -1606,8 +1627,10 @@ export async function hermesUpdate(): Promise<void> {
   return invoke("hermes_update");
 }
 
-export async function gajecodeCheckUpdate(): Promise<GajecodeUpdateStatus> {
-  return invoke("gajecode_check_update");
+export async function gajecodeCheckUpdate(
+  options: ManagedAgentCheckUpdateOptions = {},
+): Promise<GajecodeUpdateStatus> {
+  return invoke("gajecode_check_update", { force: Boolean(options.force) });
 }
 
 /** Atelier가 검증한 고정 GJC 버전으로 갱신하고 격리 런타임·기본 스킬을 재검증. */
@@ -1615,8 +1638,10 @@ export async function gajecodeUpdate(): Promise<ManagedAgentRuntimeReadiness> {
   return invoke("gajecode_update");
 }
 
-export async function grokCheckUpdate(): Promise<GrokUpdateStatus> {
-  return invoke("grok_check_update");
+export async function grokCheckUpdate(
+  options: ManagedAgentCheckUpdateOptions = {},
+): Promise<GrokUpdateStatus> {
+  return invoke("grok_check_update", { force: Boolean(options.force) });
 }
 
 export async function grokUpdate(): Promise<ManagedAgentRuntimeReadiness> {

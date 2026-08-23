@@ -44,6 +44,7 @@ mod ssh_workspaces;
 mod stella;
 mod subscription_usage;
 mod updater_canary;
+mod upstream_check;
 
 use serde::Serialize;
 use tauri::{Emitter, Manager};
