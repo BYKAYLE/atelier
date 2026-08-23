@@ -345,9 +345,12 @@ fn configure_gajecode_invocation(
     #[cfg(not(test))]
     let _ = test_fixture;
 
+    // `--no-extensions` is intentionally absent: gjc only honors it under ACP
+    // and, since 0.15.0, rejects it for a local print launch ("Unknown option").
+    // Extension/skill isolation comes from the Atelier-owned HOME/GJC_HOME and
+    // the isolated provider workspace, not from a launch flag.
     cmd.arg("--print")
         .arg("--no-title")
-        .arg("--no-extensions")
         .arg("--no-rules")
         .arg("--append-system-prompt")
         .arg(gajecode_model_system_prompt(requested_model))
@@ -5923,7 +5926,10 @@ mod tests {
             .windows(2)
             .any(|args| args == ["--tools", "read,search,find"]));
         assert!(args.iter().any(|arg| arg == "--no-tools"));
-        assert!(args.iter().any(|arg| arg == "--no-extensions"));
+        assert!(
+            !args.iter().any(|arg| arg == "--no-extensions"),
+            "gjc 0.15.0 rejects --no-extensions for local print launches"
+        );
         assert!(args.iter().any(|arg| arg == "--no-rules"));
         assert!(args
             .windows(2)
