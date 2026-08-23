@@ -2,36 +2,36 @@
   "schemaVersion": 1,
   "status": "verified",
   "proofType": "local-installed-candidate",
-  "sourceSha": "fd47fbac31f6068bd3005174f8e1e3cd901ef5d0",
+  "sourceSha": "f1d5f501b22e0d219a14bf3285c6340da942f638",
   "sourceState": {
-    "headSha": "fd47fbac31f6068bd3005174f8e1e3cd901ef5d0",
+    "headSha": "f1d5f501b22e0d219a14bf3285c6340da942f638",
     "workingTreeDirtyAtProofTime": true,
     "buildArtifactIdentifier": {
       "kind": "sha256",
-      "value": "c08d3749d8a70ede6709ab1d3585b91ee8b9a97835c9a429d8240c77076d9a22"
+      "value": "b8cdfa26598f61bf77fdc564505434d9b65e0a5d59ea73526c00b5ae18b21057"
     }
   },
-  "version": "0.2.27",
+  "version": "0.2.28",
   "bundleIdentifier": "com.atelier.app",
-  "generatedAt": "2026-08-17T17:25:13.987Z",
+  "generatedAt": "2026-08-23T18:58:34.676Z",
   "candidate": {
-    "appPath": "/Users/kansic/Service/atelier/src-tauri/target/release/bundle/macos/Atelier-0.2.27.build-artifact.noindex",
-    "executablePath": "/Users/kansic/Service/atelier/src-tauri/target/release/bundle/macos/Atelier-0.2.27.build-artifact.noindex/Contents/MacOS/atelier",
-    "version": "0.2.27",
-    "executableSha256": "c08d3749d8a70ede6709ab1d3585b91ee8b9a97835c9a429d8240c77076d9a22",
+    "appPath": "/Users/kansic/Service/atelier/src-tauri/target/release/bundle/macos/Atelier.app",
+    "executablePath": "/Users/kansic/Service/atelier/src-tauri/target/release/bundle/macos/Atelier.app/Contents/MacOS/atelier",
+    "version": "0.2.28",
+    "executableSha256": "b8cdfa26598f61bf77fdc564505434d9b65e0a5d59ea73526c00b5ae18b21057",
     "codesignVerified": true
   },
   "installed": {
     "appPath": "/Applications/Atelier.app",
     "executablePath": "/Applications/Atelier.app/Contents/MacOS/atelier",
-    "version": "0.2.27",
-    "executableSha256": "c08d3749d8a70ede6709ab1d3585b91ee8b9a97835c9a429d8240c77076d9a22",
+    "version": "0.2.28",
+    "executableSha256": "b8cdfa26598f61bf77fdc564505434d9b65e0a5d59ea73526c00b5ae18b21057",
     "codesignVerified": true,
     "rendererReady": {
       "schemaVersion": 1,
-      "appVersion": "0.2.27",
-      "pid": 63678,
-      "readyAtUnixMs": 1786987502937,
+      "appVersion": "0.2.28",
+      "pid": 9595,
+      "readyAtUnixMs": 1787510739765,
       "executablePath": "/Applications/Atelier.app/Contents/MacOS/atelier",
       "windowLabel": "main",
       "status": "ready"

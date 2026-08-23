@@ -1,7 +1,7 @@
 # Issues
 
-Updated: 2026-08-24 KST. Source and installed app: `0.2.27`
-(installed executable SHA-256 `c08d3749…9a22`, codesign verified).
+Updated: 2026-08-24 KST. Source and installed app: `0.2.28`
+(installed executable SHA-256 `b8cdfa26…1057`, codesign verified).
 Current disposition: `supervised local candidate, public release blocked`.
 
 Git baseline: branch `codex/release-readiness-final`, previous HEAD `fd47fba`
@@ -12,6 +12,26 @@ first time in the same session.
 
 ## Open
 
+- Hermes pin promotion is blocked upstream: every hermes-agent release from
+  `v2026.7.30` onward (including `v2026.8.19` / `fcbd107`, 0.20.5) ships a
+  `setup.py` guard (#68217, 2026-07-22) that refuses wheel builds, so
+  `uv tool install "hermes-agent[anthropic] @ git+…"` fails. Atelier stays on
+  `3ef6bbd` (`v2026.7.20`). Moving forward requires a new managed install
+  strategy (editable `uv sync` checkout, upstream shell installer, or the
+  `HERMES_NIX_BUILD` escape hatch — the last is an upstream-internal switch and
+  was deliberately not used). The Connections card now shows the newer upstream
+  tag as a reference only.
+- 0.2.28 verification gaps: the Connections-tab rendering of the upstream
+  reference line was not visually exercised, and the installed-app Gajaecode
+  0.15.0 turn after the `--no-extensions` fix is queued as
+  `35b5a25d-3b66-48c9-93a8-175403b025cf` but unclaimed because the macOS
+  session was screen-locked (WebKit suspends the renderer; confirmed by a 10 s
+  `sample` of the WebContent process with zero JavaScript activity). Read
+  `atelier task status 35b5a25d-…` after unlock; expected summary contains
+  `0.2.28`. The same lock prevented a Hermes regression turn.
+- Recorded and closed in 0.2.28: managed-agent `업데이트 확인` compared only
+  against the Atelier pin and never consulted upstream, so newer upstream
+  releases (gajae 0.15.0, hermes v2026.8.19, grok 1.0.5) were invisible.
 - P1: prompt phrase matching does not mediate the actual provider tool/action
   boundary. Add an app-owned action/tool proxy with scoped, expiring, one-use
   approval receipts before claiming action-level safety.

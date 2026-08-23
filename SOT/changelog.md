@@ -1,5 +1,57 @@
 # Changelog
 
+## 2026-08-24 — 0.2.28 upstream-latest display, Gajaecode 0.15.0, Bun 1.4.0
+
+- Managed-agent `업데이트 확인` now also reports what upstream currently
+  publishes, next to the Atelier support pin: Gajaecode via the managed Bun
+  (`bun pm view gajae-code version`, falling back to `npm view`), Hermes via
+  `git ls-remote --tags` (highest `v*` tag, date-like tags compared
+  numerically), and Grok via `https://x.ai/cli/stable`. Lookups are bounded to
+  5 seconds, fail soft (`upstream_error` with a short reason), and are cached
+  per provider in `providers/<id>/upstream-check.json` for six hours; the
+  manual check button bypasses the cache.
+- Contract kept: `update_available`, readiness, and the install target remain
+  bound to the exact Atelier pin. The provider-runtime-identity smoke now
+  asserts that no `update_available` function body consults the upstream
+  reference, replacing the former "no latest-version lookup exists" assertion.
+  New pure module `src/lib/agentUpstreamContract.ts` derives the card line
+  (`업스트림 최신 X 출시 · Atelier 검증 대기` / `업스트림과 동일` /
+  `업스트림 확인 불가: 사유`).
+- Raised the Gajaecode support pin from `0.14.0` to `0.15.0`. Because 0.15.0
+  hard-fails below Bun 1.4.0 (`engines.bun >=1.4.0`, enforced in its cli.ts),
+  the managed Bun moved from `1.3.14` to `1.4.0` with SHA-256 values from the
+  official `bun-v1.4.0` SHASUMS256.txt. Upstream retired the bundled `team`
+  skill and ships `autoresearch`; the managed default-skill set follows and the
+  skill bootstrap version is now `atelier-default-skills-integrity-v3`.
+- Dropped `--no-extensions` from the isolated `gjc --print` launch: gjc only
+  honors it under ACP and 0.15.0 rejects it for a local launch
+  (`Unknown option: --no-extensions`, observed in the first installed-app
+  turn). Extension/skill isolation continues to come from the Atelier-owned
+  HOME/GJC_HOME and provider workspace.
+- Hermes pin promotion to `v2026.8.19` (`fcbd107`, 0.20.5) was evaluated and
+  held. The `[anthropic]` extra, `HERMES_YOLO_MODE`, the `chat -Q` flags, and
+  the `state.db` schema all survive upstream, but upstream's `setup.py` has
+  blocked wheel builds since 2026-07-22 (#68217, present in every release from
+  `v2026.7.30`), so `uv tool install` — Atelier's entire managed Hermes install
+  path — fails with "Building wheels or sdists for hermes-agent is not
+  supported". The pin stays at `3ef6bbd` (`v2026.7.20`); see issues.
+- Proof: isolated real-package Gajaecode update on a copy of the managed root
+  reached `runtime_pin=0.15.0`, `dependency_pin=1.4.0`, four verified skills.
+  The production managed root was then updated through the installed app's own
+  readiness path (`readiness.json` runtimePin `0.15.0`, dependencyPin `1.4.0`,
+  `gjc --version` `0.15.0`). Real upstream lookups resolved `0.15.0`,
+  `v2026.8.19`, and `1.0.5` through the new module and replayed from cache.
+- Built, locally signed, installed, and renderer-proved Atelier `0.2.28`.
+  Candidate and installed executable SHA-256 values match at
+  `b8cdfa26598f61bf77fdc564505434d9b65e0a5d59ea73526c00b5ae18b21057`.
+  The previous app is preserved at
+  `/Users/kansic/Library/Application Support/Atelier/Backups.noindex/Atelier-0.2.27-before-0.2.28-upstream-display-20260824-034025.app`.
+- Not claimed: the Connections-tab rendering of the new upstream line was not
+  exercised visually, and the post-fix installed-app Gajaecode 0.15.0 turn is
+  queued (`35b5a25d-3b66-48c9-93a8-175403b025cf`) but unclaimed because the
+  macOS session was screen-locked during verification and WebKit suspends the
+  renderer; the receipt must be read after unlock.
+
 ## 2026-08-18 — 0.2.27 Grok models in Hermes and Gajaecode
 
 - Added `Grok (xAI)` to the Hermes and Gajaecode model-provider selectors.

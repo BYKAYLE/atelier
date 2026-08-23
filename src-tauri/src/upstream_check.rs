@@ -420,3 +420,58 @@ ggg\trefs/tags/v2025.12.31
             .is_some_and(|e| e.contains("unknown provider")));
     }
 }
+
+#[cfg(test)]
+mod real_network_tests {
+    use super::*;
+
+    /// Real-network proof, opt-in via `ATELIER_REAL_UPSTREAM_CHECK=1` so the
+    /// default suite stays offline. Prints the resolved upstream values and
+    /// checks each is a well-formed version newer-or-equal to a known floor.
+    #[test]
+    fn real_upstream_lookups_resolve_current_versions() {
+        if std::env::var("ATELIER_REAL_UPSTREAM_CHECK").as_deref() != Ok("1") {
+            eprintln!("skipping real upstream lookup (set ATELIER_REAL_UPSTREAM_CHECK=1)");
+            return;
+        }
+        let root =
+            std::env::temp_dir().join(format!("atelier-upstream-real-{}", std::process::id()));
+        let path_env = std::env::var("PATH").unwrap_or_default();
+        for (provider, floor) in [
+            ("gajecode", "0.15.0"),
+            ("hermes", "2026.8.19"),
+            ("grok", "1.0.5"),
+        ] {
+            let reference = resolve_upstream_reference(UpstreamLookupContext {
+                provider,
+                provider_root: Some(&root.join(provider)),
+                managed_bun: None,
+                path_env: &path_env,
+                force: true,
+            });
+            eprintln!("real upstream {provider}: {reference:?}");
+            let version = reference.latest_version.as_deref().unwrap_or_else(|| {
+                panic!("{provider} upstream lookup failed: {:?}", reference.error)
+            });
+            assert!(
+                tag_numeric_parts(version) >= tag_numeric_parts(floor),
+                "{provider}: {version} < {floor}"
+            );
+            assert!(reference.checked_at.is_some() && reference.error.is_none());
+            // A second, non-forced call must be served from the cache file.
+            let cached = resolve_upstream_reference(UpstreamLookupContext {
+                provider,
+                provider_root: Some(&root.join(provider)),
+                managed_bun: None,
+                path_env: &path_env,
+                force: false,
+            });
+            assert_eq!(
+                cached, reference,
+                "{provider}: cache must replay the fresh lookup"
+            );
+            assert!(root.join(provider).join(UPSTREAM_CACHE_FILE).is_file());
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}

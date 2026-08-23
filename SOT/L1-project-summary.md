@@ -1,6 +1,6 @@
 # Atelier Project Summary
 
-Last updated: 2026-08-18
+Last updated: 2026-08-24
 
 ## Identity
 
@@ -11,7 +11,7 @@ coding-agent workflows. It must not be treated as a greenfield rebuild.
 
 `supervised local candidate, public release blocked`
 
-- Current source and locally installed candidate: `0.2.27`.
+- Current source and locally installed candidate: `0.2.28`.
 - Source gates: 274 Rust tests passed with 6 ignored; Orca previously passed 24
   contract smokes across 10 removable features; strict
   all-target/all-feature Clippy and format/diff checks passed; `npm audit`
@@ -25,16 +25,22 @@ coding-agent workflows. It must not be treated as a greenfield rebuild.
   Basic/Auto through their existing paths; Hermes/Gajaecode use pinned,
   Atelier-owned macOS runtimes, isolated homes/default skills, and the managed
   sandbox. Direct CLI is a separate manual, limited path.
-- Gajaecode is pinned at 0.14.0 with managed Bun 1.3.14 and four adapter-owned
-  defaults. Hermes is pinned by commit, retains 453 durable bundled-source
-  files, and verifies 73 installed skills.
+- Gajaecode is pinned at 0.15.0 with managed Bun 1.4.0 and four adapter-owned
+  defaults (`autoresearch`, `deep-interview`, `ralplan`, `ultragoal`). Hermes
+  is pinned by commit (`3ef6bbd`, `v2026.7.20`), retains 453 durable
+  bundled-source files, and verifies 73 installed skills; newer Hermes releases
+  cannot be installed through `uv tool install` because upstream blocks wheel
+  builds since 2026-07-22.
+- Managed-agent update checks show the upstream-latest version as a reference
+  next to the Atelier pin (6h cache, 5s timeout, fail-soft). Update
+  availability and the install target remain pin-based.
 - Grok Build is a fifth structured agent, pinned at official xAI CLI `1.0.4`
   under an Atelier-owned HOME. Browser OAuth is connected and a real
   `grok-4.6` read-only turn returned verified final text and a session ID.
 - Hermes and Gajaecode additionally expose xAI API-backed Grok 4.5 models. This
   route requires an `XAI_API_KEY`; it does not reuse the Grok CLI browser token.
-- The real managed Gajaecode runtime was updated from 0.12.8 to 0.14.0 through
-  the production ensure path. Its separate post-update status reports
+- The real managed Gajaecode runtime was updated from 0.14.0 to 0.15.0 (Bun
+  1.3.14 to 1.4.0) through the installed app's readiness path. Its separate post-update status reports
   `update_available: false`, and all nine DB/WAL/SHM file hashes remained
   unchanged.
 - Claude, Hermes, Codex, and Gajaecode share one terminal-answer contract:
@@ -47,10 +53,10 @@ coding-agent workflows. It must not be treated as a greenfield rebuild.
   remain available.
 - Frontend and Rust prompt guards share a regression corpus, but phrase matching
   is not a complete action-level guarantee.
-- The locally signed `0.2.27` candidate is installed at
+- The locally signed `0.2.28` candidate is installed at
   `/Applications/Atelier.app`. Candidate and installed executable SHA-256 values
   match at
-  `c08d3749d8a70ede6709ab1d3585b91ee8b9a97835c9a429d8240c77076d9a22`;
+  `b8cdfa26598f61bf77fdc564505434d9b65e0a5d59ea73526c00b5ae18b21057`;
   codesign and renderer-ready checks pass. This is local installed-candidate
   proof, not Developer ID/notarization/public-distribution proof.
 - Mobile continuity publishes a bounded and native-redacted projection of the
