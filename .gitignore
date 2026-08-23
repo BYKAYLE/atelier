@@ -48,3 +48,7 @@ src-tauri/keys/
 # Local agent session state and editor backups
 .gjc/
 src/components/AgentWorkspace.tsx.bak
+
+# 런타임 덤프·설치 스크린샷 (260824 정리) — JSON proof/md 리포트는 추적, PNG는 제외
+/tmp/
+artifacts/**/*.png
