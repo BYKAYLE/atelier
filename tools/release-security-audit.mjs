@@ -125,6 +125,18 @@ const windowsRunnerDoctorSmokeSource = readFileSync(
 const ptySupervisorSmokeSource = readFileSync("tools/pty-supervisor-smoke.mjs", "utf8");
 const agentHarnessSource = readFileSync("tools/atelier-agent-harness.mjs", "utf8");
 const connectionsSource = readFileSync("src/components/ConnectionsPanel.tsx", "utf8");
+const gajecodeUpdateContractSource = readFileSync(
+  "src/lib/gajecodeUpdateContract.ts",
+  "utf8",
+);
+const providerRuntimeIdentitySmokeSource = readFileSync(
+  "tools/provider-runtime-identity-smoke.ts",
+  "utf8",
+);
+const gajecodeCardSource = connectionsSource.slice(
+  connectionsSource.indexOf("const GajecodeCard"),
+  connectionsSource.indexOf("const LoginModal"),
+);
 const oauthLoginFlowSource = readFileSync(
   "src/features/connections/oauthLoginFlow.ts",
   "utf8",
@@ -135,9 +147,14 @@ const oauthLoginFlowSmokeSource = readFileSync(
 );
 const settingsSource = readFileSync("src/components/Settings.tsx", "utf8");
 const agentWorkspaceSource = readFileSync("src/components/AgentWorkspace.tsx", "utf8");
+const agentAnswerContractSource = readFileSync("src/lib/agentAnswerContract.ts", "utf8");
 const indexCssSource = readFileSync("src/index.css", "utf8");
 const cliInstallersSource = readFileSync("src/lib/cliInstallers.ts", "utf8");
 const agentPerformanceSmokeSource = readFileSync("tools/agent-workspace-performance-smoke.mjs", "utf8");
+const agentStreamRenderingSmokeSource = readFileSync(
+  "tools/agent-stream-rendering-smoke.mjs",
+  "utf8",
+);
 const sessionRunRegistrySource = readFileSync(
   "src/components/agent-runtime/sessionRunRegistry.ts",
   "utf8",
@@ -215,6 +232,7 @@ const openLoginBrowserSource = credentialSource
   ?.split("fn watch_and_open_login_url", 1)[0] || "";
 const claudeOauthReadSource = credentialSource
   .split("pub fn read_claude_subscription_oauth_token()", 2)[1]
+  ?.split("fn codex_home_from_process_env", 1)[0]
   ?.split("fn scrub_gajecode_managed_claude_credential", 1)[0] || "";
 const unpinnedWorkflowUses = [...workflowSource.matchAll(/\buses:\s*[^@\s]+@([^\s#]+)/g)]
   .map((match) => match[1])
@@ -231,7 +249,18 @@ const sourceInvariants = [
       credentialSource.includes("@anthropic-ai/claude-code@2.1.217") &&
       credentialSource.includes("@openai/codex@0.145.0") &&
       credentialSource.includes("bun@1.3.14") &&
-      credentialSource.includes("gajae-code@0.11.7") &&
+      credentialSource.includes("gajae-code@0.14.0") &&
+      !credentialSource.includes("GAJAE_CODE_PACKAGE_NAME") &&
+      !credentialSource.includes("read_gajecode_latest_version") &&
+      credentialSource.includes('ensure_managed_agent_runtime(&app, "gajecode").await') &&
+      connectionsSource.includes("const readiness = await gajecodeUpdate()") &&
+      connectionsSource.includes("gajecodeUpdateMatchesReadiness(readiness, next)") &&
+      gajecodeUpdateContractSource.includes("status.current_version === readiness.runtimePin") &&
+      gajecodeUpdateContractSource.includes("status.latest_version === readiness.runtimePin") &&
+      providerRuntimeIdentitySmokeSource.includes(
+        "a stale post-update CLI status must enter the visible failure branch",
+      ) &&
+      !gajecodeCardSource.includes("5 * 60 * 1000") &&
       credentialSource.includes("3ef6bbd201263d354fd83ec55b3c306ded2eb72a") &&
       windowsProviderSmokeSource.includes("@anthropic-ai/claude-code@2.1.217") &&
       windowsProviderSmokeSource.includes("@openai/codex@0.145.0") &&
@@ -622,6 +651,24 @@ const sourceInvariants = [
   },
   {
     ok:
+      packageSource.includes('"smoke:agent-stream-rendering"') &&
+      (workflowSource.match(/npm run smoke:agent-stream-rendering/g) || []).length >= 4 &&
+      agentAnswerContractSource.includes("selectTerminalAgentAnswer") &&
+      agentAnswerContractSource.includes("presentAgentAnswer") &&
+      agentAnswerContractSource.includes('"dense_progress"') &&
+      agentWorkspaceSource.includes("intermediateDraft?: string") &&
+      agentWorkspaceSource.includes("unverifiedIntermediate?: boolean") &&
+      agentWorkspaceSource.includes("normalizeAgentDisplayText(displayText)") &&
+      agentWorkspaceSource.includes("저장된 원문 보기") &&
+      agentStreamRenderingSmokeSource.includes("actualScaleBoundaryCount") &&
+      agentStreamRenderingSmokeSource.includes("splitCrLfChunks") &&
+      agentStreamRenderingSmokeSource.includes('"claude", "hermes", "codex", "gajecode", "grok"') &&
+      agentStreamRenderingSmokeSource.includes("terminalDraftPolicy"),
+    message:
+      "Every release path must prove provider-common answer-only rendering, lossless original evidence, split CRLF handling, and actual-scale contamination recovery",
+  },
+  {
+    ok:
       packageSource.includes('"smoke:diff-review"') &&
       (workflowSource.match(/npm run smoke:diff-review/g) || []).length >= 3 &&
       diffReviewSource.includes("parseUnifiedDiff") &&
@@ -737,6 +784,7 @@ const sourceInvariants = [
         && oauthLoginFlowSource.includes('host.endsWith(`.${root}`)')
         && oauthLoginFlowSource.includes('["claude.ai", "claude.com", "anthropic.com"]')
         && oauthLoginFlowSource.includes('["openai.com", "chatgpt.com"]')
+        && oauthLoginFlowSource.includes('["x.ai", "grok.com"]')
         && oauthLoginFlowSmokeSource.includes('"http://auth.openai.com/codex/device"')
         && oauthLoginFlowSmokeSource.includes('"https://claude.ai.evil.example/login"')
         && oauthLoginFlowSmokeSource.includes('"https://user@example.com@openai.com/login"');
@@ -1057,6 +1105,7 @@ const sourceInvariants = [
       ciWorkflowSource.includes("npm run build") &&
       ciWorkflowSource.includes("npm run audit:release") &&
       ciWorkflowSource.includes("npm run gate:orca-features") &&
+      ciWorkflowSource.includes("npm run smoke:agent-stream-rendering") &&
       ciWorkflowSource.includes("npm run smoke:initial-signed-channel") &&
       ciWorkflowSource.includes("npm run smoke:publish-evidence") &&
       ciWorkflowSource.includes("cargo fmt --manifest-path src-tauri/Cargo.toml") &&

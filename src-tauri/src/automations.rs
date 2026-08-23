@@ -303,9 +303,11 @@ fn validate_input(
     let provider = input.provider.trim().to_ascii_lowercase();
     if !matches!(
         provider.as_str(),
-        "claude" | "codex" | "hermes" | "gajecode"
+        "claude" | "codex" | "hermes" | "gajecode" | "grok"
     ) {
-        return Err("Automation provider must be claude, codex, hermes, or gajecode.".to_string());
+        return Err(
+            "Automation provider must be claude, codex, hermes, gajecode, or grok.".to_string(),
+        );
     }
     let permission_mode = input.permission_mode.trim().to_ascii_lowercase();
     if !matches!(permission_mode.as_str(), "basic" | "auto") {

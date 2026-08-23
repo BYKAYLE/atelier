@@ -276,6 +276,7 @@ const App: React.FC = () => {
 
   return (
     <div
+      data-atelier-app-shell
       className={cls(
         "h-full w-full flex overflow-hidden",
         tw.dark ? "bg-dbg text-dink" : "bg-cream text-ink",

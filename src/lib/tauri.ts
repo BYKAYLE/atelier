@@ -854,7 +854,7 @@ export interface StellaFactoryStatusResult {
   generated_at: number;
 }
 
-export type AgentProvider = "claude" | "codex" | "hermes" | "gajecode";
+export type AgentProvider = "claude" | "codex" | "hermes" | "gajecode" | "grok";
 export type AgentPermissionMode = "basic" | "auto" | "full";
 
 export interface AgentModelOption {
@@ -940,7 +940,7 @@ export async function onManagedAgentRuntimeProgress(
 }
 
 export async function providerPrepareManagedRuntime(
-  provider: "hermes" | "gajecode",
+  provider: "hermes" | "gajecode" | "grok",
 ): Promise<ManagedAgentRuntimeReadiness> {
   return invoke("provider_prepare_managed_runtime", { provider });
 }
@@ -1536,6 +1536,8 @@ export interface ProviderOauthLoginState {
   login_url?: string | null;
   output: string;
   error?: string | null;
+  /** 확정 실패는 아니지만 알려야 하는 것 — 코드가 전달되지 않았을 가능성. */
+  submit_warning?: string | null;
   updated_at_ms: number;
 }
 
@@ -1592,7 +1594,9 @@ export interface GajecodeUpdateStatus {
   message: string | null;
 }
 
-/** Hermes CLI 의 GitHub 기반 업데이트 체크. `hermes --version` 출력의 "Update available" 라인을 파싱. */
+export type GrokUpdateStatus = GajecodeUpdateStatus;
+
+/** Hermes 관리형 설치가 이 Atelier 빌드의 검증된 고정 커밋과 일치하는지 확인. */
 export async function hermesCheckUpdate(): Promise<HermesUpdateStatus> {
   return invoke("hermes_check_update");
 }
@@ -1606,8 +1610,17 @@ export async function gajecodeCheckUpdate(): Promise<GajecodeUpdateStatus> {
   return invoke("gajecode_check_update");
 }
 
-export async function gajecodeUpdate(): Promise<void> {
+/** Atelier가 검증한 고정 GJC 버전으로 갱신하고 격리 런타임·기본 스킬을 재검증. */
+export async function gajecodeUpdate(): Promise<ManagedAgentRuntimeReadiness> {
   return invoke("gajecode_update");
+}
+
+export async function grokCheckUpdate(): Promise<GrokUpdateStatus> {
+  return invoke("grok_check_update");
+}
+
+export async function grokUpdate(): Promise<ManagedAgentRuntimeReadiness> {
+  return invoke("grok_update");
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1747,14 +1760,38 @@ export async function automationsTick(): Promise<AutomationSnapshot> {
 // ─────────────────────────────────────────────────────────────────────────
 // 모바일 원격 접근 — mobile_control.rs
 
+export type MobileConnectionMode = "local" | "lan" | "tailscale";
+
+export interface MobileTailscaleStatus {
+  installed: boolean;
+  running: boolean;
+  serveEnabled: boolean;
+  active: boolean;
+  dnsName: string | null;
+  tailscaleIps: string[];
+  serveUrl: string | null;
+  activationUrl: string | null;
+  blockedReason: string | null;
+  httpsPort: number;
+  path: string;
+}
+
 export interface MobileServerStatus {
   running: boolean;
   port: number | null;
+  connectionMode: MobileConnectionMode;
   allowLan: boolean;
   tls: boolean;
   certificateFingerprint: string | null;
   startedAtMs: number | null;
   baseUrls: string[];
+  tailscale: MobileTailscaleStatus | null;
+}
+
+export interface MobileNetworkCandidate {
+  interfaceName: string;
+  address: string;
+  recommended: boolean;
 }
 
 export interface MobilePairing {
@@ -1774,15 +1811,65 @@ export interface MobileDevice {
   revokedAtMs: number | null;
 }
 
+export type MobileContinuitySessionStatus =
+  | "running"
+  | "queued"
+  | "waiting"
+  | "completed"
+  | "failed"
+  | "idle";
+
+export interface MobileContinuityMessage {
+  messageId: string;
+  role: "user" | "assistant";
+  text: string;
+  createdAtMs: number;
+  status?: "queued" | "streaming" | "done" | "error";
+}
+
+export interface MobileContinuitySession {
+  sessionId: string;
+  mobileTaskId: string;
+  title: string;
+  provider: AgentProvider;
+  model: string;
+  workspace: string;
+  permissionMode: AgentPermissionMode;
+  status: MobileContinuitySessionStatus;
+  updatedAtMs: number;
+  messages: MobileContinuityMessage[];
+}
+
+export interface MobileControlSessionsPublishInput {
+  activeSessionId: string | null;
+  sessions: MobileContinuitySession[];
+}
+
+export async function mobileControlSessionsPublish(
+  input: MobileControlSessionsPublishInput,
+): Promise<void> {
+  return invoke("mobile_control_sessions_publish", { input });
+}
+
 export async function mobileControlServerStatus(): Promise<MobileServerStatus> {
   return invoke("mobile_control_server_status");
+}
+
+export async function mobileControlNetworkCandidates(): Promise<MobileNetworkCandidate[]> {
+  return invoke("mobile_control_network_candidates");
+}
+
+export async function mobileControlTailscaleStatus(): Promise<MobileTailscaleStatus> {
+  return invoke("mobile_control_tailscale_status");
 }
 
 export async function mobileControlServerStart(
   allowLan: boolean,
   port: number | null = null,
+  lanIp: string | null = null,
+  connectionMode: MobileConnectionMode | null = null,
 ): Promise<MobileServerStatus> {
-  return invoke("mobile_control_server_start", { allowLan, port });
+  return invoke("mobile_control_server_start", { allowLan, port, lanIp, connectionMode });
 }
 
 export async function mobileControlServerStop(): Promise<MobileServerStatus> {
@@ -1833,7 +1920,7 @@ export interface RemoteFollowupProposal {
 export interface RemoteFollowupApprovalInput {
   proposalId: string;
   workspace: string;
-  provider: "claude" | "codex" | "hermes" | "gajecode";
+  provider: "claude" | "codex" | "hermes" | "gajecode" | "grok";
   model?: string | null;
   effort?: "low" | "medium" | "high" | "xhigh" | "ultra" | null;
   permissionMode?: Exclude<AgentPermissionMode, "full"> | null;

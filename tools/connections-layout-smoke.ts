@@ -40,6 +40,8 @@ for (const contract of [
   'data-provider-login-detected={detected ? "true" : "false"}',
   'data-testid="connection-panel-error"',
   'data-testid="connection-panel-notice"',
+  'data-testid="provider-oauth-code-entry"',
+  'data-testid="oauth-code-entry"',
   "selectedProviderId",
   'data-testid="browser-handoff-diagnostics"',
   'data-testid="connection-tools"',
@@ -51,6 +53,23 @@ for (const contract of [
 assertContains(
   "if (s.oauth_logged_in)",
   "subscription login completion must require OAuth rather than an API key",
+);
+// 안내문과 입력칸이 갈라지면 사용자는 붙여넣을 곳 없이 안내만 읽게 된다.
+assertContains(
+  "codeEntry && !loginModal",
+  "the authentication code field must survive closing the login modal",
+);
+assert.ok(
+  !/const \[code, setCode\] = useState/.test(source),
+  "the code field state must live in the panel, not inside the modal that can be closed",
+);
+assertContains(
+  "loginState.submit_warning",
+  "a code submit that the CLI never answered must reach the user",
+);
+assert.ok(
+  !/Paste the browser authentication code into the field below\./.test(source),
+  "copy must not point at a field that only exists inside the modal",
 );
 assertContains(
   'value: "anthropic"',
@@ -206,6 +225,10 @@ assert.equal(writeHermesModelProviderPreference("anthropic"), true);
 assert.equal(readHermesModelProviderPreference(), "anthropic");
 assert.equal(writeGajaeModelProviderPreference("codex"), true);
 assert.equal(readGajaeModelProviderPreference(), "codex");
+assert.equal(writeHermesModelProviderPreference("grok"), true);
+assert.equal(readHermesModelProviderPreference(), "grok");
+assert.equal(writeGajaeModelProviderPreference("grok"), true);
+assert.equal(readGajaeModelProviderPreference(), "grok");
 
 assert.equal(
   gajecodeCredentialReady("codex", { oauth_logged_in: true, api_key_present: false }),
@@ -227,6 +250,17 @@ assert.equal(
   true,
   "Gajae Alibaba must accept its Token Plan API key",
 );
+assert.equal(
+  gajecodeCredentialReady("grok", { oauth_logged_in: true, api_key_present: false }),
+  false,
+  "Gajae Grok must not reuse the Grok CLI browser subscription",
+);
+assert.equal(
+  gajecodeCredentialReady("grok", { oauth_logged_in: false, api_key_present: true }),
+  true,
+  "Gajae Grok must require the xAI API key",
+);
+assert.equal(modelForGajaeProvider("grok", "grok-4.5"), "xai/grok-4.5");
 assert.equal(
   gajecodeCredentialReady("claude", { oauth_logged_in: true, api_key_present: false }),
   true,

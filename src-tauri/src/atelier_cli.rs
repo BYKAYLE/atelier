@@ -225,9 +225,11 @@ fn run_task(args: &[String]) -> Result<(), String> {
             let provider = required_option(args, "--provider")?.to_ascii_lowercase();
             if !matches!(
                 provider.as_str(),
-                "claude" | "codex" | "hermes" | "gajecode"
+                "claude" | "codex" | "hermes" | "gajecode" | "grok"
             ) {
-                return Err("Provider must be claude, codex, hermes, or gajecode.".to_string());
+                return Err(
+                    "Provider must be claude, codex, hermes, gajecode, or grok.".to_string()
+                );
             }
             let prompt = required_option(args, "--prompt")?;
             if prompt.trim().is_empty() {

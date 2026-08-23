@@ -271,7 +271,7 @@ fn normalize_approval_input(
     input.provider = input.provider.trim().to_ascii_lowercase();
     if !matches!(
         input.provider.as_str(),
-        "claude" | "codex" | "hermes" | "gajecode"
+        "claude" | "codex" | "hermes" | "gajecode" | "grok"
     ) {
         return Err("Unsupported remote follow-up provider.".to_string());
     }

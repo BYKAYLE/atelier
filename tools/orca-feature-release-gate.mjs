@@ -11,6 +11,7 @@ const coreSmokeScripts = [
   "smoke:feature-settings",
   "smoke:settings-navigation",
   "smoke:connections-layout",
+  "smoke:provider-runtime-identity",
   "smoke:stella-safety",
   "smoke:agent-permission-capability",
   "smoke:preview-capability",

@@ -1,0 +1,28 @@
+{
+  "denseProgressWithSuffix": "**Planning skill loading and session search****Planning skill loading and session search**\n**Planning targeted file searches****Locating phase files****Inspecting recent commit history**\n**Analyzing event validation and concurrency details****Analyzing event validation and concurrency details**\n**Implementing stream event validation****Verifying function call order correctness**\n**Running tests and linting****Running tests and linting**\n**Summarizing deployment and review status**\n⚠️ Reached maximum iterations (90). Requesting summary...\n대표님, 실제 최종 답변은 이 부분입니다.\n\n- 집중 테스트가 통과했습니다.\n- 원본 진행 기록은 보존되어 있습니다.",
+  "denseProgressWithoutSuffix": "**Planning repository inspection****Planning repository inspection****Searching session history**\n**Inspecting source files****Inspecting source files****Analyzing renderer state**\n**Implementing parser checks****Running focused tests****Verifying final state****Summarizing execution status**",
+  "normalLongAnswer": "**Planning a safe migration**\n\nA safe migration starts with an inventory and a rollback window. This section explains the decision criteria in full sentences so it is ordinary product guidance, not a stream of activity labels.\n\n**Implementing the first phase**\n\nThe first phase should remain intentionally small. Operators should compare old and new outputs, keep audit evidence, and stop if a compatibility condition is not met.\n\n**Validating the release**\n\nValidation includes functional tests, accessibility checks, and a staged rollout. These paragraphs separate the headings and make the document a normal long-form answer.\n\n**Monitoring after launch**\n\nMonitoring should cover errors, latency, and user-visible regressions. The document is intentionally long enough to prove that length and gerund headings alone do not trigger recovery.",
+  "contextLimitTranscript": "Context length exceeded (113,866 tokens). Cannot compress further.\nAtelier 표시 지침:\nBeginning repo inspection and session search\nCompacting context — summarizing earlier conversation so I can continue\nError during OpenAI-compatible API call #8: unable to open database file\nPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifyingPlanningSearchingInspectingVerifying",
+  "actualScale": {
+    "boundaryCount": 119,
+    "progressLabels": [
+      "Planning skill loading and session search",
+      "Beginning repo inspection and session search",
+      "Compacting context and preserving prior state",
+      "Searching for STELLA and workspace files",
+      "Inspecting event modules and tests",
+      "Verifying filesystem paths and environment",
+      "Identifying deduplication and handoff issues",
+      "Planning robust implementation scope",
+      "Inspecting gateway and provider status",
+      "Delegating bounded background review",
+      "Deciding on focused local execution",
+      "Designing lifecycle transition tests",
+      "Implementing provenance normalization",
+      "Running isolated validation checks",
+      "Summarizing final implementation status"
+    ],
+    "terminalControlLine": "⚠️ Reached maximum iterations (90). Requesting summary...",
+    "suffix": "대표님, 렌더링 경로의 최종 답변 분리를 완료했습니다.\n\n- 진행 로그는 최종 답변에서 제거됩니다.\n- 검증된 최종 답변은 그대로 유지됩니다.\n- 저장된 원문은 비파괴 방식으로 확인할 수 있습니다."
+  }
+}

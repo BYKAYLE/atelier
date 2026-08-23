@@ -4,6 +4,7 @@
 // 키 자체는 OS keychain (macOS Keychain / Windows Credential Manager) 에만 저장.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import ManagedAgentUpdatePanel from "./connections/ManagedAgentUpdatePanel";
 import { cls, Tweaks } from "../lib/tokens";
 import {
   gajecodeCredentialReady,
@@ -12,6 +13,7 @@ import {
   writeGajaeModelProviderPreference,
   writeHermesModelProviderPreference,
 } from "../lib/agentProviderPreferences";
+import { gajecodeUpdateMatchesReadiness } from "../lib/gajecodeUpdateContract";
 import type {
   GajaeModelProvider,
   HermesModelProvider,
@@ -25,6 +27,7 @@ import {
 } from "../features/connections/oauthLoginFlow";
 import {
   GajecodeUpdateStatus,
+  GrokUpdateStatus,
   HermesUpdateStatus,
   ManagedAgentRuntimeProgress,
   ManagedAgentRuntimeReadiness,
@@ -33,6 +36,8 @@ import {
   ProviderStatus,
   gajecodeCheckUpdate,
   gajecodeUpdate,
+  grokCheckUpdate,
+  grokUpdate,
   hermesCheckUpdate,
   hermesUpdate,
   isTauri,
@@ -53,7 +58,7 @@ interface Props {
   tw: Tweaks;
 }
 
-type ProviderId = "claude" | "codex" | "openrouter" | "alibaba" | "linear" | "hermes" | "gajecode";
+type ProviderId = "claude" | "codex" | "openrouter" | "alibaba" | "linear" | "hermes" | "gajecode" | "grok";
 
 interface ProviderDef {
   id: ProviderId;
@@ -76,8 +81,10 @@ const PROVIDERS: ProviderDef[] = [
     },
     oauthCta: { ko: "Claude 구독으로 로그인", en: "Sign in with Claude" },
     apiHelp: {
-      ko: "Anthropic API 키 (sk-ant-...) — console.anthropic.com에서 발급",
-      en: "Anthropic API key (sk-ant-...) — issued at console.anthropic.com",
+      // 구독은 이 칸이 아니라 위 로그인 버튼이 담당한다. 이 칸을 구독 경로로
+      // 안내하면 터미널 발급·붙여넣기 절차가 되살아난다.
+      ko: "Anthropic API 키 (sk-ant-api...) — console.anthropic.com에서 발급. Claude Pro/Max 구독은 위 '구독으로 로그인' 버튼을 사용하세요.",
+      en: "Anthropic API key (sk-ant-api...) — issued at console.anthropic.com. For a Claude Pro/Max subscription, use the sign-in button above.",
     },
     apiUrl: "https://console.anthropic.com/settings/keys",
     installHelp: {
@@ -148,6 +155,25 @@ const PROVIDERS: ProviderDef[] = [
     apiUrl: "https://linear.app/settings/api",
   },
   {
+    id: "grok",
+    name: "Grok Build (xAI)",
+    desc: {
+      ko: "xAI 공식 Grok Build CLI를 Atelier 전용 HOME과 고정 검증 버전으로 실행합니다.",
+      en: "Runs xAI's official Grok Build CLI under an Atelier-owned HOME and verified pinned version.",
+    },
+    oauthCta: { ko: "Grok 계정으로 로그인", en: "Sign in with Grok" },
+    apiHelp: {
+      ko: "xAI API 키(xai-...) — console.x.ai에서 발급. 브라우저 로그인은 위 버튼을 사용하세요.",
+      en: "xAI API key (xai-...) — issued at console.x.ai. Use the button above for browser sign-in.",
+    },
+    apiUrl: "https://console.x.ai/",
+    installHelp: {
+      ko: "Atelier가 공식 서명된 Grok Build CLI를 격리 공간에 자동 설치합니다.",
+      en: "Atelier installs the officially signed Grok Build CLI into its isolated runtime.",
+    },
+    installUrl: "https://x.ai/cli",
+  },
+  {
     id: "gajecode",
     name: "가재코드 (Gajae Code)",
     desc: {
@@ -163,6 +189,10 @@ const PROVIDERS: ProviderDef[] = [
     installUrl: "https://github.com/Yeachan-Heo/gajae-code",
   },
 ];
+
+function providerDisplayName(id: ProviderId): string {
+  return PROVIDERS.find((provider) => provider.id === id)?.name ?? id;
+}
 
 const HERMES_BACKENDS: Array<{
   value: HermesModelProvider;
@@ -194,6 +224,12 @@ const HERMES_BACKENDS: Array<{
     credentialProvider: "alibaba",
     desc: { ko: "위 Token Plan API 키 사용", en: "Uses the Token Plan key above" },
   },
+  {
+    value: "grok",
+    label: "Grok (xAI)",
+    credentialProvider: "grok",
+    desc: { ko: "위 xAI API 키 사용", en: "Uses the xAI API key above" },
+  },
 ];
 
 const GAJECODE_BACKENDS: Array<{
@@ -219,6 +255,12 @@ const GAJECODE_BACKENDS: Array<{
     label: "Alibaba Cloud",
     credentialProvider: "alibaba",
     desc: { ko: "위 Token Plan API 키 사용", en: "Uses the Token Plan key above" },
+  },
+  {
+    value: "grok",
+    label: "Grok (xAI)",
+    credentialProvider: "grok",
+    desc: { ko: "위 xAI API 키 사용", en: "Uses the xAI API key above" },
   },
 ];
 
@@ -271,6 +313,9 @@ const COPY = {
     loginStartFailed: (name: string, message: string) =>
       `${name} 로그인을 시작하지 못했습니다. ${message}`,
     loginAlreadyConnected: (name: string) => `${name} 구독 로그인이 이미 연결되어 있습니다.`,
+    loginConnected: (name: string) => `${name} 구독 연결이 완료되었습니다.`,
+    loginFinishedFailed: (name: string, message: string) =>
+      `${name} 구독 연결이 완료되지 않았습니다. ${message}`,
     loginStartedBrowser: (name: string) =>
       `${name} 로그인 명령을 시작했고 브라우저를 열었습니다. SNS 로그인을 완료하면 자동으로 감지됩니다.`,
     loginStartedWatching: (name: string) =>
@@ -288,6 +333,9 @@ const COPY = {
     loginModalCodeSubmit: "코드 전달",
     loginModalCodeSubmitting: "전달 중…",
     loginModalCodeSubmitted: "전달됨",
+    loginCodeEntryTitle: (name: string) => `${name} 인증 코드 입력`,
+    loginCodeEntryHint:
+      "브라우저에 표시된 인증 코드를 아래에 붙여넣고 코드 전달을 누르세요. 이 칸은 연결이 끝날 때까지 여기 남아 있습니다.",
     loginModalWaitingUrl: "브라우저가 열리지 않으면 로그인 URL을 감지하는 즉시 여기 표시합니다.",
     loginModalOpenUrl: "브라우저 열기",
     loginModalCopyUrl: "URL 복사",
@@ -315,12 +363,12 @@ const COPY = {
       `선택된 백엔드(${label})의 자격증명이 없습니다. 위 카드에서 먼저 연결하세요.`,
     hermesUpdateLabel: "업데이트",
     hermesUpdateChecking: "확인 중…",
-    hermesUpdateLatest: "최신 버전",
+    hermesUpdateLatest: "Atelier 지원 버전",
     hermesUpdateAvailable: (n: number) => `업데이트 가능 · ${n} 커밋 뒤`,
     hermesUpdateAvailableNoCount: "업데이트 가능",
     hermesUpdating: "업데이트 중…",
     hermesUpdateButton: "업데이트",
-    hermesRecheck: "다시 확인",
+    hermesRecheck: "업데이트 확인",
     hermesVersionPrefix: "버전",
     gajecodeTitle: "가재코드",
     gajecodeDesc:
@@ -335,12 +383,17 @@ const COPY = {
     gajecodePrepared: "가재코드 실행환경과 기본 스킬 준비를 확인했습니다.",
     gajecodeUpdateLabel: "업데이트",
     gajecodeUpdateChecking: "확인 중…",
-    gajecodeUpdateLatest: "최신 버전",
-    gajecodeUpdateAvailable: "업데이트 가능",
+    gajecodeUpdateLatest: "Atelier 지원 버전",
+    gajecodeUpdateAvailable: "Atelier 지원 버전 업데이트 가능",
     gajecodeUpdating: "업데이트 중…",
-    gajecodeUpdateButton: "업데이트",
-    gajecodeRecheck: "다시 확인",
-    gajecodeVersionPrefix: "버전",
+    gajecodeUpdateButton: "지원 버전으로 업데이트",
+    gajecodeUpdated: (version: string) =>
+      `Atelier 지원 GJC ${version}로 업데이트하고 실행환경과 기본 스킬을 다시 검증했습니다.`,
+    gajecodeUpdateVerificationFailed:
+      "업데이트 후 Atelier 지원 GJC 실행환경을 검증하지 못했습니다. 설치·복구를 실행해 주세요.",
+    gajecodeRecheck: "업데이트 확인",
+    gajecodeVersionPrefix: "현재 버전",
+    gajecodeSupportedVersionPrefix: "Atelier 지원",
     gajecodeNotInstalled: "첫 작업을 보낼 때 Atelier가 자동으로 준비합니다.",
     gajecodeInstallIsolation: "Atelier 전용 .gjc와 고정 버전 실행환경을 사용합니다.",
     gajecodeNeedCred: (label: string) =>
@@ -394,6 +447,9 @@ const COPY = {
     loginStartFailed: (name: string, message: string) =>
       `Could not start ${name} sign-in. ${message}`,
     loginAlreadyConnected: (name: string) => `${name} subscription sign-in is already connected.`,
+    loginConnected: (name: string) => `${name} subscription is now connected.`,
+    loginFinishedFailed: (name: string, message: string) =>
+      `${name} subscription sign-in did not complete. ${message}`,
     loginStartedBrowser: (name: string) =>
       `${name} sign-in command started and the browser was opened. Finish SNS sign-in and Atelier will detect it automatically.`,
     loginStartedWatching: (name: string) =>
@@ -411,6 +467,9 @@ const COPY = {
     loginModalCodeSubmit: "Submit code",
     loginModalCodeSubmitting: "Submitting…",
     loginModalCodeSubmitted: "Submitted",
+    loginCodeEntryTitle: (name: string) => `${name} authentication code`,
+    loginCodeEntryHint:
+      "Paste the authentication code shown in your browser below and press Submit code. This field stays here until the connection finishes.",
     loginModalWaitingUrl: "If the browser does not open, Atelier will show the login URL here as soon as it is detected.",
     loginModalOpenUrl: "Open browser",
     loginModalCopyUrl: "Copy URL",
@@ -438,12 +497,12 @@ const COPY = {
       `No credential for the selected backend (${label}). Connect it in the card above first.`,
     hermesUpdateLabel: "Update",
     hermesUpdateChecking: "Checking…",
-    hermesUpdateLatest: "Up to date",
+    hermesUpdateLatest: "Atelier-supported version",
     hermesUpdateAvailable: (n: number) => `Update available · ${n} commits behind`,
     hermesUpdateAvailableNoCount: "Update available",
     hermesUpdating: "Updating…",
     hermesUpdateButton: "Update",
-    hermesRecheck: "Re-check",
+    hermesRecheck: "Check for updates",
     hermesVersionPrefix: "Version",
     gajecodeTitle: "Gajae Code",
     gajecodeDesc:
@@ -458,12 +517,17 @@ const COPY = {
     gajecodePrepared: "Gajae Code runtime and default skill readiness verified.",
     gajecodeUpdateLabel: "Update",
     gajecodeUpdateChecking: "Checking…",
-    gajecodeUpdateLatest: "Up to date",
-    gajecodeUpdateAvailable: "Update available",
+    gajecodeUpdateLatest: "Atelier-supported version",
+    gajecodeUpdateAvailable: "Atelier-supported update available",
     gajecodeUpdating: "Updating…",
-    gajecodeUpdateButton: "Update",
-    gajecodeRecheck: "Re-check",
-    gajecodeVersionPrefix: "Version",
+    gajecodeUpdateButton: "Update to supported version",
+    gajecodeUpdated: (version: string) =>
+      `Updated to Atelier-supported GJC ${version} and re-verified the runtime and default skills.`,
+    gajecodeUpdateVerificationFailed:
+      "Atelier could not verify the supported GJC runtime after the update. Run Install/repair.",
+    gajecodeRecheck: "Check for updates",
+    gajecodeVersionPrefix: "Current version",
+    gajecodeSupportedVersionPrefix: "Atelier support",
     gajecodeNotInstalled: "Atelier prepares it automatically when you send the first task.",
     gajecodeInstallIsolation: "Uses Atelier's dedicated .gjc and pinned runtime.",
     gajecodeNeedCred: (label: string) =>
@@ -485,7 +549,7 @@ function connectionStatus(
 
   if (connected) return { tone: "ok", label: copy.statusOk };
   if (cliInstalled) return { tone: "info", label: copy.statusCliReady };
-  if (providerId === "hermes" || providerId === "gajecode") {
+  if (providerId === "hermes" || providerId === "gajecode" || providerId === "grok") {
     return { tone: "info", label: copy.statusAutoPrepare };
   }
   if (requiresCli) return { tone: "warn", label: copy.statusNoCli };
@@ -508,7 +572,7 @@ function managedRuntimeProgressText(
   return labels[progress.state] || progress.message;
 }
 
-function useManagedRuntimeProgress(provider: "hermes" | "gajecode") {
+function useManagedRuntimeProgress(provider: "hermes" | "gajecode" | "grok") {
   const [progress, setProgress] = useState<ManagedAgentRuntimeProgress | null>(null);
   useEffect(() => {
     if (!isTauri()) return;
@@ -610,6 +674,7 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
     linear: null,
     hermes: null,
     gajecode: null,
+    grok: null,
   });
   const [busyId, setBusyId] = useState<string | null>(null);
   const [loginModal, setLoginModal] = useState<{
@@ -621,6 +686,18 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
     diagnostic?: string | null;
     failed?: string | null;
   } | null>(null);
+  // 완료 감지는 모달 수명과 분리한다. 브라우저 승인은 1~2분 걸리고 그 사이 사용자가
+  // 모달을 닫으면, 모달에 묶인 폴링은 그대로 죽어 백엔드가 연결을 마쳐도 카드가
+  // 미연결로 남는다.
+  const [loginWatch, setLoginWatch] = useState<ProviderId | null>(null);
+  // 코드 입력칸은 모달의 소유물이 아니다. 모달 안에만 두면 모달을 닫는 순간 "아래
+  // 입력칸에 붙여넣으세요"라는 안내만 남고 넣을 곳이 사라진다. 상태를 패널이 들고
+  // 있어야 안내와 입력칸이 언제나 같은 화면에 함께 있다.
+  const [codeEntry, setCodeEntry] = useState<{ provider: ProviderId; name: string } | null>(null);
+  const [codeValue, setCodeValue] = useState("");
+  const [codeState, setCodeState] = useState<"idle" | "submitting" | "submitted">("idle");
+  const [codeError, setCodeError] = useState<string | null>(null);
+  const [codeWarning, setCodeWarning] = useState<string | null>(null);
   const [panelError, setPanelError] = useState<string | null>(null);
   const [panelNotice, setPanelNotice] = useState<string | null>(null);
   const [browserProbeBusy, setBrowserProbeBusy] = useState<"claude" | "codex" | null>(null);
@@ -629,7 +706,7 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
   const [selectedProviderId, setSelectedProviderId] = useState<ProviderId>("claude");
 
   const refresh = useCallback(async (only?: ProviderId) => {
-    const targets = only ? [only] : (["claude", "codex", "openrouter", "alibaba", "linear", "hermes", "gajecode"] as ProviderId[]);
+    const targets = only ? [only] : (["claude", "codex", "openrouter", "alibaba", "linear", "hermes", "gajecode", "grok"] as ProviderId[]);
     const results = await Promise.all(
       targets.map(async (pid) => {
         const status = await providerStatus(pid).catch(() => null);
@@ -685,16 +762,50 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
       }
     }
   }, []);
-  const loginProvider = loginModal?.provider ?? null;
+  const resetCodeEntry = useCallback(() => {
+    setCodeEntry(null);
+    setCodeValue("");
+    setCodeState("idle");
+    setCodeError(null);
+    setCodeWarning(null);
+  }, []);
+
+  const changeCodeValue = useCallback((value: string) => {
+    setCodeValue(value);
+    // 새로 입력하기 시작하면 지난 전달 결과는 더 이상 이 값의 상태가 아니다.
+    setCodeState((current) => (current === "submitted" ? "idle" : current));
+    setCodeError(null);
+  }, []);
+
+  const submitCode = useCallback(async (provider: ProviderId, code: string) => {
+    setCodeState("submitting");
+    setCodeError(null);
+    setCodeWarning(null);
+    try {
+      await providerSubmitOauthCode(provider, code);
+      setCodeState("submitted");
+    } catch (e) {
+      setCodeState("idle");
+      setCodeError(String(e));
+    }
+  }, []);
+
+  const loginProvider = loginWatch;
   useEffect(() => {
     if (!loginProvider) return;
     let cancelled = false;
     const start = Date.now();
-    const stopPolling = () => {
+    const clearTimer = () => {
       if (pollRef.current) {
         window.clearInterval(pollRef.current);
         pollRef.current = null;
       }
+    };
+    // 종결(연결됨 / 실패 / 5분 초과)에서만 감시를 내린다. effect cleanup 은 타이머만
+    // 정리해야 하며, 여기서 watch 까지 비우면 재렌더 한 번에 감시가 끊긴다.
+    const stopPolling = () => {
+      clearTimer();
+      setLoginWatch((current) => (current === loginProvider ? null : current));
     };
     const poll = async () => {
       const loginState = await providerOauthLoginState(loginProvider).catch(() => null);
@@ -734,7 +845,14 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
               }
             : m,
         );
+        // 쓰기 성공을 "전달됨"으로 읽는 대신, 백엔드가 무응답을 확인했을 때만 경고한다.
+        setCodeWarning(loginState.submit_warning || null);
         if (!loginState.active && loginState.error) {
+          // 모달이 닫혀 있으면 실패 사유가 갈 곳이 없다. 패널로도 같이 올린다.
+          setPanelError(
+            copy.loginFinishedFailed(providerDisplayName(loginProvider), loginState.error),
+          );
+          resetCodeEntry();
           stopPolling();
           return;
         }
@@ -756,6 +874,9 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
         if (s.oauth_logged_in) {
           setLoginModal((m) => (m?.provider === loginProvider ? { ...m, detected: true, failed: null } : m));
           setTimeout(() => setLoginModal(null), 1400);
+          setPanelError(null);
+          setPanelNotice(copy.loginConnected(providerDisplayName(loginProvider)));
+          resetCodeEntry();
           stopPolling();
           return;
         }
@@ -764,6 +885,7 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
         setLoginModal((m) =>
           m?.provider === loginProvider ? { ...m, failed: copy.loginModalTimeout } : m,
         );
+        resetCodeEntry();
         stopPolling();
       }
     };
@@ -771,15 +893,18 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
     pollRef.current = window.setInterval(() => void poll(), 1500);
     return () => {
       cancelled = true;
-      stopPolling();
+      clearTimer();
     };
   }, [
+    copy.loginConnected,
+    copy.loginFinishedFailed,
     copy.loginModalNoSignal,
     copy.loginModalOpenFailed,
     copy.loginModalOpenRetryLimit,
     copy.loginModalTimeout,
     loginProvider,
     openLoginUrlWithRetry,
+    resetCodeEntry,
   ]);
 
   function loginNoticeForResult(p: ProviderDef, result: ProviderLoginOauthResult) {
@@ -789,12 +914,14 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
         ? "OpenAI device sign-in started. Enter the one-time code shown below in the browser page."
         : "OpenAI 기기 로그인을 시작했습니다. 브라우저 페이지에 아래 일회용 코드를 입력하세요.";
     }
-    if (result.browser_opened) return copy.loginStartedBrowser(p.name);
+    // 안내는 실재하는 목적지만 가리킨다. 인증 코드 칸은 모달을 닫아도 연결 패널에
+    // 그대로 남으므로, 두 화면 어느 쪽에서 이 문구를 보든 넣을 곳이 함께 있다.
     if (p.id === "claude") {
       return tw.language === "en"
-        ? "Claude sign-in started. Paste the browser authentication code into the field below."
-        : "Claude 로그인 명령을 시작했습니다. 브라우저에 표시된 인증 코드를 아래 입력칸에 붙여넣으세요.";
+        ? "Claude sign-in started. Paste the browser authentication code into the authentication code field and press Submit code."
+        : "Claude 로그인 명령을 시작했습니다. 브라우저에 표시된 인증 코드를 인증 코드 칸에 붙여넣고 코드 전달을 누르세요.";
     }
+    if (result.browser_opened) return copy.loginStartedBrowser(p.name);
     if (result.login_url_detected) return copy.loginStartedNoBrowser(p.name);
     return copy.loginStartedWatching(p.name);
   }
@@ -806,10 +933,18 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
     openedLoginUrlsRef.current[p.id] = null;
     openingLoginUrlsRef.current[p.id] = null;
     delete loginUrlAttemptsRef.current[p.id];
+    resetCodeEntry();
     try {
       const result = await providerLoginOauth(p.id, force);
       const notice = loginNoticeForResult(p, result);
       setPanelNotice(notice);
+      // 코드를 기다리는 상태면 입력칸을 패널에 상주시킨다 — 모달을 닫아도 사라지지 않게.
+      if (p.id === "claude" && !result.completed && !result.already_logged_in) {
+        setCodeEntry({ provider: p.id, name: p.name });
+      }
+      // 감시는 모달보다 먼저 켜고 모달과 무관하게 유지한다 — 브라우저 승인 도중
+      // 모달을 닫아도 완료를 놓치지 않기 위해서다.
+      setLoginWatch(p.id);
       setLoginModal({
         provider: p.id,
         name: p.name,
@@ -842,7 +977,9 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
         setTimeout(() => setLoginModal(null), 1400);
       }
     } catch (e) {
+      setLoginWatch((current) => (current === p.id ? null : current));
       setPanelError(copy.loginStartFailed(p.name, String(e)));
+      resetCodeEntry();
       void refresh(p.id);
     } finally {
       setTimeout(() => setBusyId(null), 800);
@@ -866,7 +1003,11 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
     ...PROVIDERS.filter((provider) => provider.id !== "gajecode").map((provider) => ({
       id: provider.id,
       name: provider.name,
-      kind: provider.id === "linear" ? copy.serviceKind : copy.modelProviderKind,
+      kind: provider.id === "linear"
+        ? copy.serviceKind
+        : provider.id === "grok"
+          ? copy.agentKind
+          : copy.modelProviderKind,
     })),
     { id: "hermes", name: copy.hermesTitle, kind: copy.agentKind },
     { id: "gajecode", name: copy.gajecodeTitle, kind: copy.agentKind },
@@ -900,7 +1041,7 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
 
       <div
         data-testid="connection-provider-picker"
-        className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-7"
+        className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-8"
       >
         {providerChoices.map((provider) => {
           const status = connectionStatus(provider.id, statuses[provider.id], copy);
@@ -971,6 +1112,16 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
             status={statuses.gajecode}
             onUpdated={() => {
               setTimeout(() => void refresh("gajecode"), 1000);
+            }}
+          />
+        )}
+
+        {selectedProviderId === "grok" && (
+          <GrokRuntimeCard
+            tw={tw}
+            status={statuses.grok}
+            onUpdated={() => {
+              setTimeout(() => void refresh("grok"), 1000);
             }}
           />
         )}
@@ -1065,6 +1216,34 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
         </div>
       )}
 
+      {/* 모달이 닫혀 있어도 코드를 기다리는 동안은 입력칸이 패널에 남는다. 안내문과
+          입력칸이 갈라지면 사용자는 붙여넣을 곳 없이 안내만 읽게 된다. */}
+      {codeEntry && !loginModal && (
+        <div
+          data-testid="provider-oauth-code-entry"
+          data-provider={codeEntry.provider}
+          className={cls(
+            "rounded-md border p-3 space-y-2",
+            dark ? "border-dline bg-dbg" : "border-line bg-panel",
+          )}
+        >
+          <div className="text-[12.5px] font-semibold">{copy.loginCodeEntryTitle(codeEntry.name)}</div>
+          <div className={cls("text-[11.5px] leading-relaxed", dark ? "text-dsub" : "text-sub")}>
+            {copy.loginCodeEntryHint}
+          </div>
+          <OauthCodeEntry
+            dark={dark}
+            copy={copy}
+            code={codeValue}
+            onCodeChange={changeCodeValue}
+            state={codeState}
+            error={codeError}
+            warning={codeWarning}
+            onSubmit={() => void submitCode(codeEntry.provider, codeValue.trim())}
+          />
+        </div>
+      )}
+
       {loginModal && (
         <LoginModal
           provider={loginModal.provider}
@@ -1076,7 +1255,12 @@ export const ConnectionsPanel: React.FC<Props> = ({ tw }) => {
           failed={loginModal.failed}
           dark={dark}
           copy={copy}
-          onSubmitCode={(code) => providerSubmitOauthCode(loginModal.provider, code)}
+          code={codeValue}
+          onCodeChange={changeCodeValue}
+          codeState={codeState}
+          codeError={codeError}
+          codeWarning={codeWarning}
+          onSubmitCode={() => void submitCode(loginModal.provider, codeValue.trim())}
           onClose={() => setLoginModal(null)}
         />
       )}
@@ -1437,7 +1621,9 @@ const HermesCard: React.FC<{
 
   const selected = HERMES_BACKENDS.find((b) => b.value === backend) || HERMES_BACKENDS[0];
   const credStatus = statuses[selected.credentialProvider];
-  const credConnected = !!credStatus && (credStatus.oauth_logged_in || credStatus.api_key_present);
+  const credConnected = !!credStatus && (selected.value === "grok"
+    ? credStatus.api_key_present
+    : credStatus.oauth_logged_in || credStatus.api_key_present);
 
   return (
     <div
@@ -1489,8 +1675,10 @@ const HermesCard: React.FC<{
           )}
         </div>
         <button
+          type="button"
+          data-testid="hermes-install-repair"
           onClick={() => void runInstall()}
-          disabled={installing}
+          disabled={installing || updating}
           className={cls(
             "text-[12.5px] h-8 px-3 rounded-md border font-medium transition-colors",
             "bg-[var(--accent)]/10 text-[var(--accent)] border-[var(--accent)]/40 hover:bg-[var(--accent)]/20",
@@ -1503,6 +1691,42 @@ const HermesCard: React.FC<{
 
       <RuntimeReadinessEvidence readiness={runtimeReadiness} copy={copy} dark={dark} />
 
+      <ManagedAgentUpdatePanel
+        dark={dark}
+        provider="hermes"
+        visible={installed}
+        label={copy.hermesUpdateLabel}
+        state={checkingUpdate
+          ? "checking"
+          : updateStatus?.update_available
+            ? "available"
+            : updateStatus
+              ? "ready"
+              : "idle"}
+        statusText={checkingUpdate
+          ? copy.hermesUpdateChecking
+          : updateStatus?.update_available
+            ? (typeof updateStatus.commits_behind === "number"
+                ? copy.hermesUpdateAvailable(updateStatus.commits_behind)
+                : copy.hermesUpdateAvailableNoCount)
+            : updateStatus
+              ? copy.hermesUpdateLatest
+              : null}
+        versionText={updateStatus?.current_version
+          ? `${copy.hermesVersionPrefix}: ${updateStatus.current_version}`
+          : null}
+        message={updateStatus?.message}
+        updateAvailable={Boolean(updateStatus?.update_available)}
+        updating={updating}
+        updateLabel={copy.hermesUpdateButton}
+        updatingLabel={copy.hermesUpdating}
+        checkLabel={copy.hermesRecheck}
+        updateDisabled={updating || checkingUpdate || installing}
+        checkDisabled={checkingUpdate || updating || installing}
+        onUpdate={() => void runUpdate()}
+        onCheck={() => void refreshUpdate()}
+      />
+
       {installError && (
         <div
           className={cls(
@@ -1514,74 +1738,6 @@ const HermesCard: React.FC<{
         </div>
       )}
 
-      {installed && (
-        <div
-          className={cls(
-            "mt-3 rounded-md border px-3 py-2.5 flex items-center gap-2 flex-wrap",
-            updateStatus?.update_available
-              ? "border-[var(--accent)]/40 bg-[var(--accent)]/5"
-              : dark
-              ? "border-dline bg-dbg"
-              : "border-line bg-cream",
-          )}
-        >
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className={cls("text-[11.5px] uppercase tracking-wider font-semibold", dark ? "text-dsub" : "text-sub")}>
-                {copy.hermesUpdateLabel}
-              </span>
-              {checkingUpdate ? (
-                <span className={cls("text-[12px]", dark ? "text-dsub" : "text-sub")}>
-                  {copy.hermesUpdateChecking}
-                </span>
-              ) : updateStatus?.update_available ? (
-                <span className="text-[12px] font-medium" style={{ color: "#c2742b" }}>
-                  {typeof updateStatus.commits_behind === "number"
-                    ? copy.hermesUpdateAvailable(updateStatus.commits_behind)
-                    : copy.hermesUpdateAvailableNoCount}
-                </span>
-              ) : updateStatus ? (
-                <span className="text-[12px] font-medium" style={{ color: "#2f7d5b" }}>
-                  ✓ {copy.hermesUpdateLatest}
-                </span>
-              ) : null}
-            </div>
-            {updateStatus?.current_version && (
-              <div className={cls("text-[11px] gb-mono mt-0.5", dark ? "text-dsub" : "text-sub")}>
-                {copy.hermesVersionPrefix}: {updateStatus.current_version}
-              </div>
-            )}
-          </div>
-          <div className="shrink-0 flex items-center gap-1.5">
-            {updateStatus?.update_available && (
-              <button
-                onClick={() => void runUpdate()}
-                disabled={updating || checkingUpdate}
-                className={cls(
-                  "text-[12.5px] h-8 px-3 rounded-md border font-medium transition-colors",
-                  "bg-[var(--accent)]/10 text-[var(--accent)] border-[var(--accent)]/40 hover:bg-[var(--accent)]/20",
-                  "disabled:opacity-50 disabled:cursor-not-allowed",
-                )}
-              >
-                {updating ? copy.hermesUpdating : copy.hermesUpdateButton}
-              </button>
-            )}
-            <button
-              onClick={() => void refreshUpdate()}
-              disabled={checkingUpdate || updating}
-              className={cls(
-                "text-[12px] h-8 px-2.5 rounded-md border transition-colors disabled:opacity-50",
-                dark ? "border-dline text-dsub hover:text-dink" : "border-line text-sub hover:text-ink",
-              )}
-              title={copy.hermesRecheck}
-              aria-label={copy.hermesRecheck}
-            >
-              ↻
-            </button>
-          </div>
-        </div>
-      )}
-
       <div className="mt-3">
         <div className={cls("text-[11.5px] uppercase tracking-wider font-semibold mb-2", dark ? "text-dsub" : "text-sub")}>
           {copy.hermesBackendLabel}
@@ -1589,10 +1745,12 @@ const HermesCard: React.FC<{
         <div className={cls("text-[11.5px] -mt-1 mb-2", dark ? "text-dsub" : "text-sub")}>
           {copy.modelProviderDefaultHelp}
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-2">
           {HERMES_BACKENDS.map((b) => {
             const s = statuses[b.credentialProvider];
-            const ok = !!s && (s.oauth_logged_in || s.api_key_present);
+            const ok = !!s && (b.value === "grok"
+              ? s.api_key_present
+              : s.oauth_logged_in || s.api_key_present);
             const active = b.value === backend;
             return (
               <button
@@ -1664,6 +1822,11 @@ const GajecodeCard: React.FC<{
   const [runtimeReadiness, setRuntimeReadiness] = useState<ManagedAgentRuntimeReadiness | null>(null);
   const runtimeProgress = useManagedRuntimeProgress("gajecode");
   const runtimeProgressText = managedRuntimeProgressText(runtimeProgress, copy);
+  const runtimeDetected = installed || Boolean(updateStatus?.installed);
+  const supportedVersionReady = Boolean(
+    updateStatus?.current_version
+      && updateStatus.current_version === updateStatus.latest_version,
+  );
 
   const refreshUpdate = useCallback(async () => {
     setCheckingUpdate(true);
@@ -1678,26 +1841,26 @@ const GajecodeCard: React.FC<{
   }, []);
 
   useEffect(() => {
-    if (installed) void refreshUpdate();
-    else setUpdateStatus(null);
+    void refreshUpdate();
   }, [installed, refreshUpdate]);
 
   async function runUpdate() {
     setUpdating(true);
     setPreparationError(null);
+    setPreparationNotice(null);
     try {
-      await gajecodeUpdate();
-      setRuntimeReadiness(await providerPrepareManagedRuntime("gajecode"));
-      onUpdated();
-      const started = Date.now();
-      while (Date.now() - started < 5 * 60 * 1000) {
-        await new Promise((resolve) => window.setTimeout(resolve, 3000));
-        const next = await gajecodeCheckUpdate().catch(() => null);
-        if (next) {
-          setUpdateStatus(next);
-          if (!next.update_available) break;
-        }
+      const readiness = await gajecodeUpdate();
+      if (!readiness.ready) {
+        throw new Error(copy.gajecodeUpdateVerificationFailed);
       }
+      setRuntimeReadiness(readiness);
+      const next = await gajecodeCheckUpdate();
+      setUpdateStatus(next);
+      if (!gajecodeUpdateMatchesReadiness(readiness, next)) {
+        throw new Error(copy.gajecodeUpdateVerificationFailed);
+      }
+      setPreparationNotice(copy.gajecodeUpdated(readiness.runtimePin));
+      onUpdated();
     } catch (error) {
       setPreparationError(String(error));
     } finally {
@@ -1773,17 +1936,6 @@ const GajecodeCard: React.FC<{
               {runtimeProgressText}
             </div>
           )}
-          {updateStatus?.current_version && (
-            <div className={cls("text-[11px] gb-mono mt-1", dark ? "text-dsub" : "text-sub")}>
-              {copy.gajecodeVersionPrefix}: {updateStatus.current_version}
-              {updateStatus.latest_version ? ` → ${updateStatus.latest_version}` : ""}
-            </div>
-          )}
-          {updateStatus?.message && (
-            <div className={cls("text-[11px] mt-1", dark ? "text-dsub" : "text-sub")}>
-              {updateStatus.message}
-            </div>
-          )}
         </div>
         <button
           type="button"
@@ -1796,9 +1948,61 @@ const GajecodeCard: React.FC<{
             "disabled:opacity-50 disabled:cursor-not-allowed",
           )}
         >
-          {preparing ? copy.gajecodePreparing : installed ? copy.gajecodeRepair : `+ ${copy.gajecodePrepare}`}
+          {preparing ? copy.gajecodePreparing : runtimeDetected ? copy.gajecodeRepair : `+ ${copy.gajecodePrepare}`}
         </button>
       </div>
+
+      <RuntimeReadinessEvidence readiness={runtimeReadiness} copy={copy} dark={dark} />
+
+      <ManagedAgentUpdatePanel
+        dark={dark}
+        provider="gajecode"
+        visible={runtimeDetected}
+        label={copy.gajecodeUpdateLabel}
+        state={checkingUpdate
+          ? "checking"
+          : updateStatus?.update_available
+            ? "available"
+            : updateStatus && supportedVersionReady
+              ? "ready"
+              : "idle"}
+        statusText={checkingUpdate
+          ? copy.gajecodeUpdateChecking
+          : updateStatus?.update_available
+            ? copy.gajecodeUpdateAvailable
+            : updateStatus && supportedVersionReady
+              ? copy.gajecodeUpdateLatest
+              : null}
+        versionText={updateStatus?.current_version
+          ? `${copy.gajecodeVersionPrefix}: ${updateStatus.current_version}${
+              updateStatus.latest_version
+                ? ` · ${copy.gajecodeSupportedVersionPrefix}: ${updateStatus.latest_version}`
+                : ""
+            }`
+          : null}
+        message={updateStatus?.message}
+        updateAvailable={Boolean(updateStatus?.update_available)}
+        updating={updating}
+        updateLabel={copy.gajecodeUpdateButton}
+        updatingLabel={copy.gajecodeUpdating}
+        checkLabel={copy.gajecodeRecheck}
+        updateDisabled={updating || checkingUpdate || preparing}
+        checkDisabled={checkingUpdate || updating || preparing}
+        onUpdate={() => void runUpdate()}
+        onCheck={() => void refreshUpdate()}
+      />
+
+      {preparationNotice && (
+        <div className={cls("mt-2 text-[12px] px-3 py-2 rounded-md border", dark ? "border-emerald-700/40 bg-emerald-900/20 text-emerald-300" : "border-emerald-200 bg-emerald-50 text-emerald-700")}>
+          {preparationNotice}
+        </div>
+      )}
+
+      {preparationError && (
+        <div className={cls("mt-2 text-[12px] px-3 py-2 rounded-md border", dark ? "border-red-700/40 bg-red-900/20 text-red-300" : "border-red-200 bg-red-50 text-red-700")}>
+          {preparationError}
+        </div>
+      )}
 
       <div
         data-testid="gajecode-isolated-skills"
@@ -1822,7 +2026,7 @@ const GajecodeCard: React.FC<{
         <div className={cls("text-[11.5px] -mt-1 mb-2", dark ? "text-dsub" : "text-sub")}>
           {copy.modelProviderDefaultHelp}
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
           {GAJECODE_BACKENDS.map((b) => {
             const s = statuses[b.credentialProvider];
             const ok = gajecodeCredentialReady(b.value, s);
@@ -1864,51 +2068,126 @@ const GajecodeCard: React.FC<{
         )}
       </div>
 
-      <RuntimeReadinessEvidence readiness={runtimeReadiness} copy={copy} dark={dark} />
+    </div>
+  );
+};
 
-      {preparationNotice && (
+const GrokRuntimeCard: React.FC<{
+  tw: Tweaks;
+  status: ProviderStatus | null;
+  onUpdated: () => void;
+}> = ({ tw, status, onUpdated }) => {
+  const dark = tw.dark;
+  const ko = tw.language === "ko";
+  const installed = status?.cli_installed ?? false;
+  const [updateStatus, setUpdateStatus] = useState<GrokUpdateStatus | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [readiness, setReadiness] = useState<ManagedAgentRuntimeReadiness | null>(null);
+
+  const refreshUpdate = useCallback(async () => {
+    setChecking(true);
+    setError(null);
+    try {
+      setUpdateStatus(await grokCheckUpdate());
+    } catch (nextError) {
+      setUpdateStatus(null);
+      setError(String(nextError));
+    } finally {
+      setChecking(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (installed) void refreshUpdate();
+    else setUpdateStatus(null);
+  }, [installed, refreshUpdate]);
+
+  async function runUpdate() {
+    setUpdating(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const nextReadiness = await grokUpdate();
+      const nextStatus = await grokCheckUpdate();
+      if (
+        !nextReadiness.ready
+        || nextStatus.update_available
+        || nextStatus.current_version !== nextReadiness.runtimePin
+        || nextStatus.latest_version !== nextReadiness.runtimePin
+      ) {
+        throw new Error(ko
+          ? "업데이트 후 Grok 관리형 실행환경을 검증하지 못했습니다."
+          : "Atelier could not verify the managed Grok runtime after the update.");
+      }
+      setReadiness(nextReadiness);
+      setUpdateStatus(nextStatus);
+      setNotice(ko
+        ? `Grok Build ${nextReadiness.runtimePin} 실행환경을 검증했습니다.`
+        : `Verified the Grok Build ${nextReadiness.runtimePin} runtime.`);
+      onUpdated();
+    } catch (nextError) {
+      setError(String(nextError));
+    } finally {
+      setUpdating(false);
+    }
+  }
+
+  const supported = Boolean(
+    updateStatus?.current_version
+      && updateStatus.current_version === updateStatus.latest_version,
+  );
+
+  return (
+    <div data-testid="grok-managed-runtime" className="mt-2">
+      <RuntimeReadinessEvidence readiness={readiness} copy={COPY[tw.language]} dark={dark} />
+      <ManagedAgentUpdatePanel
+        dark={dark}
+        provider="grok"
+        visible={installed}
+        label={ko ? "업데이트" : "Update"}
+        state={checking
+          ? "checking"
+          : updateStatus?.update_available
+            ? "available"
+            : updateStatus && supported
+              ? "ready"
+              : "idle"}
+        statusText={checking
+          ? (ko ? "확인 중…" : "Checking…")
+          : updateStatus?.update_available
+            ? (ko ? "Atelier 지원 버전 업데이트 가능" : "Atelier-supported update available")
+            : updateStatus && supported
+              ? (ko ? "Atelier 지원 버전" : "Atelier-supported version")
+              : null}
+        versionText={updateStatus?.current_version
+          ? `${ko ? "현재 버전" : "Current version"}: ${updateStatus.current_version}${
+              updateStatus.latest_version
+                ? ` · ${ko ? "Atelier 지원" : "Atelier support"}: ${updateStatus.latest_version}`
+                : ""
+            }`
+          : null}
+        message={updateStatus?.message}
+        updateAvailable={Boolean(updateStatus?.update_available)}
+        updating={updating}
+        updateLabel={ko ? "지원 버전으로 업데이트" : "Update to supported version"}
+        updatingLabel={ko ? "업데이트 중…" : "Updating…"}
+        checkLabel={ko ? "업데이트 확인" : "Check for updates"}
+        updateDisabled={checking || updating}
+        checkDisabled={checking || updating}
+        onUpdate={() => void runUpdate()}
+        onCheck={() => void refreshUpdate()}
+      />
+      {notice && (
         <div className={cls("mt-2 text-[12px] px-3 py-2 rounded-md border", dark ? "border-emerald-700/40 bg-emerald-900/20 text-emerald-300" : "border-emerald-200 bg-emerald-50 text-emerald-700")}>
-          {preparationNotice}
+          {notice}
         </div>
       )}
-
-      {preparationError && (
+      {error && (
         <div className={cls("mt-2 text-[12px] px-3 py-2 rounded-md border", dark ? "border-red-700/40 bg-red-900/20 text-red-300" : "border-red-200 bg-red-50 text-red-700")}>
-          {preparationError}
-        </div>
-      )}
-
-      {installed && (
-        <div className="mt-2 flex items-center justify-end gap-1.5">
-          {checkingUpdate ? (
-            <span className={cls("text-[12px]", dark ? "text-dsub" : "text-sub")}>
-              {copy.gajecodeUpdateChecking}
-            </span>
-          ) : updateStatus?.update_available ? (
-            <button
-              onClick={() => void runUpdate()}
-              disabled={updating || checkingUpdate || preparing}
-              className="text-[12.5px] h-8 px-3 rounded-md border font-medium transition-colors bg-[var(--accent)]/10 text-[var(--accent)] border-[var(--accent)]/40 hover:bg-[var(--accent)]/20 disabled:opacity-50"
-            >
-              {updating ? copy.gajecodeUpdating : copy.gajecodeUpdateButton}
-            </button>
-          ) : updateStatus ? (
-            <span className="text-[12px] font-medium" style={{ color: "#2f7d5b" }}>
-              ✓ {copy.gajecodeUpdateLatest}
-            </span>
-          ) : null}
-          <button
-            onClick={() => void refreshUpdate()}
-            disabled={checkingUpdate || updating || preparing}
-            className={cls(
-              "text-[12px] h-8 px-2.5 rounded-md border transition-colors disabled:opacity-50",
-              dark ? "border-dline text-dsub hover:text-dink" : "border-line text-sub hover:text-ink",
-            )}
-            title={copy.gajecodeRecheck}
-            aria-label={copy.gajecodeRecheck}
-          >
-            ↻
-          </button>
+          {error}
         </div>
       )}
     </div>
@@ -1925,31 +2204,38 @@ const LoginModal: React.FC<{
   failed?: string | null;
   dark: boolean;
   copy: CopyT;
-  onSubmitCode: (code: string) => Promise<void>;
+  // 코드 상태는 패널이 소유한다 — 모달을 닫아도 입력한 코드와 전달 결과가 살아남게.
+  code: string;
+  onCodeChange: (value: string) => void;
+  codeState: "idle" | "submitting" | "submitted";
+  codeError: string | null;
+  codeWarning: string | null;
+  onSubmitCode: () => void;
   onClose: () => void;
-}> = ({ provider, name, detected, message, loginUrl, diagnostic, failed, dark, copy, onSubmitCode, onClose }) => {
-  const [code, setCode] = useState("");
-  const [submitState, setSubmitState] = useState<"idle" | "submitting" | "submitted">("idle");
-  const [submitError, setSubmitError] = useState<string | null>(null);
+}> = ({
+  provider,
+  name,
+  detected,
+  message,
+  loginUrl,
+  diagnostic,
+  failed,
+  dark,
+  copy,
+  code,
+  onCodeChange,
+  codeState,
+  codeError,
+  codeWarning,
+  onSubmitCode,
+  onClose,
+}) => {
   const [copyState, setCopyState] = useState<"idle" | "url" | "code">("idle");
   const [openError, setOpenError] = useState<string | null>(null);
   const showCodeInput = provider === "claude" && !detected;
   const codexDeviceCode = provider === "codex"
     ? diagnostic?.match(/\b[A-Z0-9]{4,5}-[A-Z0-9]{4,5}\b/)?.[0] || null
     : null;
-
-  async function handleSubmitCode() {
-    if (!code.trim() || submitState === "submitting") return;
-    setSubmitState("submitting");
-    setSubmitError(null);
-    try {
-      await onSubmitCode(code.trim());
-      setSubmitState("submitted");
-    } catch (e) {
-      setSubmitState("idle");
-      setSubmitError(String(e));
-    }
-  }
 
   async function handleCopyUrl() {
     if (!loginUrl) return;
@@ -2075,42 +2361,17 @@ const LoginModal: React.FC<{
           </div>
         )}
         {showCodeInput && (
-          <div className="mb-4 space-y-1.5">
-            <label className={cls("block text-[11.5px] uppercase tracking-wider font-semibold", dark ? "text-dsub" : "text-sub")}>
-              {copy.loginModalCodeLabel}
-            </label>
-            <div className="flex items-center gap-2">
-              <input
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                placeholder={copy.loginModalCodePlaceholder}
-                className={cls(
-                  "flex-1 h-9 px-3 rounded-md border text-[12.5px] outline-none gb-mono",
-                  dark
-                    ? "border-dline bg-dbg text-dink placeholder:text-dsub focus:border-[var(--accent)]"
-                    : "border-line bg-panel text-ink placeholder:text-sub focus:border-[var(--accent)]",
-                )}
-              />
-              <button
-                onClick={() => void handleSubmitCode()}
-                disabled={!code.trim() || submitState === "submitting"}
-                className={cls(
-                  "h-9 px-3 rounded-md border text-[12.5px] font-medium",
-                  "bg-[var(--accent)] text-white border-[var(--accent-hover)] hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed",
-                )}
-              >
-                {submitState === "submitting"
-                  ? copy.loginModalCodeSubmitting
-                  : submitState === "submitted"
-                  ? copy.loginModalCodeSubmitted
-                  : copy.loginModalCodeSubmit}
-              </button>
-            </div>
-            {submitError && (
-              <div className={cls("text-[11.5px]", dark ? "text-red-300" : "text-red-700")}>
-                {submitError}
-              </div>
-            )}
+          <div className="mb-4">
+            <OauthCodeEntry
+              dark={dark}
+              copy={copy}
+              code={code}
+              onCodeChange={onCodeChange}
+              state={codeState}
+              error={codeError}
+              warning={codeWarning}
+              onSubmit={onSubmitCode}
+            />
           </div>
         )}
         {!detected && diagnostic && (
@@ -2161,6 +2422,76 @@ const LoginModal: React.FC<{
           </div>
         )}
       </div>
+    </div>
+  );
+};
+
+/// 모달과 패널이 같은 입력칸을 공유한다. 한쪽에만 두면 다른 화면에서는 안내만 남는다.
+const OauthCodeEntry: React.FC<{
+  dark: boolean;
+  copy: CopyT;
+  code: string;
+  onCodeChange: (value: string) => void;
+  state: "idle" | "submitting" | "submitted";
+  error: string | null;
+  warning: string | null;
+  onSubmit: () => void;
+}> = ({ dark, copy, code, onCodeChange, state, error, warning, onSubmit }) => {
+  const canSubmit = Boolean(code.trim()) && state !== "submitting";
+  return (
+    <div className="space-y-1.5" data-testid="oauth-code-entry">
+      <label
+        className={cls(
+          "block text-[11.5px] uppercase tracking-wider font-semibold",
+          dark ? "text-dsub" : "text-sub",
+        )}
+      >
+        {copy.loginModalCodeLabel}
+      </label>
+      <div className="flex items-center gap-2">
+        <input
+          value={code}
+          onChange={(e) => onCodeChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && canSubmit) onSubmit();
+          }}
+          placeholder={copy.loginModalCodePlaceholder}
+          className={cls(
+            "min-w-0 flex-1 h-9 px-3 rounded-md border text-[12.5px] outline-none gb-mono",
+            dark
+              ? "border-dline bg-dbg text-dink placeholder:text-dsub focus:border-[var(--accent)]"
+              : "border-line bg-panel text-ink placeholder:text-sub focus:border-[var(--accent)]",
+          )}
+        />
+        <button
+          onClick={onSubmit}
+          disabled={!canSubmit}
+          className={cls(
+            "h-9 shrink-0 px-3 rounded-md border text-[12.5px] font-medium",
+            "bg-[var(--accent)] text-white border-[var(--accent-hover)] hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed",
+          )}
+        >
+          {state === "submitting"
+            ? copy.loginModalCodeSubmitting
+            : state === "submitted"
+            ? copy.loginModalCodeSubmitted
+            : copy.loginModalCodeSubmit}
+        </button>
+      </div>
+      {error && (
+        <div className={cls("text-[11.5px] break-words", dark ? "text-red-300" : "text-red-700")}>
+          {error}
+        </div>
+      )}
+      {/* 전달은 됐는데 CLI 가 아무 반응이 없는 경우. 실패로 단정하지 않고 사실만 알린다. */}
+      {!error && warning && (
+        <div
+          data-testid="oauth-code-submit-warning"
+          className={cls("text-[11.5px] break-words", dark ? "text-amber-300" : "text-amber-700")}
+        >
+          {warning}
+        </div>
+      )}
     </div>
   );
 };

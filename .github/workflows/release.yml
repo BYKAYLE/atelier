@@ -149,6 +149,7 @@ jobs:
           npm run smoke:editor-diagnostics
           npm run smoke:devscreen-picker
           npm run smoke:agent-performance
+          npm run smoke:agent-stream-rendering
           npm run smoke:oauth-login-flow
           # The feature gate restores the full bundle itself. Rebuild once more
           # at the packaging boundary so a stale restricted dist can never ship.
@@ -280,6 +281,7 @@ jobs:
           npm run smoke:editor-diagnostics
           npm run smoke:devscreen-picker
           npm run smoke:agent-performance
+          npm run smoke:agent-stream-rendering
           npm run smoke:oauth-login-flow
           npm run smoke:windows-runner-doctor
           # Repeat the full build at the packaging boundary after the gate's

@@ -6,6 +6,7 @@ pub(crate) enum AgentProviderKind {
     Codex,
     Hermes,
     GajaeCode,
+    Grok,
 }
 
 impl AgentProviderKind {
@@ -15,6 +16,7 @@ impl AgentProviderKind {
             "codex" => Ok(Self::Codex),
             "hermes" => Ok(Self::Hermes),
             "gajecode" => Ok(Self::GajaeCode),
+            "grok" => Ok(Self::Grok),
             other => Err(format!("unsupported provider: {other}")),
         }
     }
@@ -25,12 +27,14 @@ impl AgentProviderKind {
             Self::Codex => "codex",
             Self::Hermes => "hermes",
             Self::GajaeCode => "gajecode",
+            Self::Grok => "grok",
         }
     }
 
     pub(crate) const fn supports_managed_agent_send(self) -> bool {
         matches!(self, Self::Claude | Self::Codex)
-            || (cfg!(target_os = "macos") && matches!(self, Self::Hermes | Self::GajaeCode))
+            || (cfg!(target_os = "macos")
+                && matches!(self, Self::Hermes | Self::GajaeCode | Self::Grok))
     }
 
     pub(crate) const fn supports_permission_mode(self) -> bool {
@@ -42,11 +46,15 @@ impl AgentProviderKind {
             Self::Claude | Self::Codex => None,
             Self::Hermes if cfg!(target_os = "macos") => None,
             Self::GajaeCode if cfg!(target_os = "macos") => None,
+            Self::Grok if cfg!(target_os = "macos") => None,
             Self::Hermes => Some(
                 "Hermes managed Basic/Auto execution requires Atelier's macOS /usr/bin/sandbox-exec child-process boundary; this platform is unsupported and execution was not started.",
             ),
             Self::GajaeCode => Some(
                 "Gajae Code managed Basic/Auto execution requires Atelier's macOS /usr/bin/sandbox-exec child-process boundary; this platform is unsupported and execution was not started. Direct GJC/Team/RLM commands remain separate.",
+            ),
+            Self::Grok => Some(
+                "Grok managed Basic/Auto execution requires Atelier's verified macOS /usr/bin/sandbox-exec runtime boundary; this platform is unsupported and execution was not started.",
             ),
         }
     }
@@ -113,6 +121,21 @@ impl AgentProviderKind {
                 supports_managed_agent_send: self.supports_managed_agent_send(),
                 managed_agent_send_disabled_reason: self.managed_agent_send_disabled_reason(),
             },
+            Self::Grok => AgentRuntimeCapability {
+                id: "grok",
+                label: "Grok Build",
+                cli: "grok",
+                adapter_provider: "grok",
+                execution_controller: "atelier_macos_sandbox_exec+grok_seatbelt",
+                skill_owner: "grok_isolated_home",
+                auth_owner: "grok_cli_or_xai_api_key",
+                automatic_online_runtime_bootstrap: true,
+                supports_resume: true,
+                supports_model_catalog: false,
+                supports_permission_mode: self.supports_permission_mode(),
+                supports_managed_agent_send: self.supports_managed_agent_send(),
+                managed_agent_send_disabled_reason: self.managed_agent_send_disabled_reason(),
+            },
         }
     }
 }
@@ -140,6 +163,7 @@ pub(crate) fn runtime_capabilities() -> Vec<AgentRuntimeCapability> {
         AgentProviderKind::Codex,
         AgentProviderKind::Hermes,
         AgentProviderKind::GajaeCode,
+        AgentProviderKind::Grok,
     ]
     .into_iter()
     .map(AgentProviderKind::capability)
@@ -152,7 +176,7 @@ mod tests {
 
     #[test]
     fn parses_every_registered_provider() {
-        for provider in ["claude", "codex", "hermes", "gajecode"] {
+        for provider in ["claude", "codex", "hermes", "gajecode", "grok"] {
             assert_eq!(AgentProviderKind::parse(provider).unwrap().id(), provider);
         }
     }
@@ -169,11 +193,12 @@ mod tests {
             .iter()
             .map(|capability| capability.id)
             .collect::<Vec<_>>();
-        assert_eq!(ids, vec!["claude", "codex", "hermes", "gajecode"]);
+        assert_eq!(ids, vec!["claude", "codex", "hermes", "gajecode", "grok"]);
         assert!(capabilities[0].supports_managed_agent_send);
         assert!(capabilities[1].supports_managed_agent_send);
         assert_eq!(capabilities[2].adapter_provider, "hermes");
         assert_eq!(capabilities[3].adapter_provider, "gajecode");
+        assert_eq!(capabilities[4].adapter_provider, "grok");
         assert_eq!(
             capabilities[2].execution_controller,
             "atelier_macos_sandbox_exec"
@@ -184,22 +209,30 @@ mod tests {
         );
         assert_eq!(capabilities[2].skill_owner, "atelier_managed_hermes");
         assert_eq!(capabilities[3].skill_owner, "gajecode_isolated");
+        assert_eq!(capabilities[4].skill_owner, "grok_isolated_home");
         assert!(capabilities[2].automatic_online_runtime_bootstrap);
         assert!(capabilities[3].automatic_online_runtime_bootstrap);
+        assert!(capabilities[4].automatic_online_runtime_bootstrap);
         if cfg!(target_os = "macos") {
             assert!(capabilities[2].supports_managed_agent_send);
             assert!(capabilities[3].supports_managed_agent_send);
+            assert!(capabilities[4].supports_managed_agent_send);
             assert!(capabilities[2].supports_permission_mode);
             assert!(capabilities[3].supports_permission_mode);
+            assert!(capabilities[4].supports_permission_mode);
             assert!(capabilities[2].managed_agent_send_disabled_reason.is_none());
             assert!(capabilities[3].managed_agent_send_disabled_reason.is_none());
+            assert!(capabilities[4].managed_agent_send_disabled_reason.is_none());
         } else {
             assert!(!capabilities[2].supports_managed_agent_send);
             assert!(!capabilities[3].supports_managed_agent_send);
+            assert!(!capabilities[4].supports_managed_agent_send);
             assert!(!capabilities[2].supports_permission_mode);
             assert!(!capabilities[3].supports_permission_mode);
+            assert!(!capabilities[4].supports_permission_mode);
             assert!(capabilities[2].managed_agent_send_disabled_reason.is_some());
             assert!(capabilities[3].managed_agent_send_disabled_reason.is_some());
+            assert!(capabilities[4].managed_agent_send_disabled_reason.is_some());
         }
     }
 }

@@ -33,6 +33,7 @@ use uuid::Uuid;
 use crate::credentials::{
     gajecode_cache_dir, gajecode_config_dir, gajecode_data_dir, gajecode_executable_path,
     gajecode_home_dir, gajecode_runtime_path_env, gajecode_skills_dir, gajecode_workspace_dir,
+    grok_executable_path, grok_home_dir, grok_provider_root, read_agent_api_key,
 };
 use crate::pty_output::{forward_output_batches, PTY_OUTPUT_QUEUE_DEPTH, PTY_READ_CHUNK_BYTES};
 
@@ -670,6 +671,47 @@ fn gajecode_pty_command() -> Result<CommandBuilder> {
     Ok(cmd)
 }
 
+fn is_grok_profile(profile: &str) -> bool {
+    matches!(
+        profile.trim().to_ascii_lowercase().as_str(),
+        "grok" | "grok-build" | "xai"
+    )
+}
+
+fn grok_pty_command() -> Result<CommandBuilder> {
+    let executable = grok_executable_path().ok_or_else(|| {
+        anyhow!("Grok CLI가 설치되어 있지 않습니다. 설정 > 연결에서 자동 설치를 먼저 실행하세요.")
+    })?;
+    let root = grok_provider_root().ok_or_else(|| anyhow!("resolve Grok root"))?;
+    let home = grok_home_dir().ok_or_else(|| anyhow!("resolve Grok HOME"))?;
+    let config = root.join("state/config");
+    let data = root.join("state/data");
+    let cache = root.join("cache");
+    let temp = root.join("tmp");
+    for dir in [&home, &config, &data, &cache, &temp] {
+        std::fs::create_dir_all(dir)
+            .map_err(|error| anyhow!("create {}: {error}", dir.display()))?;
+    }
+    let mut cmd = CommandBuilder::new(path_string(&executable));
+    cmd.cwd(path_string(&home));
+    cmd.env("PATH", crate::augmented_cli_path());
+    cmd.env("HOME", path_string(&home));
+    cmd.env("USERPROFILE", path_string(&home));
+    cmd.env("XDG_CONFIG_HOME", path_string(&config));
+    cmd.env("XDG_DATA_HOME", path_string(&data));
+    cmd.env("XDG_CACHE_HOME", path_string(&cache));
+    cmd.env("TMPDIR", path_string(&temp));
+    cmd.env("ATELIER_PROVIDER_ID", "grok");
+    if let Some(api_key) = read_agent_api_key("grok") {
+        cmd.env("XAI_API_KEY", api_key);
+    }
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
+    cmd.env("LANG", "ko_KR.UTF-8");
+    cmd.env("LC_CTYPE", "ko_KR.UTF-8");
+    Ok(cmd)
+}
+
 /// 프로파일 id → 실제 실행 커맨드.
 /// 플랫폼별 기본값은 컴파일 타임 `#[cfg(target_os = ...)]`로 분기된다.
 fn profile_command(profile: &str) -> CommandBuilder {
@@ -781,15 +823,18 @@ pub(crate) fn runtime_spawn(
         .map_err(|e| anyhow!("openpty failed: {e}"))?;
 
     let is_gajecode = is_gajecode_profile(&profile);
+    let is_grok = is_grok_profile(&profile);
     let mut cmd = if is_gajecode {
         gajecode_pty_command()?
+    } else if is_grok {
+        grok_pty_command()?
     } else {
         profile_command(&profile)
     };
     // claude는 apply_path_env (PATH + LANG=ko_KR.UTF-8 + TERM=xterm) — UTF-8 한국어 + plain
     // xterm으로 alternate buffer 등 고급 ANSI sequence 회피. xterm-256color는 xterm.js parser
     // error 유발이라 사용 안 함. 그 외 profile은 표준 apply_default_env.
-    if is_gajecode {
+    if is_gajecode || is_grok {
         // Already configured with an isolated HOME/workspace/skills directory.
     } else if profile == "claude" {
         apply_path_env(&mut cmd);

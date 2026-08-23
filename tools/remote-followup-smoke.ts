@@ -9,6 +9,10 @@ const panel = readFileSync(
 );
 const bindings = readFileSync(new URL("../src/lib/tauri.ts", import.meta.url), "utf8");
 const app = readFileSync(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
+const legacyMobileFollowup = mobile.slice(
+  mobile.indexOf("async fn followup("),
+  mobile.indexOf("fn mobile_routes()"),
+);
 
 assert.match(backend, /APPROVAL_TTL_MS/);
 assert.match(backend, /constant_time_equal/);
@@ -17,8 +21,11 @@ assert.match(backend, /task\.dispatch/);
 assert.match(backend, /mobile-followup:/);
 assert.match(backend, /status != "pending" && status != "approving"/);
 assert.doesNotMatch(backend, /"basic"\s*\|\s*"auto"\s*\|\s*"full"/);
-assert.doesNotMatch(mobile, /enqueue_request\(/);
+assert.ok(legacyMobileFollowup.length > 0, "legacy mobile follow-up handler must remain available");
+assert.doesNotMatch(legacyMobileFollowup, /enqueue_request\(/);
+assert.match(legacyMobileFollowup, /remote_followup::submit_proposal/);
 assert.match(mobile, /\/api\/v1\/followups/);
+assert.match(mobile, /\/api\/v1\/session-followups/);
 assert.match(panel, /정확한 실행 내용 확인/);
 assert.match(panel, /승인하고 작업 큐에 등록/);
 assert.doesNotMatch(panel, /option value="full"/);

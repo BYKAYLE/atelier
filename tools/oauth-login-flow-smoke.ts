@@ -13,6 +13,9 @@ assert.equal(isAllowedOauthLoginUrl("claude", "https://claude.ai/oauth/authorize
 assert.equal(isAllowedOauthLoginUrl("claude", "https://console.anthropic.com/oauth"), true);
 assert.equal(isAllowedOauthLoginUrl("codex", "https://auth.openai.com/codex/device"), true);
 assert.equal(isAllowedOauthLoginUrl("codex", "https://chatgpt.com/auth/login"), true);
+assert.equal(isAllowedOauthLoginUrl("grok", "https://auth.x.ai/oauth/authorize"), true);
+assert.equal(isAllowedOauthLoginUrl("grok", "https://grok.com/login"), true);
+assert.equal(isAllowedOauthLoginUrl("grok", "https://x.ai.evil.example/login"), false);
 assert.equal(isAllowedOauthLoginUrl("codex", "http://auth.openai.com/codex/device"), false);
 assert.equal(isAllowedOauthLoginUrl("claude", "https://claude.ai.evil.example/login"), false);
 assert.equal(isAllowedOauthLoginUrl("codex", "https://user@example.com@openai.com/login"), false);

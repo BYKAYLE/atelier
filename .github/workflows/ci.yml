@@ -39,7 +39,9 @@ jobs:
         run: npm run gate:orca-features
 
       - name: Prove offline agent fixtures
-        run: npm run harness:fixture
+        run: |
+          npm run harness:fixture
+          npm run smoke:agent-stream-rendering
 
       - name: Prove release evidence contracts
         run: |
@@ -53,6 +55,7 @@ jobs:
         run: |
           npm run smoke:oauth-login-flow
           npm run smoke:connections-layout
+          npm run smoke:provider-runtime-identity
           npm run smoke:updater-install
 
       - name: Prove feature boundaries and settings

@@ -26,6 +26,7 @@ const PROVIDERS: Array<{ value: Provider; label: string }> = [
   { value: "claude", label: "Claude Code" },
   { value: "hermes", label: "Hermes" },
   { value: "gajecode", label: "Gajae Code" },
+  { value: "grok", label: "Grok Build" },
 ];
 
 function normalizeRemotePermission(value: unknown): Permission {

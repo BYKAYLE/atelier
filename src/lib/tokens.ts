@@ -44,7 +44,7 @@ export interface Profile {
   name: string;
   cmd: string;
   dot: string;
-  autoInstall?: "claude" | "hermes" | "codex" | "gajecode";
+  autoInstall?: "claude" | "hermes" | "codex" | "gajecode" | "grok";
   sourceUrl?: string;
 }
 
@@ -53,12 +53,14 @@ interface ProfileDef extends Profile {
 }
 
 export const GAJAE_CODE_REPO_URL = "https://github.com/Yeachan-Heo/gajae-code";
+export const GROK_BUILD_URL = "https://x.ai/cli";
 
 const ALL_PROFILES: ProfileDef[] = [
   { id: "claude", name: "Claude Code", cmd: "claude", dot: "#c96442", autoInstall: "claude", platforms: ["macos", "windows", "linux"] },
   { id: "hermes", name: "Hermes", cmd: "hermes chat -m gpt-5.5 --max-turns 25", dot: "#8a8218", autoInstall: "hermes", platforms: ["macos", "windows", "linux"] },
   { id: "codex", name: "Codex CLI", cmd: "codex", dot: "#4b7bd1", autoInstall: "codex", platforms: ["macos", "windows", "linux"] },
   { id: "gajecode", name: "가재코드", cmd: "gjc", dot: "#7a6f1a", autoInstall: "gajecode", sourceUrl: GAJAE_CODE_REPO_URL, platforms: ["macos", "windows", "linux"] },
+  { id: "grok", name: "Grok Build", cmd: "grok", dot: "#111111", autoInstall: "grok", sourceUrl: GROK_BUILD_URL, platforms: ["macos"] },
   { id: "zsh", name: "Zsh", cmd: "zsh", dot: "#9aae63", platforms: ["macos", "linux"] },
   { id: "bash", name: "Bash", cmd: "bash", dot: "#6b9a4a", platforms: ["macos", "linux", "windows"] },
   { id: "pwsh", name: "PowerShell", cmd: "pwsh", dot: "#4b7bd1", platforms: ["windows", "macos", "linux"] },
@@ -71,7 +73,7 @@ export const PROFILES: Profile[] = ALL_PROFILES
   .filter((p) => p.platforms.includes(PLATFORM))
   .map(({ platforms: _platforms, ...rest }) => rest);
 
-export const FIXED_PROFILE_IDS = ["claude", "codex", "hermes", "gajecode"] as const;
+export const FIXED_PROFILE_IDS = ["claude", "codex", "hermes", "gajecode", "grok"] as const;
 const FIXED_PROFILE_ID_SET = new Set<string>(FIXED_PROFILE_IDS);
 
 function migrateLegacyProfileCommand(profile: Profile): Profile {

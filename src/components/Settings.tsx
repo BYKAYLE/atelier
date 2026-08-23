@@ -88,8 +88,8 @@ const RemoteSettingsSection: React.FC<{ tw: Tweaks }> = ({ tw }) => {
         compact
         title={ko ? "원격 접근" : "Remote access"}
         sub={ko
-          ? "휴대폰에서 Atelier 작업 상태만 안전하게 확인합니다. 대화 원문과 자격증명은 공유되지 않습니다."
-          : "Monitor Atelier safely from a phone. Prompts and credentials are never shared."}
+          ? "휴대폰에서 기존 Atelier 작업과 정리된 대화를 확인하고 같은 작업을 이어갑니다. 자격증명과 전체 로컬 경로는 마스킹됩니다."
+          : "View existing Atelier tasks and redacted conversations on your phone, then continue the same task. Credentials and full local paths are masked."}
       />
       <div
         data-testid="remote-settings-grid"

@@ -1,7 +1,7 @@
 import { safeLocalStorageGet, safeLocalStorageSet } from "./storage.ts";
 
-export type HermesModelProvider = "openai-codex" | "anthropic" | "openrouter" | "alibaba";
-export type GajaeModelProvider = "claude" | "codex" | "alibaba";
+export type HermesModelProvider = "openai-codex" | "anthropic" | "openrouter" | "alibaba" | "grok";
+export type GajaeModelProvider = "claude" | "codex" | "alibaba" | "grok";
 
 export type ModelProviderCredentialStatus = {
   oauth_logged_in?: boolean | null;
@@ -42,6 +42,7 @@ export function normalizeHermesModelProvider(value: unknown): HermesModelProvide
     || normalized === "anthropic"
     || normalized === "openrouter"
     || normalized === "alibaba"
+    || normalized === "grok"
   ) {
     return normalized;
   }
@@ -50,7 +51,7 @@ export function normalizeHermesModelProvider(value: unknown): HermesModelProvide
 
 export function normalizeGajaeModelProvider(value: unknown): GajaeModelProvider {
   const normalized = normalizedString(value);
-  if (normalized === "claude" || normalized === "codex" || normalized === "alibaba") {
+  if (normalized === "claude" || normalized === "codex" || normalized === "alibaba" || normalized === "grok") {
     return normalized;
   }
   return DEFAULT_GAJAE_MODEL_PROVIDER;
@@ -158,6 +159,7 @@ export function inferHermesModelProviderFromModel(model?: string | null): Hermes
   if (!trimmed) return DEFAULT_HERMES_MODEL_PROVIDER;
   if (/^(?:anthropic\/)?claude-/i.test(trimmed)) return "anthropic";
   if (/^(?:qwen|glm)-?/i.test(trimmed)) return "alibaba";
+  if (/^(?:xai\/)?grok-/i.test(trimmed)) return "grok";
   if (trimmed.includes("/")) return "openrouter";
   return DEFAULT_HERMES_MODEL_PROVIDER;
 }
@@ -166,6 +168,7 @@ export function inferGajaeModelProviderFromModel(model?: string | null): GajaeMo
   const trimmed = model?.trim().toLowerCase() ?? "";
   if (trimmed.startsWith("codex/") || trimmed.startsWith("openai-codex/")) return "codex";
   if (trimmed.startsWith("alibaba-token-plan/")) return "alibaba";
+  if (trimmed.startsWith("xai/")) return "grok";
   return DEFAULT_GAJAE_MODEL_PROVIDER;
 }
 
@@ -175,9 +178,11 @@ export function modelForGajaeProvider(provider: GajaeModelProvider, model: strin
     .replace(/^codex\//i, "")
     .replace(/^openai-codex\//i, "")
     .replace(/^alibaba-token-plan\//i, "")
+    .replace(/^xai\//i, "")
     .replace(/^anthropic\//i, "");
   if (provider === "codex") return `codex/${withoutKnownPrefix}`;
   if (provider === "alibaba") return `alibaba-token-plan/${withoutKnownPrefix}`;
+  if (provider === "grok") return `xai/${withoutKnownPrefix}`;
   return withoutKnownPrefix;
 }
 
@@ -188,6 +193,7 @@ export function gajecodeCredentialReady(
   if (!status) return false;
   if (provider === "codex") return Boolean(status.oauth_logged_in);
   if (provider === "alibaba") return Boolean(status.api_key_present);
+  if (provider === "grok") return Boolean(status.api_key_present);
   return Boolean(status.oauth_logged_in || status.api_key_present);
 }
 

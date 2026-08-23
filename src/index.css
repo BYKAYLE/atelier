@@ -1613,8 +1613,7 @@ body.dark {
   padding-bottom: 4px !important;
 }
 
-.atelier-composer-compact .atelier-factory-launcher-copy,
-.atelier-composer-compact .atelier-factory-status {
+.atelier-composer-compact .atelier-factory-launcher-copy {
   display: none !important;
 }
 
@@ -1899,8 +1898,7 @@ body.dark {
     padding-bottom: 4px !important;
   }
 
-  .atelier-factory-launcher-copy,
-  .atelier-factory-status {
+  .atelier-factory-launcher-copy {
     display: none !important;
   }
 

@@ -8,10 +8,13 @@ const workspace = fs.readFileSync(new URL("../src/components/AgentWorkspace.tsx"
 const tauri = fs.readFileSync(new URL("../src/lib/tauri.ts", import.meta.url), "utf8");
 const gate = fs.readFileSync(new URL("./orca-feature-release-gate.mjs", import.meta.url), "utf8");
 
-assert.match(registry, /cfg!\(target_os = "macos"\)[\s\S]*Self::Hermes \| Self::GajaeCode/);
+assert.match(registry, /cfg!\(target_os = "macos"\)[\s\S]*Self::Hermes \| Self::GajaeCode \| Self::Grok/);
 assert.match(registry, /execution_controller: "atelier_macos_sandbox_exec"/);
 assert.match(registry, /skill_owner: "atelier_managed_hermes"/);
 assert.match(registry, /skill_owner: "gajecode_isolated"/);
+assert.match(registry, /skill_owner: "grok_isolated_home"/);
+assert.match(agent, /AgentProviderKind::Grok[\s\S]*run_grok/);
+assert.match(agent, /--sandbox[\s\S]*read-only[\s\S]*workspace/);
 assert.match(registry, /automatic_online_runtime_bootstrap: true/);
 
 const managedSend = agent.slice(
@@ -51,7 +54,15 @@ assert.ok(directGuard.indexOf("guard_agent_cli_request") < directGuard.indexOf("
 assert.match(tauri, /supports_managed_agent_send: boolean/);
 assert.match(tauri, /managed_agent_send_disabled_reason\?: string \| null/);
 assert.match(workspace, /agentRuntimeCapabilities\(\)/);
-assert.match(workspace, /isRestrictedDirectGajaeCliInput\(input\)/);
+assert.match(
+  workspace,
+  /restrictedDirectGajaeInput: isRestrictedDirectGajaeCliInput\(rawText\)/,
+);
+assert.match(workspace, /composerUi\.restrictedDirectGajaeInput/);
+assert.match(
+  workspace,
+  /inputDraftRef\.current = e\.target\.value;[\s\S]*syncComposerUi\(e\.target\.value\)/,
+);
 assert.match(tauri, /adapter_provider: string/);
 assert.match(tauri, /execution_controller: string/);
 assert.match(tauri, /skill_owner: string/);

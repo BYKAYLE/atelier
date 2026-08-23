@@ -7,12 +7,13 @@ use crate::subscription_usage::{
     fetch_claude_subscription_usage, fetch_codex_subscription_usage, ProviderSubscriptionUsage,
 };
 
-const PROVIDERS: [(&str, &str, Option<&str>); 5] = [
+const PROVIDERS: [(&str, &str, Option<&str>); 6] = [
     ("claude", "Claude", Some("claude")),
     ("codex", "Codex", Some("codex")),
     ("openrouter", "OpenRouter", None),
     ("hermes", "Hermes", Some("hermes")),
     ("gajecode", "Gajae Code", Some("gjc")),
+    ("grok", "Grok Build", None),
 ];
 
 #[derive(Clone, Debug, Serialize)]
@@ -231,6 +232,7 @@ pub async fn provider_usage_snapshot() -> Result<ProviderUsageSnapshot, String> 
             "codex" => "Codex subscription limits are read from the official CLI app-server account/rateLimits/read method.",
             "hermes" => "Hermes usage belongs to its selected backend; inspect the Codex or OpenRouter entry.",
             "gajecode" => "Gajae Code usage belongs to its configured model provider and remains isolated from Atelier credentials.",
+            "grok" => "Grok usage is owned by the isolated official CLI session or xAI API key; no documented quota endpoint is queried by Atelier.",
             "openrouter" => "Connect an OpenRouter API key to read documented usage and remaining credit.",
             _ => "No documented usage surface is available.",
         };

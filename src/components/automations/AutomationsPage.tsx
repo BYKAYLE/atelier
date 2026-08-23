@@ -280,6 +280,7 @@ const AutomationsPage: React.FC<Props> = ({ tw }) => {
                 <option value="codex">Codex CLI</option>
                 <option value="hermes">Hermes</option>
                 <option value="gajecode">Gajae Code</option>
+                <option value="grok">Grok Build</option>
               </select>
             </Field>
             <Field label={ko ? "권한" : "Permission"}>

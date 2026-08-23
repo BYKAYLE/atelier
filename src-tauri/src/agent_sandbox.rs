@@ -54,6 +54,13 @@ fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
 }
 
 #[cfg(target_os = "macos")]
+fn push_unique_ancestor_paths(paths: &mut Vec<PathBuf>, path: &Path) {
+    for ancestor in path.ancestors().skip(1) {
+        push_unique_path(paths, ancestor.to_path_buf());
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn linked_git_read_roots(workspace: &Path) -> Vec<PathBuf> {
     let dot_git = workspace.join(".git");
     let Ok(metadata) = fs::metadata(&dot_git) else {
@@ -214,10 +221,40 @@ fn managed_sandbox_profile(
     for root in linked_git_read_roots(workspace) {
         push_unique_path(&mut readable_roots, root);
     }
-    for root in readable_roots {
+
+    // sandbox-exec evaluates metadata checks for every component traversed on
+    // the way to an allowed leaf. Grant only *literal* rules on those ancestors:
+    // a subpath rule here would expose sibling contents.
+    //
+    // why file-read-data: 메타데이터만으로는 부족하다. Gajae Code 의 네이티브
+    // owner-only 경로 검사(verifyOwnerOnlyPathSecurity)는 심링크 TOCTOU 를 막으려고
+    // `/` 부터 대상까지 경로 컴포넌트를 하나씩 open(O_DIRECTORY) 하며 내려간다.
+    // 디렉터리 open 은 seatbelt 에서 file-read-data 를 요구하는데 조상에 그 권한이
+    // 없어 EPERM → 네이티브가 io_error 를 반환했다. io_error 는 자가치유 대상이
+    // 아니라서(mode_mismatch 만 복구 가능) 세션 스코프 준비가 fail-closed 되고
+    // 프로바이더가 기동 즉시 죽었다. (260803 가재코드 전면 기동 불가 사고)
+    // 경계 영향: literal 이므로 넓어지는 것은 "조상 디렉터리 자체의 항목 이름 열거"
+    // 뿐이다. 형제 파일 내용과 형제 디렉터리 열거는 여전히 차단된다 —
+    // macos_profile_allows_ancestor_metadata_and_sqlite_without_sibling_reads 가 고정한다.
+    let mut traversal_ancestors = Vec::new();
+    for target in &readable_roots {
+        push_unique_ancestor_paths(&mut traversal_ancestors, target);
+    }
+    for target in provider_immutable_roots {
+        push_unique_ancestor_paths(&mut traversal_ancestors, target);
+    }
+    push_unique_ancestor_paths(&mut traversal_ancestors, executable);
+    for ancestor in traversal_ancestors {
+        profile.push_str(&format!(
+            "(allow file-read-metadata file-read-data file-test-existence {})\n",
+            literal_filter(&ancestor)?
+        ));
+    }
+
+    for root in &readable_roots {
         profile.push_str(&format!(
             "(allow file-read* file-test-existence {})\n",
-            subpath_filter(&root)?
+            subpath_filter(root)?
         ));
     }
     for root in provider_readonly_roots {
@@ -243,6 +280,16 @@ fn managed_sandbox_profile(
         "(allow file-write* {})\n",
         subpath_filter(Path::new("/private/tmp"))?
     ));
+    // Hermes execute_code 는 /tmp(→/private/tmp) 아래 유닉스 도메인 소켓으로
+    // 로컬 RPC 서버를 bind 한다(code_execution_tool 의 AF_UNIX 경로 하드코딩).
+    // Seatbelt 에서 UDS bind/accept 는 file-write 와 별개로 network-bind /
+    // network-inbound 권한을 요구해 지금까지 진입 즉시 EPERM 으로 죽었다.
+    // local unix-socket + path-prefix 로 한정해 허용하므로 TCP 리스닝 차단
+    // (외부 유입 경계)은 그대로 유지된다.
+    profile.push_str(
+        "(allow network-bind (local unix-socket (path-prefix \"/private/tmp\")))\n\
+         (allow network-inbound (local unix-socket (path-prefix \"/private/tmp\")))\n",
+    );
     for root in provider_immutable_roots {
         profile.push_str(&format!("(deny file-write* {})\n", subpath_filter(root)?));
     }
@@ -432,6 +479,62 @@ mod tests {
             assert_eq!(
                 ManagedSandboxPermission::parse(legacy),
                 ManagedSandboxPermission::Basic
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_profile_uses_literal_metadata_rules_for_managed_path_ancestors() {
+        let workspace = Path::new("/Users/fixture/workspaces/project");
+        let readonly_roots = vec![PathBuf::from(
+            "/Users/fixture/Library/Application Support/com.atelier.app/providers/hermes/runtime",
+        )];
+        let writable_roots = vec![PathBuf::from(
+            "/Users/fixture/Library/Application Support/com.atelier.app/providers/hermes/home",
+        )];
+        let immutable_roots = vec![PathBuf::from(
+            "/Users/fixture/Library/Application Support/com.atelier.app/providers/hermes/home/.hermes/skills",
+        )];
+        let provider_temp = Path::new(
+            "/Users/fixture/Library/Application Support/com.atelier.app/providers/hermes/tmp",
+        );
+        let executable = Path::new(
+            "/Users/fixture/Library/Application Support/com.atelier.app/providers/hermes/runtime/bin/hermes",
+        );
+
+        let profile = super::managed_sandbox_profile(
+            ManagedSandboxPermission::Basic,
+            workspace,
+            &readonly_roots,
+            &writable_roots,
+            &immutable_roots,
+            provider_temp,
+            executable,
+        )
+        .expect("construct managed sandbox profile");
+
+        for ancestor in [
+            "/Users/fixture/workspaces",
+            "/Users/fixture/Library/Application Support/com.atelier.app/providers",
+            "/Users/fixture/Library/Application Support/com.atelier.app/providers/hermes",
+            "/Users/fixture/Library/Application Support/com.atelier.app/providers/hermes/home/.hermes",
+            "/Users/fixture/Library/Application Support/com.atelier.app/providers/hermes/runtime/bin",
+        ] {
+            assert!(
+                profile.contains(&format!(
+                    "(allow file-read-metadata file-read-data file-test-existence (literal \"{ancestor}\"))"
+                )),
+                "missing literal ancestor traversal rule for {ancestor}"
+            );
+        }
+        for protected_ancestor in [
+            "/Users/fixture/workspaces",
+            "/Users/fixture/Library/Application Support/com.atelier.app/providers",
+        ] {
+            assert!(
+                !profile.contains(&format!("(subpath \"{protected_ancestor}\")")),
+                "ancestor traversal must not grant subtree reads for {protected_ancestor}"
             );
         }
     }
@@ -629,6 +732,81 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
+    fn macos_profile_allows_ancestor_metadata_and_sqlite_without_sibling_reads() {
+        let fixture = ContainmentFixture::new("ancestor-sqlite");
+        let canonical_root =
+            fs::canonicalize(&fixture.root).expect("canonicalize containment fixture root");
+        assert!(
+            fixture
+                .run(
+                    ManagedSandboxPermission::Basic,
+                    "/usr/bin/stat",
+                    &[canonical_root.to_str().expect("fixture root path is UTF-8")],
+                )
+                .success(),
+            "managed paths require literal metadata access on their common ancestor"
+        );
+
+        // why: 관리형 런타임(가재코드 네이티브 등)은 심링크 TOCTOU 방어로 조상 경로를
+        // 컴포넌트마다 open(O_DIRECTORY) 하며 내려간다. 조상 디렉터리를 열 수 없으면
+        // 세션 스코프 준비가 io_error 로 fail-closed 되어 프로바이더가 기동 못 한다.
+        assert!(
+            fixture
+                .run(
+                    ManagedSandboxPermission::Basic,
+                    "/bin/ls",
+                    &[canonical_root.to_str().expect("fixture root path is UTF-8")],
+                )
+                .success(),
+            "managed paths require the traversal ancestor itself to be openable"
+        );
+        // 그 대가로 넓어지는 범위는 조상 '자기 자신'뿐이다. 형제 디렉터리 열거는 여전히 차단.
+        assert!(
+            !fixture
+                .run(
+                    ManagedSandboxPermission::Basic,
+                    "/bin/ls",
+                    &[fixture
+                        .unrelated
+                        .to_str()
+                        .expect("fixture sibling path is UTF-8")],
+                )
+                .success(),
+            "ancestor traversal must not expose sibling directory listings"
+        );
+
+        let database = fixture.state.join("state.db");
+        assert!(
+            fixture
+                .run(
+                    ManagedSandboxPermission::Basic,
+                    "/usr/bin/sqlite3",
+                    &[
+                        database.to_str().expect("fixture database path is UTF-8"),
+                        "PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS probe (value TEXT); INSERT INTO probe VALUES ('ok'); SELECT count(*) FROM probe;",
+                    ],
+                )
+                .success(),
+            "SQLite state must open and write inside the managed provider state root"
+        );
+        assert!(
+            !fixture
+                .run(
+                    ManagedSandboxPermission::Basic,
+                    "/bin/cat",
+                    &[fixture
+                        .unrelated
+                        .join("private.txt")
+                        .to_str()
+                        .expect("fixture sibling path is UTF-8")],
+                )
+                .success(),
+            "ancestor metadata traversal must not expose sibling file contents"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
     fn macos_profile_denies_unrelated_personal_reads_and_preserves_process_execution() {
         let fixture = ContainmentFixture::new("personal-read");
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
@@ -678,6 +856,73 @@ mod tests {
         let _ = listener
             .accept()
             .expect("accept local containment network probe");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_profile_allows_private_tmp_unix_socket_rpc_and_keeps_tcp_listen_denied() {
+        // Hermes execute_code 의 로컬 RPC 패턴 최소재현: /private/tmp 아래
+        // AF_UNIX bind → listen → connect → 왕복이 프로파일 하에서 성공해야
+        // 한다(이 허용이 없으면 bind 가 EPERM 으로 즉사 — 실측 사고 재현).
+        let fixture = ContainmentFixture::new("unix-socket");
+        let socket_path = format!(
+            "/private/tmp/atelier-sbx-uds-{}-{}.sock",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock after unix epoch")
+                .as_nanos()
+        );
+        const UDS_ROUNDTRIP: &str = r#"
+import socket, os, sys
+path = sys.argv[1]
+try:
+    os.unlink(path)
+except FileNotFoundError:
+    pass
+server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+server.bind(path)
+server.listen(1)
+client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+client.connect(path)
+conn, _ = server.accept()
+client.sendall(b"ping")
+assert conn.recv(4) == b"ping"
+conn.close()
+client.close()
+server.close()
+os.unlink(path)
+"#;
+        assert!(
+            fixture
+                .run(
+                    ManagedSandboxPermission::Basic,
+                    "/usr/bin/python3",
+                    &["-c", UDS_ROUNDTRIP, socket_path.as_str()],
+                )
+                .success(),
+            "managed provider must bind and serve a unix-domain RPC socket under /private/tmp"
+        );
+        let _ = fs::remove_file(&socket_path);
+
+        // 유닉스 소켓 한정 허용이 TCP 리스닝(외부 유입 경계)까지 열지 않아야
+        // 한다 — 기존 차단 의도 보존.
+        const TCP_LISTEN: &str = r#"
+import socket
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server.bind(("127.0.0.1", 0))
+server.listen(1)
+"#;
+        assert!(
+            !fixture
+                .run(
+                    ManagedSandboxPermission::Basic,
+                    "/usr/bin/python3",
+                    &["-c", TCP_LISTEN],
+                )
+                .success(),
+            "unix-socket bind allowance must not open TCP listening"
+        );
     }
 
     #[cfg(target_os = "macos")]

@@ -64,12 +64,12 @@ assert(
     css.includes("@media (max-width: 640px)") &&
     css.includes("min-height: 180px") &&
     css.includes("@media (max-height: 600px)") &&
-    css.includes(".atelier-factory-status") &&
     css.includes("display: none !important") &&
     css.includes(".atelier-composer-compact .atelier-composer-hint") &&
     css.includes(".atelier-composer-control-label") &&
     css.includes("grid-template-columns: repeat(auto-fit, minmax(92px, 1fr))") &&
-    css.includes("grid-template-columns: repeat(2, minmax(0, 1fr))"),
+    css.includes("grid-template-columns: repeat(2, minmax(0, 1fr))") &&
+    !source.includes("atelier-factory-status"),
   "composer controls must remain usable while secondary status detail compacts in short windows",
 );
 assert(

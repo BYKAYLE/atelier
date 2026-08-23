@@ -16,6 +16,7 @@ const feature: FeatureModule = {
           { value: "claude", label: { ko: "Claude Code", en: "Claude Code" } },
           { value: "hermes", label: { ko: "Hermes", en: "Hermes" } },
           { value: "gajecode", label: { ko: "Gajae Code", en: "Gajae Code" } },
+          { value: "grok", label: { ko: "Grok Build", en: "Grok Build" } },
         ],
       },
       {

@@ -36,6 +36,11 @@ import {
 import type { StellaFactoryCommand } from "../lib/stellaFactory";
 import { safeLocalStorageGet, safeLocalStorageSet } from "../lib/storage";
 import {
+  presentAgentAnswer,
+  selectTerminalAgentAnswer,
+  unverifiedIntermediateNotice,
+} from "../lib/agentAnswerContract";
+import {
   inferGajaeModelProviderFromModel as inferGajaeProviderFromModel,
   inferHermesModelProviderFromModel as inferHermesProviderFromModel,
   modelForGajaeProvider,
@@ -56,9 +61,14 @@ import { findUrl, isAutoReviewablePreviewUrl, restoreAutoPreviewUrl } from "../l
 import { resolvePreviewVisibilityFallback } from "../lib/previewSessionState";
 import {
   buildTaskPreviewEvidence,
+  createTurnPreviewImpact,
+  noteTurnPreviewImpactEvent,
   previewDiagnosticsMatchPreview,
+  turnAffectedPreview,
+  turnNeedsWorkspaceMutationProbe,
+  workspaceMutationFromChangeSummary,
 } from "../lib/previewEvidence";
-import type { TaskPreviewEvidence } from "../lib/previewEvidence";
+import type { TaskPreviewEvidence, TurnPreviewImpact } from "../lib/previewEvidence";
 import {
   formatReviewAnnotationsPrompt,
   normalizeReviewAnnotations,
@@ -103,6 +113,7 @@ import {
   controlRequestsPending,
   homeDir,
   isTauri,
+  mobileControlSessionsPublish,
   onAgentEvent,
   onAgentLifecycle,
   onManagedAgentRuntimeProgress,
@@ -119,7 +130,6 @@ import {
   searchWorkspaceFiles,
   stellaFactoryAutopilot,
   stellaFactoryBootstrap,
-  stellaFactoryStatus,
   stellaProjectAnalysis,
   stellaRecordEvidence,
   stellaWorkspaceProbe,
@@ -135,6 +145,7 @@ import type {
   AgentQuickOpenIndexEntry,
   AgentRuntimeCapability,
   ManagedAgentRuntimeProgress,
+  MobileControlSessionsPublishInput,
   AgentStreamEvent,
   AgentTokenUsageEvent,
   AgentWorktreeInfo,
@@ -143,7 +154,6 @@ import type {
   PreviewCapability,
   PreviewCheckResult,
   PreviewServiceStatus,
-  StellaFactoryStatusResult,
 } from "../lib/tauri";
 import { cls, Profile, Tweaks } from "../lib/tokens";
 import ComposerSelectMenu from "./ComposerSelectMenu";
@@ -529,6 +539,7 @@ type ComposerUiState = {
   hasText: boolean;
   slashText: string;
   factoryCommand: StellaFactoryCommand | null;
+  restrictedDirectGajaeInput: boolean;
 };
 
 function composerUiStateFromText(rawText: string): ComposerUiState {
@@ -537,13 +548,15 @@ function composerUiStateFromText(rawText: string): ComposerUiState {
     hasText: rawText.trim().length > 0,
     slashText,
     factoryCommand: activeFactoryCommandFromText(rawText),
+    restrictedDirectGajaeInput: isRestrictedDirectGajaeCliInput(rawText),
   };
 }
 
 function sameComposerUiState(left: ComposerUiState, right: ComposerUiState): boolean {
   return left.hasText === right.hasText
     && left.slashText === right.slashText
-    && left.factoryCommand === right.factoryCommand;
+    && left.factoryCommand === right.factoryCommand
+    && left.restrictedDirectGajaeInput === right.restrictedDirectGajaeInput;
 }
 
 type ChatAttachment = {
@@ -570,6 +583,8 @@ interface ChatMessage {
   activities?: AgentActivity[];
   attachments?: ChatAttachment[];
   rawEvents?: string[];
+  intermediateDraft?: string;
+  unverifiedIntermediate?: boolean;
   lifecyclePhase?: AgentLifecyclePhase;
   worktree?: AgentWorktreeInfo;
   previewEvidence?: TaskPreviewEvidence;
@@ -577,18 +592,24 @@ interface ChatMessage {
   reviewWorkflow?: ChangeReviewWorkflowState;
 }
 
-const ORPHANED_RUN_TEXT = "이전 실행이 중단되어 응답을 완료하지 못했습니다.";
+function preserveIntermediateDraft(
+  message: ChatMessage,
+  terminalText: string,
+): string | undefined {
+  const draft = message.text.trim();
+  if (!draft || draft === terminalText.trim()) return message.intermediateDraft;
+  return message.intermediateDraft || message.text;
+}
 
 function finalizeOrphanedStreamingMessages(messages: ChatMessage[]) {
   let changed = false;
   const next = messages.map((message) => {
     if (message.role !== "assistant" || message.status !== "streaming") return message;
     changed = true;
-    const text = cleanAgentText(message.text);
     return {
       ...message,
-      text: text || ORPHANED_RUN_TEXT,
-      status: text ? ("done" as const) : ("error" as const),
+      status: "error" as const,
+      unverifiedIntermediate: true,
       activities: message.activities?.map((activity) => ({ ...activity, active: false })),
     };
   });
@@ -639,6 +660,8 @@ type SmoothRevealState = {
 
 interface AgentSession {
   id: string;
+  /** Stable opaque identity used only to bind a paired mobile task to this session. */
+  mobileTaskId: string;
   title: string;
   titleEdited?: boolean;
   provider: AgentProvider;
@@ -699,6 +722,36 @@ const PREVIEW_KEY = "atelier.agent.preview.url.v1";
 const PREVIEW_VISIBLE_KEY = "atelier.agent.preview.visible.v1";
 const PREVIEW_VP_KEY = "atelier.agent.preview.viewport.v1";
 const PREVIEW_WIDTH_KEY = "atelier.agent.preview.width.v1";
+const MOBILE_CONTINUITY_MAX_SESSIONS = 24;
+const MOBILE_CONTINUITY_MAX_MESSAGES = 60;
+// Keep this aligned with Rust's mobile_continuity::MAX_TEXT_CHARS guard.
+const MOBILE_CONTINUITY_MAX_MESSAGE_TEXT_CHARS = 12_000;
+const MOBILE_CONTINUITY_PUBLISH_DEBOUNCE_MS = 300;
+const MOBILE_CONTINUITY_HEARTBEAT_MS = 5_000;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isUuid(value: unknown): value is string {
+  return typeof value === "string" && UUID_PATTERN.test(value);
+}
+
+function createMobileTaskId(): string {
+  const cryptoApi = globalThis.crypto;
+  if (typeof cryptoApi?.randomUUID === "function") return cryptoApi.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (typeof cryptoApi?.getRandomValues === "function") {
+    cryptoApi.getRandomValues(bytes);
+  } else {
+    // The opaque task id is still protected by the paired-device bearer token.
+    // This fallback keeps legacy/degraded webviews from discarding stored work.
+    for (let index = 0; index < bytes.length; index += 1) {
+      bytes[index] = Math.floor(Math.random() * 256);
+    }
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 const PREVIEW_SERVICE_COMMAND_KEY = "atelier.agent.preview.service.command.v1";
 const DEV_SCREEN_VISIBLE_KEY = "atelier.agent.devscreen.visible.v1";
 const DEV_SCREEN_HOST_KEY = "atelier.agent.devscreen.host.v1";
@@ -735,6 +788,126 @@ const MAX_COMPACT_AGENT_CONTEXT_MESSAGES = 8;
 const STREAM_FLUSH_MS = 70;
 const FINAL_ONLY_WORKSPACE_STREAMING = true;
 const CHANGE_BASELINE_TIMEOUT_MS = 650;
+// 종료된 턴의 지각 이벤트로 프리뷰 영향 신호 맵이 무한히 자라지 않게 상한을 둔다.
+const MAX_TRACKED_TURN_IMPACTS = 32;
+
+function mobileContinuityStatus(
+  session: AgentSession,
+  isBusy: boolean,
+): MobileControlSessionsPublishInput["sessions"][number]["status"] {
+  const messages = Array.isArray(session.messages) ? session.messages : [];
+  const latestMessage = messages[messages.length - 1];
+  if (isBusy && latestMessage?.lifecyclePhase === "waiting_for_user") return "waiting";
+  if (isBusy || latestMessage?.status === "streaming") return "running";
+  if ((session.queuedTurns?.length || 0) > 0 || latestMessage?.status === "queued") return "queued";
+  if (latestMessage?.role === "assistant" && latestMessage.status === "error") return "failed";
+  if (latestMessage?.role === "assistant" && latestMessage.status === "done") return "completed";
+  return "idle";
+}
+
+function mobileContinuityPublishInput(
+  sessions: AgentSession[],
+  activeSessionId: string | null,
+  busyTurnIdsBySession: Record<string, string | undefined>,
+): MobileControlSessionsPublishInput {
+  // Mobile continuity has no full-permission execution contract. Excluding it
+  // keeps one desktop-only session from rejecting the entire native snapshot.
+  const publishableSessions = sessions.filter(
+    (session) => session.permissionMode !== "full",
+  );
+  const activeSession = activeSessionId
+    ? publishableSessions.find((session) => session.id === activeSessionId) || null
+    : null;
+  const recentSessions = [...publishableSessions]
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .filter((session) => session.id !== activeSession?.id)
+    .slice(0, MOBILE_CONTINUITY_MAX_SESSIONS - (activeSession ? 1 : 0));
+  return {
+    activeSessionId: activeSession?.id || null,
+    sessions: (activeSession ? [activeSession, ...recentSessions] : recentSessions)
+      .map((session) => ({
+        sessionId: session.id,
+        mobileTaskId: session.mobileTaskId,
+        title: session.title,
+        provider: session.provider,
+        model: session.model,
+        workspace: session.cwd,
+        permissionMode: normalizePermissionMode(session.permissionMode),
+        status: mobileContinuityStatus(session, Boolean(busyTurnIdsBySession[session.id])),
+        updatedAtMs: session.updatedAt,
+        messages: (Array.isArray(session.messages) ? session.messages : [])
+          .filter((message): message is ChatMessage & { role: "user" | "assistant" } =>
+            Boolean(
+              message
+              && (message.role === "user" || message.role === "assistant")
+              && typeof message.text === "string"
+              && message.text.trim().length > 0,
+            ),
+          )
+          .slice(-MOBILE_CONTINUITY_MAX_MESSAGES)
+          .map((message) => ({
+            messageId: message.id,
+            role: message.role,
+            text: message.text.slice(0, MOBILE_CONTINUITY_MAX_MESSAGE_TEXT_CHARS),
+            createdAtMs: message.createdAt,
+            ...(message.status ? { status: message.status } : {}),
+          })),
+      })),
+  };
+}
+
+interface MobileContinuityDispatchPayload {
+  mobileContinuity: true;
+  targetSessionId: string;
+  mobileTaskId: string;
+  revision: number;
+  prompt: string;
+  expectedWorkspace: string;
+  expectedProvider: string;
+  expectedModel: string;
+  expectedPermissionMode: string;
+  clientRequestId: string;
+}
+
+function parseMobileContinuityDispatchPayload(
+  payload: Record<string, unknown>,
+): MobileContinuityDispatchPayload | null {
+  if (payload.mobileContinuity !== true) return null;
+  const targetSessionId = payload.targetSessionId;
+  const mobileTaskId = payload.mobileTaskId;
+  const revision = payload.revision;
+  const prompt = payload.prompt;
+  const expectedWorkspace = payload.expectedWorkspace;
+  const expectedProvider = payload.expectedProvider;
+  const expectedModel = payload.expectedModel;
+  const expectedPermissionMode = payload.expectedPermissionMode;
+  const clientRequestId = payload.clientRequestId;
+  if (
+    typeof targetSessionId !== "string"
+    || typeof mobileTaskId !== "string"
+    || typeof revision !== "number"
+    || typeof prompt !== "string"
+    || typeof expectedWorkspace !== "string"
+    || typeof expectedProvider !== "string"
+    || typeof expectedModel !== "string"
+    || typeof expectedPermissionMode !== "string"
+    || typeof clientRequestId !== "string"
+  ) return null;
+  if (!isUuid(mobileTaskId) || !targetSessionId.trim() || !prompt.trim()) return null;
+  if (!Number.isInteger(revision) || revision < 0) return null;
+  return {
+    mobileContinuity: true,
+    targetSessionId,
+    mobileTaskId,
+    revision,
+    prompt,
+    expectedWorkspace,
+    expectedProvider,
+    expectedModel,
+    expectedPermissionMode,
+    clientRequestId,
+  };
+}
 const SMOOTH_OUTPUT_FPS = 30;
 const SMOOTH_FRAME_MS = 1000 / SMOOTH_OUTPUT_FPS;
 const SMOOTH_BACKGROUND_CATCH_UP_MS = 900;
@@ -1335,6 +1508,15 @@ const PROVIDERS: ProviderMeta[] = [
     newTitleKo: "새 가재코드 작업",
     newTitleEn: "New Gajae Code workspace",
   },
+  {
+    id: "grok",
+    label: "Grok Build",
+    short: "Gk",
+    defaultModel: "grok-4.6",
+    dot: "#111111",
+    newTitleKo: "새 Grok 작업",
+    newTitleEn: "New Grok workspace",
+  },
 ];
 
 const CLAUDE_MODELS: ModelOption[] = [
@@ -1375,10 +1557,26 @@ const GAJECODE_MODELS: ModelOption[] = [
   { value: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
 ];
 
+const GROK_MODELS: ModelOption[] = [
+  { value: "grok-4.6", label: "Grok 4.6" },
+  { value: "grok-4.5", label: "Grok 4.5" },
+];
+
 const GAJECODE_ALIBABA_MODELS: ModelOption[] = [
   { value: "alibaba-token-plan/qwen3.8-max-preview", label: "Qwen 3.8 Max Preview" },
   { value: "alibaba-token-plan/glm-5.2", label: "GLM 5.2" },
 ];
+
+const GROK_API_MODELS: ModelOption[] = [
+  { value: "grok-4.5", label: "Grok 4.5" },
+  { value: "grok-4.5-latest", label: "Grok 4.5 Latest" },
+  { value: "grok-build-latest", label: "Grok Build Latest" },
+];
+
+const GAJECODE_GROK_MODELS: ModelOption[] = GROK_API_MODELS.map((option) => ({
+  ...option,
+  value: `xai/${option.value}`,
+}));
 
 function gajecodeModelOptions(
   provider: GajaeInferenceProvider,
@@ -1387,6 +1585,7 @@ function gajecodeModelOptions(
 ): ModelOption[] {
   if (provider === "claude") return claudeModels.length > 0 ? claudeModels : GAJECODE_MODELS;
   if (provider === "alibaba") return GAJECODE_ALIBABA_MODELS;
+  if (provider === "grok") return GAJECODE_GROK_MODELS;
   return (codexModels.length > 0 ? codexModels : CODEX_MODELS).map((option) => ({
     ...option,
     value: `codex/${option.value}`,
@@ -1398,6 +1597,7 @@ const MODEL_OPTIONS: Record<AgentProvider, ModelOption[]> = {
   hermes: OPENAI_CODEX_MODELS,
   codex: CODEX_MODELS,
   gajecode: GAJECODE_MODELS,
+  grok: GROK_MODELS,
 };
 
 const HERMES_PROVIDERS: Array<{ value: HermesInferenceProvider; label: string }> = [
@@ -1405,12 +1605,14 @@ const HERMES_PROVIDERS: Array<{ value: HermesInferenceProvider; label: string }>
   { value: "anthropic", label: "Claude" },
   { value: "openrouter", label: "OpenRouter" },
   { value: "alibaba", label: "Alibaba Cloud" },
+  { value: "grok", label: "Grok" },
 ];
 
 const GAJECODE_PROVIDERS: Array<{ value: GajaeInferenceProvider; label: string }> = [
   { value: "claude", label: "Claude" },
   { value: "codex", label: "Codex" },
   { value: "alibaba", label: "Alibaba Cloud" },
+  { value: "grok", label: "Grok" },
 ];
 
 const HERMES_MODEL_OPTIONS: Record<HermesInferenceProvider, ModelOption[]> = {
@@ -1418,6 +1620,7 @@ const HERMES_MODEL_OPTIONS: Record<HermesInferenceProvider, ModelOption[]> = {
   anthropic: CLAUDE_MODELS,
   openrouter: OPENROUTER_MODELS,
   alibaba: ALIBABA_TOKEN_PLAN_MODELS,
+  grok: GROK_API_MODELS,
 };
 
 const CODEX_EFFORTS: Array<{ value: CodexEffort; ko: string; en: string }> = [
@@ -1427,6 +1630,13 @@ const CODEX_EFFORTS: Array<{ value: CodexEffort; ko: string; en: string }> = [
   { value: "xhigh", ko: "매우 높음", en: "Very high" },
   { value: "ultra", ko: "울트라 코드", en: "Ultra Code" },
 ];
+
+const GROK_API_EFFORTS = CODEX_EFFORTS.filter((option) =>
+  option.value === "low" || option.value === "medium" || option.value === "high");
+
+function coerceGrokApiEffort(value: WorkloadLevel): CodexEffort {
+  return value === "low" || value === "medium" ? value : "high";
+}
 
 const OPENROUTER_EFFORTS: Array<{ value: OpenRouterEffort; ko: string; en: string }> = [
   { value: "none", ko: "추론 끔", en: "Reasoning off" },
@@ -1477,7 +1687,7 @@ const PERMISSION_MODES: Array<{
 ];
 
 const isProvider = (value: unknown): value is AgentProvider =>
-  value === "claude" || value === "hermes" || value === "codex" || value === "gajecode";
+  value === "claude" || value === "hermes" || value === "codex" || value === "gajecode" || value === "grok";
 
 const normalizeSessionProvider = (value: unknown): AgentProvider => {
   if (isProvider(value)) return value;
@@ -1488,14 +1698,15 @@ const normalizeSessionProvider = (value: unknown): AgentProvider => {
     return "gajecode";
   }
   if (normalized === "가재코드") return "gajecode";
+  if (normalized === "grok" || normalized === "grok-build" || normalized === "xai") return "grok";
   return DEFAULT_PROVIDER;
 };
 
 const isHermesProvider = (value: unknown): value is HermesInferenceProvider =>
-  value === "openai-codex" || value === "anthropic" || value === "openrouter" || value === "alibaba";
+  value === "openai-codex" || value === "anthropic" || value === "openrouter" || value === "alibaba" || value === "grok";
 
 const isGajaeProvider = (value: unknown): value is GajaeInferenceProvider =>
-  value === "claude" || value === "codex" || value === "alibaba";
+  value === "claude" || value === "codex" || value === "alibaba" || value === "grok";
 
 const isCodexEffort = (value: unknown): value is CodexEffort =>
   value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "ultra";
@@ -1551,6 +1762,15 @@ function managedAgentPermissionDisabledReason(
         ? "Hermes 관리 작업은 Atelier가 지원하는 macOS 격리 런타임이 필요합니다."
         : "Hermes 실행 또는 인증 준비를 복구해야 합니다. 설정 > 연결 > Hermes에서 설치·복구를 실행하세요.";
   }
+  if (provider === "grok") {
+    return language === "en"
+      ? unsupportedPlatform
+        ? "Grok managed tasks require Atelier's verified macOS isolated runtime."
+        : "Grok needs runtime or authentication repair. Open Settings > Connections > Grok and run Install/repair."
+      : unsupportedPlatform
+        ? "Grok 관리 작업은 Atelier가 검증한 macOS 격리 런타임이 필요합니다."
+        : "Grok 실행 또는 인증 준비를 복구해야 합니다. 설정 > 연결 > Grok에서 설치·복구를 실행하세요.";
+  }
   return capability.managed_agent_send_disabled_reason
     || (language === "en"
       ? `${providerMeta(provider).label} managed agent execution is unavailable.`
@@ -1573,7 +1793,7 @@ function runtimeCapabilityObservationNotice(
   capabilityError: string | null,
   language: Tweaks["language"],
 ) {
-  if (!capabilityError || (provider !== "hermes" && provider !== "gajecode")) return null;
+  if (!capabilityError || (provider !== "hermes" && provider !== "gajecode" && provider !== "grok")) return null;
   return language === "en"
     ? "Atelier could not refresh runtime readiness. You can still send the task; if preparation fails, use Install/repair in Settings > Connections."
     : "실행 준비 상태를 새로 확인하지 못했습니다. 작업은 계속 보낼 수 있으며, 준비가 실패하면 설정 > 연결에서 설치·복구를 실행하세요.";
@@ -1585,7 +1805,7 @@ function actionableManagedAgentFailure(
   language: Tweaks["language"],
 ) {
   const raw = cleanAgentText(String(error instanceof Error ? error.message : error)).replace(/^Error:\s*/i, "");
-  if (provider !== "hermes" && provider !== "gajecode") return raw;
+  if (provider !== "hermes" && provider !== "gajecode" && provider !== "grok") return raw;
   const lower = raw.toLowerCase();
   const authenticationFailure = /\b401\b|\b403\b|unauthori[sz]ed|authentication|invalid credentials?|api[-_\s]?key|oauth|refresh token|log(?:ged)? in|sign in/.test(lower);
   if (authenticationFailure) {
@@ -1595,28 +1815,16 @@ function actionableManagedAgentFailure(
   }
   const runtimeFailure = /managed runtime|runtime readiness|bootstrap|installer|isolated skill|readiness receipt|provenance|executable is missing|runtime preparation/.test(lower);
   if (runtimeFailure) {
-    const agent = provider === "gajecode" ? (language === "en" ? "Gajae Code" : "가재코드") : "Hermes";
+    const agent = provider === "gajecode"
+      ? (language === "en" ? "Gajae Code" : "가재코드")
+      : provider === "grok"
+        ? "Grok"
+        : "Hermes";
     return language === "en"
       ? `${agent} automatic preparation failed. Open Settings > Connections > ${agent}, run Install/repair, then send the task again.`
       : `${agent} 자동 준비에 실패했습니다. 설정 > 연결 > ${agent}에서 설치·복구를 실행한 뒤 작업을 다시 보내세요.`;
   }
   return raw;
-}
-
-function managedRuntimeProgressLabel(
-  progress: ManagedAgentRuntimeProgress | undefined,
-  language: Tweaks["language"],
-) {
-  if (!progress) return "";
-  const labels: Record<ManagedAgentRuntimeProgress["state"], { ko: string; en: string }> = {
-    checking: { ko: "격리 실행환경 확인 중…", en: "Checking isolated runtime…" },
-    installing: { ko: "고정 버전 런타임 설치 중…", en: "Installing pinned runtime…" },
-    bootstrapping_skills: { ko: "전용 기본 스킬 준비 중…", en: "Preparing isolated default skills…" },
-    verifying: { ko: "런타임·스킬 검증 중…", en: "Verifying runtime and skills…" },
-    ready: { ko: "런타임·기본 스킬 준비 완료", en: "Runtime and default skills ready" },
-    failed: { ko: "자동 준비에 확인 필요", en: "Automatic preparation needs attention" },
-  };
-  return labels[progress.state]?.[language] || progress.message;
 }
 
 function isRestrictedDirectGajaeCliInput(rawText: string) {
@@ -1642,6 +1850,7 @@ function providerFromProfile(profile: Profile): AgentProvider | null {
   if (first.includes("hermes")) return "hermes";
   if (first.includes("codex")) return "codex";
   if (first === "gjc" || first === "gajae-code" || first === "cmdc" || first === "command-code" || (first === "cmd" && /가재|gajae|command code/i.test(profile.name))) return "gajecode";
+  if (first === "grok" || /grok build|xai/i.test(profile.name)) return "grok";
   return null;
 }
 
@@ -1649,6 +1858,7 @@ function defaultHermesModel(hermesProvider: HermesInferenceProvider) {
   if (hermesProvider === "anthropic") return CLAUDE_MODELS[0].value;
   if (hermesProvider === "openrouter") return "openai/gpt-5.5";
   if (hermesProvider === "alibaba") return "qwen3.8-max-preview";
+  if (hermesProvider === "grok") return "grok-4.5";
   return "gpt-5.5";
 }
 
@@ -1669,6 +1879,7 @@ function subscriptionProviderForSession(
 function defaultGajaeModel(provider: GajaeInferenceProvider) {
   if (provider === "codex") return "codex/gpt-5.5";
   if (provider === "alibaba") return GAJECODE_ALIBABA_MODELS[0].value;
+  if (provider === "grok") return GAJECODE_GROK_MODELS[0].value;
   return "claude-opus-4-8";
 }
 
@@ -1697,6 +1908,8 @@ function modelOptionsFor(
           ? liveClaudeModels
           : provider === "gajecode"
             ? gajecodeModelOptions(inferGajaeProviderFromModel(selected), liveClaudeModels, liveCodexModels)
+            : provider === "grok"
+              ? GROK_MODELS
             : MODEL_OPTIONS[provider] || [];
   const trimmed = selected?.trim();
   if (!trimmed || options.some((option) => option.value === trimmed)) return options;
@@ -1880,7 +2093,7 @@ function workloadDirectiveForPrompt(workload: WorkloadLevel, language: Tweaks["l
 
 function formatWorkloadAgentPrompt(prompt: string, workload: WorkloadLevel, language: Tweaks["language"], provider: AgentProvider) {
   // Codex receives normal levels through native model_reasoning_effort. Ultra Code needs an explicit app-level directive too.
-  if (provider === "codex" && workload !== "ultra") return prompt;
+  if ((provider === "codex" || provider === "grok") && workload !== "ultra") return prompt;
   return `${workloadDirectiveForPrompt(workload, language)}\n\n${prompt}`;
 }
 
@@ -2397,6 +2610,11 @@ function normalizeHermesModel(hermesProvider: HermesInferenceProvider, model?: s
       ? candidate
       : defaultHermesModel(hermesProvider);
   }
+  if (hermesProvider === "grok") {
+    return GROK_API_MODELS.some((option) => option.value === trimmed)
+      ? trimmed
+      : defaultHermesModel(hermesProvider);
+  }
   if (hermesProvider === "openrouter") {
     if (/^gpt-5\.(?:2|3-codex|4|4-mini)$/.test(trimmed)) return "openai/gpt-5.5";
     const legacy: Record<string, string> = {
@@ -2476,6 +2694,9 @@ function compactMessageForPersistence(message: ChatMessage, textLimit = MAX_PERS
   return {
     ...message,
     text: compactTextForPersistence(message.text, textLimit),
+    intermediateDraft: message.intermediateDraft
+      ? compactTextForPersistence(message.intermediateDraft, textLimit)
+      : undefined,
     changes: compactChangeSummaryForPersistence(message.changes),
     reviewAnnotations: Array.isArray(message.reviewAnnotations)
       ? normalizeReviewAnnotations(message.reviewAnnotations).slice(-MAX_PERSISTED_REVIEW_ANNOTATIONS)
@@ -2564,6 +2785,7 @@ function loadSessions(): AgentSession[] {
           : normalizeStellaOntologyMode(session.stellaOntologyMode, provider);
         return {
           id: session.id || nowId("agent"),
+          mobileTaskId: isUuid(session.mobileTaskId) ? session.mobileTaskId : createMobileTaskId(),
           title: session.title || meta.newTitleKo,
           titleEdited: Boolean(session.titleEdited),
           provider,
@@ -2850,7 +3072,14 @@ function improveReadableMarkdown(text: string) {
 
 function cleanAgentDelta(text?: string | null) {
   if (!text) return "";
-  return collapseDumpyText(stripAnsi(text).replace(/\r\n?/g, "\n"));
+  // A delta is only one fragment of the response. ANSI and CRLF sequences can
+  // both straddle fragment/flush boundaries, so preserve it byte-for-byte
+  // until the accumulated display value is available.
+  return text;
+}
+
+function normalizeAgentDisplayText(text: string) {
+  return stripAnsi(text).replace(/\r\n?/g, "\n");
 }
 
 function terminalIssueFromEvent(event: AgentStreamEvent) {
@@ -3217,7 +3446,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   const dark = tw.dark;
   const [sessions, setSessions] = useState<AgentSession[]>(() => loadSessions());
   const [activeId, setActiveId] = useState<string | null>(() => safeLocalStorageGet(ACTIVE_KEY));
-  const [input, setInput] = useState("");
   const [composerUi, setComposerUi] = useState<ComposerUiState>(() => composerUiStateFromText(""));
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
   const [pasteError, setPasteError] = useState<string | null>(null);
@@ -3290,9 +3518,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   const [devScreenElementSelection, setDevScreenElementSelection] = useState<DevScreenElementSelection | null>(null);
   const [devScreenSelectionAttached, setDevScreenSelectionAttached] = useState(false);
   const [devScreenPickerError, setDevScreenPickerError] = useState<string | null>(null);
-  const [factoryStatus, setFactoryStatus] = useState<StellaFactoryStatusResult | null>(null);
-  const [factoryStatusLoading, setFactoryStatusLoading] = useState(false);
-  const [factoryStatusError, setFactoryStatusError] = useState<string | null>(null);
   const [previewWidth, setPreviewWidth] = useState(() =>
     clampNumber(Number(safeLocalStorageGet(PREVIEW_WIDTH_KEY)) || 430, 320, 760),
   );
@@ -3447,6 +3672,21 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
           supports_managed_agent_send: true,
           managed_agent_send_disabled_reason: null,
         },
+        {
+          id: "grok",
+          label: "Grok Build",
+          cli: "grok",
+          auth_owner: "grok_cli_or_xai_api_key",
+          adapter_provider: "grok",
+          execution_controller: "atelier_macos_sandbox_exec+grok_seatbelt",
+          skill_owner: "grok_isolated_home",
+          automatic_online_runtime_bootstrap: true,
+          supports_resume: true,
+          supports_model_catalog: false,
+          supports_permission_mode: true,
+          supports_managed_agent_send: true,
+          managed_agent_send_disabled_reason: null,
+        },
       ]);
       setRuntimeCapabilityError(null);
       return;
@@ -3503,6 +3743,29 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     turnTerminationIntent,
     clearTurnIntent,
   } = useSessionRunRegistry();
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    const publish = () => {
+      if (disposed) return;
+      try {
+        const input = mobileContinuityPublishInput(sessions, activeId, busyTurnIdsBySession);
+        void mobileControlSessionsPublish(input)
+          .catch((error) => console.warn("mobile continuity session publish failed", error));
+      } catch (error) {
+        console.warn("mobile continuity session projection failed", error);
+      }
+    };
+    const debounceTimer = window.setTimeout(publish, MOBILE_CONTINUITY_PUBLISH_DEBOUNCE_MS);
+    const heartbeatTimer = window.setInterval(publish, MOBILE_CONTINUITY_HEARTBEAT_MS);
+    return () => {
+      disposed = true;
+      window.clearTimeout(debounceTimer);
+      window.clearInterval(heartbeatTimer);
+    };
+  }, [activeId, busyTurnIdsBySession, sessions]);
+
   const [visibleTextById, setVisibleTextById] = useState<Record<string, string>>({});
   const [reviewOpenById, setReviewOpenById] = useState<Record<string, boolean>>({});
   const [expandedDiffByKey, setExpandedDiffByKey] = useState<Record<string, boolean>>({});
@@ -3522,7 +3785,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   const [editingTitle, setEditingTitle] = useState("");
   const [slashSelection, setSlashSelection] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
-  const inputDraftRef = useRef(input);
+  const inputDraftRef = useRef("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const slashMenuPopoverRef = useRef<HTMLDivElement | null>(null);
   const skipRenameCommitRef = useRef(false);
@@ -3536,6 +3799,13 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   const smoothFrameRef = useRef<number | null>(null);
   const smoothLastTickRef = useRef(0);
   const lastActivityPulseRef = useRef<Record<string, { key: string; at: number }>>({});
+  // 이번 턴이 워크스페이스/프리뷰를 건드렸는지 스트림에서 직접 누적한다.
+  // 프리뷰 검증 카드는 이 신호가 "영향 있음"일 때만 붙는다.
+  const turnPreviewImpactRef = useRef<Record<string, TurnPreviewImpact>>({});
+  // 스트림으로 관측이 안 되는 레인(가재코드·Hermes) 전용 실측 baseline id.
+  // "변경 검토" 버튼이 쥔 baseline 과 반드시 다른 id 여야 한다 — agent_change_summary 가
+  // 넘긴 id 를 소비하므로, 같은 id 를 쓰면 사용자의 변경 검토가 죽는다.
+  const turnPreviewProbeBaselineRef = useRef<Record<string, string>>({});
   const scrollFrameRef = useRef<number | null>(null);
   const inputRevealPauseUntilRef = useRef(0);
   const persistSessionsTimerRef = useRef<number | null>(null);
@@ -3558,7 +3828,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     const el = inputRef.current;
     if (el && el.value !== next) el.value = next;
     setComposerUi(composerUiStateFromText(next));
-    setInput(next);
   };
 
   const persistSessionsNow = (next: AgentSession[] = sessionsRef.current) => {
@@ -3695,19 +3964,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         stopHint: "A running turn finishes through the selected CLI; terminal fallback remains available.",
         stoppedResponse: "Run stopped by the user.",
         stopFailed: (message: string) => `Stop failed: ${message}`,
-        draftHint: "You can keep typing the next message while this turn runs.",
         noMessages: "Start a structured agent session. Messages and raw events are saved locally.",
         events: "Events",
         emptyEvents: "No stream events yet.",
         renameHint: "Double-click to rename",
         agentLabel: "Agent",
         providerLabel: "Model provider",
-        executionLabel: "Execution",
-        skillsLabel: "Skills",
-        runtimeAutomaticPreparation:
-          "Atelier automatically prepares its pinned isolated runtime and adapter-owned default skills on first use. No separate skill install is required.",
-        runtimeSupportedMacPreparation:
-          "Atelier prepares this pinned isolated runtime and its default skills automatically on a supported Mac.",
         modelLabel: "Model",
         workloadLabel: "Workload",
         permissionLabel: "Permission",
@@ -3775,8 +4037,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         reviewingChanges: "Checking changes",
         noChanges: "No file changes in this run.",
         logs: "Logs",
-        showLogs: "Show logs",
-        hideLogs: "Hide logs",
+        showLogs: "Show raw logs",
+        hideLogs: "Hide raw logs",
         undo: "Undo",
         review: "Review",
         expandAll: "Expand",
@@ -3913,19 +4175,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         stopHint: "실행 중인 턴은 선택한 CLI가 끝낼 때 완료됩니다. 터미널은 보조 화면으로 남겨둡니다.",
         stoppedResponse: "사용자가 실행을 중지했습니다.",
         stopFailed: (message: string) => `중지 실패: ${message}`,
-        draftHint: "실행 중에도 다음 메시지를 계속 입력할 수 있습니다.",
         noMessages: "구조화된 에이전트 세션을 시작하세요. 메시지와 원본 이벤트가 로컬에 저장됩니다.",
         events: "이벤트",
         emptyEvents: "아직 스트림 이벤트가 없습니다.",
         renameHint: "더블클릭해 이름 변경",
         agentLabel: "에이전트",
         providerLabel: "모델 공급자",
-        executionLabel: "실행",
-        skillsLabel: "스킬",
-        runtimeAutomaticPreparation:
-          "Atelier가 첫 사용 시 고정 버전 격리 런타임과 어댑터 전용 기본 스킬을 자동 준비합니다. 별도 스킬 설치는 필요 없습니다.",
-        runtimeSupportedMacPreparation:
-          "지원되는 Mac에서는 Atelier가 고정 버전 격리 런타임과 기본 스킬을 자동 준비합니다.",
         modelLabel: "모델",
         workloadLabel: "작업량",
         permissionLabel: "권한",
@@ -3993,8 +4248,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         reviewingChanges: "변경 확인 중",
         noChanges: "이번 실행에서 변경된 파일이 없습니다.",
         logs: "로그",
-        showLogs: "로그 보기",
-        hideLogs: "로그 숨기기",
+        showLogs: "원본 로그 보기",
+        hideLogs: "원본 로그 숨기기",
         undo: "실행 취소",
         review: "리뷰",
         expandAll: "펼치기",
@@ -4138,50 +4393,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   const busyTurnId: string | null = active ? busyTurnIdsBySession[active.id] || null : null;
   const isStoppingActiveTurn = Boolean(busyTurnId && stoppingTurnId === busyTurnId);
 
-  const refreshFactoryStatus = async () => {
-    if (!isTauri() || !cwd.trim()) {
-      setFactoryStatus(null);
-      setFactoryStatusError(null);
-      setFactoryStatusLoading(false);
-      return;
-    }
-    setFactoryStatusLoading(true);
-    setFactoryStatusError(null);
-    try {
-      const status = await stellaFactoryStatus(cwd);
-      setFactoryStatus(status);
-    } catch (err) {
-      setFactoryStatusError(String(err instanceof Error ? err.message : err));
-    } finally {
-      setFactoryStatusLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!isTauri() || !cwd.trim()) {
-      setFactoryStatus(null);
-      setFactoryStatusError(null);
-      setFactoryStatusLoading(false);
-      return;
-    }
-    setFactoryStatusLoading(true);
-    setFactoryStatusError(null);
-    stellaFactoryStatus(cwd)
-      .then((status) => {
-        if (!cancelled) setFactoryStatus(status);
-      })
-      .catch((err) => {
-        if (!cancelled) setFactoryStatusError(String(err instanceof Error ? err.message : err));
-      })
-      .finally(() => {
-        if (!cancelled) setFactoryStatusLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [cwd, active?.id]);
-
   // 작업탭마다 프리뷰 상태가 독립적이도록 활성 세션의 값으로 로컬 상태를 hydrate.
   // 프리뷰 표시 여부는 사용자가 직접 켠 경우에만 복원한다.
   const previewHydratedSessionIdRef = useRef<string | null>(null);
@@ -4324,7 +4535,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     ? normalizeHermesModel(activeHermesProvider, rawActiveModel)
     : normalizeModel(activeProvider, rawActiveModel);
   const activeModelOptions = modelOptionsFor(activeProvider, normalizedActiveModel, activeHermesProvider, claudeRuntimeModels, codexRuntimeModels, openRouterRuntimeModels);
-  const activeModel = (activeProvider === "claude" || activeProvider === "codex" || activeProvider === "gajecode" || (activeProvider === "hermes" && isHermesProvider(activeHermesProvider)))
+  const activeModel = (activeProvider === "claude" || activeProvider === "codex" || activeProvider === "gajecode" || activeProvider === "grok" || (activeProvider === "hermes" && isHermesProvider(activeHermesProvider)))
     ? coerceModelToOptions(normalizedActiveModel, activeModelOptions)
     : normalizedActiveModel;
   const activeModelLabel = labelForOption(activeModelOptions, activeModel);
@@ -4346,6 +4557,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   const activeWorkload = normalizeWorkloadLevel(active?.codexEffort);
   const activeOpenRouterModel = activeProvider === "hermes" && activeHermesProvider === "openrouter";
   const activeGajaeAlibabaModel = activeProvider === "gajecode" && activeGajaeProvider === "alibaba";
+  const activeHermesGrokModel = activeProvider === "hermes" && activeHermesProvider === "grok";
+  const activeGajaeGrokModel = activeProvider === "gajecode" && activeGajaeProvider === "grok";
   const activeOpenRouterEffortOptions = activeOpenRouterModel
     ? openRouterEffortOptions(activeModel, activeModelOptions)
     : [];
@@ -4356,11 +4569,15 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     ? activeOpenRouterEffortOptions
     : activeGajaeAlibabaModel
       ? gajecodeAlibabaEffortOptions(activeModel)
+      : activeHermesGrokModel || activeGajaeGrokModel
+        ? GROK_API_EFFORTS
       : CODEX_EFFORTS;
   const activeWorkloadValue: WorkloadLevel = activeOpenRouterModel
     ? activeOpenRouterEffort || activeWorkload
     : activeGajaeAlibabaModel
       ? coerceGajaeAlibabaEffort(activeWorkload, activeModel)
+      : activeHermesGrokModel || activeGajaeGrokModel
+        ? coerceGrokApiEffort(activeWorkload)
       : activeCodexEffort;
   const showActiveWorkload = !activeOpenRouterModel || activeOpenRouterEffortOptions.length > 0;
   const activeCodexSpeed = normalizeCodexSpeed(active?.codexSpeed);
@@ -4386,11 +4603,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     runtimeCapabilityError,
     tw.language,
   );
-  const activeAdapterManagedRuntime = activeProvider === "hermes" || activeProvider === "gajecode";
+  const activeAdapterManagedRuntime = activeProvider === "hermes" || activeProvider === "gajecode" || activeProvider === "grok";
   const activeRuntimeProgress = activeAdapterManagedRuntime
     ? managedRuntimeProgress[activeProvider]
     : undefined;
-  const activeRuntimeProgressLabel = managedRuntimeProgressLabel(activeRuntimeProgress, tw.language);
   const activeRuntimeProgressFailure = activeRuntimeProgress?.state === "failed"
     ? actionableManagedAgentFailure(
         activeProvider,
@@ -4398,25 +4614,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         tw.language,
       )
     : null;
-  const activeExecutionOwner = activeRuntimeCapability?.execution_controller === "atelier_macos_sandbox_exec"
-    ? (tw.language === "en" ? "Atelier pinned isolated runtime" : "Atelier 고정 격리 런타임")
-    : (tw.language === "en" ? "Atelier isolated runtime" : "Atelier 격리 런타임");
-  const activeSkillOwner = activeProvider === "gajecode"
-    ? (tw.language === "en" ? "Gajae Code isolated defaults" : "가재코드 전용 기본 스킬")
-    : (tw.language === "en" ? "Hermes adapter defaults" : "Hermes 어댑터 기본 스킬");
-  const activeRuntimePreparation = activeRuntimeCapability?.automatic_online_runtime_bootstrap === false
-    ? copy.runtimeSupportedMacPreparation
-    : copy.runtimeAutomaticPreparation;
-  const activeRuntimeIdentitySummary = activeAdapterManagedRuntime
-    ? `${copy.agentLabel} ${activeProviderMeta.label} · ${copy.providerLabel} ${
-        activeProvider === "hermes"
-          ? labelForOption(HERMES_PROVIDERS, activeHermesProvider)
-          : labelForOption(GAJECODE_PROVIDERS, activeGajaeProvider)
-      } · ${copy.executionLabel} ${activeExecutionOwner} · ${copy.skillsLabel} ${activeSkillOwner} · ${activeRuntimePreparation}${
-        activeRuntimeProgressLabel ? ` · ${activeRuntimeProgressLabel}` : ""
-      }`
-    : "";
-  const activeModelSurfaceTitle = activeAdapterManagedRuntime
+  const activeModelSurfaceTitle = activeProvider === "hermes" || activeProvider === "gajecode"
     ? `${copy.agentLabel} ${activeProviderMeta.label} · ${copy.providerLabel} ${
         activeProvider === "hermes"
           ? labelForOption(HERMES_PROVIDERS, activeHermesProvider)
@@ -4425,7 +4623,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     : activeProviderMeta.label;
   const directGajaeCliInput = activeProvider === "gajecode"
     && pendingAttachments.length === 0
-    && isRestrictedDirectGajaeCliInput(input);
+    && composerUi.restrictedDirectGajaeInput;
   const managedComposerSendDisabled = Boolean(activeManagedAgentDisabledReason) && !directGajaeCliInput;
   const localPreview = isLocalPreviewUrl(previewUrl);
   const previewManagedStartEnabled = previewCapabilityState.managed_start;
@@ -5218,6 +5416,43 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     }));
   };
 
+  // 턴 종료 후 프리뷰 검증 카드를 붙일지 최종 판정하고, 통과할 때만 실제 계측을 돈다.
+  // 관측 불가 레인은 여기서 턴 전용 baseline 을 해소해 "이 턴에 파일이 바뀌었나"를 실측한다.
+  // finally 안에서 await 하지 않으려고 통째로 떼어냈다 — 실측이 늦어도 다음 큐 턴 시작을
+  // 막으면 안 된다.
+  const resolveTurnPreviewEvidence = async (input: {
+    sessionId: string;
+    assistantId: string;
+    previewUrl: string;
+    cwd: string | null;
+    impact: TurnPreviewImpact | null;
+    previewUrlChanged: boolean;
+    probeBaselineId: string;
+    allowCapture: boolean;
+  }) => {
+    let impact = input.impact
+      ? {
+          ...input.impact,
+          previewUrlChanged: input.impact.previewUrlChanged || input.previewUrlChanged,
+        }
+      : null;
+    // baseline 은 잡았으면 반드시 해소한다. 중단된 턴이라 카드를 안 붙이더라도 그냥 두면
+    // Rust 쪽 baseline 맵(상한 64)을 갉아먹어 "변경 검토" baseline 이 먼저 밀려난다.
+    if (input.probeBaselineId && isTauri()) {
+      try {
+        const summary = await agentChangeSummary(input.cwd, input.probeBaselineId);
+        const mutation = workspaceMutationFromChangeSummary(summary);
+        if (impact) impact = { ...impact, workspaceMutation: mutation };
+      } catch (error) {
+        // 실측 실패는 "무영향"의 근거가 아니다 — unknown 그대로 두면 노출 쪽으로 기운다.
+        console.warn("turn preview impact probe failed", error);
+      }
+    }
+    if (!input.allowCapture) return;
+    if (!turnAffectedPreview(impact)) return;
+    await captureMessagePreviewEvidence(input.sessionId, input.assistantId, input.previewUrl);
+  };
+
   useEffect(() => {
     const sessionId = active?.id;
     const provider = activeSubscriptionProvider;
@@ -5620,7 +5855,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       ? normalizeHermesModel(hermesProvider || DEFAULT_HERMES_PROVIDER, rawModel)
       : normalizeModel(provider, rawModel);
     const modelOptions = modelOptionsFor(provider, normalizedModel, hermesProvider || DEFAULT_HERMES_PROVIDER, claudeRuntimeModels, codexRuntimeModels, openRouterRuntimeModels);
-    const initialModel = (provider === "claude" || provider === "codex" || provider === "gajecode" || (provider === "hermes" && isHermesProvider(hermesProvider)))
+    const initialModel = (provider === "claude" || provider === "codex" || provider === "gajecode" || provider === "grok" || (provider === "hermes" && isHermesProvider(hermesProvider)))
       ? coerceModelToOptions(normalizedModel, modelOptions)
       : normalizedModel;
     const defaultTitle = tw.language === "en"
@@ -5628,6 +5863,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       : `새 ${profileName} 작업`;
     return {
       id,
+      mobileTaskId: createMobileTaskId(),
       title: title || defaultTitle,
       titleEdited: Boolean(title),
       provider,
@@ -5900,7 +6136,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         ? normalizeHermesModel(hermesProvider, model)
         : normalizeModel(session.provider, model);
       const options = modelOptionsFor(session.provider, normalizedModel, hermesProvider, claudeRuntimeModels, codexRuntimeModels, openRouterRuntimeModels);
-      const nextModel = (session.provider === "claude" || session.provider === "codex" || session.provider === "gajecode" || (session.provider === "hermes" && isHermesProvider(hermesProvider)))
+      const nextModel = (session.provider === "claude" || session.provider === "codex" || session.provider === "gajecode" || session.provider === "grok" || (session.provider === "hermes" && isHermesProvider(hermesProvider)))
         ? coerceModelToOptions(normalizedModel, options)
         : normalizedModel;
       const changed = nextModel !== session.model;
@@ -6150,7 +6386,28 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     }
   };
 
+  // 턴 시작 시점에 레인을 심어 둔다. 레인을 모르면 판정이 blind 로 떨어져 늘 노출되므로,
+  // 첫 이벤트를 기다리지 않고 프로바이더를 아는 이 시점에 등록한다.
+  const startTurnPreviewImpact = (assistantId: string, lane: string) => {
+    const store = turnPreviewImpactRef.current;
+    const tracked = Object.keys(store);
+    if (tracked.length >= MAX_TRACKED_TURN_IMPACTS) delete store[tracked[0]];
+    store[assistantId] = createTurnPreviewImpact(lane);
+  };
+
+  const noteTurnPreviewImpact = (assistantId: string, event: AgentStreamEvent) => {
+    const store = turnPreviewImpactRef.current;
+    if (!store[assistantId]) {
+      const tracked = Object.keys(store);
+      if (tracked.length >= MAX_TRACKED_TURN_IMPACTS) delete store[tracked[0]];
+      store[assistantId] = createTurnPreviewImpact();
+    }
+    noteTurnPreviewImpactEvent(store[assistantId], event);
+  };
+
   const handleAgentEvent = (sessionId: string, assistantId: string, event: AgentStreamEvent) => {
+    // lifecycle 이벤트는 같은 스트림 이벤트에서 파생되므로 여기서만 집계한다(중복 방지).
+    noteTurnPreviewImpact(assistantId, event);
     if (sessionId === activeIdRef.current) {
       noteTerminalIssue(event);
     }
@@ -6187,7 +6444,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     }
     flushAgentStream(assistantId);
     finishActivities(sessionId, assistantId);
-    const finalVisibleText = cleanAgentText(event.text);
+    const finalVisibleText = selectTerminalAgentAnswer({
+      terminalResultPresent: true,
+      terminalText: cleanAgentText(event.text),
+      streamedDraft: pendingStreamRef.current[assistantId]?.text,
+      fallbackText: event.kind === "error" || event.is_error ? "Agent error" : copy.noResponse,
+    });
     const shouldRevealFinalNow = sessionId !== activeIdRef.current
       || !isWorkspaceForeground()
       || backgroundedAssistantIdsRef.current.has(assistantId);
@@ -6199,18 +6461,21 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       const messages = session.messages.map((m) => {
         if (m.id !== assistantId) return m;
         if (event.kind === "result") {
-          const text = finalVisibleText || cleanAgentText(m.text) || copy.noResponse;
           return {
             ...m,
-            text,
+            text: finalVisibleText,
             status: event.is_error ? "error" as const : "done" as const,
+            intermediateDraft: preserveIntermediateDraft(m, finalVisibleText),
+            unverifiedIntermediate: false,
           };
         }
         if (event.kind === "error") {
           return {
             ...m,
-            text: cleanAgentText(event.text) || m.text || "Agent error",
+            text: finalVisibleText,
             status: "error" as const,
+            intermediateDraft: preserveIntermediateDraft(m, finalVisibleText),
+            unverifiedIntermediate: false,
           };
         }
         return m;
@@ -6292,23 +6557,34 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         if (message.id !== assistantId) return message;
         const lifecyclePhase = event.phase;
         if (event.phase === "cancelled") {
+          const terminalText = copy.stoppedResponse;
           return {
             ...message,
             lifecyclePhase,
-            text: cleanAgentText(message.text) || copy.stoppedResponse,
+            text: terminalText,
             status: "done" as const,
+            intermediateDraft: preserveIntermediateDraft(message, terminalText),
+            unverifiedIntermediate: false,
           };
         }
         if (event.phase === "failed" && message.status === "streaming") {
+          const terminalText = cleanAgentText(event.summary) || "Agent error";
           return {
             ...message,
             lifecyclePhase,
-            text: cleanAgentText(message.text) || cleanAgentText(event.summary) || "Agent error",
+            text: terminalText,
             status: "error" as const,
+            intermediateDraft: preserveIntermediateDraft(message, terminalText),
+            unverifiedIntermediate: false,
           };
         }
         if (event.phase === "completed" && message.status === "streaming") {
-          return { ...message, lifecyclePhase, status: "done" as const };
+          return {
+            ...message,
+            lifecyclePhase,
+            status: "error" as const,
+            unverifiedIntermediate: true,
+          };
         }
         return { ...message, lifecyclePhase };
       }),
@@ -6928,15 +7204,38 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   const renderedTranscriptMessages = useMemo(() => {
     if (!active) return null;
     return active.messages.map((m) => {
+      const isStreamingAssistant = m.role === "assistant" && m.status === "streaming";
       const isAnimatedAssistant = m.role === "assistant" && animatedAssistantIdsRef.current.has(m.id);
-      const displayText = animatedAssistantIdsRef.current.has(m.id)
-        ? (visibleTextById[m.id] || "")
-        : m.text;
-      const isRevealing = isAnimatedAssistant && displayText !== m.text;
-      const useStreamingRenderer = isAnimatedAssistant && (m.status === "streaming" || isRevealing);
+      const answerPresentation = m.unverifiedIntermediate
+        ? {
+            text: unverifiedIntermediateNotice(tw.language),
+            changed: true,
+          }
+        : presentAgentAnswer({
+            provider: active.provider,
+            role: m.role,
+            status: m.status,
+            text: m.text,
+            language: tw.language,
+          });
+      const displayText = answerPresentation.changed
+        ? answerPresentation.text
+        : (animatedAssistantIdsRef.current.has(m.id)
+            ? (visibleTextById[m.id] || "")
+            : m.text);
+      const storedOriginalText = answerPresentation.changed
+        ? m.text
+        : (m.intermediateDraft || "");
+      const showStoredOriginal = Boolean(storedOriginalText)
+        && (Boolean(m.unverifiedIntermediate) || answerPresentation.changed || m.status === "error");
+      const isRevealing = !answerPresentation.changed && isAnimatedAssistant && displayText !== m.text;
+      const useStreamingRenderer = isStreamingAssistant || isRevealing;
+      const normalizedDisplayText = m.role === "assistant"
+        ? normalizeAgentDisplayText(displayText)
+        : displayText;
       const cleanedRenderedText = useStreamingRenderer
-        ? cleanStreamingText(collapseDumpyText(displayText)).replace(/\s+$/g, "")
-        : collapseDumpyText(m.text).replace(/\s+$/g, "");
+        ? cleanStreamingText(collapseDumpyText(normalizedDisplayText)).replace(/\s+$/g, "")
+        : collapseDumpyText(normalizedDisplayText).replace(/\s+$/g, "");
       const renderedText = m.role === "assistant" && !useStreamingRenderer
         ? improveReadableMarkdown(cleanedRenderedText)
         : cleanedRenderedText;
@@ -6991,6 +7290,16 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                 {copy.noResponse}
               </span>
             ) : null}
+            {m.role === "assistant" && showStoredOriginal && (
+              <details className={cls("mt-2 rounded-[6px] border px-2.5 py-2 text-[11px]", dark ? "border-dline text-dsub" : "border-line text-sub")}>
+                <summary className="cursor-pointer select-none font-medium">
+                  {tw.language === "en" ? "Show stored original" : "저장된 원문 보기"}
+                </summary>
+                <pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-[1.55]">
+                  {storedOriginalText}
+                </pre>
+              </details>
+            )}
             {m.attachments && m.attachments.length > 0 && (
               <div className={cls("atelier-chat-attachments", hasRenderedText ? "mt-2" : "")}>
                 {m.attachments.map((attachment) => (
@@ -7019,6 +7328,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     active?.messages,
     active?.profileDot,
     active?.cwd,
+    active?.provider,
     activeProviderMeta.dot,
     activeProviderMeta.short,
     visibleTextById,
@@ -7028,6 +7338,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     reviewOpenById,
     logsOpenById,
     cwd,
+    tw.language,
   ]);
 
   const handleAttachmentPaste = async (event: React.ClipboardEvent<HTMLElement>) => {
@@ -7097,6 +7408,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     if (provider === "hermes") return "Hermes";
     if (provider === "codex") return "Codex";
     if (provider === "gajecode") return "가재코드";
+    if (provider === "grok") return "Grok";
     return "Claude";
   };
 
@@ -7414,7 +7726,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         ? normalizeHermesModel(nextHermesProvider, requested)
         : normalizeModel(session.provider, requested);
       const nextOptions = modelOptionsFor(session.provider, normalizedModel, nextHermesProvider, claudeRuntimeModels, codexRuntimeModels, openRouterRuntimeModels);
-      const nextModel = (session.provider === "claude" || session.provider === "codex" || session.provider === "gajecode" || (session.provider === "hermes" && isHermesProvider(nextHermesProvider)))
+      const nextModel = (session.provider === "claude" || session.provider === "codex" || session.provider === "gajecode" || session.provider === "grok" || (session.provider === "hermes" && isHermesProvider(nextHermesProvider)))
         ? coerceModelToOptions(normalizedModel, nextOptions)
         : normalizedModel;
       const nextWorkload = session.provider === "hermes" && nextHermesProvider === "openrouter"
@@ -7919,6 +8231,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     const meta = providerMeta(session.provider);
     const assistantId = nowId("assistant");
     const turnId = nowId("turn");
+    // 턴 시작 시점의 프리뷰 URL. 턴 도중 새로 잡히거나 바뀌면 그 자체가 "영향 있음"이다.
+    const previewUrlAtTurnStart = cleanStoredPreviewUrl(
+      (sessionId === activeIdRef.current ? previewUrlRef.current : session.previewUrl) || "",
+    );
+    startTurnPreviewImpact(assistantId, session.provider);
     let runCwd = payload.cwd || session.cwd || cwd;
     const fastPatchTask = isFastPatchTask(payload.text);
     const hermesProvider = session.provider === "hermes"
@@ -7935,7 +8252,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
 	      codexRuntimeModels,
 	      openRouterRuntimeModels,
 	    );
-    const runModel = (session.provider === "claude" || session.provider === "codex" || session.provider === "gajecode" || (session.provider === "hermes" && isHermesProvider(hermesProvider)))
+    const runModel = (session.provider === "claude" || session.provider === "codex" || session.provider === "gajecode" || session.provider === "grok" || (session.provider === "hermes" && isHermesProvider(hermesProvider)))
       ? coerceModelToOptions(normalizedRunModel, runModelOptions)
       : normalizedRunModel;
     const useHermesCodexFastPath = session.provider === "hermes" && hermesProvider === "openai-codex";
@@ -8013,6 +8330,17 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         const changeBaseline = fastPatchTask
           ? null
           : await captureChangeBaselineForTurn(runCwd || null, CHANGE_BASELINE_TIMEOUT_MS);
+        // 가재코드·Hermes 는 스트림에 도구 이벤트가 구조적으로 없다(previewEvidence.ts 레인 감사).
+        // 프리뷰 URL 이 잡힌 세션에서만 실측용 baseline 을 하나 더 잡아, 턴이 끝난 뒤
+        // "이 턴에 파일이 바뀌었나"를 직접 재서 카드 노출을 판정한다. 위 changeBaseline 은
+        // "변경 검토" 버튼 소유이므로 여기서 절대 재사용·소비하지 않는다.
+        if (turnNeedsWorkspaceMutationProbe(session.provider, Boolean(previewUrlAtTurnStart))) {
+          const probeBaseline = await captureChangeBaselineForTurn(
+            runCwd || null,
+            CHANGE_BASELINE_TIMEOUT_MS,
+          );
+          if (probeBaseline?.id) turnPreviewProbeBaselineRef.current[assistantId] = probeBaseline.id;
+        }
         unlisten = await onAgentEvent(turnId, (event) => handleAgentEvent(sessionId, assistantId, event));
         unlistenTokenUsage = await onAgentTokenUsage(turnId, (event) =>
           handleAgentTokenUsage(sessionId, event),
@@ -8030,11 +8358,17 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         const runGajaeAlibabaEffort = session.provider === "gajecode" && inferGajaeProviderFromModel(runModel) === "alibaba"
           ? coerceGajaeAlibabaEffort(requestedWorkload, runModel)
           : null;
+        const runGrokBackendEffort = (session.provider === "hermes" && hermesProvider === "grok")
+          || (session.provider === "gajecode" && inferGajaeProviderFromModel(runModel) === "grok")
+          ? coerceGrokApiEffort(requestedWorkload)
+          : null;
         const codexStyleRun = session.provider === "codex"
           || (session.provider === "hermes" && hermesProvider === "openai-codex")
           || (session.provider === "gajecode" && inferGajaeProviderFromModel(runModel) === "codex");
+        const grokStyleRun = session.provider === "grok";
         const runWorkload = runOpenRouterEffort
           || runGajaeAlibabaEffort
+          || runGrokBackendEffort
           || (codexStyleRun ? normalizeCodexEffort(requestedWorkload) : requestedWorkload);
         const runHermesEffort = session.provider === "hermes" ? runWorkload : null;
         const basePrompt = formatOntologyAgentPrompt(
@@ -8058,7 +8392,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
           hermesProvider,
           effort: session.provider === "codex" || (session.provider === "gajecode" && inferGajaeProviderFromModel(runModel) === "codex")
             ? nativeCodexEffort(runWorkload, runModel, runModelOptions)
-            : runHermesEffort || runGajaeAlibabaEffort,
+            : grokStyleRun
+              ? runWorkload
+              : runHermesEffort || runGajaeAlibabaEffort,
           speed: session.provider === "codex" || (session.provider === "gajecode" && inferGajaeProviderFromModel(runModel) === "codex")
             ? (fastPatchTask ? "fast" : normalizeCodexSpeed(session.codexSpeed))
             : null,
@@ -8107,28 +8443,45 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
               if (m.id !== assistantId) return m;
               const existingRawEvents = m.rawEvents || [];
               const messageRawEvents = existingRawEvents.length ? existingRawEvents : fallbackRawEvents;
-              return {
-                  ...m,
-                  text: (() => {
-                    const actionableFailure = result.is_error
-                      ? actionableManagedAgentFailure(
-                          session.provider,
-                          result.error || result.text || "Agent error",
-                          tw.language,
-                        )
-                      : "";
-                    finalTextForReveal = cooldownSeconds !== null
-                      ? copy.providerCooldownRetry(meta.label, cooldownSeconds, shouldScheduleCooldownRetry)
-                      : actionableFailure
+              const actionableFailure = result.is_error
+                ? actionableManagedAgentFailure(
+                    session.provider,
+                    result.error || result.text || "Agent error",
+                    tw.language,
+                  )
+                : "";
+              finalTextForReveal = cooldownSeconds !== null
+                ? copy.providerCooldownRetry(meta.label, cooldownSeconds, shouldScheduleCooldownRetry)
+                : selectTerminalAgentAnswer({
+                    terminalResultPresent: true,
+                    terminalText: actionableFailure
                       || cleanAgentText(result.text)
-                      || cleanAgentText(m.text)
-                      || (wasStopped ? copy.stoppedResponse : wasInterrupted ? copy.interruptedResponse : "")
-                      || cleanAgentText(result.error)
-                      || (result.is_error ? `실행 실패: ${result.error || "Agent error"}` : copy.noResponse);
-                    return finalTextForReveal;
-                  })(),
+                      || (wasStopped
+                        ? copy.stoppedResponse
+                        : wasInterrupted
+                          ? copy.interruptedResponse
+                          : ""),
+                    terminalErrorText: cleanAgentText(result.error),
+                    streamedDraft: cleanAgentText(m.text),
+                    fallbackText: result.is_error
+                      ? `실행 실패: ${result.error || "Agent error"}`
+                      : copy.noResponse,
+                  });
+              const messageWithRawEvents = {
+                ...m,
+                rawEvents: messageRawEvents.length
+                  ? messageRawEvents.slice(-MAX_RAW_EVENTS)
+                  : m.rawEvents,
+              };
+              return {
+                  ...messageWithRawEvents,
+                  text: finalTextForReveal,
                   status: wasStopped || wasInterrupted || shouldScheduleCooldownRetry ? "done" : result.is_error ? "error" : "done",
-                  rawEvents: messageRawEvents.length ? messageRawEvents.slice(-MAX_RAW_EVENTS) : m.rawEvents,
+                  intermediateDraft: preserveIntermediateDraft(
+                    messageWithRawEvents,
+                    finalTextForReveal,
+                  ),
+                  unverifiedIntermediate: false,
                   changeBaselineId: !result.is_error && !wasInterrupted && !wasStopped ? changeBaseline?.id || null : null,
                   changeCwd: !result.is_error && !wasInterrupted && !wasStopped ? runCwd : m.changeCwd,
                   changes: !result.is_error && !wasInterrupted && !wasStopped ? null : m.changes,
@@ -8222,17 +8575,24 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
             ? {
                 ...m,
                 text: (() => {
-                  finalTextForReveal = cleanAgentText(m.text)
-                    || (wasStopped
-                      ? copy.stoppedResponse
-                      : wasInterrupted
-                        ? copy.interruptedResponse
-                        : session.provider === "hermes" || session.provider === "gajecode"
-                          ? actionableManagedAgentFailure(session.provider, err, tw.language)
-                          : `실행 실패: ${String(err)}`);
+                  const caughtFailure = wasStopped
+                    ? copy.stoppedResponse
+                    : wasInterrupted
+                      ? copy.interruptedResponse
+                      : session.provider === "hermes" || session.provider === "gajecode"
+                        ? actionableManagedAgentFailure(session.provider, err, tw.language)
+                        : `실행 실패: ${String(err)}`;
+                  finalTextForReveal = selectTerminalAgentAnswer({
+                    terminalResultPresent: true,
+                    streamedDraft: cleanAgentText(m.text),
+                    terminalErrorText: caughtFailure,
+                    fallbackText: caughtFailure,
+                  });
                   return finalTextForReveal;
                 })(),
                 status: wasStopped || wasInterrupted ? "done" : "error",
+                intermediateDraft: preserveIntermediateDraft(m, finalTextForReveal),
+                unverifiedIntermediate: false,
               }
             : m,
         ),
@@ -8290,9 +8650,27 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       const completedPreviewUrl = sessionId === activeIdRef.current
         ? previewUrlRef.current
         : completedSession?.previewUrl || "";
-      if (completionIntent !== "interrupted" && completionIntent !== "stopped" && completedPreviewUrl) {
-        void captureMessagePreviewEvidence(sessionId, assistantId, completedPreviewUrl)
-          .catch((error) => console.warn("Local preview evidence capture failed", error));
+      // 프리뷰 검증 카드는 "세션에 URL이 있다"가 아니라 "이번 턴이 프리뷰에 영향을 줬다"일 때만 붙인다.
+      const turnPreviewImpact = turnPreviewImpactRef.current[assistantId] || null;
+      delete turnPreviewImpactRef.current[assistantId];
+      const turnPreviewProbeBaselineId = turnPreviewProbeBaselineRef.current[assistantId] || "";
+      delete turnPreviewProbeBaselineRef.current[assistantId];
+      const previewUrlChangedThisTurn =
+        cleanStoredPreviewUrl(completedPreviewUrl) !== previewUrlAtTurnStart;
+      const allowPreviewCapture = completionIntent !== "interrupted"
+        && completionIntent !== "stopped"
+        && Boolean(completedPreviewUrl);
+      if (allowPreviewCapture || turnPreviewProbeBaselineId) {
+        void resolveTurnPreviewEvidence({
+          sessionId,
+          assistantId,
+          previewUrl: completedPreviewUrl,
+          cwd: runCwd || null,
+          impact: turnPreviewImpact,
+          previewUrlChanged: previewUrlChangedThisTurn,
+          probeBaselineId: turnPreviewProbeBaselineId,
+          allowCapture: allowPreviewCapture,
+        }).catch((error) => console.warn("Local preview evidence capture failed", error));
       }
       clearTurnIntent(turnId);
       finishRunForSession(sessionId, turnId);
@@ -8536,6 +8914,67 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   controlRequestHandlerRef.current = async (pendingRequest) => {
     const request = await controlRequestClaim(pendingRequest.requestId);
     try {
+      const isMobileContinuityRequest = request.action === "task.dispatch"
+        && request.payload.mobileContinuity === true;
+      if (isMobileContinuityRequest) {
+        const continuation = parseMobileContinuityDispatchPayload(request.payload);
+        if (!continuation) {
+          throw new Error("The mobile continuation request is malformed.");
+        }
+        const session = sessionsRef.current.find((item) => item.id === continuation.targetSessionId);
+        if (!session) {
+          throw new Error("The mobile continuation target session no longer exists.");
+        }
+        const expectedPermissionMode = normalizePermissionMode(session.permissionMode);
+        if (
+          session.mobileTaskId !== continuation.mobileTaskId
+          || session.cwd !== continuation.expectedWorkspace
+          || session.provider !== continuation.expectedProvider
+          || session.model !== continuation.expectedModel
+          || expectedPermissionMode !== continuation.expectedPermissionMode
+        ) {
+          throw new Error("The mobile continuation no longer matches the selected desktop session.");
+        }
+
+        const createdAt = Date.now();
+        const payload: QueuedAgentTurn = {
+          id: nowId("queued-turn"),
+          userMessageId: nowId("user"),
+          text: continuation.prompt,
+          displayText: continuation.prompt,
+          attachments: [],
+          cwd: session.cwd,
+          createdAt,
+          controlRequestId: request.requestId,
+        };
+        const wasBusy = Boolean(busyTurnIdsRef.current[session.id]);
+        patchSession(session.id, (current) => ({
+          ...current,
+          queuedTurns: [...(current.queuedTurns || []), payload],
+          messages: [
+            ...current.messages,
+            {
+              id: payload.userMessageId,
+              role: "user",
+              text: continuation.prompt,
+              createdAt,
+              status: "queued",
+              attachments: [],
+            },
+          ],
+          updatedAt: createdAt,
+        }));
+        if (!wasBusy) {
+          patchSession(session.id, (current) => ({
+            ...current,
+            queuedTurns: (current.queuedTurns || []).filter((turn) => turn.id !== payload.id),
+            updatedAt: Date.now(),
+          }));
+          await runAgentTurn(session.id, payload);
+        }
+        return;
+      }
+
       const featureResult = await handleFeatureControlRequest(request);
       if (featureResult) {
         await controlRequestComplete(
@@ -8902,30 +9341,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   };
 
   const activeFactoryCommand = composerUi.factoryCommand;
-  const factoryOpenStages = factoryStatus
-    ? (factoryStatus.stage_counts.queued || 0)
-      + (factoryStatus.stage_counts.in_progress || 0)
-      + (factoryStatus.stage_counts.blocked || 0)
-      + (factoryStatus.stage_counts.validation_required || 0)
-    : 0;
-  const factoryDoneStages = factoryStatus?.stage_counts.done || 0;
-  const factoryReady = factoryStatus?.readiness === "pilot_ready" || factoryStatus?.readiness === "full_ready";
-  const factoryStatusLabel = factoryStatusLoading
-    ? (tw.language === "en" ? "Checking" : "확인 중")
-    : factoryStatusError
-      ? (tw.language === "en" ? "Issue" : "확인 필요")
-      : !factoryStatus?.exists
-        ? (tw.language === "en" ? "No state" : "상태 없음")
-        : factoryReady
-          ? factoryStatus.readiness
-          : factoryStatus.readiness || factoryStatus.status || (tw.language === "en" ? "Running" : "진행 중");
-  const factoryStatusTone = factoryStatusError || factoryStatus?.blocked_reason
-    ? "error"
-    : factoryReady
-      ? "ready"
-      : factoryStatus?.exists
-        ? "running"
-        : "missing";
 
   const createSessionFromRail = () => {
     if (agentProfiles.length === 1) {
@@ -9726,16 +10141,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                         </button>
                       );
                     })}
-                    <span
-                      className={cls(
-                        "atelier-factory-launcher-copy min-w-0 flex-1 truncate text-[10.5px]",
-                        dark ? "text-dsub" : "text-sub",
-                      )}
-                      data-testid="agent-runtime-identity"
-                      title={activeRuntimeIdentitySummary}
-                    >
-                      {activeRuntimeIdentitySummary}
-                    </span>
                   </div>
                 )}
                 {activeProvider !== "gajecode" && (
@@ -9760,94 +10165,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                       >
                         <span className="text-[#e26f4f]">{I.zap}</span>
                         <span>{copy.factoryLabel}</span>
-                      </button>
-                      <span
-                        className={cls("atelier-factory-launcher-copy min-w-0 truncate text-[11px]", dark ? "text-dsub" : "text-sub")}
-                        data-testid={activeAdapterManagedRuntime ? "agent-runtime-identity" : undefined}
-                        title={activeAdapterManagedRuntime ? activeRuntimeIdentitySummary : undefined}
-                      >
-                        {activeAdapterManagedRuntime
-                          ? activeRuntimeIdentitySummary
-                          : tw.language === "en"
-                            ? "One launcher for goal, analysis, verification, security, and final audit."
-                            : "목표만 입력하면 계획, 실행, 검증, 보안, 최종감사까지 자동 진행합니다."}
-                      </span>
-                    </div>
-                    <div
-                      className={cls(
-                        "atelier-factory-status",
-                        "mb-2 grid grid-cols-[minmax(0,1fr)_auto] gap-2 rounded-[8px] border px-2.5 py-2 text-[11px]",
-                        factoryStatusTone === "ready"
-                          ? dark
-                            ? "border-[#2f6f56] bg-[#20352d] text-dink"
-                            : "border-[#6abf91] bg-[#edf8f1] text-ink"
-                          : factoryStatusTone === "error"
-                            ? dark
-                              ? "border-[#7c3b3b] bg-[#3a2525] text-dink"
-                              : "border-[#df8a8a] bg-[#fff0f0] text-ink"
-                            : dark
-                              ? "border-dline bg-dsurf text-dink"
-                              : "border-line bg-muted text-ink",
-                      )}
-                    >
-                      <div className="min-w-0 flex flex-wrap items-center gap-x-3 gap-y-1">
-                        <span className="inline-flex min-w-0 items-center gap-1.5 font-medium">
-                          <span className={cls(
-                            "h-2 w-2 rounded-full",
-                            factoryStatusTone === "ready"
-                              ? "bg-[#31b879]"
-                              : factoryStatusTone === "error"
-                                ? "bg-[#d9534f]"
-                                : factoryStatus?.exists
-                                  ? "bg-[#d79b3d]"
-                                  : dark ? "bg-dsub" : "bg-sub",
-                          )} />
-                          <span className="truncate">{tw.language === "en" ? "Stella Mode" : "스텔라 모드"}</span>
-                          <span className="shrink-0 font-mono">{factoryStatusLabel}</span>
-                        </span>
-                        {factoryStatus?.exists && (
-                          <>
-                            <span className={cls("font-mono", dark ? "text-dsub" : "text-sub")}>
-                              {factoryStatus.command_owner || "Stella"} → {factoryStatus.execution_controller || "Release"}
-                            </span>
-                            <span className={cls("font-mono", dark ? "text-dsub" : "text-sub")}>
-                              BP {factoryStatus.agent_blueprints} · AI {factoryStatus.agent_instances}
-                            </span>
-                            <span className={cls("font-mono", dark ? "text-dsub" : "text-sub")}>
-                              done {factoryDoneStages} · open {factoryOpenStages}
-                            </span>
-                          </>
-                        )}
-                        {factoryStatusError && (
-                          <span className={cls("min-w-0 truncate", dark ? "text-[#ffb3b3]" : "text-[#8d2f2f]")}>
-                            {factoryStatusError}
-                          </span>
-                        )}
-                        {factoryStatus?.blocked_reason && (
-                          <span className={cls("min-w-0 truncate", dark ? "text-[#ffb3b3]" : "text-[#8d2f2f]")}>
-                            {factoryStatus.blocked_reason}
-                          </span>
-                        )}
-                        {factoryStatus?.next_step && (
-                          <span className={cls("min-w-0 flex-1 truncate", dark ? "text-dsub" : "text-sub")}>
-                            {factoryStatus.next_step}
-                          </span>
-                        )}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => refreshFactoryStatus().catch(console.error)}
-                        disabled={factoryStatusLoading}
-                        className={cls(
-                          "h-7 w-7 rounded-[7px] border grid place-items-center transition-colors",
-                          dark
-                            ? "border-[#4b4b48] bg-[#2d2d2a] text-dsub hover:text-dink disabled:opacity-60"
-                            : "border-[#d6d0c7] bg-surface text-sub hover:text-ink disabled:opacity-60",
-                        )}
-                        title={tw.language === "en" ? "Refresh Stella Mode status" : "스텔라 모드 상태 새로고침"}
-                        aria-label={tw.language === "en" ? "Refresh Stella Mode status" : "스텔라 모드 상태 새로고침"}
-                      >
-                        {I.eye}
                       </button>
                     </div>
                   </>
@@ -9946,7 +10263,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                   onChange={(e) => {
                     inputRevealPauseUntilRef.current = performance.now() + INPUT_REVEAL_PAUSE_MS;
                     inputDraftRef.current = e.target.value;
-                    setInput(e.target.value);
                     syncComposerUi(e.target.value);
                   }}
                   onKeyDown={(e) => {
@@ -9981,7 +10297,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                 />
                 <div className="atelier-composer-controls mt-2 flex items-center gap-2">
                   <div className={cls("atelier-composer-hint flex-1 text-[12px] leading-[1.45]", dark ? "text-dsub" : "text-sub")}>
-                    {busyTurnId ? copy.draftHint : "⌘/Ctrl + Enter"}
+                    {"⌘/Ctrl + Enter"}
                   </div>
                   <div className="atelier-composer-actions shrink-0 flex items-center gap-1.5">
                     {(activeProvider === "hermes" || activeProvider === "gajecode") && (

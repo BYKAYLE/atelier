@@ -951,6 +951,16 @@ pub(crate) fn redact_cli_output(line: &str) -> String {
         "id-token",
         "client_secret",
         "client-secret",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "telegram_bot_token",
+        "bot_token",
+        "private_key",
+        "secret_key",
+        "token",
+        "secret",
+        "passwd",
+        "passphrase",
         "authorization",
         "password",
     ] {
@@ -1519,12 +1529,14 @@ mod tests {
     #[test]
     fn preview_output_redacts_credentials_before_storage_and_events() {
         let redacted = redact_cli_output(
-            "API_KEY=sk-preview-secret-123456789 Authorization: Bearer access-token-123456789 PASSWORD='hunter2'",
+            "API_KEY=sk-preview-secret-123456789 Authorization: Bearer access-token-123456789 PASSWORD='hunter2' PRIVATE_TOKEN=custom-token-value PASSPHRASE=custom-passphrase",
         );
         assert!(!redacted.contains("preview-secret"));
         assert!(!redacted.contains("access-token"));
         assert!(!redacted.contains("hunter2"));
-        assert!(redacted.matches("<redacted>").count() >= 3);
+        assert!(!redacted.contains("custom-token-value"));
+        assert!(!redacted.contains("custom-passphrase"));
+        assert!(redacted.matches("<redacted>").count() >= 5);
         assert_eq!(
             redact_cli_output("password authentication failed"),
             "password authentication failed"

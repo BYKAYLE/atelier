@@ -10,6 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Runtime};
 
 use atelier_process_tree::{
@@ -32,14 +33,17 @@ use crate::agent_sandbox::{
 use crate::credentials::{
     configure_gajecode_runtime_env, configure_hermes_runtime_env, ensure_managed_agent_runtime,
     env_var_for, gajecode_cli_name, gajecode_executable_path, gajecode_workspace_dir,
-    hermes_executable_path, hermes_managed_executable_path,
-    prepare_gajecode_claude_subscription_token, prepare_gajecode_codex_subscription_token,
-    read_agent_api_key, read_api_key, read_claude_subscription_oauth_token,
-    should_clear_inherited_agent_api_env, ManagedAgentRuntimeReadiness,
+    grok_isolated_cli_command, grok_oauth_logged_in, hermes_executable_path,
+    hermes_managed_executable_path, prepare_gajecode_claude_subscription_token,
+    prepare_gajecode_codex_subscription_token, read_agent_api_key, read_api_key,
+    read_claude_subscription_oauth_token, should_clear_inherited_agent_api_env,
+    stage_codex_access_for_managed_hermes, strip_ansi_sequences, ManagedAgentRuntimeReadiness,
 };
 
 const RETURN_RAW_EVENT_LIMIT: usize = 120;
 const RETURN_RAW_EVENT_CHAR_LIMIT: usize = 12_000;
+const HERMES_STDERR_TAIL_LIMIT: usize = 256 * 1024;
+const HERMES_ACTIVITY_IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const ALIBABA_TOKEN_PLAN_OPENAI_BASE_URL: &str =
     "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1";
 
@@ -62,14 +66,33 @@ fn tail_return_raw_events(raw_events: &[String]) -> Vec<String> {
         .collect()
 }
 
+fn bounded_utf8_tail(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_string();
+    }
+    let mut start = value.len().saturating_sub(max_bytes);
+    while start < value.len() && !value.is_char_boundary(start) {
+        start += 1;
+    }
+    value[start..].to_string()
+}
+
+fn hermes_quiet_activity_timed_out(last_activity_at: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(last_activity_at) >= HERMES_ACTIVITY_IDLE_TIMEOUT
+}
+
 /// CLI subprocess 호출 직전, 사용자가 Settings → Connections 에 저장한 API 키를
 /// 해당 provider 의 환경변수로 주입한다. Claude/Codex 구독 경로는 부모 프로세스의
 /// stale API key env 를 제거해 CLI OAuth 캐시가 우선되게 한다.
-fn inject_agent_cli_credential_env(cmd: &mut Command, provider: &str) {
+/// 하나라도 실제로 주입했으면 `true`. 호출부가 "자격증명 없음"을 조용히 넘기지 않고
+/// 실행 전에 막을 수 있도록 주입 여부를 돌려준다.
+fn inject_agent_cli_credential_env(cmd: &mut Command, provider: &str) -> bool {
+    let mut injected = false;
     if provider == "claude" {
         cmd.env_remove("CLAUDE_CODE_OAUTH_TOKEN");
         if let Some(token) = read_claude_subscription_oauth_token() {
             cmd.env("CLAUDE_CODE_OAUTH_TOKEN", token);
+            injected = true;
         }
     }
     if let Some(var) = env_var_for(provider) {
@@ -78,14 +101,18 @@ fn inject_agent_cli_credential_env(cmd: &mut Command, provider: &str) {
         }
         if let Some(key) = read_agent_api_key(provider) {
             cmd.env(var, key);
+            injected = true;
         }
     }
+    injected
 }
 
-fn inject_backend_credential_env(cmd: &mut Command, provider: &str) {
+fn inject_backend_credential_env(cmd: &mut Command, provider: &str) -> bool {
     if let (Some(var), Some(key)) = (env_var_for(provider), read_api_key(provider)) {
         cmd.env(var, key);
+        return true;
     }
+    false
 }
 
 fn isolate_claude_structured_run(cmd: &mut Command) {
@@ -167,6 +194,19 @@ fn inject_gajecode_alibaba_token_plan_env(cmd: &mut Command, model: &str) -> Res
             .to_string()
     })?;
     cmd.env(env_var, key);
+    Ok(())
+}
+
+fn inject_gajecode_grok_env(cmd: &mut Command, model: &str) -> Result<(), String> {
+    if !gajecode_model_without_effort(model).starts_with("xai/") {
+        return Ok(());
+    }
+    cmd.env_remove("XAI_API_KEY");
+    let key = read_agent_api_key("grok").ok_or_else(|| {
+        "xAI API 키가 연결되어 있지 않습니다. Grok CLI 브라우저 로그인은 가재코드와 공유되지 않습니다. 설정 > 연결 > Grok의 API 키 칸에 xAI API 키를 저장한 뒤 다시 실행해 주세요."
+            .to_string()
+    })?;
+    cmd.env("XAI_API_KEY", key);
     Ok(())
 }
 
@@ -633,6 +673,16 @@ fn validate_agent_cli_command(provider: &str, args: &[String]) -> Result<(), Str
                 "가재코드 작업 탭에서 지원하지 않는 명령입니다: {first}"
             )),
         },
+        "grok" => match first {
+            "help" | "--help" | "-h" | "--version" | "-v" | "version" | "doctor" | "inspect"
+            | "models" => Ok(()),
+            "sessions" => allow_cli_subcommand(provider, &lowered, "sessions", &["list"]),
+            "mcp" => allow_cli_subcommand(provider, &lowered, "mcp", &["list"]),
+            "plugin" => allow_cli_subcommand(provider, &lowered, "plugin", &["list"]),
+            _ => Err(format!(
+                "Grok 작업 탭에서 지원하지 않는 명령입니다: {first}"
+            )),
+        },
         other => Err(format!("지원하지 않는 provider입니다: {other}")),
     }
 }
@@ -659,6 +709,7 @@ fn run_agent_cli_command(
         AgentProviderKind::Claude => command_for_cli("claude"),
         AgentProviderKind::Codex => command_for_cli("codex"),
         AgentProviderKind::GajaeCode => command_for_gajecode()?,
+        AgentProviderKind::Grok => grok_isolated_cli_command()?,
     };
     if !matches!(
         provider_kind,
@@ -977,6 +1028,53 @@ fn agent_line_is_command_dump(s: &str) -> bool {
     (looks_like_code && has_tool_context) || looks_like_shell
 }
 
+fn agent_line_contains_hermes_box_run(s: &str) -> bool {
+    let mut run = 0usize;
+    for c in s.chars() {
+        if matches!(c, '━' | '─' | '═') {
+            run += 1;
+            if run >= 8 {
+                return true;
+            }
+        } else {
+            run = 0;
+        }
+    }
+    false
+}
+
+fn agent_line_is_hermes_box_rule(s: &str) -> bool {
+    let visible = strip_ansi_sequences(s);
+    let t = visible.trim();
+    !t.is_empty()
+        && (t.starts_with('━') || t.starts_with('─') || t.starts_with('═'))
+        && t.chars()
+            .filter(|c| !c.is_whitespace())
+            .all(|c| matches!(c, '━' | '─' | '═' | '—' | '-'))
+}
+
+fn agent_line_is_hermes_response_header(s: &str) -> bool {
+    let visible = strip_ansi_sequences(s);
+    let t = visible.trim();
+    let has_provider_name = ["Hermes", "Claude", "Codex", "GPT"]
+        .iter()
+        .any(|name| t.contains(name));
+    let has_provider_marker = ['⚕', '◆', '◇', '•', '·']
+        .iter()
+        .any(|marker| t.contains(*marker));
+    let has_top_frame = (t.starts_with('╭') && t.ends_with('╮'))
+        || (t.starts_with('┌') && t.ends_with('┐'))
+        || (t.starts_with('─') && agent_line_contains_hermes_box_run(t));
+    has_provider_name && has_provider_marker && has_top_frame
+}
+
+fn agent_line_is_hermes_response_footer(s: &str) -> bool {
+    let visible = strip_ansi_sequences(s);
+    let t = visible.trim();
+    ((t.starts_with('╰') && t.ends_with('╯')) || (t.starts_with('└') && t.ends_with('┘')))
+        && agent_line_contains_hermes_box_run(t)
+}
+
 fn hermes_auth_error_message(text: &str) -> Option<String> {
     let lower = text.to_ascii_lowercase();
     let looks_like_auth_error = lower.contains("refresh token was already consumed")
@@ -1025,8 +1123,455 @@ fn hermes_auth_error_message(text: &str) -> Option<String> {
     })
 }
 
+fn validate_hermes_session_id(value: &str) -> Result<String, String> {
+    let session_id = value.trim();
+    if session_id.is_empty()
+        || session_id.len() > 128
+        || !session_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+    {
+        return Err(
+            "Hermes returned an invalid session id; final answer verification was blocked."
+                .to_string(),
+        );
+    }
+    Ok(session_id.to_string())
+}
+
+fn verified_hermes_session_id(text: &str) -> Result<String, String> {
+    let raw = text
+        .lines()
+        .rev()
+        .find_map(|line| line.trim().strip_prefix("session_id:").map(str::trim))
+        .ok_or_else(|| {
+            "Hermes did not return a verified session id; final answer verification was blocked."
+                .to_string()
+        })?;
+    validate_hermes_session_id(raw)
+}
+
+fn decode_hermes_content_hex(value: &str) -> Result<String, String> {
+    let encoded = value.trim();
+    if encoded.is_empty() || encoded.len() % 2 != 0 {
+        return Err(
+            "Hermes final answer storage returned an invalid content encoding.".to_string(),
+        );
+    }
+    let mut bytes = Vec::with_capacity(encoded.len() / 2);
+    for pair in encoded.as_bytes().chunks_exact(2) {
+        let high = (pair[0] as char).to_digit(16).ok_or_else(|| {
+            "Hermes final answer storage returned an invalid content encoding.".to_string()
+        })?;
+        let low = (pair[1] as char).to_digit(16).ok_or_else(|| {
+            "Hermes final answer storage returned an invalid content encoding.".to_string()
+        })?;
+        bytes.push(((high << 4) | low) as u8);
+    }
+    String::from_utf8(bytes)
+        .map_err(|_| "Hermes final answer storage returned non-UTF-8 content.".to_string())
+}
+
+const HERMES_ANSWER_MAX_BYTES: usize = 1024 * 1024;
+
+#[derive(Clone, Debug)]
+struct HermesAnswerBoundary {
+    min_message_id: i64,
+    run_started_at: f64,
+    resumed_from: Option<String>,
+    db_existed_before: bool,
+}
+
+#[derive(Clone, Debug)]
+struct HermesMessageBaseline {
+    max_message_id: i64,
+    db_existed_before: bool,
+}
+
+#[cfg(target_os = "macos")]
+fn canonical_hermes_state_db(home_dir: &Path) -> Result<PathBuf, String> {
+    let canonical_home = fs::canonicalize(home_dir).map_err(|error| {
+        format!(
+            "Hermes final answer home is unavailable ({}): {error}",
+            home_dir.display()
+        )
+    })?;
+    if !canonical_home.is_dir() {
+        return Err("Hermes final answer home is not a directory.".to_string());
+    }
+    let state_db = canonical_home.join("state.db");
+    let metadata = fs::symlink_metadata(&state_db).map_err(|_| {
+        format!(
+            "Hermes final answer database is missing: {}",
+            state_db.display()
+        )
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(format!(
+            "Hermes final answer database is not a direct regular file: {}",
+            state_db.display()
+        ));
+    }
+    let canonical_db = fs::canonicalize(&state_db)
+        .map_err(|error| format!("resolve Hermes final answer database: {error}"))?;
+    if canonical_db.parent() != Some(canonical_home.as_path()) {
+        return Err(
+            "Hermes final answer database is not a direct child of the managed provider home."
+                .to_string(),
+        );
+    }
+    Ok(canonical_db)
+}
+
+#[cfg(target_os = "macos")]
+fn run_hermes_sqlite_readonly(state_db: &Path, query: &str) -> Result<String, String> {
+    let mut last_detail = String::new();
+    for attempt in 0..3 {
+        let output = Command::new("/usr/bin/sqlite3")
+            .arg("-readonly")
+            .arg("-batch")
+            .arg("-noheader")
+            .arg("-cmd")
+            .arg(".timeout 1500")
+            .arg(state_db)
+            .arg(query)
+            .output()
+            .map_err(|error| format!("start Hermes final answer verification: {error}"))?;
+        if output.status.success() {
+            return String::from_utf8(output.stdout).map_err(|_| {
+                "Hermes final answer verification returned non-UTF-8 output.".to_string()
+            });
+        }
+        last_detail = clip_cli_output(redact_cli_output(&String::from_utf8_lossy(&output.stderr)));
+        let busy = last_detail
+            .to_ascii_lowercase()
+            .contains("database is locked")
+            || last_detail
+                .to_ascii_lowercase()
+                .contains("database is busy");
+        if busy && attempt < 2 {
+            thread::sleep(Duration::from_millis(80 * (attempt + 1) as u64));
+            continue;
+        }
+        return Err(if last_detail.trim().is_empty() {
+            format_cli_exit("Hermes final answer verification", output.status)
+        } else {
+            format!("Hermes final answer verification failed: {last_detail}")
+        });
+    }
+    Err(format!(
+        "Hermes final answer verification failed after a short database retry: {last_detail}"
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn hermes_message_baseline(
+    home_dir: &Path,
+    resume_session_id: Option<&str>,
+) -> Result<HermesMessageBaseline, String> {
+    let canonical_home = fs::canonicalize(home_dir).map_err(|error| {
+        format!(
+            "Hermes message baseline home is unavailable ({}): {error}",
+            home_dir.display()
+        )
+    })?;
+    if !canonical_home.is_dir() {
+        return Err("Hermes message baseline home is not a directory.".to_string());
+    }
+    let state_db_target = canonical_home.join("state.db");
+    match fs::symlink_metadata(&state_db_target) {
+        Ok(metadata) if metadata.file_type().is_file() => {}
+        Ok(_) => {
+            return Err(
+                "Hermes message baseline database is not a direct regular file.".to_string(),
+            )
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if resume_session_id.is_some() {
+                return Err(
+                    "Hermes resume database is missing; execution was blocked before launch."
+                        .to_string(),
+                );
+            }
+            return Ok(HermesMessageBaseline {
+                max_message_id: 0,
+                db_existed_before: false,
+            });
+        }
+        Err(error) => return Err(format!("inspect Hermes message baseline database: {error}")),
+    }
+    let state_db = canonical_hermes_state_db(home_dir)?;
+    if let Some(session_id) = resume_session_id {
+        let session_id = validate_hermes_session_id(session_id)?;
+        let query = format!("SELECT source FROM sessions WHERE id = '{session_id}' LIMIT 1;");
+        let source = run_hermes_sqlite_readonly(&state_db, &query)?;
+        match source.trim() {
+            "tool" => {}
+            "" => {
+                return Err(
+                    "Hermes resume session was not found; execution was blocked before launch."
+                        .to_string(),
+                )
+            }
+            _ => {
+                return Err(
+                    "Hermes resume session is not an Atelier tool session; execution was blocked."
+                        .to_string(),
+                )
+            }
+        }
+    }
+    let baseline =
+        run_hermes_sqlite_readonly(&state_db, "SELECT COALESCE(MAX(id), 0) FROM messages;")?;
+    let max_message_id = baseline
+        .trim()
+        .parse::<i64>()
+        .ok()
+        .filter(|value| *value >= 0)
+        .ok_or_else(|| "Hermes message baseline is invalid; execution was blocked.".to_string())?;
+    Ok(HermesMessageBaseline {
+        max_message_id,
+        db_existed_before: true,
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn hermes_latest_assistant_content(
+    home_dir: &Path,
+    session_id: &str,
+    boundary: &HermesAnswerBoundary,
+) -> Result<String, String> {
+    let session_id = validate_hermes_session_id(session_id)?;
+    let resumed_from = boundary
+        .resumed_from
+        .as_deref()
+        .map(validate_hermes_session_id)
+        .transpose()?;
+    if boundary.min_message_id < 0
+        || !boundary.run_started_at.is_finite()
+        || boundary.run_started_at <= 0.0
+        || (!boundary.db_existed_before
+            && (boundary.min_message_id != 0 || boundary.resumed_from.is_some()))
+    {
+        return Err("Hermes final answer boundary is invalid.".to_string());
+    }
+    let state_db = canonical_hermes_state_db(home_dir)?;
+
+    let session_query = format!(
+        "SELECT source || char(9) || printf('%.17g', started_at) || char(9) || \
+                COALESCE(parent_session_id, '') \
+         FROM sessions \
+         WHERE id = '{session_id}' \
+         LIMIT 1;"
+    );
+    let session_output = run_hermes_sqlite_readonly(&state_db, &session_query)?;
+    let mut session_fields = session_output.trim_end().splitn(3, '\t');
+    let source = session_fields.next().unwrap_or_default();
+    let started_at = session_fields
+        .next()
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| "Hermes verified session has an invalid start time.".to_string())?;
+    let parent_session_id = session_fields.next().unwrap_or_default();
+    if source != "tool" {
+        return Err("Hermes verified session is not a tool session.".to_string());
+    }
+    if resumed_from.as_deref() != Some(session_id.as_str()) && started_at < boundary.run_started_at
+    {
+        return Err("Hermes verified session predates the current execution.".to_string());
+    }
+    match resumed_from.as_deref() {
+        Some(resume_id) if session_id == resume_id => {}
+        Some(resume_id) => {
+            let ancestry_query = format!(
+                "WITH RECURSIVE ancestry(id, parent_session_id, valid) AS (\
+                   SELECT id, parent_session_id, 1 \
+                   FROM sessions \
+                   WHERE id = '{session_id}' \
+                   UNION ALL \
+                   SELECT parent.id, parent.parent_session_id, \
+                          ancestry.valid AND parent.end_reason = 'compression' \
+                   FROM sessions parent \
+                   JOIN ancestry ON parent.id = ancestry.parent_session_id\
+                 ) \
+                 SELECT valid FROM ancestry WHERE id = '{resume_id}' LIMIT 1;"
+            );
+            let ancestry = run_hermes_sqlite_readonly(&state_db, &ancestry_query)?;
+            if ancestry.trim() != "1" {
+                return Err(
+                    "Hermes continuation is not a compression-only descendant of the requested resume session."
+                        .to_string(),
+                );
+            }
+        }
+        None if parent_session_id.is_empty() && started_at >= boundary.run_started_at => {}
+        None => {
+            return Err(
+                "Hermes new session is not a fresh root session for the current execution."
+                    .to_string(),
+            )
+        }
+    }
+
+    let query = format!(
+        "WITH current_turn AS (\
+           SELECT MAX(id) AS user_message_id \
+           FROM messages \
+           WHERE session_id = '{session_id}' \
+             AND id > {} \
+             AND active = 1 \
+             AND role = 'user'\
+         ) \
+         SELECT CASE \
+           WHEN length(CAST(message.content AS BLOB)) > {HERMES_ANSWER_MAX_BYTES} \
+             THEN 'TOO_LARGE:' || length(CAST(message.content AS BLOB)) \
+           ELSE 'OK:' || hex(CAST(message.content AS BLOB)) \
+         END \
+         FROM messages message, current_turn \
+         WHERE message.session_id = '{session_id}' \
+           AND message.id > {} \
+           AND message.id > current_turn.user_message_id \
+           AND message.active = 1 \
+           AND message.compacted = 0 \
+           AND message.role = 'assistant' \
+           AND lower(trim(COALESCE(message.tool_calls, ''))) IN ('', '[]', 'null') \
+           AND length(trim(COALESCE(message.content, ''), char(9) || char(10) || char(13) || ' ')) > 0 \
+         ORDER BY message.id DESC \
+         LIMIT 1;",
+        boundary.min_message_id,
+        boundary.min_message_id
+    );
+    let output = run_hermes_sqlite_readonly(&state_db, &query)?;
+    let encoded = output.trim();
+    if encoded.is_empty() {
+        return Err(
+            "Hermes completed without a new non-empty assistant answer in its verified session."
+                .to_string(),
+        );
+    }
+    if let Some(length) = encoded.strip_prefix("TOO_LARGE:") {
+        return Err(format!(
+            "Hermes final answer exceeded the {} byte safety limit ({} bytes).",
+            HERMES_ANSWER_MAX_BYTES,
+            length.trim()
+        ));
+    }
+    let encoded = encoded.strip_prefix("OK:").ok_or_else(|| {
+        "Hermes final answer storage returned an invalid content record.".to_string()
+    })?;
+    let answer = decode_hermes_content_hex(encoded)?;
+    if answer.len() > HERMES_ANSWER_MAX_BYTES {
+        return Err("Hermes final answer exceeded the byte safety limit.".to_string());
+    }
+    Ok(answer)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn hermes_message_baseline(
+    _home_dir: &Path,
+    _resume_session_id: Option<&str>,
+) -> Result<HermesMessageBaseline, String> {
+    Err("Hermes message baseline requires Atelier's managed macOS runtime.".to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn hermes_latest_assistant_content(
+    _home_dir: &Path,
+    _session_id: &str,
+    _boundary: &HermesAnswerBoundary,
+) -> Result<String, String> {
+    Err("Hermes final answer verification requires Atelier's managed macOS runtime.".to_string())
+}
+
+fn hermes_stderr_without_session_id(text: &str) -> String {
+    text.lines()
+        .filter(|line| !line.trim_start().starts_with("session_id:"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
+fn hermes_runtime_error_message(text: &str) -> Option<String> {
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("context length exceeded")
+        || lower.contains("input exceeds the context window")
+        || lower.contains("cannot compress further")
+    {
+        return Some(
+            "Hermes 요청 컨텍스트가 모델 한도를 초과했습니다. Atelier는 전체 내장 스킬 선적재를 중단했으며, 새 실행부터 필요한 스킬만 선택해 불러옵니다."
+                .to_string(),
+        );
+    }
+    if lower.contains("unable to open database file") {
+        return Some(
+            "Hermes 작업 저장소를 열지 못했습니다. Atelier 관리 샌드박스의 상태 경로 접근이 차단되었습니다."
+                .to_string(),
+        );
+    }
+    None
+}
+
+/// 대표님 구독 자체가 소진된 경우를 판별한다.
+///
+/// why: Atelier 의 존재 이유는 여러 CLI 하네스를 한 자리에서 쓰는 것이고, 한 구독이
+/// 소진되면 **다른 구독으로 갈아타 이어서** 쓰는 것이 목적이다. 그러려면 "기다리면
+/// 풀리는 공급자측 일시 제한"과 "기다려도 안 풀리는 내 구독 소진"을 반드시 갈라야
+/// 한다 — 전자는 재시도가 정답이고 후자는 전환이 정답이다. 둘을 섞으면 소진된
+/// 레인에서 무한히 재시도하며 대표님을 막아 세운다. (260804 Codex 소진 실사고)
+fn provider_usage_exhausted(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    // 공급자 계정 풀의 일시 제한은 스스로 "네 한도가 아니다"라고 밝힌다 — 소진 아님.
+    if lower.contains("not your usage limit") {
+        return false;
+    }
+    lower.contains("usage_limit_reached")
+        || lower.contains("usage limit has been reached")
+        || lower.contains("hit your usage limit")
+        || lower.contains("usage limit reached")
+        || lower.contains("reached your usage limit")
+        || lower.contains("insufficient_quota")
+        || lower.contains("quota exceeded")
+        || lower.contains("out of credits")
+}
+
+/// 소진 사실을 "무엇으로 갈아탈 수 있는지"와 함께 전달한다.
+/// `alternatives` 는 지금 실제로 연결되어 있는 다른 구독의 표시명이다 —
+/// 비어 있으면 갈아탈 곳이 있는 척하지 않는다.
+fn provider_usage_exhausted_message(
+    provider: &str,
+    text: &str,
+    alternatives: &[String],
+) -> Option<String> {
+    if !provider_usage_exhausted(text) {
+        return None;
+    }
+    let source = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or(text.trim());
+    let next = if alternatives.is_empty() {
+        "연결된 다른 구독이 없습니다. 설정 > 연결에서 다른 구독을 붙이면 이어서 쓸 수 있습니다."
+            .to_string()
+    } else {
+        format!(
+            "연결된 다른 구독으로 이어서 쓸 수 있습니다: {}",
+            alternatives.join(", ")
+        )
+    };
+    Some(format!(
+        "{provider} 구독 사용량이 소진되었습니다. 기다린다고 풀리는 일시 제한이 아니라 한도 소진이라 같은 레인에서는 재시도해도 계속 막힙니다. {next}\n\n원문: {source}"
+    ))
+}
+
 fn provider_cooldown_seconds(text: &str) -> Option<u64> {
     let lower = text.to_ascii_lowercase();
+    // 소진은 쿨다운이 아니다 — "기다리면 됩니다"로 안내하면 대표님이 풀리지 않을
+    // 대기를 하게 된다. 판정 순서상 소진을 먼저 배제한다.
+    if provider_usage_exhausted(text) {
+        return None;
+    }
     let looks_like_provider_cooldown = lower.contains("temporarily limiting requests")
         || lower.contains("accounts exhausted")
         || lower.contains("server is temporarily limiting")
@@ -1066,6 +1611,15 @@ fn provider_cooldown_message(provider: &str, text: &str) -> Option<String> {
     ))
 }
 
+/// 공급자 한도 관련 에러를 사용자가 행동할 수 있는 문장으로 승격한다.
+/// 소진(전환해야 함)을 쿨다운(기다리면 됨)보다 먼저 판정한다 — 순서가 뒤바뀌면
+/// 소진된 레인에서 "잠시 뒤 재시도"를 안내하게 된다.
+fn provider_limit_message(provider_id: &str, display: &str, text: &str) -> Option<String> {
+    let alternatives = crate::credentials::connected_subscription_labels(provider_id);
+    provider_usage_exhausted_message(display, text, &alternatives)
+        .or_else(|| provider_cooldown_message(display, text))
+}
+
 fn extract_claude_error_from_raw_events(raw_events: &[String]) -> Option<String> {
     for line in raw_events.iter().rev() {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
@@ -1078,12 +1632,13 @@ fn extract_claude_error_from_raw_events(raw_events: &[String]) -> Option<String>
         if event_type == "result" && value.get("is_error").and_then(Value::as_bool) == Some(true) {
             if let Some(status) = value.get("api_error_status").and_then(Value::as_str) {
                 let message = format!("Claude API error: {status}");
-                return provider_cooldown_message("Claude/TeamClaude", &message).or(Some(message));
+                return provider_limit_message("claude", "Claude/TeamClaude", &message)
+                    .or(Some(message));
             }
             if let Some(result) = value.get("result").and_then(Value::as_str) {
                 if !result.trim().is_empty() {
                     let message = result.trim().to_string();
-                    return provider_cooldown_message("Claude/TeamClaude", &message)
+                    return provider_limit_message("claude", "Claude/TeamClaude", &message)
                         .or(Some(message));
                 }
             }
@@ -1092,7 +1647,7 @@ fn extract_claude_error_from_raw_events(raw_events: &[String]) -> Option<String>
             if let Some(message) = value.get("message").and_then(Value::as_str) {
                 if !message.trim().is_empty() {
                     let message = message.trim().to_string();
-                    return provider_cooldown_message("Claude/TeamClaude", &message)
+                    return provider_limit_message("claude", "Claude/TeamClaude", &message)
                         .or(Some(message));
                 }
             }
@@ -1681,6 +2236,7 @@ fn normalize_hermes_provider(provider: Option<String>) -> String {
     {
         "openrouter" => "openrouter".to_string(),
         "alibaba" | "alibaba-cloud" | "dashscope" | "aliyun" => "alibaba".to_string(),
+        "grok" | "xai" => "xai".to_string(),
         "openai-codex" | "codex" => "openai-codex".to_string(),
         "anthropic" | "claude" => "anthropic".to_string(),
         _ => "openai-codex".to_string(),
@@ -1692,8 +2248,32 @@ fn default_hermes_model(provider: &str) -> &'static str {
         "anthropic" => "claude-opus-4-8",
         "openrouter" => "openai/gpt-5.5",
         "alibaba" => "qwen3.8-max-preview",
+        "xai" => "grok-4.5",
         _ => "gpt-5.5",
     }
+}
+
+/// 주입 결과로 Hermes 를 띄워도 되는지 판정한다. Codex 는 앞단의
+/// `stage_codex_access_for_managed_hermes` 가 구독 자격증명을 이미 검증·스테이징하므로
+/// 별도 API 키가 없는 것이 정상이다. 나머지 공급자는 주입된 자격증명이 유일한 경로다.
+fn hermes_credentials_ready(provider: &str, injected: bool) -> bool {
+    injected || provider == "openai-codex"
+}
+
+/// 모델 공급자를 바꿨는데 그 공급자의 자격증명이 없을 때 보여줄 안내.
+/// 자격증명 없이 Hermes 를 띄우면 `hermes exited with 1` 만 남고 원인을 알 수 없다.
+fn hermes_credential_missing_message(provider: &str) -> String {
+    let label = match provider {
+        "anthropic" => "Claude",
+        "openrouter" => "OpenRouter",
+        "alibaba" => "Alibaba(DashScope)",
+        "xai" => "Grok(xAI)",
+        _ => "Codex",
+    };
+    format!(
+        "모델 공급자를 {label}(으)로 바꿨지만 {label} 자격증명이 연결되어 있지 않아 실행하지 않았습니다. \
+설정 > 연결에서 {label}을(를) 연결한 뒤 다시 보내주세요. 연결하면 이후에는 모델을 바꿀 때마다 자동으로 적용됩니다."
+    )
 }
 
 fn normalize_hermes_effort(effort: Option<String>) -> Option<String> {
@@ -1860,10 +2440,65 @@ fn push_hermes_isolation_args(
     command: &mut Command,
     readiness: &ManagedAgentRuntimeReadiness,
 ) -> Result<(), String> {
+    // The manifest is still a hard readiness boundary: every company Mac must
+    // receive the same Atelier-owned skill inventory. Do not pass those names
+    // through `--skills`, though. Hermes defines that flag as eager preload and
+    // embeds every selected SKILL.md in the initial system prompt. With the 73
+    // managed skills this inflated an empty-history request to ~256k tokens.
+    // The installed inventory remains discoverable under HERMES_HOME/skills and
+    // Hermes loads the relevant skill on demand through its skills tools.
+    let _managed_skill_inventory = hermes_managed_skill_names(readiness)?;
     command.arg("--ignore-user-config").arg("--ignore-rules");
-    for skill in hermes_managed_skill_names(readiness)? {
-        command.arg("--skills").arg(skill);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_hermes_query_args(
+    command: &mut Command,
+    readiness: &ManagedAgentRuntimeReadiness,
+    provider: &str,
+    model: &str,
+    prompt: &str,
+    permission_mode: &str,
+    resume_session_id: Option<&str>,
+) -> Result<(), String> {
+    // `-Q` keeps Hermes in its non-interactive single-query lifecycle, but it
+    // is not an answer-only transport when display.show_reasoning is enabled.
+    // stdout remains raw evidence; the verified final answer is read from the
+    // session database after Hermes exits.
+    command
+        .arg("chat")
+        .arg("-Q")
+        .arg("--source")
+        .arg("tool")
+        .arg("--max-turns")
+        .arg("90")
+        .arg("--provider")
+        .arg(provider)
+        .arg("-m")
+        .arg(model);
+    push_hermes_isolation_args(command, readiness)?;
+    // 무인 -Q 세션에는 도달 가능한 승인 UI 가 없다. Hermes 는 기본 smart
+    // 승인에서 보이지 않는 승인 콜백을 60초 기다린 뒤 "User denied"라는
+    // 거짓 사유로 거부한다(사용자는 아무것도 본 적 없음 — 62초 블랙홀 실측).
+    // 프로세스 단위 YOLO 플래그로 그 내부 게이트만 끈다: import 시점에
+    // 동결되는 값이라 프롬프트 인젝션으로 뒤집을 수 없고, Hermes 의
+    // 하드라인 플로어·sudo stdin 가드·사용자 deny 규칙은 이 플래그보다
+    // 먼저 실행되며, 실제 보안 경계는 atelier 의 sandbox-exec 프로파일이
+    // 계속 맡는다(승인 우회가 아니라 도달 불가능한 이중 게이트 제거).
+    command.env("HERMES_YOLO_MODE", "1");
+    if permission_mode == "auto" {
+        command.arg("--checkpoints");
     }
+    if let Some(session_id) = resume_session_id
+        .map(str::trim)
+        .filter(|session_id| !session_id.is_empty())
+    {
+        command
+            .arg("--resume")
+            .arg(validate_hermes_session_id(session_id)?);
+    }
+    command.arg("-q").arg(prompt);
     Ok(())
 }
 
@@ -2088,8 +2723,8 @@ fn parse_claude_line<R: Runtime>(
                     .or_else(|| v.get("api_error_status").and_then(Value::as_str))
                     .unwrap_or("Claude returned an error")
                     .to_string();
-                let message =
-                    provider_cooldown_message("Claude/TeamClaude", &raw_error).unwrap_or(raw_error);
+                let message = provider_limit_message("claude", "Claude/TeamClaude", &raw_error)
+                    .unwrap_or(raw_error);
                 *state.final_text = message.clone();
                 *state.error = Some(message);
             }
@@ -2116,7 +2751,8 @@ fn parse_claude_line<R: Runtime>(
                 .and_then(Value::as_str)
                 .unwrap_or("Claude stream error")
                 .to_string();
-            let msg = provider_cooldown_message("Claude/TeamClaude", &raw_msg).unwrap_or(raw_msg);
+            let msg =
+                provider_limit_message("claude", "Claude/TeamClaude", &raw_msg).unwrap_or(raw_msg);
             *state.error = Some(msg.clone());
             emit_agent_event(
                 app,
@@ -2253,7 +2889,7 @@ fn run_claude<R: Runtime>(
             });
         }
         if let Some(current) = error.clone() {
-            if let Some(message) = provider_cooldown_message("Claude/TeamClaude", &current) {
+            if let Some(message) = provider_limit_message("claude", "Claude/TeamClaude", &current) {
                 final_text = message.clone();
                 error = Some(message);
             }
@@ -2382,6 +3018,8 @@ fn parse_codex_line<R: Runtime>(
                 .or_else(|| v.get("error").and_then(Value::as_str))
                 .unwrap_or("Codex returned an error")
                 .to_string();
+            // 구독 소진이면 원문 대신 "어디로 갈아탈 수 있는지"까지 담은 문장으로 승격한다.
+            let msg = provider_limit_message("codex", "Codex", &msg).unwrap_or(msg);
             *state.error = Some(msg.clone());
             emit_agent_event(
                 app,
@@ -2659,6 +3297,7 @@ fn gajecode_model_label_for_prompt(model: &str) -> String {
         "anthropic/claude-haiku-4-5-20251001" | "claude-haiku-4-5-20251001" => "Haiku 4.5",
         "alibaba-token-plan/qwen3.8-max-preview" => "Qwen 3.8 Max Preview",
         "alibaba-token-plan/glm-5.2" => "GLM 5.2",
+        "xai/grok-4.5" | "xai/grok-4.5-latest" | "xai/grok-build-latest" => "Grok 4.5",
         _ => "selected model",
     }
     .to_string()
@@ -2743,7 +3382,19 @@ fn normalize_gajecode_model_for_cli(model: Option<String>) -> String {
         | "claude-3-5-haiku-20241022"
         | "anthropic/claude-haiku-4-5-20251001"
         | "anthropic/claude-haiku-4.5" => "anthropic/claude-haiku-4-5-20251001".to_string(),
-        _ => trimmed.to_string(),
+        // 가재코드 탭의 Claude 목록은 agent_models.rs 가 Anthropic 문서에서 긁어오는
+        // 살아있는 목록이라, 새 모델(claude-sonnet-5 등)은 언제나 위 별칭표보다 먼저
+        // 도착한다. 공급자 접두사 없이 그대로 흘려보내면 GJC 가 흐릿하게 해석해
+        // amazon-bedrock/anthropic.<id> 로 착지하고 "No API key for amazon-bedrock/…"
+        // 로 죽는다(=UI 에는 "공급자 인증 필요"로 번역된다). 별칭표를 늘리는 대신
+        // 접두사 없는 Claude id 는 항상 anthropic 공급자로 고정해 부류를 닫는다.
+        _ => {
+            if !trimmed.contains('/') && lower.starts_with("claude-") {
+                format!("anthropic/{trimmed}")
+            } else {
+                trimmed.to_string()
+            }
+        }
     }
 }
 
@@ -2772,6 +3423,14 @@ fn gajecode_model_selector_with_effort(model: &str, effort: Option<&str>) -> Str
             }
             _ => base.to_string(),
         };
+    }
+    if base.starts_with("xai/") {
+        let effort = match effort.map(str::trim) {
+            Some("low") => "low",
+            Some("medium") => "medium",
+            _ => "high",
+        };
+        return format!("{base}:{effort}");
     }
     if !gajecode_uses_alibaba_token_plan(base) {
         return base.to_string();
@@ -2987,6 +3646,7 @@ fn run_gajecode<R: Runtime>(
     fs::create_dir_all(&run_dir).map_err(|e| format!("create {}: {e}", run_dir.display()))?;
 
     inject_gajecode_alibaba_token_plan_env(&mut cmd, &requested_model)?;
+    inject_gajecode_grok_env(&mut cmd, &requested_model)?;
     inject_gajecode_codex_subscription_env(&mut cmd, &requested_model)?;
 
     if !inject_gajecode_claude_credential_env(&mut cmd, &requested_model) {
@@ -3158,6 +3818,210 @@ fn run_gajecode<R: Runtime>(
     })
 }
 
+fn normalize_grok_effort(effort: Option<String>) -> String {
+    match effort
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("none" | "minimal") => "low".to_string(),
+        Some("low" | "medium" | "high" | "xhigh") => effort
+            .unwrap_or_else(|| "high".to_string())
+            .trim()
+            .to_ascii_lowercase(),
+        Some("max" | "ultra") => "xhigh".to_string(),
+        _ => "high".to_string(),
+    }
+}
+
+fn parse_grok_json_output(output: &str) -> Result<(String, Option<String>), String> {
+    let trimmed = output.trim();
+    let value = serde_json::from_str::<Value>(trimmed)
+        .or_else(|_| {
+            trimmed
+                .lines()
+                .rev()
+                .find_map(|line| serde_json::from_str::<Value>(line).ok())
+                .ok_or_else(|| {
+                    serde_json::Error::io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Grok did not return a JSON result",
+                    ))
+                })
+        })
+        .map_err(|error| format!("parse Grok JSON result: {error}"))?;
+    let text = value
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let session_id = value
+        .get("sessionId")
+        .or_else(|| value.get("session_id"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    if text.is_empty() {
+        return Err("Grok completed without a final response.".to_string());
+    }
+    Ok((text, session_id))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_grok<R: Runtime>(
+    app: AppHandle<R>,
+    turn_id: String,
+    prompt: String,
+    resume_session_id: Option<String>,
+    cwd: Option<String>,
+    model: Option<String>,
+    effort: Option<String>,
+    permission_mode: Option<String>,
+    managed_runtime: Option<ManagedAgentRuntimeReadiness>,
+) -> Result<AgentRunResult, String> {
+    let permission_mode = normalize_agent_permission_mode(permission_mode);
+    let workspace = normalize_agent_cwd(cwd)?.ok_or_else(|| {
+        "Grok managed execution requires a selected workspace; execution was not started."
+            .to_string()
+    })?;
+    let readiness = managed_runtime.as_ref().ok_or_else(|| {
+        "Grok managed runtime readiness is missing; execution was not started.".to_string()
+    })?;
+    let model = model
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "grok-4.6".to_string());
+    let effort = normalize_grok_effort(effort);
+    let mut cmd = grok_isolated_cli_command()?;
+    let api_key_injected = inject_agent_cli_credential_env(&mut cmd, "grok");
+    if !api_key_injected && !grok_oauth_logged_in() {
+        return Err(
+            "Grok 인증이 필요합니다. 설정 > 연결 > Grok에서 브라우저 로그인 또는 xAI API 키 연결을 완료한 뒤 다시 보내세요."
+                .to_string(),
+        );
+    }
+    cmd.arg("--cwd")
+        .arg(&workspace)
+        .arg("--model")
+        .arg(&model)
+        .arg("--reasoning-effort")
+        .arg(&effort)
+        .arg("--output-format")
+        .arg("json")
+        .arg("--max-turns")
+        .arg("25")
+        .arg("--no-subagents");
+    if permission_mode == "auto" {
+        cmd.args(["--sandbox", "workspace", "--permission-mode", "auto"]);
+    } else {
+        cmd.args([
+            "--sandbox",
+            "read-only",
+            "--permission-mode",
+            "default",
+            "--tools",
+            "read_file,grep,list_dir,web_search,web_fetch",
+        ]);
+    }
+    if let Some(session_id) = resume_session_id.filter(|value| !value.trim().is_empty()) {
+        cmd.arg("--resume").arg(session_id);
+    }
+    cmd.arg("-p")
+        .arg(prompt)
+        .current_dir(&workspace)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("LANG", "ko_KR.UTF-8")
+        .env("LC_CTYPE", "ko_KR.UTF-8");
+    cmd = wrap_ready_managed_command(
+        cmd,
+        AgentProviderKind::Grok,
+        &permission_mode,
+        &workspace,
+        readiness,
+    )?;
+
+    emit_agent_event(
+        &app,
+        &turn_id,
+        AgentStreamEvent {
+            kind: "status".into(),
+            text: None,
+            status: Some("grok.starting".into()),
+            raw: Some(format!("provider=grok model={model}")),
+            provider_session_id: None,
+            is_error: None,
+        },
+    );
+
+    configure_agent_process_tree(&mut cmd);
+    let child = cmd
+        .spawn()
+        .map_err(|error| format!("grok spawn: {error}"))?;
+    let child_id = child.id();
+    let _child_registration = AgentChildRegistration::new(&turn_id, child_id);
+    let _power_assertion = AgentPowerAssertion::hold_for_child("grok", child_id);
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("grok wait: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    if !output.status.success() {
+        let raw_error = if stderr.trim().is_empty() {
+            stdout.trim().to_string()
+        } else {
+            stderr.trim().to_string()
+        };
+        let error = provider_limit_message("grok", "Grok", &raw_error).unwrap_or_else(|| {
+            if raw_error.is_empty() {
+                format_cli_exit("grok", output.status)
+            } else {
+                raw_error
+            }
+        });
+        emit_agent_event(
+            &app,
+            &turn_id,
+            AgentStreamEvent {
+                kind: "error".into(),
+                text: Some(error.clone()),
+                status: Some("grok.failed".into()),
+                raw: None,
+                provider_session_id: None,
+                is_error: Some(true),
+            },
+        );
+        return Ok(AgentRunResult {
+            text: error.clone(),
+            provider_session_id: None,
+            raw_events: Vec::new(),
+            is_error: true,
+            error: Some(error),
+        });
+    }
+    let (text, provider_session_id) = parse_grok_json_output(&stdout)?;
+    emit_agent_event(
+        &app,
+        &turn_id,
+        AgentStreamEvent {
+            kind: "result".into(),
+            text: Some(text.clone()),
+            status: Some("grok.completed".into()),
+            raw: None,
+            provider_session_id: provider_session_id.clone(),
+            is_error: Some(false),
+        },
+    );
+    Ok(AgentRunResult {
+        text,
+        provider_session_id,
+        raw_events: Vec::new(),
+        is_error: false,
+        error: None,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_hermes<R: Runtime>(
     app: AppHandle<R>,
@@ -3173,6 +4037,18 @@ fn run_hermes<R: Runtime>(
 ) -> Result<AgentRunResult, String> {
     let hermes_provider = normalize_hermes_provider(hermes_provider);
     let effort = normalize_hermes_effort(effort);
+    let effort = if hermes_provider == "xai" {
+        Some(
+            match effort.as_deref() {
+                Some("low") => "low",
+                Some("medium") => "medium",
+                _ => "high",
+            }
+            .to_string(),
+        )
+    } else {
+        effort
+    };
     let prompt = apply_hermes_workload_prompt(prompt, effort.as_deref());
     let permission_mode = normalize_agent_permission_mode(permission_mode);
     let model = model
@@ -3185,21 +4061,43 @@ fn run_hermes<R: Runtime>(
     let readiness = managed_runtime.as_ref().ok_or_else(|| {
         "Hermes managed runtime readiness is missing; execution was not started.".to_string()
     })?;
+    let hermes_home = readiness_path(&readiness.home_dir, "provider home")?;
+    let verified_resume_session_id = resume_session_id
+        .as_deref()
+        .map(validate_hermes_session_id)
+        .transpose()?;
+    let message_baseline =
+        hermes_message_baseline(&hermes_home, verified_resume_session_id.as_deref())?;
+    let _managed_codex_access = if hermes_provider == "openai-codex" {
+        Some(
+            stage_codex_access_for_managed_hermes(&hermes_home).map_err(|error| {
+                log::warn!("managed Hermes Codex credential staging failed: {error}");
+                "Codex 구독 로그인이 없거나 만료되었습니다. 설정 > 연결 > Codex에서 다시 로그인한 뒤 Hermes를 실행해 주세요.".to_string()
+            })?,
+        )
+    } else {
+        None
+    };
     let mut cmd = command_for_managed_hermes()?;
     // Hermes 의 sub-provider 별로 그에 맞는 사용자 키를 주입.
     // Hermes owns its provider authentication and can import the canonical
     // provider credential itself. Atelier passes credentials only in the child
     // process environment and never copies them into Hermes state.
-    if hermes_provider == "anthropic" {
-        inject_agent_cli_credential_env(&mut cmd, "claude");
+    let credential_ready = if hermes_provider == "anthropic" {
+        inject_agent_cli_credential_env(&mut cmd, "claude")
     } else {
         let hermes_credential_provider = match hermes_provider.as_str() {
             "openai-codex" => "codex",
             "openrouter" => "openrouter",
             "alibaba" => "alibaba",
+            "xai" => "grok",
             _ => "openai-codex",
         };
-        inject_backend_credential_env(&mut cmd, hermes_credential_provider);
+        let injected = inject_backend_credential_env(&mut cmd, hermes_credential_provider);
+        hermes_credentials_ready(&hermes_provider, injected)
+    };
+    if !credential_ready {
+        return Err(hermes_credential_missing_message(&hermes_provider));
     }
     if hermes_provider == "alibaba" {
         cmd.env("DASHSCOPE_BASE_URL", ALIBABA_TOKEN_PLAN_OPENAI_BASE_URL);
@@ -3211,31 +4109,20 @@ fn run_hermes<R: Runtime>(
         &workspace,
         readiness,
     )?;
-    // -Q (quiet) 는 banner·spinner·도구 프리뷰를 차단해 stdout 무음이 됨 → 진행 표시 불가.
-    // 진행 흐름 노출을 위해 quiet 끄고, 대신 --source tool 로 세션 리스트 노출만 차단.
-    cmd.arg("chat")
-        .arg("--source")
-        .arg("tool")
-        .arg("--max-turns")
-        .arg("90")
-        .arg("--provider")
-        .arg(hermes_provider)
-        .arg("-m")
-        .arg(&model)
-        .arg("-q")
-        .arg(prompt);
-    push_hermes_isolation_args(&mut cmd, readiness)?;
+    push_hermes_query_args(
+        &mut cmd,
+        readiness,
+        &hermes_provider,
+        &model,
+        &prompt,
+        &permission_mode,
+        verified_resume_session_id.as_deref(),
+    )?;
     cmd.env("PATH", crate::augmented_cli_path())
         .env("LANG", "ko_KR.UTF-8")
         .env("LC_CTYPE", "ko_KR.UTF-8")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if permission_mode == "auto" {
-        cmd.arg("--checkpoints");
-    }
-    if let Some(session_id) = resume_session_id.filter(|s| !s.trim().is_empty()) {
-        cmd.arg("--resume").arg(session_id);
-    }
     cmd.current_dir(workspace);
 
     emit_agent_event(
@@ -3252,6 +4139,10 @@ fn run_hermes<R: Runtime>(
     );
 
     configure_agent_process_tree(&mut cmd);
+    let run_started_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("resolve Hermes execution start time: {error}"))?
+        .as_secs_f64();
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("hermes spawn: {e} ({})", describe_hermes_command()))?;
@@ -3267,6 +4158,9 @@ fn run_hermes<R: Runtime>(
                     out.push('\n');
                 }
                 out.push_str(&line);
+                if out.len() > HERMES_STDERR_TAIL_LIMIT {
+                    out = bounded_utf8_tail(&out, HERMES_STDERR_TAIL_LIMIT);
+                }
             }
             out
         })
@@ -3294,6 +4188,10 @@ fn run_hermes<R: Runtime>(
         }
     });
     let mut raw_events: Vec<String> = Vec::new();
+    let mut stdout_line_count: u64 = 0;
+    let mut stdout_byte_count: u64 = 0;
+    let mut stdout_sha256 = Sha256::new();
+    let mut stdout_provider_diagnostic = false;
     let mut final_text = String::new();
     let mut provider_session_id: Option<String> = None;
     let mut saw_completion_hint = false;
@@ -3304,48 +4202,16 @@ fn run_hermes<R: Runtime>(
     let mut tool_block_end: Option<String> = None;
     let mut diff_block_active = false;
     let mut replacement_block_active = false;
+    let machine_readable_output = true;
 
-    // hermes stdout 라인을 codex 패턴으로 분류 emit (status / tool / delta).
-    // 저장 전 raw 분류 = 본문 시작(첫 ━/─ 박스 구분선 또는 첫 메타 종료) 전까지의 모든 라인은
-    // 본문에 누적하지 않는다. 본문 시작 이후엔 박스 라인/⚕ 라벨/trailing 메타도 status로 분류.
-    let mut content_started = false;
-    let is_box_line = |s: &str| -> bool {
-        let t = s.trim();
-        !t.is_empty()
-            && (t.starts_with('━') || t.starts_with('─') || t.starts_with('═'))
-            && t.chars()
-                .filter(|c| !c.is_whitespace())
-                .all(|c| matches!(c, '━' | '─' | '═' | '—' | '-'))
-    };
-    let contains_box_run = |s: &str| -> bool {
-        // 한 라인 안에 8자 이상 연속 ━/─/═ → 박스 헤더 (예: "─  ⚕ Hermes  ─────...")
-        let mut run = 0usize;
-        for c in s.chars() {
-            if matches!(c, '━' | '─' | '═') {
-                run += 1;
-                if run >= 8 {
-                    return true;
-                }
-            } else {
-                run = 0;
-            }
-        }
-        false
-    };
-    let is_provider_label = |s: &str| -> bool {
-        let t = s.trim();
-        // "─  ⚕ Hermes  ───..." 또는 "⋮ Hermes" 같은 박스 헤더
-        (t.contains("⚕")
-            || t.contains("⋮")
-            || t.contains("◆")
-            || t.contains("◇")
-            || t.contains("•")
-            || t.contains("·"))
-            && (t.contains("Hermes")
-                || t.contains("Claude")
-                || t.contains("Codex")
-                || t.contains("GPT"))
-    };
+    // Hermes는 질문 미리보기, reasoning, 중간 tool-call 전 narration, 최종 답변을
+    // 모두 박스 형태로 출력한다. 따라서 일반 구분선이 아니라 명시적인 응답 헤더와
+    // 푸터 사이만 답변 후보로 캡처한다. 중간 박스는 다음 응답 헤더가 오면 교체되고,
+    // 프로세스 종료 시 마지막 응답 박스만 최종 결과로 공개한다.
+    let mut response_box_open = false;
+    let is_box_line = agent_line_is_hermes_box_rule;
+    let contains_box_run = agent_line_contains_hermes_box_run;
+    let is_provider_label = agent_line_is_hermes_response_header;
     let is_trailing_meta = |s: &str| -> bool {
         let t = s.trim();
         if t.is_empty() {
@@ -3515,13 +4381,22 @@ fn run_hermes<R: Runtime>(
                     Err(e) => return Err(format!("hermes wait: {e}")),
                 }
 
-                let idle_for = last_output_at.elapsed();
+                let now = Instant::now();
+                let idle_for = now.saturating_duration_since(last_output_at);
                 let has_text = !final_text.trim().is_empty();
-                let completed_and_idle = saw_completion_hint
+                let completed_and_idle = !machine_readable_output
+                    && saw_completion_hint
                     && idle_for >= Duration::from_secs(if has_text { 3 } else { 12 });
-                let answer_silent_too_long = has_text && idle_for >= Duration::from_secs(900);
-                let activity_silent_too_long =
-                    !has_text && !raw_events.is_empty() && idle_for >= Duration::from_secs(1800);
+                let answer_silent_too_long =
+                    !machine_readable_output && has_text && idle_for >= Duration::from_secs(900);
+                let activity_silent_too_long = if machine_readable_output {
+                    // Quiet mode deliberately suppresses stdout rendering, but stdout
+                    // still proves process activity. Bound both cold-start silence
+                    // (zero lines) and a hang after prior activity.
+                    hermes_quiet_activity_timed_out(last_output_at, now)
+                } else {
+                    !has_text && stdout_line_count > 0 && idle_for >= HERMES_ACTIVITY_IDLE_TIMEOUT
+                };
                 if completed_and_idle || answer_silent_too_long || activity_silent_too_long {
                     finalized_after_idle = completed_and_idle;
                     if answer_silent_too_long {
@@ -3553,10 +4428,25 @@ fn run_hermes<R: Runtime>(
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         };
-        raw_events.push(line.clone());
         let trimmed = line.trim();
+        if stdout_line_count > 0 {
+            stdout_sha256.update(b"\n");
+            stdout_byte_count = stdout_byte_count.saturating_add(1);
+        }
+        stdout_sha256.update(line.as_bytes());
+        stdout_line_count = stdout_line_count.saturating_add(1);
+        stdout_byte_count = stdout_byte_count.saturating_add(line.len() as u64);
+        stdout_provider_diagnostic |= is_hermes_provider_diagnostic_line(&line);
         if let Some(usage) = parse_cli_token_usage_line(&line, Some(&model), "cli") {
             emit_agent_token_usage(&app, &turn_id, usage);
+        }
+
+        // Quiet Hermes stdout is still presentation output. With
+        // display.show_reasoning enabled it contains reasoning, tool progress,
+        // and the final answer together. Retain only bounded count/byte/hash
+        // evidence; the exact assistant answer is verified from state.db.
+        if machine_readable_output {
+            continue;
         }
 
         if replacement_block_active {
@@ -3650,22 +4540,8 @@ fn run_hermes<R: Runtime>(
         }
 
         if trimmed.is_empty() {
-            if content_started {
-                if !final_text.is_empty() {
-                    final_text.push('\n');
-                }
-                emit_agent_event(
-                    &app,
-                    &turn_id,
-                    AgentStreamEvent {
-                        kind: "delta".into(),
-                        text: Some("\n".into()),
-                        status: None,
-                        raw: Some(line.clone()),
-                        provider_session_id: provider_session_id.clone(),
-                        is_error: None,
-                    },
-                );
+            if response_box_open && !final_text.is_empty() {
+                final_text.push('\n');
             }
             continue;
         }
@@ -3722,8 +4598,56 @@ fn run_hermes<R: Runtime>(
             continue;
         }
 
-        // 박스 구분선 / ⚕ 라벨 헤더 → status로 emit + content_started 전환
-        if is_box_line(&line) || contains_box_run(&line) || is_provider_label(&line) {
+        // 명시적인 응답 헤더만 답변 후보의 시작으로 인정한다. Hermes는 tool-call
+        // 사이의 계획 narration도 같은 헤더로 출력하므로 새 헤더마다 후보를 교체하고
+        // 프로세스가 끝날 때 마지막 박스만 result 이벤트로 공개한다.
+        if is_provider_label(&line) {
+            response_box_open = true;
+            final_text.clear();
+            emit_agent_event(
+                &app,
+                &turn_id,
+                AgentStreamEvent {
+                    kind: "status".into(),
+                    text: Some(trimmed.to_string()),
+                    status: Some("hermes.response_buffering".into()),
+                    raw: Some(line.clone()),
+                    provider_session_id: provider_session_id.clone(),
+                    is_error: None,
+                },
+            );
+            continue;
+        }
+
+        if agent_line_is_hermes_response_footer(&line) {
+            response_box_open = false;
+            emit_agent_event(
+                &app,
+                &turn_id,
+                AgentStreamEvent {
+                    kind: "status".into(),
+                    text: Some(trimmed.to_string()),
+                    status: Some("hermes.response_buffered".into()),
+                    raw: Some(line.clone()),
+                    provider_session_id: provider_session_id.clone(),
+                    is_error: None,
+                },
+            );
+            continue;
+        }
+
+        // 최종 여부를 아직 알 수 없는 응답 박스 내용은 실시간 delta로 공개하지 않는다.
+        // 프로세스 종료 후 마지막 응답 박스만 result 이벤트로 전달된다.
+        if response_box_open {
+            if !final_text.is_empty() {
+                final_text.push('\n');
+            }
+            final_text.push_str(&line);
+            continue;
+        }
+
+        // 응답 외 박스 구분선은 상태 UI로만 전달한다.
+        if is_box_line(&line) || contains_box_run(&line) {
             emit_agent_event(
                 &app,
                 &turn_id,
@@ -3736,10 +4660,6 @@ fn run_hermes<R: Runtime>(
                     is_error: None,
                 },
             );
-            // 박스 구분선이 처음 나오면 본문 시작 신호로 간주
-            if !content_started {
-                content_started = true;
-            }
             continue;
         }
 
@@ -3783,12 +4703,7 @@ fn run_hermes<R: Runtime>(
             continue;
         }
 
-        // 본문 시작 전 — 어떤 라인이든 모두 drop (instruction echo, wrapped bullet body, query echo 등)
-        if !content_started {
-            continue;
-        }
-
-        // 2) hermes 메타 라인 → status
+        // Hermes 메타 라인 → status
         if trimmed.starts_with("Initializing agent")
             || trimmed.starts_with("↺")
             || trimmed.starts_with("📦")
@@ -3811,7 +4726,7 @@ fn run_hermes<R: Runtime>(
             continue;
         }
 
-        // 3) 사고 narration → status (thinking)
+        // 사고 narration → status (thinking)
         let lower = trimmed.to_ascii_lowercase();
         let is_thinking = lower.starts_with("thinking")
             || lower.starts_with("tinkering")
@@ -3839,7 +4754,7 @@ fn run_hermes<R: Runtime>(
             continue;
         }
 
-        // 4) 도구 호출 / 명령 라인 → tool
+        // 도구 호출 / 명령 라인 → tool
         if trimmed.starts_with("$ ")
             || trimmed.starts_with("Running:")
             || trimmed.starts_with("Tool:")
@@ -3864,25 +4779,7 @@ fn run_hermes<R: Runtime>(
             continue;
         }
 
-        // 5) 답변 본문
-        content_started = true;
-        if !final_text.is_empty() {
-            final_text.push('\n');
-        }
-        final_text.push_str(&line);
-
-        emit_agent_event(
-            &app,
-            &turn_id,
-            AgentStreamEvent {
-                kind: "delta".into(),
-                text: Some(format!("{line}\n")),
-                status: None,
-                raw: Some(line.clone()),
-                provider_session_id: provider_session_id.clone(),
-                is_error: None,
-            },
-        );
+        // 응답 박스 밖의 분류되지 않은 라인은 질문/지침 echo일 수 있으므로 공개하지 않는다.
     }
 
     let status = if let Some(status) = observed_status {
@@ -3893,119 +4790,90 @@ fn run_hermes<R: Runtime>(
     let stderr_text = stderr_handle
         .and_then(|h| h.join().ok())
         .unwrap_or_default();
-    let auth_error =
-        hermes_auth_error_message(&format!("{}\n{}", raw_events.join("\n"), stderr_text));
-    let mut text = final_text.trim().to_string();
-    let mut best: Vec<String> = Vec::new();
-    let mut current: Vec<String> = Vec::new();
-    let mut in_answer_box = false;
-    let mut extract_replacement_block = false;
-    for line in &raw_events {
-        let trimmed = line.trim();
-        if is_provider_label(line) {
-            current.clear();
-            in_answer_box = true;
-            extract_replacement_block = false;
-            continue;
-        }
-        if !in_answer_box {
-            continue;
-        }
-        if is_trailing_meta(line)
-            || is_box_line(line)
-            || contains_box_run(line)
-            || trimmed.starts_with("Query:")
-        {
-            if current.iter().any(|l| !l.trim().is_empty()) {
-                best = current.clone();
-            }
-            current.clear();
-            in_answer_box = false;
-            extract_replacement_block = false;
-            continue;
-        }
-        if extract_replacement_block {
-            if trimmed.is_empty()
-                || is_replacement_dump_line(line)
-                || is_replacement_map_entry_line(line)
-                || is_command_dump(line)
-            {
-                continue;
-            }
-            extract_replacement_block = false;
-        }
-        if is_replacement_dump_line(line)
-            && (trimmed.starts_with("repls={")
-                || trimmed.starts_with("repls = {")
-                || ((trimmed.starts_with('\'') || trimmed.starts_with('"'))
-                    && (trimmed.contains(".tsx")
-                        || trimmed.contains(".ts")
-                        || trimmed.contains(".jsx")
-                        || trimmed.contains(".js")
-                        || trimmed.contains(".py")
-                        || trimmed.contains(".css")
-                        || trimmed.contains(".json"))))
-        {
-            extract_replacement_block = true;
-            continue;
-        }
-        if is_activity_summary(line) || is_command_dump(line) || is_replacement_dump_line(line) {
-            continue;
-        }
-        if is_hermes_provider_diagnostic_line(line) {
-            continue;
-        }
-        current.push(trimmed.to_string());
+    if stdout_line_count > 0 {
+        raw_events.push(format!(
+            "Hermes quiet stdout evidence: lines={stdout_line_count}, bytes={stdout_byte_count}, sha256={:x}",
+            stdout_sha256.finalize()
+        ));
     }
-    if current.iter().any(|l| !l.trim().is_empty()) {
-        best = current;
+    let auth_error = (!status.success())
+        .then(|| hermes_auth_error_message(&stderr_text))
+        .flatten();
+    let runtime_error = (!status.success())
+        .then(|| hermes_runtime_error_message(&stderr_text))
+        .flatten();
+    let session_id_result = verified_hermes_session_id(&stderr_text);
+    provider_session_id = session_id_result.as_ref().ok().cloned();
+    let redacted_stderr = clip_cli_output(redact_cli_output(&hermes_stderr_without_session_id(
+        &stderr_text,
+    )));
+    if !redacted_stderr.trim().is_empty() {
+        raw_events.push(format!("Hermes stderr: {redacted_stderr}"));
     }
-    while best.first().is_some_and(|l| l.trim().is_empty()) {
-        best.remove(0);
-    }
-    while best.last().is_some_and(|l| l.trim().is_empty()) {
-        best.pop();
-    }
-    if !best.is_empty() {
-        text = best.join("\n").trim().to_string();
-    }
-    if text.is_empty() && !stderr_text.trim().is_empty() {
-        text = stderr_text
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("session_id:"))
-            .collect::<Vec<_>>()
-            .join("\n")
-            .trim()
-            .to_string();
-    }
+
     let idle_timed_out = idle_timeout_status.is_some();
+    let process_succeeded = status.success() && !finalized_after_idle;
+    let should_verify_answer =
+        auth_error.is_none() && runtime_error.is_none() && process_succeeded && !idle_timed_out;
+    let mut answer_verification_error = None;
+    let text = if should_verify_answer {
+        match session_id_result {
+            Ok(ref session_id) => {
+                let boundary = HermesAnswerBoundary {
+                    min_message_id: message_baseline.max_message_id,
+                    run_started_at,
+                    resumed_from: verified_resume_session_id.clone(),
+                    db_existed_before: message_baseline.db_existed_before,
+                };
+                match hermes_latest_assistant_content(&hermes_home, session_id, &boundary) {
+                    Ok(answer) => answer,
+                    Err(error) => {
+                        answer_verification_error = Some(error);
+                        String::new()
+                    }
+                }
+            }
+            Err(error) => {
+                answer_verification_error = Some(error);
+                String::new()
+            }
+        }
+    } else {
+        String::new()
+    };
     let provider_timeout_without_answer = text.trim().is_empty()
-        && raw_events
-            .iter()
-            .any(|line| is_hermes_provider_diagnostic_line(line));
+        && (stdout_provider_diagnostic
+            || stderr_text.lines().any(is_hermes_provider_diagnostic_line));
     let is_error = auth_error.is_some()
-        || (!status.success() && !finalized_after_idle)
+        || runtime_error.is_some()
+        || !status.success()
+        || finalized_after_idle
         || idle_timed_out
-        || provider_timeout_without_answer;
+        || provider_timeout_without_answer
+        || answer_verification_error.is_some();
     let error = if is_error {
         Some(if let Some(auth_error) = auth_error {
             auth_error
+        } else if let Some(runtime_error) = runtime_error {
+            runtime_error
         } else if let Some(idle_status) = idle_timeout_status {
             match idle_status {
                 "hermes.answer_idle_timeout" => {
                     "Hermes가 답변 작성 중 15분 동안 새 출력을 내지 않아 중단했습니다.".to_string()
                 }
                 "hermes.activity_idle_timeout" => {
-                    "Hermes가 도구 실행 후 30분 동안 새 출력을 내지 않아 중단했습니다.".to_string()
+                    "Hermes가 30분 동안 새 출력을 내지 않아 중단했습니다.".to_string()
                 }
                 _ => "Hermes가 오래 응답하지 않아 중단했습니다.".to_string(),
             }
         } else if provider_timeout_without_answer {
             "Hermes 모델 호출이 시간 안에 응답하지 않아 중단됐습니다. Atelier가 다음 요청부터 긴 Hermes/Codex 세션 resume 대신 짧은 최근 대화 컨텍스트로 실행합니다.".to_string()
-        } else if stderr_text.trim().is_empty() {
+        } else if let Some(answer_error) = answer_verification_error {
+            answer_error
+        } else if hermes_stderr_without_session_id(&stderr_text).is_empty() {
             format_cli_exit("hermes", status)
         } else {
-            stderr_text.trim().to_string()
+            hermes_stderr_without_session_id(&stderr_text)
         })
     } else {
         None
@@ -4081,6 +4949,17 @@ fn run_registered_adapter<R: Runtime>(
             request.permission_mode,
         ),
         AgentProviderKind::GajaeCode => run_gajecode(app, request),
+        AgentProviderKind::Grok => run_grok(
+            app,
+            request.turn_id,
+            request.prompt,
+            request.resume_session_id,
+            request.cwd,
+            request.model,
+            request.effort,
+            request.permission_mode,
+            request.managed_runtime,
+        ),
         AgentProviderKind::Hermes => run_hermes(
             app,
             request.turn_id,
@@ -4190,7 +5069,7 @@ pub async fn agent_send<R: Runtime>(
     crate::stella::guard_agent_execution(&prompt, safety_subject.as_deref())?;
     let managed_provider = matches!(
         provider_kind,
-        AgentProviderKind::Hermes | AgentProviderKind::GajaeCode
+        AgentProviderKind::Hermes | AgentProviderKind::GajaeCode | AgentProviderKind::Grok
     );
     if managed_provider {
         begin_agent_lifecycle(&app, &turn_id, provider_kind)?;
@@ -4322,6 +5201,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parses_grok_headless_json_result_and_session() {
+        let (text, session) = parse_grok_json_output(
+            r#"{"text":"완료했습니다.","stopReason":"EndTurn","sessionId":"grok-session-1"}"#,
+        )
+        .expect("Grok JSON result");
+        assert_eq!(text, "완료했습니다.");
+        assert_eq!(session.as_deref(), Some("grok-session-1"));
+        assert!(parse_grok_json_output(r#"{"text":""}"#).is_err());
+    }
+
+    #[test]
+    fn normalizes_grok_effort_to_official_levels() {
+        assert_eq!(normalize_grok_effort(Some("xhigh".to_string())), "xhigh");
+        assert_eq!(normalize_grok_effort(Some("minimal".to_string())), "low");
+        assert_eq!(normalize_grok_effort(Some("ultra".to_string())), "xhigh");
+        assert_eq!(normalize_grok_effort(Some("invalid".to_string())), "high");
+    }
+
+    #[test]
+    fn routes_grok_models_through_xai_provider_contracts() {
+        assert_eq!(normalize_hermes_provider(Some("grok".to_string())), "xai");
+        assert_eq!(default_hermes_model("xai"), "grok-4.5");
+        assert_eq!(
+            gajecode_model_selector_with_effort("xai/grok-4.5", Some("low")),
+            "xai/grok-4.5:low"
+        );
+        assert_eq!(
+            gajecode_model_selector_with_effort("xai/grok-4.5", Some("ultra")),
+            "xai/grok-4.5:high"
+        );
+    }
+
+    #[test]
     fn extracts_claude_token_usage_with_remaining_context() {
         let event = serde_json::json!({
             "type": "result",
@@ -4373,6 +5285,28 @@ mod tests {
         assert_eq!(usage.total_tokens, 56_911);
         assert_eq!(usage.context_window, None);
         assert_eq!(usage.source, "cli_estimate");
+    }
+
+    #[test]
+    fn hermes_quiet_activity_timeout_has_a_bounded_cold_start() {
+        let started = Instant::now();
+        assert!(!hermes_quiet_activity_timed_out(
+            started,
+            started + HERMES_ACTIVITY_IDLE_TIMEOUT - Duration::from_millis(1)
+        ));
+        assert!(hermes_quiet_activity_timed_out(
+            started,
+            started + HERMES_ACTIVITY_IDLE_TIMEOUT
+        ));
+
+        let activity_reset = started + Duration::from_secs(20 * 60);
+        assert!(
+            !hermes_quiet_activity_timed_out(
+                activity_reset,
+                started + HERMES_ACTIVITY_IDLE_TIMEOUT
+            ),
+            "new stdout activity must reset the quiet-mode idle window"
+        );
     }
 
     #[test]
@@ -4853,6 +5787,33 @@ mod tests {
         assert_eq!(
             normalize_gajecode_model_for_cli(Some("claude-fable-5".into())),
             "anthropic/claude-fable-5"
+        );
+    }
+
+    #[test]
+    fn gajecode_unmapped_live_claude_models_keep_anthropic_provider() {
+        // 실측: 접두사 없는 `claude-sonnet-5` 를 넘기면 GJC 가
+        // `amazon-bedrock/anthropic.claude-sonnet-5` 로 착지해 "No API key" 로 죽는다.
+        assert_eq!(
+            normalize_gajecode_model_for_cli(Some("claude-sonnet-5".into())),
+            "anthropic/claude-sonnet-5"
+        );
+        assert_eq!(
+            normalize_gajecode_model_for_cli(Some("claude-opus-5-1".into())),
+            "anthropic/claude-opus-5-1"
+        );
+        // 이미 공급자가 붙은 값과 다른 공급자 모델은 건드리지 않는다.
+        assert_eq!(
+            normalize_gajecode_model_for_cli(Some("anthropic/claude-sonnet-5".into())),
+            "anthropic/claude-sonnet-5"
+        );
+        assert_eq!(
+            normalize_gajecode_model_for_cli(Some("alibaba-token-plan/glm-5.2".into())),
+            "alibaba-token-plan/glm-5.2"
+        );
+        assert_eq!(
+            normalize_gajecode_model_for_cli(Some("codex/gpt-5.6-sol".into())),
+            "openai-codex/gpt-5.6-sol"
         );
     }
 
@@ -5374,14 +6335,58 @@ export ANTHROPIC_API_KEY="tc-example"
     }
 
     #[test]
+    fn hermes_response_header_requires_a_framed_provider_label() {
+        assert!(agent_line_is_hermes_response_header(
+            "╭─ ⚕ Hermes ─────────────────────────────╮"
+        ));
+        assert!(agent_line_is_hermes_response_header(
+            "─  ⚕ Hermes  ─────────────────────────────"
+        ));
+        assert!(agent_line_is_hermes_response_header(
+            "\u{1b}[38;2;205;127;50m╭─ ⚕ Hermes ─────────────────────────────╮\u{1b}[0m"
+        ));
+        assert!(!agent_line_is_hermes_response_header(
+            "──────────────────────────────────────────"
+        ));
+        assert!(!agent_line_is_hermes_response_header(
+            "⚕ gpt-5.6-sol · 42% context"
+        ));
+        assert!(!agent_line_is_hermes_response_header("Atelier 표시 지침:"));
+    }
+
+    #[test]
+    fn hermes_response_footer_is_distinct_from_generic_rules() {
+        assert!(agent_line_is_hermes_response_footer(
+            "╰──────────────────────────────────────────╯"
+        ));
+        assert!(agent_line_is_hermes_response_footer(
+            "└──────────────────────────────────────────┘"
+        ));
+        assert!(agent_line_is_hermes_response_footer(
+            "\u{1b}[38;2;205;127;50m╰──────────────────────────────────────────╯\u{1b}[0m"
+        ));
+        assert!(!agent_line_is_hermes_response_footer(
+            "──────────────────────────────────────────"
+        ));
+        assert!(!agent_line_is_hermes_response_footer(
+            "╭─ ⚕ Hermes ─────────────────────────────╮"
+        ));
+    }
+
+    #[test]
     fn managed_agent_permission_support_is_provider_scoped() {
         assert!(ensure_managed_agent_permission_support(AgentProviderKind::Claude).is_ok());
         assert!(ensure_managed_agent_permission_support(AgentProviderKind::Codex).is_ok());
         if cfg!(target_os = "macos") {
             assert!(ensure_managed_agent_permission_support(AgentProviderKind::Hermes).is_ok());
             assert!(ensure_managed_agent_permission_support(AgentProviderKind::GajaeCode).is_ok());
+            assert!(ensure_managed_agent_permission_support(AgentProviderKind::Grok).is_ok());
         } else {
-            for provider in [AgentProviderKind::Hermes, AgentProviderKind::GajaeCode] {
+            for provider in [
+                AgentProviderKind::Hermes,
+                AgentProviderKind::GajaeCode,
+                AgentProviderKind::Grok,
+            ] {
                 let error = ensure_managed_agent_permission_support(provider).unwrap_err();
                 assert!(error.contains("requires Atelier's macOS /usr/bin/sandbox-exec"));
             }
@@ -5411,7 +6416,7 @@ export ANTHROPIC_API_KEY="tc-example"
     fn unsupported_managed_agent_send_fails_closed_before_spawn() {
         let app = tauri::test::mock_app();
         let app_handle = app.handle().clone();
-        for provider in ["hermes", "gajecode"] {
+        for provider in ["hermes", "gajecode", "grok"] {
             let turn_id = format!("permission-fail-closed-{provider}-{}", std::process::id());
             let result = tauri::async_runtime::block_on(agent_send(
                 app_handle.clone(),
@@ -5526,7 +6531,7 @@ export ANTHROPIC_API_KEY="tc-example"
     }
 
     #[test]
-    fn hermes_isolation_ignores_personal_rules_but_explicitly_keeps_managed_skills() {
+    fn hermes_isolation_validates_managed_skills_without_eager_preload() {
         let root =
             std::env::temp_dir().join(format!("atelier-hermes-skills-{}", std::process::id()));
         let skills = root.join("skills");
@@ -5564,11 +6569,523 @@ export ANTHROPIC_API_KEY="tc-example"
         assert!(args.iter().any(|arg| arg == "--ignore-user-config"));
         assert!(args.iter().any(|arg| arg == "--ignore-rules"));
         assert!(!args.iter().any(|arg| arg == "--safe-mode"));
-        assert!(args.windows(2).any(|args| args == ["--skills", "search"]));
+        assert!(!args.iter().any(|arg| arg == "--skills"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hermes_query_keeps_quiet_lifecycle_and_on_demand_skills() {
+        let root =
+            std::env::temp_dir().join(format!("atelier-hermes-query-{}", std::process::id()));
+        let skills = root.join("skills");
+        fs::create_dir_all(&skills).expect("create Hermes skill fixture");
+        fs::write(
+            skills.join(".bundled_manifest"),
+            "search:0123456789abcdef0123456789abcdef\n",
+        )
+        .expect("write Hermes skill manifest");
+        let readiness = ManagedAgentRuntimeReadiness {
+            provider: "hermes".into(),
+            ready: true,
+            repaired: false,
+            executable: "/managed/hermes".into(),
+            provider_root: "/managed".into(),
+            home_dir: "/managed/home".into(),
+            state_dir: "/managed/state".into(),
+            cache_dir: "/managed/cache".into(),
+            temp_dir: "/managed/tmp".into(),
+            skills_dir: skills.to_string_lossy().into_owned(),
+            workspace_dir: None,
+            runtime_pin: "test".into(),
+            dependency_pin: None,
+            policy_version: "test".into(),
+            skill_bootstrap_version: "test".into(),
+            receipt_path: "/managed/readiness.json".into(),
+        };
+        let mut command = Command::new("hermes");
+        push_hermes_query_args(
+            &mut command,
+            &readiness,
+            "openai-codex",
+            "gpt-5.6-sol",
+            "최종 답변",
+            "auto",
+            Some("20260730_000000_fixture"),
+        )
+        .expect("configure Hermes query");
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(args.first().map(String::as_str), Some("chat"));
+        assert!(args.iter().any(|arg| arg == "-Q"));
+        assert!(!args.iter().any(|arg| arg == "-z"));
+        assert!(args.windows(2).any(|args| args == ["-q", "최종 답변"]));
         assert!(args
             .windows(2)
-            .any(|args| args == ["--skills", "code-review"]));
+            .any(|args| args == ["--provider", "openai-codex"]));
+        assert!(args
+            .windows(2)
+            .any(|args| args == ["--resume", "20260730_000000_fixture"]));
+        assert!(args.iter().any(|arg| arg == "--checkpoints"));
+        assert!(!args.iter().any(|arg| arg == "--skills"));
+        // 무인 -Q 세션은 Hermes 내부 승인 게이트(도달 불가능한 60초 대기 후
+        // 거짓 "User denied")를 반드시 끈 채로 스폰되어야 한다.
+        assert!(
+            command.get_envs().any(|(key, value)| {
+                key == "HERMES_YOLO_MODE" && value.map(|value| value == "1").unwrap_or(false)
+            }),
+            "unattended Hermes query must disable the unreachable interactive approval gate"
+        );
+        let mut invalid_resume = Command::new("hermes");
+        assert!(
+            push_hermes_query_args(
+                &mut invalid_resume,
+                &readiness,
+                "openai-codex",
+                "gpt-5.6-sol",
+                "최종 답변",
+                "basic",
+                Some("safe' OR 1=1 --"),
+            )
+            .is_err(),
+            "invalid resume ids must fail before Hermes launch"
+        );
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hermes_quiet_stderr_requires_a_strict_session_identity() {
+        let stderr = "Provider warning\nsession_id: 20260730_000000_fixture\n";
+        assert_eq!(
+            verified_hermes_session_id(stderr).expect("valid session id"),
+            "20260730_000000_fixture"
+        );
+        assert_eq!(hermes_stderr_without_session_id(stderr), "Provider warning");
+        for invalid in [
+            "session_id: ../../other",
+            "session_id: safe' OR 1=1 --",
+            "session_id: value with spaces",
+            "Provider warning only",
+        ] {
+            assert!(
+                verified_hermes_session_id(invalid).is_err(),
+                "invalid or absent Hermes session id must fail closed: {invalid}"
+            );
+        }
+        assert!(hermes_runtime_error_message(
+            "Context length exceeded (113,866 tokens). Cannot compress further."
+        )
+        .is_some());
+        assert!(hermes_runtime_error_message(
+            "sqlite3.OperationalError: unable to open database file"
+        )
+        .is_some());
+    }
+
+    #[cfg(target_os = "macos")]
+    fn create_hermes_state_fixture(label: &str, sql: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock after unix epoch")
+            .as_nanos();
+        let home = std::env::temp_dir().join(format!(
+            "atelier-hermes-answer-{label}-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&home).expect("create Hermes state fixture home");
+        let output = Command::new("/usr/bin/sqlite3")
+            .arg(home.join("state.db"))
+            .arg(sql)
+            .output()
+            .expect("create Hermes SQLite state fixture");
+        assert!(
+            output.status.success(),
+            "create Hermes state fixture failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        home
+    }
+
+    #[cfg(target_os = "macos")]
+    const HERMES_TEST_STATE_SCHEMA: &str = "\
+        CREATE TABLE sessions (\
+            id TEXT PRIMARY KEY,\
+            source TEXT NOT NULL,\
+            parent_session_id TEXT,\
+            started_at REAL NOT NULL,\
+            end_reason TEXT\
+        );\
+        CREATE TABLE messages (\
+            id INTEGER PRIMARY KEY AUTOINCREMENT,\
+            session_id TEXT NOT NULL,\
+            role TEXT NOT NULL,\
+            content TEXT,\
+            reasoning TEXT,\
+            tool_calls TEXT,\
+            active INTEGER NOT NULL DEFAULT 1,\
+            compacted INTEGER NOT NULL DEFAULT 0\
+        );";
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn hermes_state_db_returns_only_latest_non_empty_assistant_content() {
+        let session_id = "20260730_063217_fixture";
+        let final_answer = "검증된 최종 답변입니다.\n둘째 줄의 literal ****도 그대로 유지됩니다.\n";
+        let escaped_answer = final_answer.replace('\'', "''");
+        let sql = format!(
+            "{HERMES_TEST_STATE_SCHEMA}\
+             INSERT INTO sessions(id, source, parent_session_id, started_at, end_reason)\
+             VALUES ('old_session', 'tool', NULL, 50, NULL),\
+                    ('{session_id}', 'tool', NULL, 200, NULL);\
+             INSERT INTO messages(session_id, role, content)\
+             VALUES ('old_session', 'user', 'old request'),\
+                    ('old_session', 'assistant', 'old answer');\
+             INSERT INTO messages(session_id, role, content)\
+             VALUES ('{session_id}', 'user', 'current request');\
+             WITH RECURSIVE counter(value) AS (\
+                SELECT 1 UNION ALL SELECT value + 1 FROM counter WHERE value < 124\
+             )\
+             INSERT INTO messages(session_id, role, content, reasoning)\
+             SELECT '{session_id}', 'assistant', '', 'Planning/Inspecting reasoning ' || value \
+             FROM counter;\
+             INSERT INTO messages(session_id, role, content, reasoning)\
+             VALUES ('{session_id}', 'tool', 'tool output must not render', NULL);\
+             INSERT INTO messages(session_id, role, content, reasoning)\
+             VALUES ('{session_id}', 'assistant', '{escaped_answer}', NULL);\
+             INSERT INTO messages(session_id, role, content, tool_calls)\
+             VALUES ('{session_id}', 'assistant', 'tool-call shell must not render', '[{{}}]');\
+             INSERT INTO messages(session_id, role, content, compacted)\
+             VALUES ('{session_id}', 'assistant', 'compacted answer must not render', 1);\
+             INSERT INTO messages(session_id, role, content, active)\
+             VALUES ('{session_id}', 'assistant', 'inactive answer must not render', 0);\
+             INSERT INTO messages(session_id, role, content, reasoning)\
+             VALUES ('{session_id}', 'assistant', char(10) || char(9), 'later empty reasoning');"
+        );
+        let home = create_hermes_state_fixture("exact", &sql);
+        let boundary = HermesAnswerBoundary {
+            min_message_id: 2,
+            run_started_at: 150.0,
+            resumed_from: None,
+            db_existed_before: true,
+        };
+        let answer = hermes_latest_assistant_content(&home, session_id, &boundary)
+            .expect("read exact assistant answer from Hermes state");
+        assert_eq!(answer, final_answer);
+        let resumed_answer = hermes_latest_assistant_content(
+            &home,
+            session_id,
+            &HermesAnswerBoundary {
+                min_message_id: 2,
+                run_started_at: 300.0,
+                resumed_from: Some(session_id.to_string()),
+                db_existed_before: true,
+            },
+        )
+        .expect("same-session resume may use a pre-existing session row");
+        assert_eq!(resumed_answer, final_answer);
+        let post_run_baseline =
+            hermes_message_baseline(&home, None).expect("read global message baseline");
+        assert!(post_run_baseline.max_message_id > 2);
+        assert!(hermes_latest_assistant_content(
+            &home,
+            session_id,
+            &HermesAnswerBoundary {
+                min_message_id: post_run_baseline.max_message_id,
+                run_started_at: 300.0,
+                resumed_from: Some(session_id.to_string()),
+                db_existed_before: true,
+            },
+        )
+        .expect_err("same-session resume must not reuse a previous final answer")
+        .contains("without a new non-empty assistant answer"));
+
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn hermes_state_db_rejects_injection_and_missing_database() {
+        let missing_home = std::env::temp_dir().join(format!(
+            "atelier-hermes-answer-missing-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock after unix epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&missing_home).expect("create missing database fixture home");
+        let boundary = HermesAnswerBoundary {
+            min_message_id: 0,
+            run_started_at: 1.0,
+            resumed_from: None,
+            db_existed_before: false,
+        };
+        assert!(
+            hermes_latest_assistant_content(&missing_home, "valid_session", &boundary)
+                .expect_err("missing state.db must fail")
+                .contains("database is missing")
+        );
+        assert!(
+            hermes_latest_assistant_content(&missing_home, "safe' OR 1=1 --", &boundary,)
+                .expect_err("SQL-shaped session id must fail before database access")
+                .contains("invalid session id")
+        );
+        let _ = fs::remove_dir_all(missing_home);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn hermes_first_use_allows_zero_baseline_then_verifies_new_root_session() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock after unix epoch")
+            .as_nanos();
+        let home = std::env::temp_dir().join(format!(
+            "atelier-hermes-answer-first-use-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&home).expect("create first-use Hermes home");
+        let baseline = hermes_message_baseline(&home, None).expect("allow first-use zero baseline");
+        assert_eq!(baseline.max_message_id, 0);
+        assert!(!baseline.db_existed_before);
+        assert!(
+            hermes_message_baseline(&home, Some("missing_resume")).is_err(),
+            "first use must not allow resume without a state database"
+        );
+
+        let session_id = "first_use_session";
+        let sql = format!(
+            "{HERMES_TEST_STATE_SCHEMA}\
+             INSERT INTO sessions(id, source, parent_session_id, started_at, end_reason)\
+             VALUES ('{session_id}', 'tool', NULL, 200, NULL);\
+             INSERT INTO messages(session_id, role, content)\
+             VALUES ('{session_id}', 'user', 'first request'),\
+                    ('{session_id}', 'assistant', 'first verified answer');"
+        );
+        let output = Command::new("/usr/bin/sqlite3")
+            .arg(home.join("state.db"))
+            .arg(sql)
+            .output()
+            .expect("create first-use Hermes state database");
+        assert!(
+            output.status.success(),
+            "create first-use database failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let answer = hermes_latest_assistant_content(
+            &home,
+            session_id,
+            &HermesAnswerBoundary {
+                min_message_id: baseline.max_message_id,
+                run_started_at: 150.0,
+                resumed_from: None,
+                db_existed_before: baseline.db_existed_before,
+            },
+        )
+        .expect("verify first-use Hermes answer");
+        assert_eq!(answer, "first verified answer");
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn hermes_state_db_fails_when_final_assistant_content_is_absent() {
+        let sql = format!(
+            "{HERMES_TEST_STATE_SCHEMA}\
+             INSERT INTO sessions(id, source, parent_session_id, started_at, end_reason)\
+             VALUES ('empty_session', 'tool', NULL, 200, NULL);\
+             INSERT INTO messages(session_id, role, content)\
+             VALUES ('empty_session', 'user', 'current request'),\
+                    ('empty_session', 'assistant', ''),\
+                    ('empty_session', 'assistant', char(10) || char(9)),\
+                    ('empty_session', 'tool', 'reasoning-like tool output');\
+             INSERT INTO messages(session_id, role, content, tool_calls)\
+             VALUES ('empty_session', 'assistant', 'tool call only', '[{{}}]');\
+             INSERT INTO messages(session_id, role, content, compacted)\
+             VALUES ('empty_session', 'assistant', 'compacted only', 1);\
+             INSERT INTO messages(session_id, role, content, active)\
+             VALUES ('empty_session', 'assistant', 'inactive only', 0);"
+        );
+        let home = create_hermes_state_fixture("empty", &sql);
+        let boundary = HermesAnswerBoundary {
+            min_message_id: 0,
+            run_started_at: 150.0,
+            resumed_from: None,
+            db_existed_before: true,
+        };
+        assert!(
+            hermes_latest_assistant_content(&home, "empty_session", &boundary)
+                .expect_err("missing non-empty final answer must fail")
+                .contains("without a new non-empty assistant answer")
+        );
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn hermes_resume_accepts_only_a_compression_only_multi_hop_ancestry() {
+        let sql = format!(
+            "{HERMES_TEST_STATE_SCHEMA}\
+             INSERT INTO sessions(id, source, parent_session_id, started_at, end_reason)\
+             VALUES ('resume_root', 'tool', NULL, 50, 'compression'),\
+                    ('compressed_mid', 'tool', 'resume_root', 180, 'compression'),\
+                    ('compressed_final', 'tool', 'compressed_mid', 200, NULL),\
+                    ('delegate_root', 'tool', NULL, 50, 'agent_close'),\
+                    ('delegate_mid', 'tool', 'delegate_root', 180, 'compression'),\
+                    ('delegate_final', 'tool', 'delegate_mid', 200, NULL);\
+             INSERT INTO messages(session_id, role, content)\
+             VALUES ('resume_root', 'user', 'old request'),\
+                    ('resume_root', 'assistant', 'old answer'),\
+                    ('compressed_final', 'user', 'compressed request'),\
+                    ('compressed_final', 'assistant', 'compressed final'),\
+                    ('delegate_final', 'user', 'delegated request'),\
+                    ('delegate_final', 'assistant', 'delegated final');"
+        );
+        let home = create_hermes_state_fixture("compression-chain", &sql);
+        let compressed = hermes_latest_assistant_content(
+            &home,
+            "compressed_final",
+            &HermesAnswerBoundary {
+                min_message_id: 2,
+                run_started_at: 150.0,
+                resumed_from: Some("resume_root".to_string()),
+                db_existed_before: true,
+            },
+        )
+        .expect("compression-only ancestry must be accepted");
+        assert_eq!(compressed, "compressed final");
+        assert!(hermes_latest_assistant_content(
+            &home,
+            "delegate_final",
+            &HermesAnswerBoundary {
+                min_message_id: 4,
+                run_started_at: 150.0,
+                resumed_from: Some("delegate_root".to_string()),
+                db_existed_before: true,
+            },
+        )
+        .expect_err("a non-compression ancestry hop must fail closed")
+        .contains("compression-only descendant"));
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "uses the signed-in Codex subscription for one real managed Hermes request"]
+    fn manual_real_managed_hermes_quiet_turn_proof() {
+        const PROOF_MARKER: &str = "ATELIER_HERMES_QUIET_OK";
+
+        let user_home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .expect("resolve current user home");
+        let provider_root = user_home
+            .join("Library")
+            .join("Application Support")
+            .join("com.atelier.app")
+            .join("providers")
+            .join("hermes");
+        let home = provider_root.join("home");
+        let executable =
+            hermes_managed_executable_path().expect("resolve Atelier-managed Hermes executable");
+        let readiness = ManagedAgentRuntimeReadiness {
+            provider: "hermes".into(),
+            ready: true,
+            repaired: false,
+            executable: executable.to_string_lossy().into_owned(),
+            provider_root: provider_root.to_string_lossy().into_owned(),
+            home_dir: home.to_string_lossy().into_owned(),
+            state_dir: provider_root.join("state").to_string_lossy().into_owned(),
+            cache_dir: provider_root.join("cache").to_string_lossy().into_owned(),
+            temp_dir: provider_root.join("tmp").to_string_lossy().into_owned(),
+            skills_dir: home.join("skills").to_string_lossy().into_owned(),
+            workspace_dir: None,
+            runtime_pin: "installed-proof".into(),
+            dependency_pin: None,
+            policy_version: "installed-proof".into(),
+            skill_bootstrap_version: "installed-proof".into(),
+            receipt_path: provider_root
+                .join("readiness.json")
+                .to_string_lossy()
+                .into_owned(),
+        };
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("resolve Atelier repository root")
+            .canonicalize()
+            .expect("canonicalize Atelier repository root");
+
+        // Hold the same short-lived access guard used by `run_hermes`. The
+        // guard removes only Atelier's staged token when this proof ends and
+        // never overwrites or deletes a user-owned Hermes login.
+        let _managed_codex_access = stage_codex_access_for_managed_hermes(&home)
+            .expect("stage the current Codex subscription for managed Hermes");
+        let mut command =
+            command_for_managed_hermes().expect("prepare managed Hermes command environment");
+        inject_backend_credential_env(&mut command, "codex");
+        command = wrap_ready_managed_command(
+            command,
+            AgentProviderKind::Hermes,
+            "basic",
+            &workspace,
+            &readiness,
+        )
+        .expect("apply production managed Hermes sandbox");
+        push_hermes_query_args(
+            &mut command,
+            &readiness,
+            "openai-codex",
+            "gpt-5.6-sol",
+            &format!(
+                "This is a transport contract probe. Do not use tools. Reply with exactly {PROOF_MARKER} and nothing else."
+            ),
+            "basic",
+            None,
+        )
+        .expect("apply production Hermes quiet-query contract");
+        command
+            .env("PATH", crate::augmented_cli_path())
+            .env("LANG", "ko_KR.UTF-8")
+            .env("LC_CTYPE", "ko_KR.UTF-8")
+            .current_dir(&workspace)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        configure_agent_process_tree(&mut command);
+
+        let message_baseline =
+            hermes_message_baseline(&home, None).expect("capture pre-spawn message baseline");
+        let run_started_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock after unix epoch")
+            .as_secs_f64();
+        let output = command.output().expect("run real managed Hermes proof");
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let redacted_stderr = clip_cli_output(redact_cli_output(&stderr));
+        assert!(
+            output.status.success(),
+            "managed Hermes proof failed: {redacted_stderr}"
+        );
+        let session_id = verified_hermes_session_id(&stderr)
+            .expect("quiet stderr must expose a provider session id");
+        let answer = hermes_latest_assistant_content(
+            &home,
+            &session_id,
+            &HermesAnswerBoundary {
+                min_message_id: message_baseline.max_message_id,
+                run_started_at,
+                resumed_from: None,
+                db_existed_before: message_baseline.db_existed_before,
+            },
+        )
+        .expect("read the exact managed Hermes answer from state.db");
+        assert_eq!(answer.trim(), PROOF_MARKER);
+        eprintln!(
+            "managed Hermes state proof passed: session_id={session_id}, answer_bytes={}, untrusted_stdout_bytes={}",
+            answer.len(),
+            stdout.len(),
+        );
     }
 
     #[test]
@@ -5603,6 +7120,36 @@ export ANTHROPIC_API_KEY="tc-example"
             );
         }
         assert_eq!(default_hermes_model("anthropic"), "claude-opus-4-8");
+    }
+
+    #[test]
+    fn hermes_without_provider_credentials_refuses_to_launch() {
+        // 자격증명이 하나도 주입되지 않았는데 실행을 허용하면 Hermes 가
+        // `hermes exited with 1` 만 남기고 죽어 원인을 알 수 없게 된다.
+        for provider in ["anthropic", "openrouter", "alibaba"] {
+            assert!(
+                !hermes_credentials_ready(provider, false),
+                "{provider} must not launch without an injected credential"
+            );
+            assert!(hermes_credentials_ready(provider, true));
+        }
+    }
+
+    #[test]
+    fn hermes_codex_launches_on_the_staged_subscription_without_an_api_key() {
+        // Codex 는 구독 OAuth 를 앞단에서 스테이징하므로 API 키 부재가 정상이다.
+        assert!(hermes_credentials_ready("openai-codex", false));
+    }
+
+    #[test]
+    fn hermes_credential_guidance_names_the_selected_provider() {
+        let message = hermes_credential_missing_message("anthropic");
+        assert!(message.contains("Claude"), "{message}");
+        assert!(message.contains("설정 > 연결"), "{message}");
+        assert!(
+            hermes_credential_missing_message("openrouter").contains("OpenRouter"),
+            "openrouter guidance must name the provider the user picked"
+        );
     }
 
     #[test]
@@ -5660,6 +7207,56 @@ export ANTHROPIC_API_KEY="tc-example"
         let friendly = provider_cooldown_message("Claude/TeamClaude", message).unwrap();
         assert!(friendly.contains("일시 제한"));
         assert!(friendly.contains("300초"));
+    }
+
+    #[test]
+    fn subscription_exhaustion_is_distinguished_from_provider_cooldown() {
+        // 소진: 기다려도 안 풀린다 — 다른 구독으로 갈아타야 이어서 쓸 수 있다.
+        for exhausted in [
+            "Codex error event: The usage limit has been reached (code=usage_limit_reached)",
+            "ERROR: You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Aug 8th, 2026 12:35 PM.",
+            "Claude usage limit reached. Your limit will reset at 5pm.",
+            "openrouter error: insufficient_quota",
+        ] {
+            assert!(
+                provider_usage_exhausted(exhausted),
+                "must detect subscription exhaustion: {exhausted}"
+            );
+            assert_eq!(
+                provider_cooldown_seconds(exhausted),
+                None,
+                "exhaustion must never be reported as a wait-and-retry cooldown: {exhausted}"
+            );
+        }
+
+        // 쿨다운: 사용자의 한도가 아니라 서버측 일시 제한 — 갈아타면 안 되고 기다리면 된다.
+        let cooldown = "API Error: Server is temporarily limiting requests (not your usage limit) · All 2 accounts exhausted. Retry in 300s.";
+        assert!(
+            !provider_usage_exhausted(cooldown),
+            "provider-side cooldown must not be mistaken for the user's subscription running out"
+        );
+    }
+
+    #[test]
+    fn exhaustion_message_names_the_switch_targets_it_was_given() {
+        let message = provider_usage_exhausted_message(
+            "Codex",
+            "The usage limit has been reached (code=usage_limit_reached)",
+            &["Claude".to_string(), "Alibaba Token Plan".to_string()],
+        )
+        .expect("exhaustion must produce a switch-oriented message");
+        assert!(message.contains("소진"));
+        assert!(message.contains("Claude"));
+        assert!(message.contains("Alibaba Token Plan"));
+
+        // 갈아탈 곳이 없으면 있는 척하지 않는다.
+        let alone = provider_usage_exhausted_message(
+            "Codex",
+            "The usage limit has been reached (code=usage_limit_reached)",
+            &[],
+        )
+        .expect("exhaustion is still reported when nothing else is connected");
+        assert!(alone.contains("연결된 다른 구독이 없습니다"));
     }
 
     #[test]

@@ -75,6 +75,7 @@ jobs:
           npm run smoke:editor-diagnostics
           npm run smoke:devscreen-picker
           npm run smoke:agent-performance
+          npm run smoke:agent-stream-rendering
           npm run smoke:oauth-login-flow
           npm run gate:orca-features
           npm audit --audit-level=low

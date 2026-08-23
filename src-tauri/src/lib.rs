@@ -28,6 +28,8 @@ mod github_workflows;
 #[cfg(feature = "orca-linear-workflows")]
 mod linear_workflows;
 #[cfg(feature = "orca-mobile-control")]
+mod mobile_continuity;
+#[cfg(feature = "orca-mobile-control")]
 mod mobile_control;
 #[cfg(feature = "orca-provider-usage")]
 mod provider_usage;
@@ -932,6 +934,15 @@ async fn command_exists(command: String) -> std::result::Result<bool, String> {
     if !valid_command_name(&command) {
         return Err("invalid command name".into());
     }
+    if command == "grok" {
+        return Ok(credentials::grok_executable_path().is_some());
+    }
+    if command == "gjc" {
+        return Ok(credentials::gajecode_executable_path().is_some());
+    }
+    if command == "hermes" {
+        return Ok(credentials::hermes_executable_path().is_some());
+    }
 
     #[cfg(target_os = "windows")]
     {
@@ -1532,6 +1543,10 @@ pub fn run() {
             #[cfg(feature = "orca-mobile-control")]
             mobile_control::mobile_control_server_status,
             #[cfg(feature = "orca-mobile-control")]
+            mobile_control::mobile_control_network_candidates,
+            #[cfg(feature = "orca-mobile-control")]
+            mobile_control::mobile_control_tailscale_status,
+            #[cfg(feature = "orca-mobile-control")]
             mobile_control::mobile_control_server_start,
             #[cfg(feature = "orca-mobile-control")]
             mobile_control::mobile_control_server_stop,
@@ -1545,6 +1560,8 @@ pub fn run() {
             mobile_control::mobile_control_device_revoke,
             #[cfg(feature = "orca-mobile-control")]
             mobile_control::mobile_control_device_followups_set,
+            #[cfg(feature = "orca-mobile-control")]
+            mobile_continuity::mobile_control_sessions_publish,
             #[cfg(feature = "orca-remote-followup")]
             remote_followup::remote_followup_proposals,
             #[cfg(feature = "orca-remote-followup")]
@@ -1621,12 +1638,18 @@ pub fn run() {
             credentials::hermes_update,
             credentials::gajecode_check_update,
             credentials::gajecode_update,
+            credentials::grok_check_update,
+            credentials::grok_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| match event {
-        tauri::RunEvent::Ready => reveal_main_window(app_handle),
+        tauri::RunEvent::Ready => {
+            reveal_main_window(app_handle);
+            #[cfg(feature = "orca-mobile-control")]
+            tauri::async_runtime::spawn(mobile_control::restore_server_after_restart());
+        }
         #[cfg(target_os = "macos")]
         tauri::RunEvent::Reopen {
             has_visible_windows,

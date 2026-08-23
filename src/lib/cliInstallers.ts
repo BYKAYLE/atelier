@@ -18,6 +18,9 @@ const INSTALLS: Record<
   gajecode: {
     executable: "gjc",
   },
+  grok: {
+    executable: "grok",
+  },
 };
 
 export function autoInstallExecutable(profile: Profile): string | null {

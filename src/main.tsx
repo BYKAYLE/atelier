@@ -9,6 +9,9 @@ type BootErrorBoundaryState = {
   error: Error | null;
 };
 
+let appRoot: ReturnType<typeof ReactDOM.createRoot> | null = null;
+let appHasCommitted = false;
+
 function errorText(error: unknown) {
   if (error instanceof Error) return `${error.name}: ${error.message}\n${error.stack || ""}`;
   return String(error);
@@ -32,6 +35,8 @@ function BootErrorFallback({ error }: { error: unknown }) {
 
 class BootErrorBoundary extends React.Component<React.PropsWithChildren, BootErrorBoundaryState> {
   state: BootErrorBoundaryState = { error: null };
+  private readinessTimer: number | null = null;
+  private readinessHeartbeat: number | null = null;
 
   static getDerivedStateFromError(error: Error): BootErrorBoundaryState {
     return { error };
@@ -42,15 +47,38 @@ class BootErrorBoundary extends React.Component<React.PropsWithChildren, BootErr
   }
 
   componentDidMount() {
-    this.reportRendererStatus();
+    appHasCommitted = true;
+    this.scheduleRendererStatusReport();
+    this.readinessHeartbeat = window.setInterval(() => this.reportRendererStatus(), 15_000);
   }
 
   componentDidUpdate(_previousProps: React.PropsWithChildren, previousState: BootErrorBoundaryState) {
-    if (previousState.error !== this.state.error) this.reportRendererStatus();
+    if (previousState.error !== this.state.error) this.scheduleRendererStatusReport();
+  }
+
+  componentWillUnmount() {
+    if (this.readinessTimer !== null) window.clearTimeout(this.readinessTimer);
+    if (this.readinessHeartbeat !== null) window.clearInterval(this.readinessHeartbeat);
+  }
+
+  private scheduleRendererStatusReport() {
+    if (this.readinessTimer !== null) window.clearTimeout(this.readinessTimer);
+    // requestAnimationFrame can remain suspended when a signed app is launched
+    // off the active Space. A short task delay still lets React commit and CSS
+    // layout settle without making renderer health depend on window visibility.
+    this.readinessTimer = window.setTimeout(() => this.reportRendererStatus(), 50);
   }
 
   private reportRendererStatus() {
-    const status = this.state.error ? "error" : "ready";
+    const root = document.getElementById("root");
+    const shell = document.querySelector<HTMLElement>("[data-atelier-app-shell]");
+    const hasCommittedShell = Boolean(
+      root
+      && shell
+      && root.contains(shell)
+      && shell.childElementCount > 0,
+    );
+    const status = this.state.error || !hasCommittedShell ? "error" : "ready";
     void rendererReady(status).catch((error) => {
       console.error("Atelier renderer readiness receipt failed", error);
     });
@@ -65,21 +93,31 @@ class BootErrorBoundary extends React.Component<React.PropsWithChildren, BootErr
 function renderBootError(error: unknown) {
   const root = document.getElementById("root");
   if (!root) return;
-  ReactDOM.createRoot(root).render(<BootErrorFallback error={error} />);
+  appRoot ||= ReactDOM.createRoot(root);
+  appRoot.render(<BootErrorFallback error={error} />);
+}
+
+function handleGlobalFailure(error: unknown) {
+  console.error("Atelier renderer background error", error);
+  // Once the application shell has committed, an unrelated rejected background
+  // task must not replace the entire UI. React render failures remain handled by
+  // BootErrorBoundary; this path is only a last-resort pre-boot fallback.
+  if (!appHasCommitted) renderBootError(error);
 }
 
 window.addEventListener("error", (event) => {
-  renderBootError(event.error || event.message);
+  handleGlobalFailure(event.error || event.message);
 });
 
 window.addEventListener("unhandledrejection", (event) => {
-  renderBootError(event.reason || "Unhandled promise rejection");
+  handleGlobalFailure(event.reason || "Unhandled promise rejection");
 });
 
 try {
   const root = document.getElementById("root");
   if (!root) throw new Error("Missing #root element");
-  ReactDOM.createRoot(root).render(
+  appRoot = ReactDOM.createRoot(root);
+  appRoot.render(
     <React.StrictMode>
       <BootErrorBoundary>
         <App />

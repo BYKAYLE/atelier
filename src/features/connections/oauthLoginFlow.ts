@@ -1,4 +1,4 @@
-export type OauthLoginProvider = "claude" | "codex";
+export type OauthLoginProvider = "claude" | "codex" | "grok";
 
 export interface LoginUrlAttempt {
   url: string;
@@ -19,10 +19,11 @@ export const OAUTH_LOGIN_SIGNAL_TIMEOUT_MS = 20_000;
 const ALLOWED_HOSTS: Record<OauthLoginProvider, readonly string[]> = {
   claude: ["claude.ai", "claude.com", "anthropic.com"],
   codex: ["openai.com", "chatgpt.com"],
+  grok: ["x.ai", "grok.com"],
 };
 
 export function isAllowedOauthLoginUrl(provider: string, value: string): boolean {
-  if (provider !== "claude" && provider !== "codex") return false;
+  if (provider !== "claude" && provider !== "codex" && provider !== "grok") return false;
 
   try {
     const parsed = new URL(value);
