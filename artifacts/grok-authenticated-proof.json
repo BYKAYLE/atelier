@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "status": "verified",
+  "proofType": "local-authenticated-grok-turn",
+  "generatedAt": "2026-08-18T02:09:08+09:00",
+  "atelierVersion": "0.2.26",
+  "runtime": {
+    "provider": "grok",
+    "cliVersion": "1.0.4",
+    "model": "grok-4.6",
+    "effort": "low",
+    "sandbox": "read-only",
+    "maxTurns": 1,
+    "subagents": false,
+    "allowedTools": [
+      "read_file"
+    ]
+  },
+  "result": {
+    "text": "GROK_ATELIER_OK",
+    "stopReason": "end_turn",
+    "sessionId": "01a010b3-b490-7012-b9d8-c48be9bd53c1",
+    "requestId": "316e2731-3bbd-4711-8a7a-81061e703402"
+  },
+  "boundaries": {
+    "globalGrokHomeImported": false,
+    "globalGrokCredentialImported": false,
+    "databaseDeleted": false,
+    "publicDistributionClaimed": false
+  }
+}

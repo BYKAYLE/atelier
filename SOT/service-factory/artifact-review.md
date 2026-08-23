@@ -2,45 +2,85 @@
 
 factory_id: sf-20260531-133552
 state_file: /Users/kansic/Service/atelier/SOT/service-factory-state.json
-generated_at: 2026-05-31T23:30:36+09:00
+generated_at: 2026-07-29T23:52:44+09:00
 
 ## Validation
 - valid: True
 - errors: 0
 - warnings: 0
 
+## Completion Claim Guard
+```json
+{
+  "probe_required": true,
+  "probe_verified": true,
+  "completion_claim_allowed": true,
+  "blockers": [],
+  "delivery_gate": {
+    "blockers": []
+  },
+  "depth_gate": {
+    "dod": {
+      "checklist_present": true,
+      "total": 8,
+      "satisfied": 8,
+      "unmet_ids": [],
+      "fulfillment_rate": 1.0,
+      "all_met": true
+    },
+    "elaboration_blockers": []
+  },
+  "parity_gate": {
+    "budget": {
+      "budget_present": false,
+      "task_class": null,
+      "classified": false,
+      "discretion_enabled": false,
+      "rounds_cap": 0
+    },
+    "discretion_blockers": [],
+    "intent": {
+      "ledger_present": false,
+      "total": 0,
+      "reconciled": 0,
+      "unreconciled_ids": []
+    }
+  }
+}
+```
+
 ## Approval Gates
 ```json
 [
   {
+    "evidence": [],
     "id": "db_data_deletion",
-    "status": "pending",
     "requires_human_approval": true,
-    "evidence": []
+    "status": "pending"
   },
   {
+    "evidence": [],
     "id": "production_deploy",
-    "status": "pending",
     "requires_human_approval": true,
-    "evidence": []
+    "status": "pending"
   },
   {
+    "evidence": [],
     "id": "paid_api_budget",
-    "status": "pending",
     "requires_human_approval": true,
-    "evidence": []
+    "status": "pending"
   },
   {
+    "evidence": [],
     "id": "external_communication",
-    "status": "pending",
     "requires_human_approval": true,
-    "evidence": []
+    "status": "pending"
   },
   {
+    "evidence": [],
     "id": "offensive_security",
-    "status": "pending",
     "requires_human_approval": true,
-    "evidence": []
+    "status": "pending"
   }
 ]
 ```
@@ -65,8 +105,6 @@ generated_at: 2026-05-31T23:30:36+09:00
     ],
     "prompt_path": "SOT/service-factory/agent-prompts/current_state--state_mapper.md",
     "spawn_policy": "spawn_when_stage_unblocked",
-    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/current_state-state_mapper",
-    "finished_at": "2026-05-31T19:45:33+09:00",
     "last_run_id": "sf-run-20260531-194533",
     "artifacts": [
       "/Users/kansic/Service/atelier/SOT/service-factory/current-state.md",
@@ -77,8 +115,10 @@ generated_at: 2026-05-31T23:30:36+09:00
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-194533/current_state-state_mapper/stderr.txt",
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-194533/current_state-state_mapper/stdout.txt"
     ],
-    "failure_class": null,
     "next_step": "continue the Service Factory managed cycle",
+    "failure_class": null,
+    "finished_at": "2026-05-31T19:45:33+09:00",
+    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/current_state-state_mapper",
     "commands_run": [
       {
         "argv": [
@@ -102,10 +142,125 @@ generated_at: 2026-05-31T23:30:36+09:00
           "sf-run-20260531-194533"
         ],
         "exit_code": 0,
-        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-194533/current_state-state_mapper/stdout.txt",
-        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-194533/current_state-state_mapper/stderr.txt"
+        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-194533/current_state-state_mapper/stderr.txt",
+        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-194533/current_state-state_mapper/stdout.txt"
       }
     ]
+  },
+  {
+    "id": "research_intelligence::research_director",
+    "stage": "research_intelligence",
+    "agent_type": "k-dense-researcher",
+    "kind": "planner",
+    "status": "completed",
+    "available": true,
+    "owned_paths": [
+      "SOT/service-factory/research-dossier.md"
+    ],
+    "success_criteria": [
+      "k-dense skill routing plan",
+      "literature/database/source strategy",
+      "hypotheses and counter-hypotheses",
+      "evidence quality tiers"
+    ],
+    "prompt_path": "SOT/service-factory/agent-prompts/research_intelligence--research_director.md",
+    "spawn_policy": "spawn_when_stage_unblocked",
+    "last_run_id": "sf-run-20260729-235243",
+    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/research_intelligence-research_director",
+    "finished_at": "2026-07-29T23:52:44+09:00",
+    "artifacts": [
+      "/Users/kansic/Service/atelier/SOT/service-factory/research-dossier.md",
+      "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260729-235243/research_intelligence-research_director/agent-launch.md",
+      "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260729-235243/research_intelligence-research_director/events.jsonl",
+      "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260729-235243/research_intelligence-research_director/local-worker-report.md",
+      "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260729-235243/research_intelligence-research_director/result.json",
+      "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260729-235243/research_intelligence-research_director/stderr.txt",
+      "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260729-235243/research_intelligence-research_director/stdout.txt"
+    ],
+    "commands_run": [
+      {
+        "argv": [
+          "/opt/homebrew/opt/python@3.14/bin/python3.14",
+          "/Users/kansic/.claude/skills/release/scripts/service_factory_local_worker.py",
+          "--artifact-dir",
+          "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260729-235243/research_intelligence-research_director",
+          "--request-id",
+          "research_intelligence::research_director",
+          "--agent-type",
+          "k-dense-researcher",
+          "--state-file",
+          "/Users/kansic/Service/atelier/SOT/service-factory-state.json",
+          "--project",
+          "/Users/kansic/Service/atelier",
+          "--prompt-file",
+          "/Users/kansic/Service/atelier/SOT/service-factory/agent-prompts/research_intelligence--research_director.md",
+          "--worktree",
+          "/Users/kansic/Service/atelier/.service-factory/worktrees/research_intelligence-research_director",
+          "--run-id",
+          "sf-run-20260729-235243"
+        ],
+        "exit_code": 0,
+        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260729-235243/research_intelligence-research_director/stdout.txt",
+        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260729-235243/research_intelligence-research_director/stderr.txt"
+      }
+    ],
+    "failure_class": null,
+    "next_step": "continue the Service Factory managed cycle"
+  },
+  {
+    "id": "research_intelligence::market_researcher",
+    "stage": "research_intelligence",
+    "agent_type": "market-researcher",
+    "kind": "planner",
+    "status": "queued",
+    "available": true,
+    "owned_paths": [
+      "SOT/service-factory/market-research.md"
+    ],
+    "success_criteria": [
+      "competitor/substitute landscape",
+      "adoption and positioning risks",
+      "freshness and source caveats"
+    ],
+    "prompt_path": "SOT/service-factory/agent-prompts/research_intelligence--market_researcher.md",
+    "spawn_policy": "spawn_when_stage_unblocked"
+  },
+  {
+    "id": "research_intelligence::evidence_synthesizer",
+    "stage": "research_intelligence",
+    "agent_type": "knowledge-synthesizer",
+    "kind": "planner",
+    "status": "queued",
+    "available": true,
+    "owned_paths": [
+      "SOT/service-factory/evidence-map.md"
+    ],
+    "success_criteria": [
+      "deduplicated claims",
+      "confidence levels",
+      "decision implications",
+      "unresolved conflicts"
+    ],
+    "prompt_path": "SOT/service-factory/agent-prompts/research_intelligence--evidence_synthesizer.md",
+    "spawn_policy": "spawn_when_stage_unblocked"
+  },
+  {
+    "id": "research_intelligence::methodology_reviewer",
+    "stage": "research_intelligence",
+    "agent_type": "research-methodologist",
+    "kind": "reviewer",
+    "status": "queued",
+    "available": true,
+    "owned_paths": [
+      "SOT/service-factory/research-qc.md"
+    ],
+    "success_criteria": [
+      "research design critique",
+      "bias and falsification checks",
+      "minimum next evidence slice"
+    ],
+    "prompt_path": "SOT/service-factory/agent-prompts/research_intelligence--methodology_reviewer.md",
+    "spawn_policy": "spawn_when_stage_unblocked"
   },
   {
     "id": "development_plan::strategy_planner",
@@ -124,8 +279,6 @@ generated_at: 2026-05-31T23:30:36+09:00
     ],
     "prompt_path": "SOT/service-factory/agent-prompts/development_plan--strategy_planner.md",
     "spawn_policy": "spawn_when_stage_unblocked",
-    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/development_plan-strategy_planner",
-    "finished_at": "2026-05-31T19:45:55+09:00",
     "last_run_id": "sf-run-20260531-194555",
     "artifacts": [
       "/Users/kansic/Service/atelier/SOT/service-factory/development-plan.md",
@@ -136,8 +289,10 @@ generated_at: 2026-05-31T23:30:36+09:00
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-194555/development_plan-strategy_planner/stderr.txt",
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-194555/development_plan-strategy_planner/stdout.txt"
     ],
-    "failure_class": null,
     "next_step": "continue the Service Factory managed cycle",
+    "failure_class": null,
+    "finished_at": "2026-05-31T19:45:55+09:00",
+    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/development_plan-strategy_planner",
     "commands_run": [
       {
         "argv": [
@@ -161,8 +316,8 @@ generated_at: 2026-05-31T23:30:36+09:00
           "sf-run-20260531-194555"
         ],
         "exit_code": 0,
-        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-194555/development_plan-strategy_planner/stdout.txt",
-        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-194555/development_plan-strategy_planner/stderr.txt"
+        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-194555/development_plan-strategy_planner/stderr.txt",
+        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-194555/development_plan-strategy_planner/stdout.txt"
       }
     ]
   },
@@ -183,16 +338,13 @@ generated_at: 2026-05-31T23:30:36+09:00
     ],
     "prompt_path": "SOT/service-factory/agent-prompts/product_brief--product_manager.md",
     "spawn_policy": "spawn_when_stage_unblocked",
-    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/product_brief-product_manager",
-    "finished_at": "2026-05-31T13:56:14+09:00",
+    "artifact_dir": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-133552/product_brief-product_manager",
     "modified_files": [
       "/Users/kansic/Service/atelier/.service-factory/worktrees/product_brief-product_manager/SOT/service-factory/product-brief.md",
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-133552/product_brief-product_manager/product-brief.md",
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-133552/product_brief-product_manager/result.json"
     ],
-    "dispatch_path": "/Users/kansic/Service/atelier/SOT/service-factory/bridge/sf-run-20260531-133552/product_brief-product_manager/dispatch.md",
     "last_run_id": "sf-run-20260531-135614",
-    "artifact_dir": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-133552/product_brief-product_manager",
     "artifacts": [
       "/Users/kansic/Service/atelier/SOT/service-factory/product-brief.md",
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-133552/product_brief-product_manager/events.jsonl",
@@ -205,8 +357,11 @@ generated_at: 2026-05-31T23:30:36+09:00
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135614/product_brief-product_manager/stderr.txt",
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135614/product_brief-product_manager/stdout.txt"
     ],
-    "failure_class": null,
+    "dispatch_path": "/Users/kansic/Service/atelier/SOT/service-factory/bridge/sf-run-20260531-133552/product_brief-product_manager/dispatch.md",
     "next_step": "continue the Service Factory managed cycle until mandatory verification, security, deployment readiness, and final audit complete",
+    "failure_class": null,
+    "finished_at": "2026-05-31T13:56:14+09:00",
+    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/product_brief-product_manager",
     "commands_run": [
       {
         "argv": [
@@ -230,8 +385,8 @@ generated_at: 2026-05-31T23:30:36+09:00
           "sf-run-20260531-135614"
         ],
         "exit_code": 0,
-        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135614/product_brief-product_manager/stdout.txt",
-        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135614/product_brief-product_manager/stderr.txt"
+        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135614/product_brief-product_manager/stderr.txt",
+        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135614/product_brief-product_manager/stdout.txt"
       }
     ]
   },
@@ -252,8 +407,6 @@ generated_at: 2026-05-31T23:30:36+09:00
     ],
     "prompt_path": "SOT/service-factory/agent-prompts/repo_map--repo_mapper.md",
     "spawn_policy": "spawn_when_stage_unblocked",
-    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/repo_map-repo_mapper",
-    "finished_at": "2026-05-31T13:56:15+09:00",
     "last_run_id": "sf-run-20260531-135614",
     "artifacts": [
       "/Users/kansic/Service/atelier/SOT/service-factory/repo-map.md",
@@ -264,8 +417,10 @@ generated_at: 2026-05-31T23:30:36+09:00
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135614/repo_map-repo_mapper/stderr.txt",
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135614/repo_map-repo_mapper/stdout.txt"
     ],
-    "failure_class": null,
     "next_step": "continue the Service Factory managed cycle until mandatory verification, security, deployment readiness, and final audit complete",
+    "failure_class": null,
+    "finished_at": "2026-05-31T13:56:15+09:00",
+    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/repo_map-repo_mapper",
     "commands_run": [
       {
         "argv": [
@@ -289,8 +444,8 @@ generated_at: 2026-05-31T23:30:36+09:00
           "sf-run-20260531-135614"
         ],
         "exit_code": 0,
-        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135614/repo_map-repo_mapper/stdout.txt",
-        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135614/repo_map-repo_mapper/stderr.txt"
+        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135614/repo_map-repo_mapper/stderr.txt",
+        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135614/repo_map-repo_mapper/stdout.txt"
       }
     ]
   },
@@ -312,8 +467,6 @@ generated_at: 2026-05-31T23:30:36+09:00
     ],
     "prompt_path": "SOT/service-factory/agent-prompts/architecture--architect.md",
     "spawn_policy": "spawn_when_stage_unblocked",
-    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/architecture-architect",
-    "finished_at": "2026-05-31T13:56:15+09:00",
     "last_run_id": "sf-run-20260531-135615",
     "artifacts": [
       "/Users/kansic/Service/atelier/SOT/service-factory/architecture.md",
@@ -324,8 +477,10 @@ generated_at: 2026-05-31T23:30:36+09:00
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135615/architecture-architect/stderr.txt",
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135615/architecture-architect/stdout.txt"
     ],
-    "failure_class": null,
     "next_step": "continue the Service Factory managed cycle until mandatory verification, security, deployment readiness, and final audit complete",
+    "failure_class": null,
+    "finished_at": "2026-05-31T13:56:15+09:00",
+    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/architecture-architect",
     "commands_run": [
       {
         "argv": [
@@ -349,8 +504,8 @@ generated_at: 2026-05-31T23:30:36+09:00
           "sf-run-20260531-135615"
         ],
         "exit_code": 0,
-        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135615/architecture-architect/stdout.txt",
-        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135615/architecture-architect/stderr.txt"
+        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135615/architecture-architect/stderr.txt",
+        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135615/architecture-architect/stdout.txt"
       }
     ]
   },
@@ -372,8 +527,6 @@ generated_at: 2026-05-31T23:30:36+09:00
     ],
     "prompt_path": "SOT/service-factory/agent-prompts/decomposition--decomposer.md",
     "spawn_policy": "spawn_when_stage_unblocked",
-    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/decomposition-decomposer",
-    "finished_at": "2026-05-31T13:56:16+09:00",
     "last_run_id": "sf-run-20260531-135615",
     "artifacts": [
       "/Users/kansic/Service/atelier/SOT/service-factory/decomposition.md",
@@ -384,8 +537,10 @@ generated_at: 2026-05-31T23:30:36+09:00
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135615/decomposition-decomposer/stderr.txt",
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135615/decomposition-decomposer/stdout.txt"
     ],
-    "failure_class": null,
     "next_step": "continue the Service Factory managed cycle until mandatory verification, security, deployment readiness, and final audit complete",
+    "failure_class": null,
+    "finished_at": "2026-05-31T13:56:16+09:00",
+    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/decomposition-decomposer",
     "commands_run": [
       {
         "argv": [
@@ -409,8 +564,8 @@ generated_at: 2026-05-31T23:30:36+09:00
           "sf-run-20260531-135615"
         ],
         "exit_code": 0,
-        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135615/decomposition-decomposer/stdout.txt",
-        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135615/decomposition-decomposer/stderr.txt"
+        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135615/decomposition-decomposer/stderr.txt",
+        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135615/decomposition-decomposer/stdout.txt"
       }
     ]
   },
@@ -429,10 +584,10 @@ generated_at: 2026-05-31T23:30:36+09:00
     ],
     "prompt_path": "SOT/service-factory/agent-prompts/parallel_implementation--builder.md",
     "spawn_policy": "spawn_when_stage_unblocked",
-    "artifacts": [
+    "validation_evidence": [
       "/Users/kansic/Service/atelier/SOT/service-factory/implementation-report.md"
     ],
-    "validation_evidence": [
+    "artifacts": [
       "/Users/kansic/Service/atelier/SOT/service-factory/implementation-report.md"
     ],
     "validation_note": "actual implementation evidence attached after code, test, package, install, and security hardening verification",
@@ -453,8 +608,6 @@ generated_at: 2026-05-31T23:30:36+09:00
     ],
     "prompt_path": "SOT/service-factory/agent-prompts/integration--integrator.md",
     "spawn_policy": "spawn_when_stage_unblocked",
-    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/integration-integrator",
-    "finished_at": "2026-05-31T13:56:17+09:00",
     "last_run_id": "sf-run-20260531-135616",
     "artifacts": [
       "/Users/kansic/Service/atelier/SOT/service-factory/integration-report.md",
@@ -465,8 +618,10 @@ generated_at: 2026-05-31T23:30:36+09:00
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135616/integration-integrator/stderr.txt",
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135616/integration-integrator/stdout.txt"
     ],
-    "failure_class": null,
     "next_step": "continue the Service Factory managed cycle until mandatory verification, security, deployment readiness, and final audit complete",
+    "failure_class": null,
+    "finished_at": "2026-05-31T13:56:17+09:00",
+    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/integration-integrator",
     "commands_run": [
       {
         "argv": [
@@ -490,8 +645,8 @@ generated_at: 2026-05-31T23:30:36+09:00
           "sf-run-20260531-135616"
         ],
         "exit_code": 0,
-        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135616/integration-integrator/stdout.txt",
-        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135616/integration-integrator/stderr.txt"
+        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135616/integration-integrator/stderr.txt",
+        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135616/integration-integrator/stdout.txt"
       }
     ]
   },
@@ -512,8 +667,9 @@ generated_at: 2026-05-31T23:30:36+09:00
     ],
     "prompt_path": "SOT/service-factory/agent-prompts/verification--reviewer.md",
     "spawn_policy": "spawn_when_stage_unblocked",
-    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/verification-reviewer",
-    "finished_at": "2026-05-31T14:15:43+09:00",
+    "validation_evidence": [
+      "/Users/kansic/Service/atelier/SOT/service-factory/reviewer-report.md"
+    ],
     "last_run_id": "sf-run-20260531-141543",
     "artifacts": [
       "/Users/kansic/Service/atelier/SOT/service-factory/reviewer-report.md",
@@ -530,13 +686,12 @@ generated_at: 2026-05-31T23:30:36+09:00
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-141543/verification-reviewer/stderr.txt",
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-141543/verification-reviewer/stdout.txt"
     ],
-    "failure_class": "agent_unavailable",
-    "validation_evidence": [
-      "/Users/kansic/Service/atelier/SOT/service-factory/reviewer-report.md"
-    ],
-    "validation_note": "specialist evidence attached after reviewer/security audit fixes",
-    "validation_resolved_at": "2026-05-31T14:17:33+09:00",
     "next_step": "spawn a specialist LLM agent for this mandatory review stage",
+    "failure_class": "agent_unavailable",
+    "finished_at": "2026-05-31T14:15:43+09:00",
+    "validation_note": "specialist evidence attached after reviewer/security audit fixes",
+    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/verification-reviewer",
+    "validation_resolved_at": "2026-05-31T14:17:33+09:00",
     "commands_run": [
       {
         "argv": [
@@ -560,8 +715,8 @@ generated_at: 2026-05-31T23:30:36+09:00
           "sf-run-20260531-141543"
         ],
         "exit_code": 0,
-        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-141543/verification-reviewer/stdout.txt",
-        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-141543/verification-reviewer/stderr.txt"
+        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-141543/verification-reviewer/stderr.txt",
+        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-141543/verification-reviewer/stdout.txt"
       }
     ]
   },
@@ -582,8 +737,9 @@ generated_at: 2026-05-31T23:30:36+09:00
     ],
     "prompt_path": "SOT/service-factory/agent-prompts/verification--critic.md",
     "spawn_policy": "spawn_when_stage_unblocked",
-    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/verification-critic",
-    "finished_at": "2026-05-31T13:56:18+09:00",
+    "validation_evidence": [
+      "/Users/kansic/Service/atelier/SOT/service-factory/critic-report.md"
+    ],
     "last_run_id": "sf-run-20260531-135618",
     "artifacts": [
       "/Users/kansic/Service/atelier/SOT/service-factory/critic-report.md",
@@ -594,13 +750,12 @@ generated_at: 2026-05-31T23:30:36+09:00
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135618/verification-critic/stderr.txt",
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135618/verification-critic/stdout.txt"
     ],
-    "failure_class": "insufficient_independent_evidence",
-    "validation_evidence": [
-      "/Users/kansic/Service/atelier/SOT/service-factory/critic-report.md"
-    ],
-    "validation_note": "specialist evidence attached after reviewer/security audit fixes",
-    "validation_resolved_at": "2026-05-31T14:17:42+09:00",
     "next_step": "spawn or attach specialist evidence for this mandatory stage",
+    "failure_class": "insufficient_independent_evidence",
+    "finished_at": "2026-05-31T13:56:18+09:00",
+    "validation_note": "specialist evidence attached after reviewer/security audit fixes",
+    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/verification-critic",
+    "validation_resolved_at": "2026-05-31T14:17:42+09:00",
     "commands_run": [
       {
         "argv": [
@@ -624,8 +779,8 @@ generated_at: 2026-05-31T23:30:36+09:00
           "sf-run-20260531-135618"
         ],
         "exit_code": 0,
-        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135618/verification-critic/stdout.txt",
-        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135618/verification-critic/stderr.txt"
+        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135618/verification-critic/stderr.txt",
+        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135618/verification-critic/stdout.txt"
       }
     ]
   },
@@ -646,8 +801,9 @@ generated_at: 2026-05-31T23:30:36+09:00
     ],
     "prompt_path": "SOT/service-factory/agent-prompts/security_review--security_auditor.md",
     "spawn_policy": "spawn_when_stage_unblocked",
-    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/security_review-security_auditor",
-    "finished_at": "2026-05-31T13:56:19+09:00",
+    "validation_evidence": [
+      "/Users/kansic/Service/atelier/SOT/service-factory/security-audit.md"
+    ],
     "last_run_id": "sf-run-20260531-135619",
     "artifacts": [
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135619/security_review-security_auditor/agent-launch.md",
@@ -658,13 +814,12 @@ generated_at: 2026-05-31T23:30:36+09:00
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135619/security_review-security_auditor/stdout.txt",
       "/Users/kansic/Service/atelier/SOT/service-factory/security-audit.md"
     ],
-    "failure_class": "insufficient_independent_evidence",
-    "validation_evidence": [
-      "/Users/kansic/Service/atelier/SOT/service-factory/security-audit.md"
-    ],
-    "validation_note": "specialist evidence attached after reviewer/security audit fixes",
-    "validation_resolved_at": "2026-05-31T14:17:42+09:00",
     "next_step": "spawn or attach specialist evidence for this mandatory stage",
+    "failure_class": "insufficient_independent_evidence",
+    "finished_at": "2026-05-31T13:56:19+09:00",
+    "validation_note": "specialist evidence attached after reviewer/security audit fixes",
+    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/security_review-security_auditor",
+    "validation_resolved_at": "2026-05-31T14:17:42+09:00",
     "commands_run": [
       {
         "argv": [
@@ -688,8 +843,8 @@ generated_at: 2026-05-31T23:30:36+09:00
           "sf-run-20260531-135619"
         ],
         "exit_code": 0,
-        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135619/security_review-security_auditor/stdout.txt",
-        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135619/security_review-security_auditor/stderr.txt"
+        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135619/security_review-security_auditor/stderr.txt",
+        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135619/security_review-security_auditor/stdout.txt"
       }
     ]
   },
@@ -710,8 +865,9 @@ generated_at: 2026-05-31T23:30:36+09:00
     ],
     "prompt_path": "SOT/service-factory/agent-prompts/verification--runtime_probe.md",
     "spawn_policy": "spawn_when_stage_unblocked",
-    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/verification-runtime_probe",
-    "finished_at": "2026-05-31T13:56:18+09:00",
+    "validation_evidence": [
+      "/Users/kansic/Service/atelier/SOT/service-factory/probe-report.md"
+    ],
     "last_run_id": "sf-run-20260531-135618",
     "artifacts": [
       "/Users/kansic/Service/atelier/SOT/service-factory/probe-report.md",
@@ -722,13 +878,12 @@ generated_at: 2026-05-31T23:30:36+09:00
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135618/verification-runtime_probe/stderr.txt",
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135618/verification-runtime_probe/stdout.txt"
     ],
-    "failure_class": "insufficient_independent_evidence",
-    "validation_evidence": [
-      "/Users/kansic/Service/atelier/SOT/service-factory/probe-report.md"
-    ],
-    "validation_note": "specialist evidence attached after reviewer/security audit fixes",
-    "validation_resolved_at": "2026-05-31T14:17:42+09:00",
     "next_step": "spawn or attach specialist evidence for this mandatory stage",
+    "failure_class": "insufficient_independent_evidence",
+    "finished_at": "2026-05-31T13:56:18+09:00",
+    "validation_note": "specialist evidence attached after reviewer/security audit fixes",
+    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/verification-runtime_probe",
+    "validation_resolved_at": "2026-05-31T14:17:42+09:00",
     "commands_run": [
       {
         "argv": [
@@ -752,8 +907,8 @@ generated_at: 2026-05-31T23:30:36+09:00
           "sf-run-20260531-135618"
         ],
         "exit_code": 0,
-        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135618/verification-runtime_probe/stdout.txt",
-        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135618/verification-runtime_probe/stderr.txt"
+        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135618/verification-runtime_probe/stderr.txt",
+        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135618/verification-runtime_probe/stdout.txt"
       }
     ]
   },
@@ -774,8 +929,9 @@ generated_at: 2026-05-31T23:30:36+09:00
     ],
     "prompt_path": "SOT/service-factory/agent-prompts/deployment_readiness--deployment_readiness.md",
     "spawn_policy": "spawn_when_stage_unblocked",
-    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/deployment_readiness-deployment_readiness",
-    "finished_at": "2026-05-31T13:56:19+09:00",
+    "validation_evidence": [
+      "/Users/kansic/Service/atelier/SOT/service-factory/deployment-readiness.md"
+    ],
     "last_run_id": "sf-run-20260531-135619",
     "artifacts": [
       "/Users/kansic/Service/atelier/SOT/service-factory/deployment-readiness.md",
@@ -786,13 +942,12 @@ generated_at: 2026-05-31T23:30:36+09:00
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135619/deployment_readiness-deployment_readiness/stderr.txt",
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135619/deployment_readiness-deployment_readiness/stdout.txt"
     ],
-    "failure_class": "insufficient_independent_evidence",
-    "validation_evidence": [
-      "/Users/kansic/Service/atelier/SOT/service-factory/deployment-readiness.md"
-    ],
-    "validation_note": "specialist evidence attached after reviewer/security audit fixes",
-    "validation_resolved_at": "2026-05-31T14:17:42+09:00",
     "next_step": "spawn or attach specialist evidence for this mandatory stage",
+    "failure_class": "insufficient_independent_evidence",
+    "finished_at": "2026-05-31T13:56:19+09:00",
+    "validation_note": "specialist evidence attached after reviewer/security audit fixes",
+    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/deployment_readiness-deployment_readiness",
+    "validation_resolved_at": "2026-05-31T14:17:42+09:00",
     "commands_run": [
       {
         "argv": [
@@ -816,8 +971,8 @@ generated_at: 2026-05-31T23:30:36+09:00
           "sf-run-20260531-135619"
         ],
         "exit_code": 0,
-        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135619/deployment_readiness-deployment_readiness/stdout.txt",
-        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135619/deployment_readiness-deployment_readiness/stderr.txt"
+        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135619/deployment_readiness-deployment_readiness/stderr.txt",
+        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135619/deployment_readiness-deployment_readiness/stdout.txt"
       }
     ]
   },
@@ -839,8 +994,9 @@ generated_at: 2026-05-31T23:30:36+09:00
     ],
     "prompt_path": "SOT/service-factory/agent-prompts/final_audit--final_audit.md",
     "spawn_policy": "spawn_when_stage_unblocked",
-    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/final_audit-final_audit",
-    "finished_at": "2026-05-31T13:56:20+09:00",
+    "validation_evidence": [
+      "/Users/kansic/Service/atelier/SOT/service-factory/final-audit.md"
+    ],
     "last_run_id": "sf-run-20260531-135620",
     "artifacts": [
       "/Users/kansic/Service/atelier/SOT/service-factory/final-audit.md",
@@ -851,13 +1007,12 @@ generated_at: 2026-05-31T23:30:36+09:00
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135620/final_audit-final_audit/stderr.txt",
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135620/final_audit-final_audit/stdout.txt"
     ],
-    "failure_class": "insufficient_independent_evidence",
-    "validation_evidence": [
-      "/Users/kansic/Service/atelier/SOT/service-factory/final-audit.md"
-    ],
-    "validation_note": "specialist evidence attached after reviewer/security audit fixes",
-    "validation_resolved_at": "2026-05-31T14:17:42+09:00",
     "next_step": "spawn or attach specialist evidence for this mandatory stage",
+    "failure_class": "insufficient_independent_evidence",
+    "finished_at": "2026-05-31T13:56:20+09:00",
+    "validation_note": "specialist evidence attached after reviewer/security audit fixes",
+    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/final_audit-final_audit",
+    "validation_resolved_at": "2026-05-31T14:17:42+09:00",
     "commands_run": [
       {
         "argv": [
@@ -881,9 +1036,97 @@ generated_at: 2026-05-31T23:30:36+09:00
           "sf-run-20260531-135620"
         ],
         "exit_code": 0,
-        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135620/final_audit-final_audit/stdout.txt",
-        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135620/final_audit-final_audit/stderr.txt"
+        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135620/final_audit-final_audit/stderr.txt",
+        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135620/final_audit-final_audit/stdout.txt"
       }
+    ]
+  },
+  {
+    "id": "delivery::delivery_publisher",
+    "stage": "delivery",
+    "agent_type": "deployment-engineer",
+    "kind": "auditor",
+    "status": "completed",
+    "available": true,
+    "owned_paths": [
+      "SOT/service-factory/delivery.md"
+    ],
+    "success_criteria": [
+      "release channel publish executed (default: GitHub Release tag+artifact+install note)",
+      "delivery verification evidence (release URL reachable / artifact download OK / web live URL 200 + probe smoke)",
+      "production_deploy approval consumed with reference (pending approval = blocked)"
+    ],
+    "prompt_path": "SOT/service-factory/agent-prompts/delivery--delivery_publisher.md",
+    "spawn_policy": "spawn_when_stage_unblocked",
+    "validation_evidence": [
+      "/Users/kansic/Service/atelier/SOT/service-factory/delivery-verification-independent.md"
+    ],
+    "artifact_dir": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260728-232527/delivery-delivery_publisher",
+    "modified_files": [
+      "SOT/service-factory/delivery.md"
+    ],
+    "last_run_id": "sf-run-20260728-232527",
+    "artifacts": [
+      "/Users/kansic/Service/atelier/SOT/service-factory/delivery-verification-independent.md",
+      "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260728-232527/delivery-delivery_publisher/events.jsonl",
+      "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260728-232527/delivery-delivery_publisher/result.json",
+      "Atelier_0.2.15_aarch64.dmg (sha256 f23b2c19cb67afdb8c3774b3d9e8047f2347462cc4c9b2140ad269b8bd3457ac)",
+      "SOT/service-factory/delivery.md",
+      "https://github.com/BYKAYLE/atelier/releases/tag/v0.2.15"
+    ],
+    "dispatch_path": "/Users/kansic/Service/atelier/SOT/service-factory/bridge/sf-run-20260728-232527/delivery-delivery_publisher/dispatch.md",
+    "next_step": "user_receipt: 사용자 문서 + 대표님 인수 확인",
+    "failure_class": "child_result_trust_boundary",
+    "finished_at": "2026-07-28T23:27:13+09:00",
+    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/delivery-delivery_publisher",
+    "validation_resolved_at": "2026-07-28T23:29:25+09:00",
+    "commands_run": [
+      "git tag -a v0.2.15 fd47fba",
+      "git push origin v0.2.15",
+      "gh release create v0.2.15 <dmg> --notes-file <notes>",
+      "gh release view/download + sha256 대조",
+      "curl -I release URL"
+    ]
+  },
+  {
+    "id": "user_receipt::user_docs_writer",
+    "stage": "user_receipt",
+    "agent_type": "documentation-engineer",
+    "kind": "builder",
+    "status": "completed",
+    "available": true,
+    "owned_paths": [
+      "SOT/service-factory/user-receipt.md"
+    ],
+    "success_criteria": [
+      "user-facing docs (설치·사용법·온보딩) exist at delivered channel",
+      "ceo_acceptance recorded (데모 링크/실행 방법 제시 + 대표님 확인 기록 — 유일한 사람 게이트)"
+    ],
+    "prompt_path": "SOT/service-factory/agent-prompts/user_receipt--user_docs_writer.md",
+    "spawn_policy": "spawn_when_stage_unblocked",
+    "validation_evidence": [
+      "/Users/kansic/Service/atelier/SOT/service-factory/user-receipt.md"
+    ],
+    "artifact_dir": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260728-233522/user_receipt-user_docs_writer",
+    "modified_files": [
+      "SOT/service-factory/user-receipt.md"
+    ],
+    "last_run_id": "sf-run-20260728-233522",
+    "artifacts": [
+      "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260728-233522/user_receipt-user_docs_writer/events.jsonl",
+      "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260728-233522/user_receipt-user_docs_writer/result.json",
+      "/Users/kansic/Service/atelier/SOT/service-factory/user-receipt.md",
+      "SOT/service-factory/user-receipt.md",
+      "https://github.com/BYKAYLE/atelier/releases/tag/v0.2.15 (사용자 문서 실재)"
+    ],
+    "dispatch_path": "/Users/kansic/Service/atelier/SOT/service-factory/bridge/sf-run-20260728-233522/user_receipt-user_docs_writer/dispatch.md",
+    "next_step": "대표님 인수 확인 접수 → resolve-validation → user_receipt done → delivered",
+    "failure_class": null,
+    "finished_at": "2026-07-28T23:35:23+09:00",
+    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/user_receipt-user_docs_writer",
+    "validation_resolved_at": "2026-07-29T00:02:14+09:00",
+    "commands_run": [
+      "릴리스 노트 사용자 문서 검증(gh release view)"
     ]
   },
   {
@@ -899,8 +1142,6 @@ generated_at: 2026-05-31T23:30:36+09:00
     ],
     "prompt_path": "SOT/service-factory/agent-prompts/parallel_implementation--agent_runtime_worker.md",
     "spawn_policy": "spawn_when_stage_unblocked",
-    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/parallel_implementation-agent_runtime_worker",
-    "finished_at": "2026-05-31T13:56:16+09:00",
     "last_run_id": "sf-run-20260531-135616",
     "artifacts": [
       "/Users/kansic/Service/atelier/SOT/service-factory/implementation-report.md",
@@ -911,8 +1152,10 @@ generated_at: 2026-05-31T23:30:36+09:00
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135616/parallel_implementation-agent_runtime_worker/stderr.txt",
       "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135616/parallel_implementation-agent_runtime_worker/stdout.txt"
     ],
-    "failure_class": null,
     "next_step": "continue the Service Factory managed cycle until mandatory verification, security, deployment readiness, and final audit complete",
+    "failure_class": null,
+    "finished_at": "2026-05-31T13:56:16+09:00",
+    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/parallel_implementation-agent_runtime_worker",
     "commands_run": [
       {
         "argv": [
@@ -936,10 +1179,178 @@ generated_at: 2026-05-31T23:30:36+09:00
           "sf-run-20260531-135616"
         ],
         "exit_code": 0,
-        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135616/parallel_implementation-agent_runtime_worker/stdout.txt",
-        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135616/parallel_implementation-agent_runtime_worker/stderr.txt"
+        "stderr_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135616/parallel_implementation-agent_runtime_worker/stderr.txt",
+        "stdout_path": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260531-135616/parallel_implementation-agent_runtime_worker/stdout.txt"
       }
     ]
+  },
+  {
+    "agent_type": "orchestration-reviewer",
+    "artifact_dir": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260728-233003/delivery-elaboration-1",
+    "artifacts": [
+      "/Users/kansic/Service/atelier/SOT/service-factory/delivery-elaboration-disposition.md",
+      "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260728-233003/delivery-elaboration-1/events.jsonl",
+      "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260728-233003/delivery-elaboration-1/result.json",
+      "이 result.json 자체가 갭 목록 산출물"
+    ],
+    "available": true,
+    "commands_run": [
+      "cat SOT/service-factory/delivery.md",
+      "cat SOT/service-factory/delivery-verification-independent.md",
+      "gh release view v0.2.15 --json body,assets",
+      "gh release view v0.1.66 --json tagName,url",
+      "gh release list --limit 20",
+      "gh release view v0.1.66 --json assets -q '.assets[].name'",
+      "grep -ri \"intel|x86_64|minimum|macos 1[0-9]\" SOT/service-factory/delivery.md SOT/service-factory/delivery-verification-independent.md",
+      "grep -rli \"파일럿|pilot\" SOT/service-factory/*.md",
+      "grep -B2 -A5 \"파일럿|pilot\" SOT/service-factory/mission-charter.md SOT/service-factory/deployment-readiness.md",
+      "cat SOT/service-factory/current-state.md",
+      "python3 -c \"json.load(open('SOT/service-factory-state.json')) -> approval_gates['production_deploy']\"",
+      "grep -in \"롤백|rollback|이전 버전|revert|downgrade\" SOT/service-factory/delivery.md SOT/service-factory/delivery-verification-independent.md"
+    ],
+    "dispatch_path": "/Users/kansic/Service/atelier/SOT/service-factory/bridge/sf-run-20260728-233003/delivery-elaboration-1/dispatch.md",
+    "elaboration_round": 1,
+    "failure_class": "child_result_trust_boundary",
+    "finished_at": "2026-07-28T23:33:03+09:00",
+    "id": "delivery::elaboration-1",
+    "kind": "self_elaboration",
+    "last_run_id": "sf-run-20260728-233003",
+    "modified_files": [],
+    "next_step": "blocking 갭 없음 — 위 4건 non-blocking 권고를 릴리스 노트 개선(최소 OS 버전+플랫폼 스코프 고지+롤백 안내) 및 delivery-verification-independent.md 범위 확장(승인 게이트 증거 재현 항목 추가) 백로그로 반영 권고. 즉시 조치 불필요.",
+    "owned_paths": [],
+    "prompt_path": "SOT/service-factory/agent-prompts/delivery--elaboration-1.md",
+    "spawn_policy": "spawn_when_stage_unblocked",
+    "stage": "delivery",
+    "status": "completed",
+    "success_criteria": [
+      "이 stage 산출물의 미커버 gap/빠진 디테일을 발굴한다",
+      "발굴된 각 gap 을 resolve 하거나, gap 이 없으면 'gap 없음'을 명시 evidence 로 기록한다"
+    ],
+    "validation_evidence": [
+      "/Users/kansic/Service/atelier/SOT/service-factory/delivery-elaboration-disposition.md"
+    ],
+    "validation_resolved_at": "2026-07-28T23:33:35+09:00",
+    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/delivery-elaboration-1"
+  },
+  {
+    "agent_type": "orchestration-reviewer",
+    "artifact_dir": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260728-233335/delivery-elaboration-2",
+    "artifacts": [
+      "/Users/kansic/Service/atelier/SOT/service-factory/delivery-elaboration-disposition.md",
+      "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260728-233335/delivery-elaboration-2/events.jsonl",
+      "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260728-233335/delivery-elaboration-2/result.json",
+      "delivery-elaboration-disposition.md 대조"
+    ],
+    "available": true,
+    "commands_run": [
+      "gh release view v0.2.15 --json body",
+      "gh release view v0.1.66 --json tagName,url",
+      "gh release view v0.2.15 --json assets --jq '.assets[].name'",
+      "gh release view v0.2.15 --json isDraft,isPrerelease,tagName,publishedAt"
+    ],
+    "dispatch_path": "/Users/kansic/Service/atelier/SOT/service-factory/bridge/sf-run-20260728-233335/delivery-elaboration-2/dispatch.md",
+    "elaboration_round": 2,
+    "failure_class": "child_result_trust_boundary",
+    "finished_at": "2026-07-28T23:34:30+09:00",
+    "id": "delivery::elaboration-2",
+    "kind": "self_elaboration",
+    "last_run_id": "sf-run-20260728-233335",
+    "modified_files": [],
+    "next_step": "delivery stage 종결",
+    "owned_paths": [],
+    "prompt_path": "SOT/service-factory/agent-prompts/delivery--elaboration-2.md",
+    "spawn_policy": "spawn_when_stage_unblocked",
+    "stage": "delivery",
+    "status": "completed",
+    "success_criteria": [
+      "이 stage 산출물의 미커버 gap/빠진 디테일을 발굴한다",
+      "발굴된 각 gap 을 resolve 하거나, gap 이 없으면 'gap 없음'을 명시 evidence 로 기록한다"
+    ],
+    "validation_evidence": [
+      "/Users/kansic/Service/atelier/SOT/service-factory/delivery-elaboration-disposition.md"
+    ],
+    "validation_resolved_at": "2026-07-28T23:34:49+09:00",
+    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/delivery-elaboration-2"
+  },
+  {
+    "agent_type": "orchestration-reviewer",
+    "artifact_dir": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260729-000221/user_receipt-elaboration-1",
+    "artifacts": [
+      "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260729-000221/user_receipt-elaboration-1/events.jsonl",
+      "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260729-000221/user_receipt-elaboration-1/result.json",
+      "/Users/kansic/Service/atelier/SOT/service-factory/user-receipt.md"
+    ],
+    "available": true,
+    "commands_run": [
+      "cat SOT/service-factory/user-receipt.md",
+      "gh release view v0.2.15 --json body,tagName,publishedAt,assets",
+      "gh repo view --json hasIssuesEnabled,url",
+      "grep -i updater src-tauri/tauri.conf.json src-tauri/Cargo.toml",
+      "curl -sI -L https://github.com/BYKAYLE/atelier/releases/latest/download/latest.json",
+      "gh release view v0.1.66 --json body -q .body"
+    ],
+    "dispatch_path": "/Users/kansic/Service/atelier/SOT/service-factory/bridge/sf-run-20260729-000221/user_receipt-elaboration-1/dispatch.md",
+    "elaboration_round": 1,
+    "failure_class": "child_result_trust_boundary",
+    "finished_at": "2026-07-29T00:04:15+09:00",
+    "id": "user_receipt::elaboration-1",
+    "kind": "self_elaboration",
+    "last_run_id": "sf-run-20260729-000221",
+    "modified_files": [],
+    "next_step": "user_receipt 종결 → delivered",
+    "owned_paths": [],
+    "prompt_path": "SOT/service-factory/agent-prompts/user_receipt--elaboration-1.md",
+    "spawn_policy": "spawn_when_stage_unblocked",
+    "stage": "user_receipt",
+    "status": "completed",
+    "success_criteria": [
+      "이 stage 산출물의 미커버 gap/빠진 디테일을 발굴한다",
+      "발굴된 각 gap 을 resolve 하거나, gap 이 없으면 'gap 없음'을 명시 evidence 로 기록한다"
+    ],
+    "validation_evidence": [
+      "/Users/kansic/Service/atelier/SOT/service-factory/user-receipt.md"
+    ],
+    "validation_resolved_at": "2026-07-29T00:04:29+09:00",
+    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/user_receipt-elaboration-1"
+  },
+  {
+    "agent_type": "orchestration-reviewer",
+    "artifact_dir": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260729-000429/user_receipt-elaboration-2",
+    "artifacts": [
+      "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260729-000429/user_receipt-elaboration-2/events.jsonl",
+      "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260729-000429/user_receipt-elaboration-2/result.json",
+      "/Users/kansic/Service/atelier/SOT/service-factory/user-receipt.md",
+      "gh release view v0.2.15 body 실측",
+      "user-receipt.md §H2 정련 결과 대조"
+    ],
+    "available": true,
+    "commands_run": [
+      "gh release view v0.2.15 --repo BYKAYLE/atelier --json body,isDraft,isPrerelease",
+      "curl -sI https://github.com/BYKAYLE/atelier/releases/download/v0.2.15/latest.json"
+    ],
+    "dispatch_path": "/Users/kansic/Service/atelier/SOT/service-factory/bridge/sf-run-20260729-000429/user_receipt-elaboration-2/dispatch.md",
+    "elaboration_round": 2,
+    "failure_class": "child_result_trust_boundary",
+    "finished_at": "2026-07-29T00:05:24+09:00",
+    "id": "user_receipt::elaboration-2",
+    "kind": "self_elaboration",
+    "last_run_id": "sf-run-20260729-000429",
+    "modified_files": [],
+    "next_step": "user_receipt 종결 → delivered",
+    "owned_paths": [],
+    "prompt_path": "SOT/service-factory/agent-prompts/user_receipt--elaboration-2.md",
+    "spawn_policy": "spawn_when_stage_unblocked",
+    "stage": "user_receipt",
+    "status": "completed",
+    "success_criteria": [
+      "이 stage 산출물의 미커버 gap/빠진 디테일을 발굴한다",
+      "발굴된 각 gap 을 resolve 하거나, gap 이 없으면 'gap 없음'을 명시 evidence 로 기록한다"
+    ],
+    "validation_evidence": [
+      "/Users/kansic/Service/atelier/SOT/service-factory/user-receipt.md"
+    ],
+    "validation_resolved_at": "2026-07-29T00:05:24+09:00",
+    "worktree_path": "/Users/kansic/Service/atelier/.service-factory/worktrees/user_receipt-elaboration-2"
   }
 ]
 ```
@@ -976,8 +1387,8 @@ generated_at: 2026-05-31T23:30:36+09:00
       "responsibility": "bounded research, implementation, review, Probe, security, release audit"
     }
   ],
-  "blueprint_count": 15,
-  "instance_count": 23,
+  "blueprint_count": 25,
+  "instance_count": 36,
   "manifest_candidates": [],
   "nodes": [
     {
@@ -995,6 +1406,34 @@ generated_at: 2026-05-31T23:30:36+09:00
       "type": "AgentBlueprint",
       "agent_type": "code-mapper",
       "stage": "current_state",
+      "manifest_status": "installed_or_builtin"
+    },
+    {
+      "id": "blueprint:research_intelligence::research_director",
+      "type": "AgentBlueprint",
+      "agent_type": "k-dense-researcher",
+      "stage": "research_intelligence",
+      "manifest_status": "installed_or_builtin"
+    },
+    {
+      "id": "blueprint:research_intelligence::market_researcher",
+      "type": "AgentBlueprint",
+      "agent_type": "market-researcher",
+      "stage": "research_intelligence",
+      "manifest_status": "installed_or_builtin"
+    },
+    {
+      "id": "blueprint:research_intelligence::evidence_synthesizer",
+      "type": "AgentBlueprint",
+      "agent_type": "knowledge-synthesizer",
+      "stage": "research_intelligence",
+      "manifest_status": "installed_or_builtin"
+    },
+    {
+      "id": "blueprint:research_intelligence::methodology_reviewer",
+      "type": "AgentBlueprint",
+      "agent_type": "research-methodologist",
+      "stage": "research_intelligence",
       "manifest_status": "installed_or_builtin"
     },
     {
@@ -1089,10 +1528,52 @@ generated_at: 2026-05-31T23:30:36+09:00
       "manifest_status": "installed_or_builtin"
     },
     {
+      "id": "blueprint:delivery::delivery_publisher",
+      "type": "AgentBlueprint",
+      "agent_type": "deployment-engineer",
+      "stage": "delivery",
+      "manifest_status": "installed_or_builtin"
+    },
+    {
+      "id": "blueprint:user_receipt::user_docs_writer",
+      "type": "AgentBlueprint",
+      "agent_type": "documentation-engineer",
+      "stage": "user_receipt",
+      "manifest_status": "installed_or_builtin"
+    },
+    {
       "id": "blueprint:parallel_implementation::agent_runtime_worker",
       "type": "AgentBlueprint",
       "agent_type": "tooling-engineer",
       "stage": "parallel_implementation",
+      "manifest_status": "installed_or_builtin"
+    },
+    {
+      "id": "blueprint:delivery::elaboration-1",
+      "type": "AgentBlueprint",
+      "agent_type": "orchestration-reviewer",
+      "stage": "delivery",
+      "manifest_status": "installed_or_builtin"
+    },
+    {
+      "id": "blueprint:delivery::elaboration-2",
+      "type": "AgentBlueprint",
+      "agent_type": "orchestration-reviewer",
+      "stage": "delivery",
+      "manifest_status": "installed_or_builtin"
+    },
+    {
+      "id": "blueprint:user_receipt::elaboration-1",
+      "type": "AgentBlueprint",
+      "agent_type": "orchestration-reviewer",
+      "stage": "user_receipt",
+      "manifest_status": "installed_or_builtin"
+    },
+    {
+      "id": "blueprint:user_receipt::elaboration-2",
+      "type": "AgentBlueprint",
+      "agent_type": "orchestration-reviewer",
+      "stage": "user_receipt",
       "manifest_status": "installed_or_builtin"
     },
     {
@@ -1255,6 +1736,97 @@ generated_at: 2026-05-31T23:30:36+09:00
       "blueprint_id": "development_plan::strategy_planner",
       "status": "completed",
       "runtime": "command"
+    },
+    {
+      "id": "instance:sf-run-20260728-232527::delivery::delivery_publisher",
+      "type": "AgentInstance",
+      "blueprint_id": "delivery::delivery_publisher",
+      "status": "validation_required",
+      "runtime": "codex_bridge"
+    },
+    {
+      "id": "instance:sf-run-20260728-232527::delivery::delivery_publisher",
+      "type": "AgentInstance",
+      "blueprint_id": "delivery::delivery_publisher",
+      "status": "completed",
+      "runtime": "validation_resolution"
+    },
+    {
+      "id": "instance:sf-run-20260728-233003::delivery::elaboration-1",
+      "type": "AgentInstance",
+      "blueprint_id": "delivery::elaboration-1",
+      "status": "validation_required",
+      "runtime": "codex_bridge"
+    },
+    {
+      "id": "instance:sf-run-20260728-233003::delivery::elaboration-1",
+      "type": "AgentInstance",
+      "blueprint_id": "delivery::elaboration-1",
+      "status": "completed",
+      "runtime": "validation_resolution"
+    },
+    {
+      "id": "instance:sf-run-20260728-233335::delivery::elaboration-2",
+      "type": "AgentInstance",
+      "blueprint_id": "delivery::elaboration-2",
+      "status": "validation_required",
+      "runtime": "codex_bridge"
+    },
+    {
+      "id": "instance:sf-run-20260728-233335::delivery::elaboration-2",
+      "type": "AgentInstance",
+      "blueprint_id": "delivery::elaboration-2",
+      "status": "completed",
+      "runtime": "validation_resolution"
+    },
+    {
+      "id": "instance:sf-run-20260728-233522::user_receipt::user_docs_writer",
+      "type": "AgentInstance",
+      "blueprint_id": "user_receipt::user_docs_writer",
+      "status": "validation_required",
+      "runtime": "codex_bridge"
+    },
+    {
+      "id": "instance:sf-run-20260728-233522::user_receipt::user_docs_writer",
+      "type": "AgentInstance",
+      "blueprint_id": "user_receipt::user_docs_writer",
+      "status": "completed",
+      "runtime": "validation_resolution"
+    },
+    {
+      "id": "instance:sf-run-20260729-000221::user_receipt::elaboration-1",
+      "type": "AgentInstance",
+      "blueprint_id": "user_receipt::elaboration-1",
+      "status": "validation_required",
+      "runtime": "codex_bridge"
+    },
+    {
+      "id": "instance:sf-run-20260729-000221::user_receipt::elaboration-1",
+      "type": "AgentInstance",
+      "blueprint_id": "user_receipt::elaboration-1",
+      "status": "completed",
+      "runtime": "validation_resolution"
+    },
+    {
+      "id": "instance:sf-run-20260729-000429::user_receipt::elaboration-2",
+      "type": "AgentInstance",
+      "blueprint_id": "user_receipt::elaboration-2",
+      "status": "validation_required",
+      "runtime": "codex_bridge"
+    },
+    {
+      "id": "instance:sf-run-20260729-000429::user_receipt::elaboration-2",
+      "type": "AgentInstance",
+      "blueprint_id": "user_receipt::elaboration-2",
+      "status": "completed",
+      "runtime": "validation_resolution"
+    },
+    {
+      "id": "instance:sf-run-20260729-235243::research_intelligence::research_director",
+      "type": "AgentInstance",
+      "blueprint_id": "research_intelligence::research_director",
+      "status": "completed",
+      "runtime": "command"
     }
   ],
   "edges": [
@@ -1266,6 +1838,26 @@ generated_at: 2026-05-31T23:30:36+09:00
     {
       "from": "stella",
       "to": "blueprint:current_state::state_mapper",
+      "relationship": "authorizes_specialist_blueprint"
+    },
+    {
+      "from": "stella",
+      "to": "blueprint:research_intelligence::research_director",
+      "relationship": "authorizes_specialist_blueprint"
+    },
+    {
+      "from": "stella",
+      "to": "blueprint:research_intelligence::market_researcher",
+      "relationship": "authorizes_specialist_blueprint"
+    },
+    {
+      "from": "stella",
+      "to": "blueprint:research_intelligence::evidence_synthesizer",
+      "relationship": "authorizes_specialist_blueprint"
+    },
+    {
+      "from": "stella",
+      "to": "blueprint:research_intelligence::methodology_reviewer",
       "relationship": "authorizes_specialist_blueprint"
     },
     {
@@ -1335,7 +1927,37 @@ generated_at: 2026-05-31T23:30:36+09:00
     },
     {
       "from": "stella",
+      "to": "blueprint:delivery::delivery_publisher",
+      "relationship": "authorizes_specialist_blueprint"
+    },
+    {
+      "from": "stella",
+      "to": "blueprint:user_receipt::user_docs_writer",
+      "relationship": "authorizes_specialist_blueprint"
+    },
+    {
+      "from": "stella",
       "to": "blueprint:parallel_implementation::agent_runtime_worker",
+      "relationship": "authorizes_specialist_blueprint"
+    },
+    {
+      "from": "stella",
+      "to": "blueprint:delivery::elaboration-1",
+      "relationship": "authorizes_specialist_blueprint"
+    },
+    {
+      "from": "stella",
+      "to": "blueprint:delivery::elaboration-2",
+      "relationship": "authorizes_specialist_blueprint"
+    },
+    {
+      "from": "stella",
+      "to": "blueprint:user_receipt::elaboration-1",
+      "relationship": "authorizes_specialist_blueprint"
+    },
+    {
+      "from": "stella",
+      "to": "blueprint:user_receipt::elaboration-2",
       "relationship": "authorizes_specialist_blueprint"
     },
     {
@@ -1452,6 +2074,71 @@ generated_at: 2026-05-31T23:30:36+09:00
       "from": "release",
       "to": "instance:sf-run-20260531-194555::development_plan::strategy_planner",
       "relationship": "dispatches_or_collects_instance"
+    },
+    {
+      "from": "release",
+      "to": "instance:sf-run-20260728-232527::delivery::delivery_publisher",
+      "relationship": "dispatches_or_collects_instance"
+    },
+    {
+      "from": "release",
+      "to": "instance:sf-run-20260728-232527::delivery::delivery_publisher",
+      "relationship": "dispatches_or_collects_instance"
+    },
+    {
+      "from": "release",
+      "to": "instance:sf-run-20260728-233003::delivery::elaboration-1",
+      "relationship": "dispatches_or_collects_instance"
+    },
+    {
+      "from": "release",
+      "to": "instance:sf-run-20260728-233003::delivery::elaboration-1",
+      "relationship": "dispatches_or_collects_instance"
+    },
+    {
+      "from": "release",
+      "to": "instance:sf-run-20260728-233335::delivery::elaboration-2",
+      "relationship": "dispatches_or_collects_instance"
+    },
+    {
+      "from": "release",
+      "to": "instance:sf-run-20260728-233335::delivery::elaboration-2",
+      "relationship": "dispatches_or_collects_instance"
+    },
+    {
+      "from": "release",
+      "to": "instance:sf-run-20260728-233522::user_receipt::user_docs_writer",
+      "relationship": "dispatches_or_collects_instance"
+    },
+    {
+      "from": "release",
+      "to": "instance:sf-run-20260728-233522::user_receipt::user_docs_writer",
+      "relationship": "dispatches_or_collects_instance"
+    },
+    {
+      "from": "release",
+      "to": "instance:sf-run-20260729-000221::user_receipt::elaboration-1",
+      "relationship": "dispatches_or_collects_instance"
+    },
+    {
+      "from": "release",
+      "to": "instance:sf-run-20260729-000221::user_receipt::elaboration-1",
+      "relationship": "dispatches_or_collects_instance"
+    },
+    {
+      "from": "release",
+      "to": "instance:sf-run-20260729-000429::user_receipt::elaboration-2",
+      "relationship": "dispatches_or_collects_instance"
+    },
+    {
+      "from": "release",
+      "to": "instance:sf-run-20260729-000429::user_receipt::elaboration-2",
+      "relationship": "dispatches_or_collects_instance"
+    },
+    {
+      "from": "release",
+      "to": "instance:sf-run-20260729-235243::research_intelligence::research_director",
+      "relationship": "dispatches_or_collects_instance"
     }
   ]
 }
@@ -1461,15 +2148,16 @@ generated_at: 2026-05-31T23:30:36+09:00
 ```json
 {
   "runner_version": "0.2",
-  "mode": "plan_only_until_parent_spawns_agents",
+  "mode": "spawn_runtime_command",
   "operating_contract": {
-    "version": "state-plan-execute-v1",
     "required_order": [
       "current_state",
+      "research_intelligence",
       "development_plan",
       "execution_verification"
     ],
-    "rule": "Always inspect current state first, then write a goal-to-plan strategy, then execute and verify. Do not start implementation before current-state and development-plan artifacts exist unless the user explicitly requests a trivial one-shot task.",
+    "rule": "Always inspect current state first, then run research intelligence and hypothesis QC, then write a goal-to-plan strategy, then execute and verify. Do not start implementation before current-state, research, and development-plan artifacts exist unless the user explicitly requests a trivial one-shot task.",
+    "version": "state-plan-execute-v1",
     "phases": [
       {
         "id": "current_state",
@@ -1480,9 +2168,19 @@ generated_at: 2026-05-31T23:30:36+09:00
         ]
       },
       {
+        "id": "research_intelligence",
+        "name": "Research Intelligence and Hypothesis QC",
+        "rule": "Before product planning, run K-Dense-backed research, market/technical evidence gathering, hypothesis framing, counter-evidence search, and methodology review. Planning must cite this research lane instead of relying on unsupported intuition.",
+        "artifacts": [
+          "SOT/service-factory/research-dossier.md",
+          "SOT/service-factory/evidence-map.md",
+          "SOT/service-factory/research-qc.md"
+        ]
+      },
+      {
         "id": "development_plan",
         "name": "Goal-to-Plan Strategy",
-        "rule": "Convert the goal and current-state baseline into a gap analysis, ordered task packets, role assignments, owned paths, done_when, and verification strategy.",
+        "rule": "Convert the goal, current-state baseline, and research intelligence into a gap analysis, ordered task packets, role assignments, owned paths, done_when, and verification strategy.",
         "artifacts": [
           "SOT/service-factory/development-plan.md"
         ]
@@ -1506,9 +2204,10 @@ generated_at: 2026-05-31T23:30:36+09:00
   },
   "parallel_groups": [
     {
-      "id": "state_and_strategy",
+      "id": "state_research_strategy",
       "stages": [
         "current_state",
+        "research_intelligence",
         "development_plan"
       ],
       "max_parallel": 1
@@ -1637,6 +2336,10 @@ generated_at: 2026-05-31T23:30:36+09:00
   ],
   "ready_to_spawn": [
     "current_state::state_mapper",
+    "research_intelligence::research_director",
+    "research_intelligence::market_researcher",
+    "research_intelligence::evidence_synthesizer",
+    "research_intelligence::methodology_reviewer",
     "development_plan::strategy_planner",
     "product_brief::product_manager",
     "repo_map::repo_mapper",
@@ -1650,23 +2353,30 @@ generated_at: 2026-05-31T23:30:36+09:00
     "verification::runtime_probe",
     "deployment_readiness::deployment_readiness",
     "final_audit::final_audit",
-    "parallel_implementation::agent_runtime_worker"
+    "delivery::delivery_publisher",
+    "user_receipt::user_docs_writer",
+    "parallel_implementation::agent_runtime_worker",
+    "delivery::elaboration-1",
+    "delivery::elaboration-2",
+    "user_receipt::elaboration-1",
+    "user_receipt::elaboration-2"
   ],
   "foundry_required": [],
-  "last_run_id": "sf-run-20260531-233035"
+  "last_run_id": "sf-run-20260729-235243"
 }
 ```
 
 ## Operating Contract
 ```json
 {
-  "version": "state-plan-execute-v1",
   "required_order": [
     "current_state",
+    "research_intelligence",
     "development_plan",
     "execution_verification"
   ],
-  "rule": "Always inspect current state first, then write a goal-to-plan strategy, then execute and verify. Do not start implementation before current-state and development-plan artifacts exist unless the user explicitly requests a trivial one-shot task.",
+  "rule": "Always inspect current state first, then run research intelligence and hypothesis QC, then write a goal-to-plan strategy, then execute and verify. Do not start implementation before current-state, research, and development-plan artifacts exist unless the user explicitly requests a trivial one-shot task.",
+  "version": "state-plan-execute-v1",
   "phases": [
     {
       "id": "current_state",
@@ -1677,9 +2387,19 @@ generated_at: 2026-05-31T23:30:36+09:00
       ]
     },
     {
+      "id": "research_intelligence",
+      "name": "Research Intelligence and Hypothesis QC",
+      "rule": "Before product planning, run K-Dense-backed research, market/technical evidence gathering, hypothesis framing, counter-evidence search, and methodology review. Planning must cite this research lane instead of relying on unsupported intuition.",
+      "artifacts": [
+        "SOT/service-factory/research-dossier.md",
+        "SOT/service-factory/evidence-map.md",
+        "SOT/service-factory/research-qc.md"
+      ]
+    },
+    {
       "id": "development_plan",
       "name": "Goal-to-Plan Strategy",
-      "rule": "Convert the goal and current-state baseline into a gap analysis, ordered task packets, role assignments, owned paths, done_when, and verification strategy.",
+      "rule": "Convert the goal, current-state baseline, and research intelligence into a gap analysis, ordered task packets, role assignments, owned paths, done_when, and verification strategy.",
       "artifacts": [
         "SOT/service-factory/development-plan.md"
       ]

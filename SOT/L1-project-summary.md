@@ -1,6 +1,6 @@
 # Atelier Project Summary
 
-Last updated: 2026-07-26
+Last updated: 2026-08-18
 
 ## Identity
 
@@ -11,12 +11,12 @@ coding-agent workflows. It must not be treated as a greenfield rebuild.
 
 `supervised local candidate, public release blocked`
 
-- Current source candidate: `0.2.14`.
-- Source gates: 230 all-feature Rust tests passed with 3 ignored; Orca passed 23
+- Current source and locally installed candidate: `0.2.27`.
+- Source gates: 274 Rust tests passed with 6 ignored; Orca previously passed 24
   contract smokes across 10 removable features; strict
   all-target/all-feature Clippy and format/diff checks passed; `npm audit`
   reports 0 vulnerabilities; RustSec reports 0 known vulnerabilities with 18
-  unmaintained and 2 unsound upstream warnings retained.
+  unmaintained and 3 unsound upstream warnings retained.
 - Managed preview start is fail-closed. Atelier can still inspect a separately
   trusted localhost service.
 - Basic is the default permission. Auto keeps sandboxing and approval checks
@@ -25,19 +25,53 @@ coding-agent workflows. It must not be treated as a greenfield rebuild.
   Basic/Auto through their existing paths; Hermes/Gajaecode use pinned,
   Atelier-owned macOS runtimes, isolated homes/default skills, and the managed
   sandbox. Direct CLI is a separate manual, limited path.
-- Gajaecode is pinned at 0.11.7 with managed Bun 1.3.14 and four adapter-owned
+- Gajaecode is pinned at 0.14.0 with managed Bun 1.3.14 and four adapter-owned
   defaults. Hermes is pinned by commit, retains 453 durable bundled-source
   files, and verifies 73 installed skills.
+- Grok Build is a fifth structured agent, pinned at official xAI CLI `1.0.4`
+  under an Atelier-owned HOME. Browser OAuth is connected and a real
+  `grok-4.6` read-only turn returned verified final text and a session ID.
+- Hermes and Gajaecode additionally expose xAI API-backed Grok 4.5 models. This
+  route requires an `XAI_API_KEY`; it does not reuse the Grok CLI browser token.
+- The real managed Gajaecode runtime was updated from 0.12.8 to 0.14.0 through
+  the production ensure path. Its separate post-update status reports
+  `update_available: false`, and all nine DB/WAL/SHM file hashes remained
+  unchanged.
+- Claude, Hermes, Codex, and Gajaecode share one terminal-answer contract:
+  verified terminal result/error wins over streamed drafts. The real
+  13,112-character Hermes contamination record recovers its final conclusion
+  without `Planning`/`****` blocks while the stored original remains unchanged.
+- The structured composer no longer repeats the non-actionable
+  agent/provider/runtime/skill identity sentence. Model/provider/permission
+  controls, Gajae/Stella actions, and actionable runtime/authentication banners
+  remain available.
 - Frontend and Rust prompt guards share a regression corpus, but phrase matching
   is not a complete action-level guarantee.
-- The locally signed `0.2.14` candidate is installed at
+- The locally signed `0.2.27` candidate is installed at
   `/Applications/Atelier.app`. Candidate and installed executable SHA-256 values
   match at
-  `4ee04fbed757f015c910171f4e7c0c3979ca009d396f90a6abfb890e2e1b1868`;
+  `c08d3749d8a70ede6709ab1d3585b91ee8b9a97835c9a429d8240c77076d9a22`;
   codesign and renderer-ready checks pass. This is local installed-candidate
   proof, not Developer ID/notarization/public-distribution proof.
+- Mobile continuity publishes a bounded and native-redacted projection of the
+  existing desktop work instead of lifecycle counters only. The current
+  installed runtime exposed 3 existing tasks and 180 bounded messages over the
+  tailnet-only endpoint, with no internal session IDs, absolute workspace paths,
+  raw execution fields, or obvious credential patterns in the response.
+- The existing `Mobile browser` device is explicitly authorized for direct
+  continuation. A mobile instruction is revision-bound to the selected opaque
+  task ID and enters that exact desktop session queue; resolution failure never
+  falls back to a new session.
+- An explicitly started Tailscale mobile endpoint now restores after an app
+  restart, including while the Mac is locked. An explicit Stop disarms restore
+  before Serve cleanup, and every restore still enforces loopback binding,
+  tailnet-only Serve, and Funnel rejection.
+- Renderer health now uses one React root, ignores non-fatal background
+  rejections after the application shell commits, and refreshes a shell-backed
+  readiness receipt. The prior blank installed window was reproduced and the
+  final installed screen was captured after recovery.
 - The proof was created from a dirty worktree. HEAD
-  `35e6b0d92eba33ca5644b4d209ef1eaac75d987b` does not uniquely identify this
+  `fd47fbac31f6068bd3005174f8e1e3cd901ef5d0` does not uniquely identify this
   build; the installed candidate identifier is the executable SHA-256 above.
 - No public publish, Developer ID signing, notarization, or Windows physical
   proof was performed or claimed in this cycle.
@@ -90,7 +124,7 @@ runtime supervision, normalized agent lifecycles, optional task worktrees, and
 task-linked preview evidence are now integrated. Encrypted remote control stays
 deferred behind separate permission and device-revocation gates.
 
-The installed macOS `0.2.14` baseline builds on detached PTY supervision with a
+The installed macOS `0.2.19` baseline builds on detached PTY supervision with a
 common agent lifecycle, optional task isolation, and task-linked preview
 evidence. Preview evidence now includes bounded, redacted HTTP response and
 managed-server output alongside PID, restart, DOM, screenshot, browser
@@ -119,8 +153,19 @@ WinRT-first Windows activation, and COM/system fallbacks, Store-updater capabili
 credential ownership, macOS permission, long-session renderer performance, and release-audit gaps found during the
 final review. Normal and Store-feature Windows targets now also pass strict
 cross-target clippy and produce linked PE32+ x86-64 executables. Atelier no
-longer stages Codex access tokens into Hermes state; each CLI owns its provider
-authentication. Package reflection is independently proven by a private
+longer treats Hermes quiet stdout as a final-answer boundary: the managed path
+uses `chat -Q`, keeps `session_id:` on stderr, treats stdout as bounded
+diagnostic evidence, and selects only the exact new final assistant row from
+managed state after turn, resume/compression ancestry, active/compacted,
+tool-call, stale-row, and size validation. The provider-neutral frontend
+contract also keeps streamed drafts as evidence rather than verified answers
+and recovers historical dense progress records without changing stored
+originals. Atelier validates the 73-skill manifest without eager `--skills`
+preload and preserves installed skill discoverability under the Atelier-owned
+Hermes home. Atelier still stages
+a temporary Codex access token into the managed Hermes auth store for the
+duration of an app-owned turn; direct standalone Hermes replay outside Atelier
+correctly fails closed without that staging. Package reflection is independently proven by a private
 renderer receipt that binds the current version, live PID, canonical installed
 executable, main-window label, freshness, and React-root ready state; macOS and
 physical Windows release gates reject a process-only launch without this
@@ -133,9 +178,11 @@ contract and remaining completion gates.
 The current source has detached PTY ownership, restart replay, normalized
 provider lifecycle, optional task worktrees, task-linked preview evidence,
 fail-closed managed preview start, and an enforced long-session rendering
-contract. Its immediate full-gate task is provider-capability truth:
-Claude/Codex managed Basic/Auto only, Hermes/Gajaecode managed fail-closed, and a
-separate manual/limited direct CLI. Its durable P1 safety gap is an app-owned
+contract. Hermes/Gajaecode managed Basic/Auto now require pinned Atelier-owned
+runtimes and fail closed when readiness or user authentication is absent; direct
+CLI remains a separate manual/limited route. Hermes's state-backed final-answer
+provenance, context-budget, and SQLite sandbox boundaries are verified through
+an authenticated managed turn. Its durable P1 safety gap is an app-owned
 action/tool proxy with scoped approval receipts: a prompt phrase denylist cannot
 guarantee what an external provider tool actually executes. The remaining distribution gaps are
 physical Windows proof and public macOS/Windows signing and notarization. The

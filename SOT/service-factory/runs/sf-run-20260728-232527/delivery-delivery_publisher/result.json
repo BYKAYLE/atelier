@@ -1,0 +1,27 @@
+{
+  "status": "done",
+  "modified_files": [
+    "SOT/service-factory/delivery.md"
+  ],
+  "commands_run": [
+    "git tag -a v0.2.15 fd47fba",
+    "git push origin v0.2.15",
+    "gh release create v0.2.15 <dmg> --notes-file <notes>",
+    "gh release view/download + sha256 대조",
+    "curl -I release URL"
+  ],
+  "artifacts": [
+    "https://github.com/BYKAYLE/atelier/releases/tag/v0.2.15",
+    "SOT/service-factory/delivery.md",
+    "Atelier_0.2.15_aarch64.dmg (sha256 f23b2c19cb67afdb8c3774b3d9e8047f2347462cc4c9b2140ad269b8bd3457ac)"
+  ],
+  "findings_or_risks": [
+    "미서명 배포 — 설치 안내로 완화(정책 확정)",
+    "브릿지 가드레일 템플릿 delivery 미인지 — 잔여 개선"
+  ],
+  "failure_category": null,
+  "next_step": "user_receipt: 사용자 문서 + 대표님 인수 확인",
+  "evidence_class": "delivery_evidence",
+  "inspection_ref": "fd47fba + sha256:f23b2c19cb67afdb + https://github.com/BYKAYLE/atelier/releases/tag/v0.2.15",
+  "executed_by": "release orchestrator (H3 폴백 — production_deploy 승인 게이트 소비, 대표님 260728 명시 승인)"
+}

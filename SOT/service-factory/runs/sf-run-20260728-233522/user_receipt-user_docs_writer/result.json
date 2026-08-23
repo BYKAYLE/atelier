@@ -1,0 +1,21 @@
+{
+  "status": "validation_required",
+  "modified_files": [
+    "SOT/service-factory/user-receipt.md"
+  ],
+  "commands_run": [
+    "릴리스 노트 사용자 문서 검증(gh release view)"
+  ],
+  "artifacts": [
+    "SOT/service-factory/user-receipt.md",
+    "https://github.com/BYKAYLE/atelier/releases/tag/v0.2.15 (사용자 문서 실재)"
+  ],
+  "findings_or_risks": [
+    "user_docs 충족 — 릴리스 페이지에 설치·환경·롤백 문서 실재(정련 2라운드 검증)",
+    "ceo_acceptance 대기 — 사람 게이트, 대표님 확인 발화로만 종결 가능"
+  ],
+  "failure_category": null,
+  "next_step": "대표님 인수 확인 접수 → resolve-validation → user_receipt done → delivered",
+  "evidence_class": "user_receipt_acceptance",
+  "inspection_ref": "SOT/service-factory/user-receipt.md + gh release v0.2.15"
+}

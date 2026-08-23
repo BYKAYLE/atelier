@@ -1,5 +1,203 @@
 # Evidence Log
 
+## 2026-08-18 Hermes/Gajaecode Grok model provider and installed 0.2.27 proof
+
+- Official xAI API contract verified from current docs: model `grok-4.5`,
+  aliases `grok-4.5-latest` and `grok-build-latest`, OpenAI-compatible base
+  `https://api.x.ai/v1`, bearer `XAI_API_KEY`, 500K context, and reasoning
+  levels `low|medium|high`.
+- Installed Hermes source already contains first-class `xai` provider routing,
+  `XAI_API_KEY`, and `https://api.x.ai/v1` support. Installed Gajaecode source
+  contains first-class `xai` provider/model and effort support.
+- The installed Connections UI visibly shows `Grok (xAI)` in both Hermes and
+  Gajaecode cards. The gray credential indicators are truthful because the
+  current Grok browser subscription is not an xAI API key.
+- Installed proof:
+  - version `0.2.27`;
+  - candidate/installed executable SHA-256
+    `c08d3749d8a70ede6709ab1d3585b91ee8b9a97835c9a429d8240c77076d9a22`;
+  - local codesign, renderer-ready receipt, candidate/install hash equality,
+    Spotlight singleton, and restored mobile route pass.
+
+## 2026-08-18 authenticated Grok call and installed 0.2.26 proof
+
+- The Atelier-launched official device authorization completed and the
+  provider-local auth detector moved from pending to connected without copying
+  any global Grok credential.
+- Authenticated `grok models` returned default `grok-4.6` and available
+  `grok-4.5`; source defaults and effort normalization were corrected to this
+  live contract.
+- A bounded proof call used `grok-4.6`, `low`, `--sandbox read-only`, only the
+  `read_file` tool, one maximum turn, and no subagents. It returned
+  `GROK_ATELIER_OK`, `end_turn`, and a session ID. Receipt:
+  `artifacts/grok-authenticated-proof.json`.
+- Installed proof:
+  - Atelier version `0.2.26`;
+  - candidate/installed executable SHA-256
+    `18674fb1c840bf671da5efd9e34b8f9cecadf50bbc3200aa4bdb65767b98e7a9`;
+  - local codesign, renderer-ready receipt, and executable hash equality pass;
+  - Spotlight returns only `/Applications/Atelier.app`;
+  - mobile Tailscale route restored to `127.0.0.1:64724`.
+
+## 2026-08-18 Grok Build integration and installed 0.2.25 proof
+
+- Official source contract: `https://x.ai/cli` and
+  `xai-org/grok-build`; pinned stable version `1.0.4`.
+- Real managed-runtime proof:
+  - executable:
+    `/Users/kansic/Library/Application Support/com.atelier.app/providers/grok/bin/grok`;
+  - `grok 1.0.4 (d846eb93d94d)`;
+  - SHA-256
+    `39366f7756a090b735cc1df8c93a8c0c3c7871555cf6cbb28f9351ca82936485`;
+  - strict code signature valid, Developer ID Application X.AI Corporation,
+    team `5Y6N3AJ54S`;
+  - schema-2 readiness receipt records provider `grok`, runtime pin `1.0.4`,
+    zero adapter-injected skills, and the isolated executable path.
+- Auth boundary: no global Grok CLI or global Grok auth was imported. Browser
+  OAuth and `XAI_API_KEY` are supported, but the installed runtime currently
+  remains `not_connected` pending user authentication.
+- Source verification passed for production frontend build and focused
+  provider identity, compact Connections, permission, OAuth URL, answer
+  rendering, mobile continuity, remote follow-up, automation, registry,
+  Grok JSON/result, effort, and auth detection tests.
+- Installed proof:
+  - Atelier version `0.2.25`;
+  - candidate/installed executable SHA-256
+    `aad217646b9eab11afdbacff0ed105ae1e7d841d570ea132bfdf56615a3c89e7`;
+  - local codesign, renderer-ready receipt, and executable hash equality pass;
+  - the installed Profiles screen visibly includes `Grok Build` / `grok`;
+  - Spotlight returns only `/Applications/Atelier.app`.
+- No database, existing task/session, credential, or user-authored skill data
+  was deleted.
+
+## 2026-08-17 Hermes/Gajaecode card standard and installed 0.2.24 proof
+
+- `ConnectionsPanel` now mounts the same shared managed-agent update component
+  once for Hermes and once for Gajaecode. The component owns common status,
+  version, message, update, and update-check layout and interaction slots.
+- Provider-runtime identity and compact Connections layout smokes passed. The
+  identity smoke also verifies the shared-component use count and ordering
+  after runtime evidence and before provider-specific controls.
+- Production frontend build and focused Hermes/Gajaecode Rust pin tests passed.
+- Installed proof:
+  - version `0.2.24`;
+  - candidate and installed executable SHA-256
+    `9cd61a96f118a692660751c931c27f595074f8d6ac0678589e141c017e0db481`;
+  - local codesign, renderer-ready receipt, and candidate/install hash equality
+    passed;
+  - Spotlight returns only `/Applications/Atelier.app`; the source bundle is
+    preserved as a non-app `.build-artifact`.
+- Installation temporarily restarted Atelier's mobile server. Tailscale Serve
+  restored the same tailnet-only HTTPS `:8443/atelier` route against the new
+  local listener `127.0.0.1:60662`.
+- No database, task/session, credential, provider state, or user-authored skill
+  data was deleted.
+
+## 2026-08-17 Gajaecode 0.14.0 update and installed 0.2.23 proof
+
+- The npm package `gajae-code@0.14.0` passed an isolated compatibility proof
+  under Atelier's actual managed HOME, `GJC_CODING_AGENT_DIR`, Bun `1.3.14`,
+  and `setup defaults --check` contract.
+- Focused verification passed: provider-runtime identity smoke, production
+  frontend build, update-status comparison, Gajaecode exact-pin/readiness,
+  Hermes pinned-spec, and Hermes readiness/integrity tests.
+- The real managed Gajaecode update path reported ordered
+  `checking -> installing -> bootstrapping_skills -> verifying -> ready`, then
+  independently returned GJC `0.14.0`, Bun `1.3.14`, four default skills, and
+  `update_available=false` from the schema-2 receipt.
+- Installed proof:
+  - source/candidate/installed version: `0.2.23`;
+  - candidate and installed executable SHA-256:
+    `6c5d40b9e89d4a51a451bd45ced2ab57dab8a5754a1bac3d2537679631b0396d`;
+  - local codesign, candidate/install hash equality, and installed
+    renderer-ready receipt passed;
+  - the installed Connections screen visibly shows current/support GJC
+    `0.14.0` and an explicit `업데이트 확인` button.
+- The previous `0.2.22` app was moved to a `.noindex` recovery archive. No
+  provider database, user session, credential, or user-authored skill data was
+  deleted.
+- The release bundle and DMG were produced, but the release command stopped at
+  public updater signing because `TAURI_SIGNING_PRIVATE_KEY` is unavailable.
+
+## 2026-08-02 Composer explanation removal and local 0.2.20 proof
+
+- `AgentWorkspace` no longer mounts the generic runtime-identity explanation
+  under the structured composer. Focused source assertions also reject the
+  removed identity summary, progress-label helper, and generic launcher copy.
+- Preserved surfaces were verified: model/provider/permission controls, Gajae
+  primary actions, Stella launch action, runtime failure/observation/unavailable
+  banners, and Connections provider/skill identity contracts.
+- Verification passed:
+  - provider-runtime, Stella-row, permission-capability, and Connections smokes;
+  - production frontend build and 24-contract/10-feature Orca gate;
+  - Rust all-target/all-feature suite: 254 passed, 0 failed, 6 ignored;
+  - strict format, Clippy, diff, release-security, npm-audit, and RustSec gates.
+- Installed proof:
+  - source/candidate/installed version: `0.2.20`;
+  - candidate and installed executable SHA-256:
+    `098ac2aaa404deab7d1432868450ca1859049bdd4c1892554594f99dfa3d773e`;
+  - codesign and renderer-ready receipt passed at
+    `artifacts/macos-installed-candidate-proof.json`;
+  - installed Hermes composer screenshot:
+    `artifacts/atelier-0.2.20-agent-workspace-description-removed.png`;
+  - prior `0.2.19` app preserved at
+    `/Users/kansic/Library/Application Support/Atelier/Backups/Atelier-0.2.19-before-0.2.20-description-removal-20260802.app`.
+- Gajae DB/WAL/SHM path count stayed 9 before and after installation. No
+  database/user-data deletion, public publication, or notarization occurred.
+
+## 2026-08-02 Reproducible managed Gajae update and local 0.2.19 proof
+
+- Verified the installed managed-update contract no longer stalls on a
+  `npm latest`-driven early-return path; check/action now follows the same
+  Atelier-supported pin `0.12.8`.
+- Updated-source and installed-app verification for this release used
+  `cargo test --all-targets --all-features` and reported
+  254 passed, 0 failed, 6 ignored; strict Clippy, production build, release
+  audit, the 24-contract/10-feature Orca gate, provider/connection smokes, and
+  no known npm/RustSec vulnerabilities.
+- Built and signed local `0.2.19` artifacts, including DMG, with installed-app
+  executable match:
+  - candidate/install version: `0.2.19`
+  - executable SHA-256:
+    `a72a251ff88977a22bb1e6720db64e47863bc7d9182dc8c06e3ebd5cdcbe2754`
+  - prior app preserved at
+    `/Users/kansic/Library/Application Support/Atelier/Backups/Atelier-0.2.18-before-0.2.19-gajecode-update-20260802.app`
+  - codesign and installed renderer-ready checks passed.
+- Real managed GJC proof against the installed runtime root shows:
+  - the production ensure path updated `gjc/0.11.7` to `gjc/0.12.8`, with Bun
+    `1.3.14` and 4 verified default skills;
+  - the schema-2 receipt records the exact pins, executable, and skill count,
+    while a separate post-update status reports `update_available: false`;
+  - runtime DB/WAL/SHM paths were unchanged before/after update (9 files hashed
+    identically), confirming no DB/data deletion in this flow.
+- Session-level evidence remained local-only, and all claims are bounded to local
+  installed-candidate truth; physical Windows, public distribution, and public
+  signing/notarization were not claimed.
+
+## 2026-07-29 Stella status-row removal and installed 0.2.16 proof
+
+- The persistent status card, status refresh control, and background
+  `stellaFactoryStatus` query were removed from `AgentWorkspace`; Stella
+  launcher/bootstrap/autopilot and safety behavior remain present.
+- Verification:
+  - `smoke:stella-status-row`, `smoke:stella-safety`,
+    `smoke:settings-navigation`, and `smoke:connections-layout` passed;
+  - production frontend build passed;
+  - Rust library tests: 239 passed, 0 failed, 4 ignored.
+- Installed proof:
+  - candidate and installed version: `0.2.16`;
+  - candidate and installed executable SHA-256:
+    `fcf5b07fb7625ebb82db19378643ce7542359bf12b33e8f0a6c9184c96d8da22`;
+  - local codesign and installed renderer-ready checks passed;
+  - receipt: `artifacts/macos-installed-candidate-proof.json`;
+  - DMG: `src-tauri/target/release/bundle/dmg/Atelier_0.2.16_aarch64.dmg`,
+    SHA-256
+    `9212a2778a4329cc53a1bae113f2dc7de6d42a0304f503ce2bbb1c13df500592`;
+  - installed UI screenshot:
+    `/Users/kansic/.codex/visualizations/2026/07/25/019f98d7-308a-76c0-b5e0-1a9657cf64ea/atelier-0.2.16-stella-status-row-removed.png`.
+- Boundary: local signing and local installed-candidate proof only; Developer ID
+  notarization and public distribution are not claimed.
+
 ## 2026-07-26 Gajae provider parity and installed 0.2.15 proof
 
 - Gajae remains an Atelier-owned GJC adapter with isolated HOME/config/session/
@@ -2389,3 +2587,200 @@ This verifies a locally signed installed candidate only. Developer ID signing,
 notarization, public distribution, and physical Windows behavior remain
 unproven. Because the worktree was dirty at proof time, the HEAD SHA is not the
 candidate identity; the executable SHA-256 is.
+
+## 2026-07-30 Atelier 0.2.17 Hermes rendering root-cause slice
+
+Truth surface: source, build, and installed local candidate proof. No public
+release, notarization, deployment, or DB/data deletion was performed.
+
+Confirmed causes:
+
+- Hermes stdout contamination: Atelier's old managed Hermes path parsed the
+  human/TUI transcript shape and could promote planning/tool-progress box lines
+  into assistant body text.
+- Context inflation: Atelier passed all 73 managed Hermes skills through
+  `--skills`, which Hermes interprets as eager preload. Production evidence
+  showed an empty-history first request at approximately `256,565` input tokens
+  before the visible `Context length exceeded` failure.
+- SQLite path denial: managed Hermes `state.db` access could fail on macOS
+  because the sandbox allowed the leaf paths but not the required literal
+  ancestor metadata traversal for SQLite/WAL open.
+
+Source and test evidence:
+
+- `src-tauri/src/agent.rs`
+  - managed Hermes query path now uses `chat -Q --source tool --max-turns 90`
+    with `--ignore-user-config --ignore-rules`;
+  - managed skill manifest remains validated but is no longer passed through
+    `--skills`;
+  - `session_id:` is recovered from stderr and removed from visible errors;
+  - context-overflow and database-open failures map to explicit runtime
+    messages.
+- `src-tauri/src/agent_sandbox.rs`
+  - ancestor paths now receive literal metadata/existence rules only, preserving
+    sibling-file denial while allowing SQLite WAL open.
+- `src/components/AgentWorkspace.tsx`
+  - delta cleanup no longer strips chunk-final newlines;
+  - streaming assistant turns always use the plain pre-wrap renderer path;
+  - persisted messages matching the exact legacy Hermes TUI/context-failure
+    signature render a recovery notice without changing stored source data.
+- Targeted passes:
+  - `cargo test hermes_isolation_validates_managed_skills_without_eager_preload`
+  - `cargo test hermes_query_keeps_quiet_lifecycle_and_on_demand_skills`
+  - `cargo test hermes_quiet_stderr_requires_a_strict_session_identity`
+  - `cargo test macos_profile_allows_ancestor_metadata_and_sqlite_without_sibling_reads`
+  - `cargo check --manifest-path src-tauri/Cargo.toml`
+  - `npm run build`
+  - `npm run smoke:agent-stream-rendering`
+
+Installed-app proof:
+
+- Local bundle build: `npm run tauri:build` passed and produced
+  `/Users/kansic/Service/atelier/src-tauri/target/release/bundle/macos/Atelier.app`
+  plus `Atelier_0.2.17_aarch64.dmg`.
+- Installed app was updated to `/Applications/Atelier.app`; the prior app was
+  moved without deletion to
+  `/Users/kansic/Library/Application Support/Atelier/Backups/Atelier-0.2.17-pre-legacy-hermes-display-20260730-0050.app`.
+- Candidate and installed executable SHA-256 both equal
+  `b862a24e57be0fe6df233ac8c1177420381eba9215e2c07253208e6719b24db1`.
+- `npm run release:installed-proof:mac` passed and wrote
+  `/Users/kansic/Service/atelier/artifacts/macos-installed-candidate-proof.json`.
+- Installed renderer receipt in that proof reports version `0.2.17`, PID
+  `73998`, executable
+  `/Applications/Atelier.app/Contents/MacOS/atelier`, window `main`, status
+  `ready`.
+
+Authenticated production-path proof:
+
+- Explicit ignored test
+  `agent::tests::manual_real_managed_hermes_quiet_turn_proof` used the same
+  temporary Codex access staging, managed runtime environment, macOS sandbox,
+  on-demand skill inventory, and `chat -Q` argument builder as `run_hermes`.
+- It completed as session `20260730_004403_923602`; stdout was exactly
+  `ATELIER_HERMES_QUIET_OK` plus its line terminator (24 bytes), stderr carried
+  the session ID, and no planning/search/tool/DB/context diagnostic entered the
+  answer.
+- Hermes `agent.log` records first-call usage `in=14388 out=14`, compared with
+  the reproduced pre-fix empty-history first-call `in=256565`.
+- Read-only SQLite checks returned `PRAGMA quick_check=ok` and found the new
+  session with two messages, zero tool calls, one API call, 14,388 input tokens,
+  and 14 output tokens. No post-fix `unable to open database file` or
+  `Context length exceeded` entry exists.
+- Post-turn redacted auth inspection found no Atelier-managed Codex provider and
+  no Atelier refresh marker in the managed Hermes auth store, confirming the
+  temporary access guard scrubbed its staging after the proof.
+- A standalone replay without Atelier's temporary credential staging still
+  correctly fails closed. The remaining boundaries are public notarization,
+  physical Windows/second clean-Mac proof, and Gajae's authenticated turn.
+
+## Stella Mode goal: 설치 검증입니다. 파일을 변경하지 말고 응답은 OK 한 단어만 출력하세요. — 1785338002
+
+Provider: hermes
+Model: gpt-5.5
+Workspace: /Users/kansic/Service/atelier
+Status: done
+
+Preflight:
+Atelier 스텔라 모드 사전 증거:
+- 작업 루트: /Users/kansic/Service/atelier
+- 프로젝트: atelier
+- 스택: React, Rust, Tauri, TypeScript, Vite, xterm.js
+- Git: 사용; 변경 경로: 44
+- 검증 후보: git diff --check | npm run build | cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture | npm run harness:fixture
+- SOT: 존재
+- 위험 신호: large dirty tree: 44 changed paths
+- 스텔라 모드 상태: 재개 /Users/kansic/Service/atelier/SOT/service-factory-state.json
+- 스텔라 모드 산출물: 0개 생성, 9개 기존; readiness running
+- 스텔라 모드 다음 작업: read current-state.md first and confirm the real repo/runtime/SOT/install baseline | use development-plan.md to convert the goal gap into task packets before implementation
+- Managed autopilot: 검토 필요
+- Managed autopilot 실행: 1200초; bridge: /Users/kansic/.claude/skills/stella/scripts/stella_service_factory.py
+- Managed autopilot 다음 작업: managed Stella Mode autopilot timed out; resume from SOT/service-factory/handoff-latest.md | provider must continue the Stella Mode run until pilot_ready or a concrete blocker is recorded
+
+Result:
+Context length exceeded (18,664 tokens). Cannot compress further.
+
+## 2026-07-31 Atelier 0.2.18 verified-answer and rendering recurrence prevention
+
+Truth surface: real persisted failure, managed-provider state, source/tests,
+real provider call, local package, and installed-app renderer receipt. No
+public release, notarization, deployment, DB/data deletion, or credential
+export was performed.
+
+### Superseded assumption and reproduced record
+
+- The prior `0.2.17` section's 24-byte marker response proved only that one
+  short request happened to return answer-only stdout. It did not establish a
+  canonical stdout contract for long or tool-heavy Hermes runs.
+- Read-only inspection of the real WebKit LocalStorage record found completed
+  assistant message `assistant-ms6lolfo-6jbgf1` with 13,112 characters and 119
+  literal `****` progress boundaries.
+- Read-only managed Hermes state inspection found the exact final assistant row
+  at message id `523`: 1,791 characters / 3,269 bytes, `active=1`,
+  `compacted=0`, with no tool call. The database journal mode is WAL.
+- Applying the provider-neutral presentation contract to the stored record
+  produced a 1,839-character display, recovered the final suffix, removed all
+  `Planning` and `****` blocks, and preserved the expected final conclusion.
+  The LocalStorage and Hermes databases were opened read-only and were not
+  modified.
+
+### Implemented contract
+
+- `src-tauri/src/agent.rs`
+  - retains `hermes chat -Q` but treats stdout as bounded diagnostic evidence,
+    never as the answer;
+  - validates the strict stderr session ID and queries managed `state.db`
+    read-only for the exact new final assistant content;
+  - rejects missing/stale/unrelated rows, invalid resume ancestry, inactive or
+    compacted messages, tool-call rows, oversized content, abnormal exits, and
+    quiet-runtime activity timeout cases.
+- `src/lib/agentAnswerContract.ts` and
+  `src/components/AgentWorkspace.tsx`
+  - make terminal result/error authoritative for Claude, Hermes, Codex, and
+    Gajaecode;
+  - retain streamed drafts as evidence only;
+  - mark restored runs without a verified terminal answer as unverified;
+  - recover only high-confidence historical dense-progress records at display
+    time and expose their complete stored original without mutation;
+  - normalize ANSI/CRLF after chunk aggregation so split boundaries remain
+    lossless.
+- The shared smoke is enforced in CI, macOS/Windows release, Windows Store, and
+  release-security gates.
+
+### Test and real-provider evidence
+
+- `npm run smoke:agent-stream-rendering`: pass for `claude`, `hermes`, `codex`,
+  and `gajecode`; the actual-scale fixture is 18,497 characters with exactly
+  119 `****` boundaries.
+- `npm run build`: pass; the existing large-chunk warning remains P2.
+- `npm run audit:release`: pass; RustSec reports 0 vulnerabilities with the
+  existing upstream maintenance warnings retained.
+- `cargo test --manifest-path src-tauri/Cargo.toml --all-features`: 253 passed,
+  0 failed, 5 ignored.
+- `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets
+  --all-features -- -D warnings`: pass.
+- Explicit real managed-provider proof
+  `agent::tests::manual_real_managed_hermes_quiet_turn_proof`: pass as session
+  `20260731_163009_66f19f`; the adapter rejected 24 untrusted stdout bytes and
+  selected the 23-byte verified final answer from managed state.
+
+### Local package and installed-app reflection
+
+- `npm run tauri:build`: pass; produced the locally signed
+  `Atelier.app` and `Atelier_0.2.18_aarch64.dmg`.
+- Candidate and installed versions: `0.2.18`.
+- Candidate and installed executable SHA-256:
+  `591f88709e6d3e8183bd98610e2e37aeb7ca1d2dd101e451760f07a8090dc57c`.
+- Candidate and installed codesign verification: pass.
+- Installed renderer receipt: version `0.2.18`, canonical executable
+  `/Applications/Atelier.app/Contents/MacOS/atelier`, window label `main`,
+  status `ready`.
+- Machine-readable proof:
+  `/Users/kansic/Service/atelier/artifacts/macos-installed-candidate-proof.json`.
+- The prior `0.2.17` application was moved, not deleted, to
+  `/Users/kansic/Library/Application Support/Atelier/Backups/Atelier-0.2.17-before-0.2.18-render-contract-20260731.app`.
+- CGWindow inspection found the installed Atelier main window on screen.
+  Pixel capture was not accepted as visual evidence because the macOS console
+  was locked (`CGSSessionScreenIsLocked=1`) and screenshots were black.
+- Boundary: local installed-candidate proof only. Developer ID notarization,
+  public distribution, physical Windows behavior, and a second clean company
+  Mac remain unproven.

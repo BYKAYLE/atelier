@@ -1,0 +1,186 @@
+{
+  "schemaVersion": 2,
+  "phase": "release-infrastructure-preflight",
+  "generatedAt": "2026-07-23T12:57:51.344Z",
+  "version": "0.2.12",
+  "releaseRepository": "BYKAYLE/atelier",
+  "sourceCommit": "35e6b0d92eba33ca5644b4d209ef1eaac75d987b",
+  "tag": null,
+  "checks": [
+    {
+      "id": "version-alignment",
+      "status": "pass",
+      "message": "package.json, Cargo.toml, and tauri.conf.json versions must match",
+      "actual": {
+        "packageJson": "0.2.12",
+        "cargoToml": "0.2.12",
+        "tauriConfig": "0.2.12"
+      }
+    },
+    {
+      "id": "release-repository",
+      "status": "pass",
+      "message": "package repository must be a GitHub repository",
+      "actual": "BYKAYLE/atelier"
+    },
+    {
+      "id": "github-updater-endpoint",
+      "status": "pass",
+      "message": "updater endpoint must resolve only to this repository's latest.json",
+      "actual": [
+        "https://github.com/BYKAYLE/atelier/releases/latest/download/latest.json"
+      ]
+    },
+    {
+      "id": "github-updater-artifacts",
+      "status": "pass",
+      "message": "direct-distribution builds must create signed updater artifacts",
+      "actual": true
+    },
+    {
+      "id": "store-updater-isolation",
+      "status": "pass",
+      "message": "Microsoft Store builds must not create GitHub updater artifacts",
+      "actual": false
+    },
+    {
+      "id": "updater-public-key",
+      "status": "pass",
+      "message": "updater public key must be configured"
+    },
+    {
+      "id": "release-tag",
+      "status": "not-evaluated",
+      "message": "No release tag was supplied for this local inspection"
+    },
+    {
+      "id": "workflow-repository-binding",
+      "status": "not-evaluated",
+      "message": "No workflow repository was supplied for this local inspection"
+    },
+    {
+      "id": "tracked-source-clean",
+      "status": "pass",
+      "message": "tracked source must be clean before a release tag is created"
+    },
+    {
+      "id": "release-credentials",
+      "status": "not-evaluated",
+      "message": "Local credential values are not inspected; GitHub credential names are checked instead"
+    },
+    {
+      "id": "macos-release-tools",
+      "status": "pass",
+      "message": "macOS signing, Gatekeeper, packaging, notarization, and stapling tools must be available",
+      "actual": {
+        "missing": []
+      }
+    },
+    {
+      "id": "macos-developer-id-identity",
+      "status": "fail",
+      "message": "the release keychain must contain a Developer ID Application identity",
+      "actual": {
+        "identities": []
+      }
+    },
+    {
+      "id": "macos-configured-signing-identity",
+      "status": "not-evaluated",
+      "message": "APPLE_SIGNING_IDENTITY was not supplied to local host inspection; GitHub names are checked separately"
+    },
+    {
+      "id": "github-release-api",
+      "status": "pass",
+      "message": "GitHub release infrastructure is readable"
+    },
+    {
+      "id": "github-release-secrets",
+      "status": "fail",
+      "message": "repository release secrets required by release.yml must exist",
+      "actual": {
+        "missing": [
+          "APPLE_CERTIFICATE",
+          "APPLE_CERTIFICATE_PASSWORD",
+          "APPLE_SIGNING_IDENTITY",
+          "APPLE_ID",
+          "APPLE_PASSWORD",
+          "APPLE_TEAM_ID",
+          "SIGNPATH_API_TOKEN"
+        ],
+        "presentCount": 2
+      }
+    },
+    {
+      "id": "github-release-variables",
+      "status": "fail",
+      "message": "repository release variables required by release.yml must exist",
+      "actual": {
+        "missing": [
+          "SIGNPATH_ORGANIZATION_ID",
+          "SIGNPATH_PROJECT_SLUG"
+        ],
+        "presentCount": 0
+      }
+    },
+    {
+      "id": "github-production-environment",
+      "status": "pass",
+      "message": "production-release must exist and enforce a deployment branch policy",
+      "actual": {
+        "name": "production-release",
+        "requiredReviewerCount": 1,
+        "branchPolicyProtected": true
+      }
+    },
+    {
+      "id": "github-production-reviewer",
+      "status": "pass",
+      "message": "production-release must require at least one reviewer",
+      "actual": {
+        "requiredReviewerCount": 1
+      }
+    },
+    {
+      "id": "github-windows-runner-registration",
+      "status": "fail",
+      "message": "an interactive self-hosted Windows x64 release runner must be registered",
+      "actual": {
+        "requiredLabels": [
+          "self-hosted",
+          "windows",
+          "x64"
+        ],
+        "matchingRunnerNames": []
+      }
+    },
+    {
+      "id": "github-windows-runner-online",
+      "status": "fail",
+      "message": "a matching Windows x64 release runner must be online before release",
+      "actual": {
+        "onlineRunnerNames": []
+      }
+    }
+  ],
+  "missingCredentials": [],
+  "environmentCredentialsInspected": false,
+  "blockers": [
+    "macos-developer-id-identity",
+    "github-release-secrets",
+    "github-release-variables",
+    "github-windows-runner-registration",
+    "github-windows-runner-online"
+  ],
+  "pendingDistributionGates": [
+    "macos-developer-id-notarization",
+    "windows-signpath-timestamped-signature",
+    "physical-windows-oauth-and-updater-receipt"
+  ],
+  "evaluatedScopes": [
+    "source",
+    "release-host",
+    "github-infrastructure"
+  ],
+  "verdict": "blocked"
+}

@@ -1,0 +1,29 @@
+{
+  "status": "done",
+  "modified_files": [],
+  "commands_run": [
+    "cat SOT/service-factory/delivery.md",
+    "cat SOT/service-factory/delivery-verification-independent.md",
+    "gh release view v0.2.15 --json body,assets",
+    "gh release view v0.1.66 --json tagName,url",
+    "gh release list --limit 20",
+    "gh release view v0.1.66 --json assets -q '.assets[].name'",
+    "grep -ri \"intel|x86_64|minimum|macos 1[0-9]\" SOT/service-factory/delivery.md SOT/service-factory/delivery-verification-independent.md",
+    "grep -rli \"파일럿|pilot\" SOT/service-factory/*.md",
+    "grep -B2 -A5 \"파일럿|pilot\" SOT/service-factory/mission-charter.md SOT/service-factory/deployment-readiness.md",
+    "cat SOT/service-factory/current-state.md",
+    "python3 -c \"json.load(open('SOT/service-factory-state.json')) -> approval_gates['production_deploy']\"",
+    "grep -in \"롤백|rollback|이전 버전|revert|downgrade\" SOT/service-factory/delivery.md SOT/service-factory/delivery-verification-independent.md"
+  ],
+  "artifacts": ["이 result.json 자체가 갭 목록 산출물"],
+  "findings_or_risks": [
+    "non-blocking: 릴리스 노트(gh release view v0.2.15 --json body)와 delivery.md 모두 macOS 최소 지원 버전(예: macOS 12+)을 명시하지 않음 — 환경 제약 미고지. 설치가 실패하는 구형 macOS 사용자가 원인을 릴리스 페이지에서 파악할 수 없음.",
+    "non-blocking: 릴리스 노트 설치 섹션 제목이 '설치 (macOS Apple Silicon)'로 대상은 암시하나, Intel Mac(x86_64) 미지원을 명시적으로 부정하지 않음. v0.1.66에는 Windows x64 exe/msi(x64-setup.exe, x64_en-US.msi)까지 배포됐으나 v0.2.15는 macOS aarch64 dmg 단일 아티팩트뿐 — 과거 릴리스에 익숙한 Windows/Intel 사용자가 릴리스 페이지만 보고 '내 플랫폼은 지원 안 됨'을 능동적으로 확인하기 어려움. current-state.md(2026-07-26 baseline)에 따르면 이는 'physical Windows evidence/public Windows signing/public macOS notarization 미충족'에 따른 의도적 스코프 축소이지만, 그 사유가 릴리스 노트 자체에는 반영돼 있지 않음.",
+    "non-blocking: 롤백 경로 미고지 — delivery.md·delivery-verification-independent.md 어디에도 'v0.2.15 설치/실행 문제 시 v0.1.66으로 회귀' 안내가 없음(grep 0건). v0.1.66 릴리스는 GitHub Releases 목록에 실재하므로 사용자가 직접 스크롤해 찾을 수는 있으나, 명시적 안내는 부재.",
+    "non-blocking: delivery-verification-independent.md는 릴리스 아티팩트 무결성(6개 항목: HTTP 200/gh release view/SHA-256 3중대조/태그-커밋 peel/미서명 안내/hdiutil verify)만 재현했고, delivery.md가 주장하는 'production_deploy 게이트 승인 소비'(state.approval_gates 증거)는 독립 검증 파일 범위 밖 — 검증 커버리지 공백. 본 리뷰에서 SOT/service-factory-state.json의 approval_gates[production_deploy]를 직접 대조한 결과 status=approved, evidence 문구가 delivery.md의 대표님 발화 인용과 일치함을 확인(실제로는 참이나, 독립검증 문서 자체가 이 항목을 커버하지 않았다는 절차적 갭)."
+  ],
+  "failure_category": null,
+  "next_step": "blocking 갭 없음 — 위 4건 non-blocking 권고를 릴리스 노트 개선(최소 OS 버전+플랫폼 스코프 고지+롤백 안내) 및 delivery-verification-independent.md 범위 확장(승인 게이트 증거 재현 항목 추가) 백로그로 반영 권고. 즉시 조치 불필요.",
+  "evidence_class": "independent_review",
+  "inspection_ref": "/Users/kansic/Service/atelier/SOT/service-factory/delivery.md; /Users/kansic/Service/atelier/SOT/service-factory/delivery-verification-independent.md; /Users/kansic/Service/atelier/SOT/service-factory-state.json (approval_gates.production_deploy); /Users/kansic/Service/atelier/SOT/service-factory/current-state.md; https://github.com/BYKAYLE/atelier/releases/tag/v0.2.15; https://github.com/BYKAYLE/atelier/releases/tag/v0.1.66"
+}

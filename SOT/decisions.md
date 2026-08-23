@@ -1,6 +1,56 @@
 # Decisions
 
+## 2026-08-03 — Restore only explicitly enabled Tailscale mobile access
+
+Decision: a successful explicit Tailscale server start persists a private
+restart preference. Ordinary app Exit preserves it, while explicit Stop disarms
+it before attempting Serve cleanup. Startup restore is bounded, loopback-only,
+tailnet-only, and re-runs the existing Funnel rejection checks.
+
+Reason: mobile continuity cannot work while the Mac app silently drops its
+endpoint on every restart, but silently enabling LAN or public access would
+expand authority. Persisting only the user's Tailscale choice keeps continuity
+without converting Atelier into a public service.
+
+## 2026-08-03 — Mobile continuation targets an existing task, never a new task
+
+Decision: a paired mobile device receives only a bounded redacted projection and
+an opaque task ID. A direct instruction is accepted only with explicit
+`task:followup` device scope, the current published revision, and an exact match
+to the desktop-owned workspace/provider/model/permission tuple. Any stale,
+missing, or changed target fails closed without calling the normal new-session
+dispatcher.
+
+Reason: mobile access is useful only when it preserves the user's current task
+and provider resume context. Allowing the phone to choose execution identity or
+fall back to a new task would make the visible continuity claim false.
+
+## 2026-08-03 — A background rejection cannot replace the committed app shell
+
+Decision: Atelier owns one React root for the lifetime of the renderer. The
+global error handlers may show a fallback only before the shell commits;
+afterward, non-fatal background errors are logged without replacing the UI.
+Renderer readiness is reported only when the app shell exists and is refreshed
+periodically. Mobile projection catches synchronous legacy-data errors locally.
+
+Reason: the previous global fallback attempted a second `createRoot` after any
+unhandled asynchronous error. That made an unrelated background failure capable
+of converting a healthy installed window into a blank surface while an earlier
+receipt still claimed `ready`.
+
 Current disposition: `supervised local candidate, public release blocked`.
+
+## 2026-08-02 — Keep composer identity actionable, not repetitive
+
+Decision: remove the always-visible composer prose that repeats agent,
+provider, managed-runtime, and bundled-skill identity. Preserve identity where
+it controls behavior (model/provider selectors), preserve Gajae/Stella actions,
+and preserve runtime/authentication banners only when they communicate a live
+state or required action.
+
+Reason: the repeated sentence consumed composer space without helping the user
+act. Removing it reduces visual noise while keeping operational truth and
+failure recovery visible.
 
 ## 2026-07-26 — Keep Hermes durable bundled source separate from runtime skills
 

@@ -1,0 +1,1 @@
+{"result": "/Users/kansic/Service/atelier/SOT/service-factory/runs/sf-run-20260729-235243/research_intelligence-research_director/result.json", "status": "done", "artifact": "/Users/kansic/Service/atelier/SOT/service-factory/research-dossier.md"}

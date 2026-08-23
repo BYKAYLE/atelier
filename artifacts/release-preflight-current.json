@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 2,
+  "phase": "source-preflight",
+  "generatedAt": "2026-07-23T09:47:55.060Z",
+  "version": "0.2.12",
+  "releaseRepository": "BYKAYLE/atelier",
+  "sourceCommit": "64270f240258879bc753f77b00df3fc797258d33",
+  "tag": null,
+  "checks": [
+    {
+      "id": "version-alignment",
+      "status": "pass",
+      "message": "package.json, Cargo.toml, and tauri.conf.json versions must match",
+      "actual": {
+        "packageJson": "0.2.12",
+        "cargoToml": "0.2.12",
+        "tauriConfig": "0.2.12"
+      }
+    },
+    {
+      "id": "release-repository",
+      "status": "pass",
+      "message": "package repository must be a GitHub repository",
+      "actual": "BYKAYLE/atelier"
+    },
+    {
+      "id": "github-updater-endpoint",
+      "status": "pass",
+      "message": "updater endpoint must resolve only to this repository's latest.json",
+      "actual": [
+        "https://github.com/BYKAYLE/atelier/releases/latest/download/latest.json"
+      ]
+    },
+    {
+      "id": "github-updater-artifacts",
+      "status": "pass",
+      "message": "direct-distribution builds must create signed updater artifacts",
+      "actual": true
+    },
+    {
+      "id": "store-updater-isolation",
+      "status": "pass",
+      "message": "Microsoft Store builds must not create GitHub updater artifacts",
+      "actual": false
+    },
+    {
+      "id": "updater-public-key",
+      "status": "pass",
+      "message": "updater public key must be configured"
+    },
+    {
+      "id": "release-tag",
+      "status": "not-evaluated",
+      "message": "No release tag was supplied for this local inspection"
+    },
+    {
+      "id": "workflow-repository-binding",
+      "status": "not-evaluated",
+      "message": "No workflow repository was supplied for this local inspection"
+    },
+    {
+      "id": "tracked-source-clean",
+      "status": "fail",
+      "message": "tracked source must be clean before a release tag is created"
+    },
+    {
+      "id": "release-credentials",
+      "status": "fail",
+      "message": "all macOS notarization, updater signing, and SignPath credentials must be present",
+      "actual": {
+        "missing": [
+          "APPLE_CERTIFICATE",
+          "APPLE_CERTIFICATE_PASSWORD",
+          "APPLE_SIGNING_IDENTITY",
+          "APPLE_ID",
+          "APPLE_PASSWORD",
+          "APPLE_TEAM_ID",
+          "TAURI_SIGNING_PRIVATE_KEY",
+          "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+          "SIGNPATH_API_TOKEN",
+          "SIGNPATH_ORGANIZATION_ID",
+          "SIGNPATH_PROJECT_SLUG"
+        ],
+        "presentCount": 0
+      }
+    },
+    {
+      "id": "release-host-inspection",
+      "status": "not-evaluated",
+      "message": "Release host capabilities were not inspected"
+    },
+    {
+      "id": "github-release-infrastructure",
+      "status": "not-evaluated",
+      "message": "GitHub release infrastructure was not inspected"
+    }
+  ],
+  "missingCredentials": [
+    "APPLE_CERTIFICATE",
+    "APPLE_CERTIFICATE_PASSWORD",
+    "APPLE_SIGNING_IDENTITY",
+    "APPLE_ID",
+    "APPLE_PASSWORD",
+    "APPLE_TEAM_ID",
+    "TAURI_SIGNING_PRIVATE_KEY",
+    "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+    "SIGNPATH_API_TOKEN",
+    "SIGNPATH_ORGANIZATION_ID",
+    "SIGNPATH_PROJECT_SLUG"
+  ],
+  "environmentCredentialsInspected": true,
+  "blockers": [
+    "tracked-source-clean",
+    "release-credentials"
+  ],
+  "pendingDistributionGates": [
+    "macos-developer-id-notarization",
+    "windows-signpath-timestamped-signature",
+    "physical-windows-oauth-and-updater-receipt"
+  ],
+  "evaluatedScopes": [
+    "source"
+  ],
+  "verdict": "blocked"
+}

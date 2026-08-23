@@ -2,14 +2,14 @@
 
 factory_id: sf-20260531-133552
 state_file: /Users/kansic/Service/atelier/SOT/service-factory-state.json
-generated_at: 2026-07-13T02:37:56+09:00
+generated_at: 2026-07-29T23:52:44+09:00
 
 ## Verdict
 
 - readiness_score: 0.97
-- verdict: pilot_ready
+- verdict: delivered
 - primary_blocker: None
-- next_step: pilot_ready: use the managed Factory cycle for product-specific goals and attach specialist agents for real implementation work
+- next_step: delivered: 제품이 사용자에게 전달됨 — post_launch 운영 인계 마무리 후 종결
 
 ## Capability Matrix
 
@@ -31,8 +31,8 @@ generated_at: 2026-07-13T02:37:56+09:00
     "evidence": {
       "version": "stella-factory-agent-topology-v1",
       "command_owner": "Stella",
-      "blueprints": 15,
-      "instances": 23,
+      "blueprints": 25,
+      "instances": 36,
       "kanban_role": "projection_only"
     }
   },
@@ -63,7 +63,7 @@ generated_at: 2026-07-13T02:37:56+09:00
   {
     "id": "agent_runner_plan",
     "status": "ready",
-    "evidence": "15 agent request(s), 23 result(s)"
+    "evidence": "25 agent request(s), 36 result(s)"
   },
   {
     "id": "agent_foundry",
@@ -75,10 +75,10 @@ generated_at: 2026-07-13T02:37:56+09:00
     "status": "ready",
     "evidence": {
       "mode": "spawn_runtime_command",
-      "execution_plan_mode": "plan_only_until_parent_spawns_agents",
-      "agent_results": 23,
-      "autonomous_results": 14,
-      "bridge_results": 1
+      "execution_plan_mode": "spawn_runtime_command",
+      "agent_results": 36,
+      "autonomous_results": 15,
+      "bridge_results": 7
     }
   },
   {
@@ -86,21 +86,21 @@ generated_at: 2026-07-13T02:37:56+09:00
     "status": "partial",
     "evidence": {
       "enabled": true,
-      "policy": "one_writer_per_owned_path",
-      "root": ".service-factory/worktrees"
+      "root": ".service-factory/worktrees",
+      "policy": "one_writer_per_owned_path"
     }
   },
   {
     "id": "watchdog",
     "status": "ready",
     "evidence": {
-      "action": "mark_blocked_or_respawn_from_handoff",
       "enabled": true,
+      "stale_after_minutes": 15,
       "progress_files": [
         "SOT/service-factory/progress.jsonl",
         "SOT/service-factory/handoff-latest.md"
       ],
-      "stale_after_minutes": 15,
+      "action": "mark_blocked_or_respawn_from_handoff",
       "recovery_proof": true,
       "recovered_requests": 2
     }
@@ -152,47 +152,49 @@ generated_at: 2026-07-13T02:37:56+09:00
     "evidence": {
       "configured": [
         {
+          "id": "node-test",
+          "cmd": "npm test",
           "argv": [
             "npm",
             "test"
           ],
-          "cmd": "npm test",
-          "env_policy": "minimal_allowlist",
-          "id": "node-test",
-          "network_policy": "disabled_by_policy",
-          "optional": true,
           "stage": "verification",
-          "trusted": false
+          "optional": true,
+          "trusted": false,
+          "network_policy": "disabled_by_policy",
+          "env_policy": "minimal_allowlist"
         },
         {
+          "id": "node-build",
+          "cmd": "npm run build",
           "argv": [
             "npm",
             "run",
             "build"
           ],
-          "cmd": "npm run build",
-          "env_policy": "minimal_allowlist",
-          "id": "node-build",
-          "network_policy": "disabled_by_policy",
-          "optional": true,
           "stage": "verification",
-          "trusted": false
+          "optional": true,
+          "trusted": false,
+          "network_policy": "disabled_by_policy",
+          "env_policy": "minimal_allowlist"
         },
         {
+          "id": "node-typecheck",
+          "cmd": "npm run typecheck",
           "argv": [
             "npm",
             "run",
             "typecheck"
           ],
-          "cmd": "npm run typecheck",
-          "env_policy": "minimal_allowlist",
-          "id": "node-typecheck",
-          "network_policy": "disabled_by_policy",
-          "optional": true,
           "stage": "verification",
-          "trusted": false
+          "optional": true,
+          "trusted": false,
+          "network_policy": "disabled_by_policy",
+          "env_policy": "minimal_allowlist"
         },
         {
+          "id": "service-factory-validate",
+          "cmd": "/opt/homebrew/opt/python@3.14/bin/python3.14 /Users/kansic/.claude/skills/release/scripts/service_factory.py validate --project .",
           "argv": [
             "/opt/homebrew/opt/python@3.14/bin/python3.14",
             "/Users/kansic/.claude/skills/release/scripts/service_factory.py",
@@ -200,16 +202,14 @@ generated_at: 2026-07-13T02:37:56+09:00
             "--project",
             "."
           ],
-          "cmd": "/opt/homebrew/opt/python@3.14/bin/python3.14 /Users/kansic/.claude/skills/release/scripts/service_factory.py validate --project .",
-          "env_policy": "minimal_allowlist",
-          "id": "service-factory-validate",
-          "network_policy": "disabled_by_policy",
-          "optional": false,
           "stage": "final_audit",
-          "trusted": true
+          "optional": false,
+          "trusted": true,
+          "network_policy": "disabled_by_policy",
+          "env_policy": "minimal_allowlist"
         }
       ],
-      "results": 76
+      "results": 104
     }
   },
   {
@@ -246,4 +246,4 @@ generated_at: 2026-07-13T02:37:56+09:00
 
 ## Interpretation
 
-The current Service Factory now has a managed local runtime proof: it can inspect current state, write a goal-to-plan strategy, plan agent requests, execute command-backed worker cycles, collect machine-readable results, write recovery proof, pass factory validation, and close the mandatory verification chain. This is pilot-ready for local autonomous orchestration. It is still not a claim that every future product can be completed without specialist implementation agents; real product goals must attach the needed worker, Probe, security, release, and final-audit evidence.
+Delivered: the product has been published on its delivery channel with verified evidence (delivery + user_receipt stages closed via verified requests, including ceo_acceptance). Finish post_launch handover (monitoring/runbook) and close the factory.

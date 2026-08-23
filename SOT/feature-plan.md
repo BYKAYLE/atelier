@@ -1,9 +1,11 @@
 # Feature Plan: Runtime Safety and Preview Truth
 
-Last updated: 2026-07-25 KST
+Last updated: 2026-08-02 KST
 
-Status: P0 and provider-capability source gates pass; provider model-provider parity
-is source/build/installed validated at 0.2.15, with authenticated provider-turn proof pending.
+Status: P0 and provider-capability gates pass; Hermes rendering/context/runtime
+closure is source/build/installed and authenticated managed-path verified at
+0.2.20 with provider-neutral terminal-answer and Atelier-supported Gajae update
+contract. Gajae authenticated-turn proof remains pending.
 
 ## Goal
 
@@ -13,6 +15,122 @@ direct-CLI preflight bypass, and no preview Start control when managed preview
 execution is intentionally disabled by the backend.
 
 ## Work Items
+
+### P1-5 — Mobile reachable pairing and QR — in progress (partial closure)
+
+- Reproduce and correct the loopback-only state that previously advertised
+  `127.0.0.1` to a phone while refusing Wi-Fi/Tailscale connections.
+- Keep exposure explicit with three modes: current-computer only, one selected
+  private LAN address, or Tailscale remote access for Windows/macOS hosts and
+  iPhone/Android browsers signed into the same tailnet.
+- Advertise only the exact LAN HTTPS endpoint covered by the local certificate
+  or the exact tailnet HTTPS endpoint terminated by Tailscale Serve. Funnel and
+  public-internet publication are out of scope and must remain disabled.
+- Preserve unrelated Tailscale Serve configuration, bind the Tailscale backend
+  to loopback, stop only Atelier's exact handler, and retain the five-minute
+  one-use pairing/token/revocation contract.
+- Render an accessible, local QR code from the exact pairing URL with copy and
+  manual-code fallback, expiry handling, and no external QR service.
+- Add backend and frontend regression tests, prove both the real LAN HTTPS path
+  and the real tailnet-only Serve path, then build/install/visually verify
+  `0.2.21` without claiming physical Windows proof.
+
+Current status note:
+
+- Tailnet proof is implemented and verified on-device: remote URL
+  `https://kansic-macbookpro.tailb0943d.ts.net:8443/atelier/` is served by
+  Tailscale Serve (no Funnel, no public publication), backend remains loopback,
+  and unrelated Serve handlers are preserved.
+- `app.js` and `/atelier/health` checks pass on the tailnet endpoint; Host/Origin
+  API constraints are enforced (invalid calls yield expected rejection status).
+- Physical iPhone Safari launch from the pairing URL succeeded with active tailnet
+  transfer counters.
+- Full all-feature verification is closed at `268` passed and `6` ignored; strict
+  all-target/all-feature Clippy, the mobile-control smoke, production frontend
+  build, and diff check all pass.
+- The foreground Serve lifecycle now uses a parent-bound Unix pipe guard and a
+  Windows kill-on-close Job Object. Installed-process SIGTERM proof and the normal
+  UI Stop flow both remove the exact handler, close the backend port, and leave
+  Serve status `{}`.
+
+Affected surfaces:
+
+- `src-tauri/src/mobile_control.rs`
+- `src/components/mobile-control/RemoteAccessSection.tsx`
+- `src/components/mobile-control/mobileControl.ts`
+- `tools/mobile-control-smoke.ts`
+- dependency/version/release evidence as required
+
+### P1-6 — Mobile existing-work continuity — implemented and installed
+
+- Bridge the renderer-owned session store to a native in-memory continuity
+  registry using bounded, sanitized session/message projections.
+- Show the active and recent Atelier work on the mobile page, including title,
+  provider, state, update time, and user/final-assistant conversation, while
+  excluding raw events, reasoning/tool output, credentials, provider session
+  IDs, attachment paths, and full workspace paths.
+- Give every desktop session an opaque persisted mobile task ID. Mobile requests
+  carry only that ID, a bounded prompt, an idempotency ID, and the published
+  revision; provider/model/workspace/permission remain desktop-owned.
+- Require the existing explicit per-device follow-up permission before direct
+  continuation, enforce rate limits and idempotency, and fail closed when the
+  renderer heartbeat, task mapping, or revision is stale.
+- Dispatch the request to the exact existing `AgentSession` queue, preserving
+  its provider resume ID and busy/queued behavior. Never fall back to creating a
+  new session when the target cannot be resolved.
+- Add Rust and source-contract tests for visibility, redaction, IDOR/revision
+  rejection, replay handling, and same-session dispatch; then verify through the
+  installed app and the physical mobile browser.
+
+Current verified state:
+
+- Installed `0.2.22` preserved the 3 existing desktop sessions and 224 stored
+  messages; no local session or message data was reset.
+- The live tailnet monitor projection returned 3 tasks and the configured 60
+  most recent eligible messages per task, for 180 messages total.
+- Runtime assertions confirmed opaque task IDs, basename-only workspace output,
+  and absence of internal session IDs, raw execution fields, absolute paths, and
+  obvious credential patterns.
+- The existing paired phone device is authorized for `task:followup`. Static,
+  Rust, and source-contract coverage proves exact-session queue dispatch and no
+  new-session fallback. A paid/provider live test instruction was not injected
+  into the user's existing task merely for proof.
+- Renderer recurrence prevention now keeps one React root, treats background
+  failures as non-fatal after the shell commits, catches synchronous mobile
+  projection errors, and records a shell-backed readiness heartbeat.
+- Candidate/installed SHA-256 equality, local codesign, renderer readiness,
+  production build, focused smokes, strict Clippy, format/diff, and all-feature
+  Rust `276/0/6` pass.
+- A persisted, explicit Tailscale-start preference now restores the tailnet-only
+  endpoint after app restart. Explicit Stop disarms restore before cleanup, and
+  a real locked-Mac restart returned health `ok` without enabling Funnel.
+
+Affected surfaces:
+
+- `src-tauri/src/mobile_continuity.rs`
+- `src-tauri/src/mobile_control.rs`
+- `src-tauri/src/lib.rs`
+- `src/components/AgentWorkspace.tsx`
+- `src/components/mobile-control/RemoteAccessSection.tsx`
+- `src/lib/tauri.ts`
+- `tools/mobile-control-smoke.ts`
+
+### P1-4 — Remove redundant composer runtime explanation — complete
+
+- Remove the always-visible agent/provider/runtime/skill identity sentence from
+  Hermes, Claude, Codex, and Gajae structured composers.
+- Remove description-only derivation and copy fields while preserving model and
+  provider controls, permissions, primary actions, Stella launch, and actionable
+  runtime/authentication banners.
+- Lock the absence contract with a focused source smoke, pass the related UI,
+  build, Rust, security, and release gates, then install and visually verify the
+  locally signed `0.2.20` candidate.
+
+Affected surfaces:
+
+- `src/components/AgentWorkspace.tsx`
+- `tools/provider-runtime-identity-smoke.ts`
+- release/version metadata and installed-candidate evidence
 
 ### P0-1 — Shared safety policy behavior — complete
 
@@ -100,6 +218,24 @@ Affected surfaces:
   only when the upstream Codex ChatGPT subscription login exists, matching the
   isolated child-env bridge contract.
 
+### P0-5 — Hermes verified answer and bounded initial context — complete
+
+- Use Hermes's supported `chat -Q` lifecycle while treating stdout as bounded
+  diagnostics, validating the stderr session identity, and selecting only the
+  exact new final assistant row from managed state.
+- Preserve newline boundaries per stream fragment and render every live
+  streaming assistant turn through the plain pre-wrap path.
+- Make terminal result/error authoritative for Claude, Hermes, Codex, and
+  Gajaecode; streamed drafts and restored orphans remain visibly unverified
+  evidence.
+- Verify the Atelier-owned 73-skill manifest at readiness, but leave installed
+  skills discoverable for on-demand loading instead of eagerly passing all of
+  them through `--skills`.
+- Grant only literal metadata/existence traversal on managed path ancestors so
+  SQLite/WAL opens without widening sibling subtree reads.
+- Prove the exact production auth + sandbox + command path with a real managed
+  Hermes turn and a read-only SQLite integrity/session check.
+
 ## Acceptance Criteria
 
 - A mixed request that negates DB deletion but requests user-data deletion is
@@ -131,8 +267,8 @@ Affected surfaces:
     refresh-token or global-state copy.
   - `설치·복구` + reopen + new-session-start reflects the persisted provider
     default in behavior.
-  - Installed 0.2.15 candidate and `/Applications/Atelier.app` match on version,
-    executable SHA-256, codesign, and renderer-ready receipt.
+  - Installed 0.2.19 candidate and `/Applications/Atelier.app` match on
+    version, executable SHA-256, codesign, and renderer-ready receipt.
 
 ## Main Risks
 
@@ -178,14 +314,23 @@ Affected surfaces:
 - Developer ID signing, notarization, public distribution, and physical Windows
   proof remain unclaimed.
 
+- The mobile remote-access proof work moved installed evidence to `0.2.21` with
+  remote endpoint checks for `/atelier/`, `app.js`, and `/atelier/health`, plus
+  same-tailnet iPhone Safari launch verification. Candidate/installed hash:
+  `f03d9cf2c77b9f66cb42579202bd37d0f0e28fd114e075edccb642593b550dfc`.
+  The final all-feature, strict Clippy, frontend smoke/build, installed renderer,
+  normal Stop, and SIGTERM lifecycle gates are closed. Physical Windows,
+  off-LAN cellular, notarization, and public distribution remain unclaimed.
+
 ---
 
 # Feature Plan: Reproducible Managed Provider Runtime
 
-Last updated: 2026-07-26 KST
+Last updated: 2026-08-02 KST
 
-Status: implementation-in-progress; runtime/bootstrap verified, provider default
-model settings and Codex bridge parity pending installed proof
+Status: runtime/bootstrap, provider defaults, and Hermes authenticated managed
+turn verified; Gajae authenticated-turn remains pending, but managed Gajae
+update contract now matches Atelier-supported pin `0.12.8` in source/installed.
 
 ## Goal
 
@@ -253,8 +398,11 @@ every user. Account authentication and API entitlement remain user-specific.
 
 - Remove global Hermes fallback for managed tasks.
 - Set an Atelier-owned `HERMES_HOME`, disable personal config/rules/plugins/MCP,
-  and allow only explicitly selected Atelier-managed Hermes skills.
+  verify the Atelier-managed skill inventory, and let Hermes discover those
+  installed skills on demand without eager whole-inventory prompt preload.
 - Trigger and verify Hermes bundled-skill synchronization before readiness.
+- Use `chat -Q` as the structured answer contract; never parse the human TUI
+  transcript into assistant text.
 - Do not use `--yolo`, `--oneshot`, or any approval-bypass path.
 
 ### R5 — Identity-correct readiness UX
@@ -315,12 +463,22 @@ Acceptance:
 
 ## Verified Outcome
 
-- Exact managed versions and skill counts: Gajaecode 0.11.7, Bun 1.3.14, four
+- Exact managed versions and skill counts: Gajaecode 0.12.8, Bun 1.3.14, four
   defaults; Hermes pinned commit `3ef6bbd…`, 453 durable files, 73 installed
   skills.
-- Installed 0.2.14 UI preparation/repair passes for both providers without a
+- Installed 0.2.19 preparation/repair passes for both providers without a
   separate CLI or skill installation.
-- Candidate/installed hash equality, local codesign, renderer readiness, Rust
-  230/0/3, strict Clippy, build, audits, and Orca 23/10 pass.
-- A separate clean company Mac and authenticated provider response remain
-  validation, not an implementation blocker.
+- Candidate/installed executable SHA-256 equality at
+  `a72a251ff88977a22bb1e6720db64e47863bc7d9182dc8c06e3ebd5cdcbe2754`,
+  local codesign, renderer readiness, Rust 254/0/6, strict Clippy, build,
+  release audit, and Orca 24/10 pass.
+- The real managed Gajaecode update changed `0.11.7` to `0.12.8`, kept Bun
+  `1.3.14` and four defaults ready, returned `update_available: false` from the
+  separate status check, and preserved identical hashes for all nine
+  DB/WAL/SHM files.
+- A real Atelier-managed Hermes turn passed by rejecting 24 untrusted stdout
+  bytes and returning the 23-byte verified final state answer. The reproduced
+  13,112-character historical record recovers its final display without
+  `Planning`/`****` blocks or stored-data mutation.
+- A separate clean company Mac and authenticated Gajae provider response remain
+  validation, not implementation blockers.

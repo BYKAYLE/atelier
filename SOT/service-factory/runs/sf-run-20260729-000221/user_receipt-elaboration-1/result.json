@@ -1,0 +1,23 @@
+{
+  "status": "done",
+  "modified_files": [],
+  "commands_run": [
+    "cat SOT/service-factory/user-receipt.md",
+    "gh release view v0.2.15 --json body,tagName,publishedAt,assets",
+    "gh repo view --json hasIssuesEnabled,url",
+    "grep -i updater src-tauri/tauri.conf.json src-tauri/Cargo.toml",
+    "curl -sI -L https://github.com/BYKAYLE/atelier/releases/latest/download/latest.json",
+    "gh release view v0.1.66 --json body -q .body"
+  ],
+  "findings_or_risks": [
+    "ceo_acceptance 문구 정확 일치 확인: user-receipt.md에 '상태: **인수 완료** — 대표님 발화 \"인수\" (260729 접수)' 기록됨 — 지시된 기대 문구와 일치.",
+    "릴리스 v0.2.15 body에 설치 3단계, 지원 환경(macOS 12+ Apple Silicon), 미지원 플랫폼 사유, 롤백 링크(v0.1.66) 모두 실재 확인.",
+    "DMG SHA-256 체크섬 일치 확인: user-receipt.md 기재값(f23b2c19...57ac)과 gh release asset digest(sha256:f23b2c19cb67afdb8c3774b3d9e8047f2347462cc4c9b2140ad269b8bd3457ac) 일치.",
+    "[non-blocking] 릴리스 노트에 이슈 신고 채널(GitHub Issues) 명시적 링크 부재 — hasIssuesEnabled=true이나 사용자에게 고지되지 않음. 단, 사용자=대표님(리포 소유자)이라 실질 리스크 낮음.",
+    "[non-blocking] tauri.conf.json에 auto-updater 활성화(active:true, dialog:false, endpoint=github latest.json)되어 있으나 v0.2.15 latest.json 매니페스트 미발행(curl 404) — 업데이트 방법이 릴리스 노트에 고지되지 않았고 현재 자동업데이트도 작동 안 함(무해하지만 미완). blocking 아님 — 현재 릴리스 수령·설치·실행에는 영향 없음."
+  ],
+  "failure_category": null,
+  "next_step": "user_receipt 종결 → delivered",
+  "evidence_class": "independent_review",
+  "inspection_ref": "user-receipt.md(인수기록 인용) + gh release v0.2.15 body"
+}
