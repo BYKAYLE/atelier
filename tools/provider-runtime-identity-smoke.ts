@@ -195,9 +195,10 @@ assert.match(
   "user-facing login output must be stripped of terminal control noise",
 );
 
-assert.match(credentials, /const GAJAE_CODE_PACKAGE: &str = "gajae-code@0\.14\.0"/);
-assert.match(credentials, /const GAJAE_CODE_VERSION: &str = "0\.14\.0"/);
+assert.match(credentials, /const GAJAE_CODE_PACKAGE: &str = "gajae-code@0\.15\.0"/);
+assert.match(credentials, /const GAJAE_CODE_VERSION: &str = "0\.15\.0"/);
 assert.match(credentials, /const GROK_VERSION: &str = "1\.0\.4"/);
+assert.match(credentials, /const BUN_VERSION: &str = "1\.4\.0"/);
 assert.match(credentials, /GROK_MACOS_AARCH64_SHA256/);
 assert.match(credentials, /Developer ID verification/);
 // 업스트림 최신 버전은 참고 표시 전용이다. update_available 산출 함수 본문에는
@@ -265,11 +266,11 @@ assert.match(
   /export async function gajecodeUpdate\(\): Promise<ManagedAgentRuntimeReadiness>/,
 );
 
-const readiness = { ready: true, runtimePin: "0.14.0" };
+const readiness = { ready: true, runtimePin: "0.15.0" };
 const verified = {
   installed: true,
-  current_version: "0.14.0",
-  latest_version: "0.14.0",
+  current_version: "0.15.0",
+  latest_version: "0.15.0",
   update_available: false,
 };
 assert.equal(gajecodeUpdateMatchesReadiness(readiness, verified), true);

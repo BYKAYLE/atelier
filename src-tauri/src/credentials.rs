@@ -28,10 +28,11 @@ const CODEX_DEVICE_AUTH_URL: &str = "https://auth.openai.com/codex/device";
 const CLAUDE_CODE_PACKAGE: &str = "@anthropic-ai/claude-code@2.1.217";
 const CODEX_PACKAGE: &str = "@openai/codex@0.145.0";
 #[cfg(not(target_os = "macos"))]
-const BUN_PACKAGE: &str = "bun@1.3.14";
-const GAJAE_CODE_PACKAGE: &str = "gajae-code@0.14.0";
-const BUN_VERSION: &str = "1.3.14";
-const GAJAE_CODE_VERSION: &str = "0.14.0";
+const BUN_PACKAGE: &str = "bun@1.4.0";
+const GAJAE_CODE_PACKAGE: &str = "gajae-code@0.15.0";
+// gajae-code 0.15.0 hard-fails below Bun 1.4.0 (`engines.bun >=1.4.0`, checked in cli.ts).
+const BUN_VERSION: &str = "1.4.0";
+const GAJAE_CODE_VERSION: &str = "0.15.0";
 const GROK_VERSION: &str = "1.0.4";
 // PEP 508 direct reference에 `[anthropic]` extra를 포함하는 이유:
 // 관리형 런타임(uv tool env)은 재프로비저닝 때 receipt(uv-receipt.toml) 기준으로
@@ -47,7 +48,8 @@ const HERMES_PINNED_RELEASE_TAG: &str = "v2026.7.20";
 const UV_BOOTSTRAP_VERSION: &str = "0.10.12";
 const MANAGED_RUNTIME_RECEIPT_SCHEMA: u32 = 2;
 const MANAGED_RUNTIME_POLICY_VERSION: &str = "atelier-managed-basic-auto-v1";
-const MANAGED_SKILL_BOOTSTRAP_VERSION: &str = "atelier-default-skills-integrity-v2";
+// v3: gajae-code 0.15.0 retired the bundled `team` skill and ships `autoresearch` instead.
+const MANAGED_SKILL_BOOTSTRAP_VERSION: &str = "atelier-default-skills-integrity-v3";
 const MANAGED_RUNTIME_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 const MANAGED_RUNTIME_LOCK_WAIT: Duration = Duration::from_secs(21 * 60);
 const MANAGED_RECEIPT_MAX_BYTES: u64 = 64 * 1024;
@@ -69,18 +71,18 @@ const HERMES_GIT_CACHE_SCAN_MAX_DEPTH: usize = 6;
 const HERMES_GIT_OUTPUT_MAX_BYTES: usize = 8 * 1024 * 1024;
 const GAJAE_SKILL_INTEGRITY_MANIFEST: &str = ".atelier-default-skills.sha256.json";
 const GAJAE_SKILL_INTEGRITY_SCHEMA: u32 = 1;
-const GAJAE_DEFAULT_SKILLS: [&str; 4] = ["deep-interview", "ralplan", "team", "ultragoal"];
+const GAJAE_DEFAULT_SKILLS: [&str; 4] = ["autoresearch", "deep-interview", "ralplan", "ultragoal"];
 // Primary release provenance:
 // https://releases.astral.sh/github/uv/releases/download/0.10.12/
-// https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/SHASUMS256.txt
+// https://github.com/oven-sh/bun/releases/download/bun-v1.4.0/SHASUMS256.txt
 const UV_MACOS_AARCH64_SHA256: &str =
     "ae738b5661a900579ec621d3918c0ef17bdec0da2a8a6d8b161137cd15f25414";
 const UV_MACOS_X86_64_SHA256: &str =
     "17443e293f2ae407bb2d8d34b875ebfe0ae01cf1296de5647e69e7b2e2b428f0";
 const BUN_MACOS_AARCH64_SHA256: &str =
-    "d8b96221828ad6f97ac7ac0ab7e95872341af763001e8803e8267652c2652620";
+    "c669e97f6164e1c96e0701748db98dfa77492908cbd8394c7557134a735de381";
 const BUN_MACOS_X86_64_SHA256: &str =
-    "4183df3374623e5bab315c547cfa0974533cd457d86b73b639f7a87974cd6633";
+    "1d0211b8f1dc991182344687ad15e72ee86f154845a5f7fa477994cd341dd9b0";
 // Official xAI stable binaries from https://x.ai/cli, verified on 2026-08-18.
 const GROK_MACOS_AARCH64_SHA256: &str =
     "39366f7756a090b735cc1df8c93a8c0c3c7871555cf6cbb28f9351ca82936485";
@@ -7289,9 +7291,9 @@ mod tests {
             .as_deref()
             .is_some_and(|message| message.contains("설치되어 있지 않습니다")));
 
-        let newer = gajecode_update_status(true, Some("0.15.0".to_string()));
+        let newer = gajecode_update_status(true, Some("0.16.0".to_string()));
         assert!(newer.installed);
-        assert_eq!(newer.current_version.as_deref(), Some("0.15.0"));
+        assert_eq!(newer.current_version.as_deref(), Some("0.16.0"));
         assert!(!newer.update_available);
         assert!(newer
             .message
@@ -7960,10 +7962,10 @@ mod tests {
         ensure_runtime_layout(&layout).expect("create Gajaecode layout");
         let bun = layout.root.join("bun/bin/bun");
         let gjc = layout.root.join("bun/bin/gjc");
-        write_test_executable(&bun, "#!/bin/sh\nprintf '1.3.14\\n'\n");
+        write_test_executable(&bun, "#!/bin/sh\nprintf '1.4.0\\n'\n");
         write_test_executable(
             &gjc,
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'Gajae CLI 0.14.0\\n'; exit 0; fi\nif [ \"$1\" = \"setup\" ] && [ \"$2\" = \"defaults\" ]; then exit 0; fi\nexit 2\n",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'Gajae CLI 0.15.0\\n'; exit 0; fi\nif [ \"$1\" = \"setup\" ] && [ \"$2\" = \"defaults\" ]; then exit 0; fi\nexit 2\n",
         );
         for skill in GAJAE_DEFAULT_SKILLS {
             let skill_md = layout.skills.join(skill).join("SKILL.md");
@@ -7988,7 +7990,7 @@ mod tests {
         write_test_executable(&bun, "#!/bin/sh\nprintf '1.3.13\\n'\n");
         let error = verify_managed_runtime_at(root.path(), "gajecode")
             .expect_err("wrong Bun pin must fail readiness");
-        assert!(error.contains("requires Bun 1.3.14"));
+        assert!(error.contains("requires Bun 1.4.0"));
     }
 
     #[test]
@@ -8046,11 +8048,11 @@ mod tests {
         ensure_runtime_layout(&layout).expect("create Gajaecode layout");
         write_test_executable(
             &layout.root.join("bun/bin/bun"),
-            "#!/bin/sh\nprintf '1.3.14\\n'\n",
+            "#!/bin/sh\nprintf '1.4.0\\n'\n",
         );
         write_test_executable(
             &layout.root.join("bun/bin/gjc"),
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'Gajae CLI 0.14.0\\n'; exit 0; fi\nif [ \"$1\" = \"setup\" ] && [ \"$2\" = \"defaults\" ]; then exit 0; fi\nexit 2\n",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'Gajae CLI 0.15.0\\n'; exit 0; fi\nif [ \"$1\" = \"setup\" ] && [ \"$2\" = \"defaults\" ]; then exit 0; fi\nexit 2\n",
         );
         for skill in GAJAE_DEFAULT_SKILLS {
             let skill_md = layout.skills.join(skill).join("SKILL.md");

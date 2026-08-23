@@ -248,8 +248,8 @@ const sourceInvariants = [
       !windowsProviderSmokeSource.includes("[scriptblock]::Create") &&
       credentialSource.includes("@anthropic-ai/claude-code@2.1.217") &&
       credentialSource.includes("@openai/codex@0.145.0") &&
-      credentialSource.includes("bun@1.3.14") &&
-      credentialSource.includes("gajae-code@0.14.0") &&
+      credentialSource.includes("bun@1.4.0") &&
+      credentialSource.includes("gajae-code@0.15.0") &&
       !credentialSource.includes("GAJAE_CODE_PACKAGE_NAME") &&
       !credentialSource.includes("read_gajecode_latest_version") &&
       credentialSource.includes('ensure_managed_agent_runtime(&app, "gajecode").await') &&
