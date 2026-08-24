@@ -47,7 +47,11 @@ Usage:\n\
   atelier ui key --key <key> [bridge options]\n\
   atelier ui resize --width <px> --height <px> [bridge options]\n\n\
 Task options:\n\
-  --model <model> --effort <level> --permission <mode> --stella\n\n\
+  --model <model> --effort <level> --permission <mode> --stella\n\
+  --stage-models <json>   Stella Mode per-stage model map, e.g.\n\
+                          '{{\"planning\":{{\"model\":\"claude-opus-4-8\"}},\"execution\":{{\"model\":\"claude-sonnet-4-6\"}}}}'\n\
+                          Stages: planning, execution, verification, security, audit.\n\
+                          Requires --stella. Unassigned stages inherit the session model.\n\n\
 Bridge options:\n\
   --host <localhost> --port <port> --window <label>\n\n\
 The CLI never accepts arbitrary shell commands. Mutating requests are queued for\n\
@@ -113,6 +117,49 @@ fn fixed_command_output(program: &str, cwd: &Path, args: &[&str]) -> Option<Stri
         .status
         .success()
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Stella Mode 단계 이름 정본. 프런트엔드 계약(src/lib/stellaStageModels.ts)의
+/// STELLA_STAGES 와 반드시 일치해야 한다.
+const STELLA_STAGE_NAMES: [&str; 5] =
+    ["planning", "execution", "verification", "security", "audit"];
+
+/// `--stage-models` JSON 검증 (fail-closed): 형식이 틀리면 큐에 넣지 않고
+/// 즉시 오류를 돌려준다. 깊은 검증(모델 카탈로그 대조)은 앱 쪽 계약 모듈이
+/// 실행 직전에 다시 수행한다.
+fn parse_stage_models(raw: &str) -> Result<Value, String> {
+    let value: Value = serde_json::from_str(raw.trim())
+        .map_err(|error| format!("--stage-models must be valid JSON: {error}"))?;
+    let object = value.as_object().ok_or_else(|| {
+        format!(
+            "--stage-models must be a JSON object keyed by stage name ({}).",
+            STELLA_STAGE_NAMES.join(", ")
+        )
+    })?;
+    for (stage, entry) in object {
+        if !STELLA_STAGE_NAMES.contains(&stage.as_str()) {
+            return Err(format!(
+                "Unknown stage \"{stage}\" in --stage-models; expected one of {}.",
+                STELLA_STAGE_NAMES.join(", ")
+            ));
+        }
+        let assignment = entry.as_object().ok_or_else(|| {
+            format!("Stage \"{stage}\" must map to an object with provider/model/effort strings.")
+        })?;
+        for (key, field) in assignment {
+            if !matches!(key.as_str(), "provider" | "model" | "effort") {
+                return Err(format!(
+                    "Stage \"{stage}\" has unsupported field \"{key}\"; allowed fields are provider, model, effort."
+                ));
+            }
+            if !field.is_string() {
+                return Err(format!(
+                    "Stage \"{stage}\" field \"{key}\" must be a string."
+                ));
+            }
+        }
+    }
+    Ok(value)
 }
 
 fn workspace_snapshot(workspace: &Path) -> WorkspaceSnapshot {
@@ -235,6 +282,15 @@ fn run_task(args: &[String]) -> Result<(), String> {
             if prompt.trim().is_empty() {
                 return Err("The task prompt cannot be empty.".to_string());
             }
+            let stella_mode = flag(args, "--stella");
+            let stage_models = option(args, "--stage-models")
+                .map(|raw| parse_stage_models(&raw))
+                .transpose()?;
+            if stage_models.is_some() && !stella_mode {
+                return Err(
+                    "--stage-models applies to Stella Mode staged runs; add --stella.".to_string(),
+                );
+            }
             let request = crate::control_plane::enqueue_request(
                 "task.dispatch",
                 Some(workspace.to_string_lossy().into_owned()),
@@ -244,7 +300,8 @@ fn run_task(args: &[String]) -> Result<(), String> {
                     "model": option(args, "--model"),
                     "effort": option(args, "--effort"),
                     "permissionMode": option(args, "--permission"),
-                    "stellaMode": flag(args, "--stella"),
+                    "stellaMode": stella_mode,
+                    "stageModels": stage_models,
                 }),
                 "atelier-cli",
             )?;
@@ -422,6 +479,52 @@ mod tests {
     fn only_explicit_cli_commands_take_over_gui_startup() {
         assert!(try_run(&["atelier".into(), "not-a-cli-command".into()]).is_none());
         assert!(try_run(&["atelier".into(), "version".into()]).is_some());
+    }
+
+    #[test]
+    fn stage_models_json_is_validated_fail_closed() {
+        // 유효 입력: 단계별 모델이 그대로 페이로드에 실린다.
+        let parsed = parse_stage_models(
+            r#"{"planning":{"model":"claude-opus-4-8"},"execution":{"model":"claude-sonnet-4-6","effort":"low"}}"#,
+        )
+        .expect("valid stage models");
+        assert_eq!(
+            parsed["planning"]["model"].as_str(),
+            Some("claude-opus-4-8")
+        );
+        assert_eq!(
+            parsed["execution"]["model"].as_str(),
+            Some("claude-sonnet-4-6")
+        );
+
+        // fail-closed: 잘못된 JSON / 알 수 없는 단계 / 잘못된 필드는 큐 진입 전에 거부.
+        assert!(parse_stage_models("{nope").is_err());
+        assert!(parse_stage_models(r#"["planning"]"#).is_err());
+        assert!(parse_stage_models(r#"{"deploy":{"model":"x"}}"#).is_err());
+        assert!(parse_stage_models(r#"{"planning":"claude"}"#).is_err());
+        assert!(parse_stage_models(r#"{"planning":{"speed":"fast"}}"#).is_err());
+        assert!(parse_stage_models(r#"{"planning":{"model":1}}"#).is_err());
+    }
+
+    #[test]
+    fn stage_models_option_requires_stella_mode() {
+        let args = vec![
+            "atelier".to_string(),
+            "task".to_string(),
+            "dispatch".to_string(),
+            "--workspace".to_string(),
+            std::env::temp_dir().to_string_lossy().into_owned(),
+            "--provider".to_string(),
+            "claude".to_string(),
+            "--prompt".to_string(),
+            "hello".to_string(),
+            "--stage-models".to_string(),
+            r#"{"planning":{"model":"claude-opus-4-8"}}"#.to_string(),
+        ];
+        let result = run_task(&args);
+        assert!(result
+            .unwrap_err()
+            .contains("--stage-models applies to Stella Mode staged runs"));
     }
 
     #[test]
