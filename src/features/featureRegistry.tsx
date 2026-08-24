@@ -1,6 +1,7 @@
 import React from "react";
 import discoveredFeatureModules from "virtual:atelier-feature-modules";
 import type { AgentProvider, AtelierControlRequest } from "../lib/tauri";
+import type { StageModelAssignments } from "../lib/stellaStageModels";
 import type { Tweaks } from "../lib/tokens";
 import { getFeatureSetting, type FeatureSettingsContribution } from "./featureSettings";
 
@@ -68,6 +69,8 @@ export interface NormalizedFeatureControlTask {
   effort?: string;
   permissionMode?: string;
   stellaMode: boolean;
+  /** Stella Mode 단계별 모델 배정 (`--stage-models`) — 오버라이드가 있을 때만 존재. */
+  stageModels?: StageModelAssignments;
 }
 
 export type ControlTaskNormalizer = (

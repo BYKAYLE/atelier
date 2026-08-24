@@ -6329,6 +6329,21 @@ export ANTHROPIC_API_KEY="tc-example"
     }
 
     #[test]
+    fn stage_distinct_models_reach_model_arg_unmerged() {
+        // Stella Mode 단계 분할 실행: 단계마다 다른 모델이 요청되면 각각이
+        // 스폰 인자 `--model` 로 그대로 전달돼야 한다 (run_claude 는
+        // normalize_claude_model 결과를 --model 에 싣는다). 서로 다른 단계
+        // 모델이 하나로 합쳐지거나 기본값으로 대체되면 안 된다.
+        let planning = normalize_claude_model(Some("claude-fable-5".into()));
+        let execution = normalize_claude_model(Some("claude-sonnet-4-6".into()));
+        let verification = normalize_claude_model(Some("claude-haiku-4-5-20251001".into()));
+        assert_eq!(planning, "claude-fable-5");
+        assert_eq!(execution, "claude-sonnet-4-6");
+        assert_eq!(verification, "claude-haiku-4-5-20251001");
+        assert!(planning != execution && execution != verification);
+    }
+
+    #[test]
     fn command_dump_detects_launchctl_exit_tail() {
         let line = r#"printf '= apps =\n'for d in /Applications "$HOME/Applications"; do [ -d "$d" ] && /usr/bin/find "$d" -maxdepth 2 -iname 'hermes' -print; doneprintf '= launchctl =\n'launchctl list | grep -i 'hermes|atelier' || true 0.2s [exit 1]"#;
         assert!(agent_line_is_command_dump(line));

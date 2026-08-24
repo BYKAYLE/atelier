@@ -447,13 +447,13 @@ assert.match(
 );
 assert.match(
   workspaceSource,
-  /startTurnPreviewImpact\(assistantId, session\.provider\);/,
-  "턴 시작 시 레인을 심어야 관측 가능 여부를 판정할 수 있다",
+  /startTurnPreviewImpact\(assistantId, runProvider\);/,
+  "턴 시작 시 레인을 심어야 관측 가능 여부를 판정할 수 있다 (단계 분할 턴은 실제 실행 provider 기준)",
 );
 assert.match(
   workspaceSource,
-  /turnNeedsWorkspaceMutationProbe\(session\.provider, Boolean\(previewUrlAtTurnStart\)\)/,
-  "관측 불가 레인은 턴 전용 baseline 을 잡아야 한다",
+  /turnNeedsWorkspaceMutationProbe\(runProvider, Boolean\(previewUrlAtTurnStart\)\)/,
+  "관측 불가 레인은 턴 전용 baseline 을 잡아야 한다 (단계 분할 턴은 실제 실행 provider 기준)",
 );
 assert.match(
   workspaceSource,

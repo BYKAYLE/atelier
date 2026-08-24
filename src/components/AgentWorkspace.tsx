@@ -34,6 +34,29 @@ import {
   parseStellaFactoryCommand,
 } from "../lib/stellaFactory";
 import type { StellaFactoryCommand } from "../lib/stellaFactory";
+import {
+  STAGE_MODELS_STORAGE_KEY,
+  STELLA_STAGES,
+  advanceStageRunState,
+  buildStageHandoff,
+  buildStageReceipt,
+  buildStageTurnPrompt,
+  createStageRunState,
+  hasStageOverrides,
+  normalizeStageRunState,
+  parseStageModelAssignments,
+  resolveStageExecution,
+  serializeStageModelAssignments,
+  stageLabel,
+  stageReceiptLine,
+  validateStageExecution,
+} from "../lib/stellaStageModels";
+import type {
+  StageModelAssignments,
+  StageReceipt,
+  StageRunState,
+  StellaStage,
+} from "../lib/stellaStageModels";
 import { safeLocalStorageGet, safeLocalStorageSet } from "../lib/storage";
 import {
   presentAgentAnswer,
@@ -651,6 +674,9 @@ type QueuedAgentTurn = {
   notBefore?: number;
   reviewRequest?: ReviewDispatchContext;
   controlRequestId?: string;
+  /** Stella Mode 단계 분할 실행 상태. 존재하면 이 턴은 특정 단계의 실행이다.
+   *  오버라이드 없는 실행에는 절대 실리지 않는다 (기존 단일 실행 경로 보존). */
+  stageRun?: StageRunState;
 };
 
 type SmoothRevealState = {
@@ -2723,6 +2749,7 @@ function compactQueuedTurnForPersistence(turn: QueuedAgentTurn): QueuedAgentTurn
     elementSelection: elementSelection || undefined,
     reviewRequest: normalizeReviewDispatchContext(turn.reviewRequest),
     attachments: Array.isArray(turn.attachments) ? turn.attachments.slice(-MAX_PERSISTED_ATTACHMENTS) : [],
+    stageRun: normalizeStageRunState(turn.stageRun) || undefined,
   };
 }
 
@@ -2859,6 +2886,7 @@ function loadSessions(): AgentSession[] {
                   cwd: typeof turn.cwd === "string" ? turn.cwd : "",
                   createdAt: typeof turn.createdAt === "number" ? turn.createdAt : Date.now(),
                   notBefore: typeof turn.notBefore === "number" ? turn.notBefore : undefined,
+                  stageRun: normalizeStageRunState(turn.stageRun) || undefined,
                 }))
             : [],
           rawEvents: Array.isArray(session.rawEvents) ? session.rawEvents : [],
@@ -3451,6 +3479,35 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   const [pasteError, setPasteError] = useState<string | null>(null);
   const [isPastingImage, setIsPastingImage] = useState(false);
   const [cwd, setCwd] = useState(() => safeLocalStorageGet(CWD_KEY) || "");
+  // Stella Mode 단계별 모델 배정 — 전역 기본값(localStorage). 실행 시작 시
+  // 스냅샷을 payload.stageRun 에 넣으므로 실행 중 변경은 진행 중 런에 영향 없다.
+  const [stageModelAssignments, setStageModelAssignments] = useState<StageModelAssignments>(
+    () => parseStageModelAssignments(safeLocalStorageGet(STAGE_MODELS_STORAGE_KEY)).assignments,
+  );
+  const stageModelAssignmentsRef = useRef<StageModelAssignments>(stageModelAssignments);
+  const [showStageModelPanel, setShowStageModelPanel] = useState(false);
+  const [stageRunStatusBySession, setStageRunStatusBySession] = useState<
+    Record<string, { stage: StellaStage; stageIndex: number; provider: string; model: string } | null>
+  >({});
+  const updateStageModelAssignment = (stage: StellaStage, model: string) => {
+    setStageModelAssignments((current) => {
+      const next: StageModelAssignments = { ...current };
+      if (!model) {
+        delete next[stage];
+      } else {
+        next[stage] = { ...(next[stage] || {}), model };
+      }
+      stageModelAssignmentsRef.current = next;
+      safeLocalStorageSet(STAGE_MODELS_STORAGE_KEY, serializeStageModelAssignments(next));
+      return next;
+    });
+  };
+  const setStageRunStatus = (
+    sessionId: string,
+    status: { stage: StellaStage; stageIndex: number; provider: string; model: string } | null,
+  ) => {
+    setStageRunStatusBySession((current) => ({ ...current, [sessionId]: status }));
+  };
   const [showTaskList, setShowTaskList] = useState(() => safeLocalStorageGet(TASK_LIST_VISIBLE_KEY) !== "0");
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(() => initialWorkspaceView());
   const [workspaceChanges, setWorkspaceChanges] = useState<AgentChangeSummary | null>(null);
@@ -8231,41 +8288,160 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     const meta = providerMeta(session.provider);
     const assistantId = nowId("assistant");
     const turnId = nowId("turn");
+    const turnStartedAt = Date.now();
+    // Stella Mode 단계 분할 실행: 이 턴이 특정 단계라면 (provider, model, effort)를
+    // 정적 배정 계약으로 해석한다. stageRun 이 없으면 아래 전 구간은 기존 단일
+    // 세션 실행 경로와 동일하게 동작한다 (runProvider === session.provider).
+    const stageRun = payload.stageRun;
+    const stageSessionDefaults = {
+      provider: session.provider,
+      model: session.model || meta.defaultModel,
+      effort: normalizeWorkloadLevel(session.codexEffort) as string,
+    };
+    const stagePlan = stageRun
+      ? resolveStageExecution(stageRun.stage, stageRun.assignments, stageSessionDefaults)
+      : null;
+    const runProvider: AgentProvider = stagePlan && isProvider(stagePlan.provider)
+      ? stagePlan.provider
+      : session.provider;
+    const runMeta = runProvider === session.provider ? meta : providerMeta(runProvider);
     // 턴 시작 시점의 프리뷰 URL. 턴 도중 새로 잡히거나 바뀌면 그 자체가 "영향 있음"이다.
     const previewUrlAtTurnStart = cleanStoredPreviewUrl(
       (sessionId === activeIdRef.current ? previewUrlRef.current : session.previewUrl) || "",
     );
-    startTurnPreviewImpact(assistantId, session.provider);
+    startTurnPreviewImpact(assistantId, runProvider);
     let runCwd = payload.cwd || session.cwd || cwd;
     const fastPatchTask = isFastPatchTask(payload.text);
-    const hermesProvider = session.provider === "hermes"
+    const hermesProvider = runProvider === "hermes"
       ? normalizeHermesProvider(session.hermesProvider || inferHermesProviderFromModel(session.model))
       : null;
-    const normalizedRunModel = session.provider === "hermes"
-      ? normalizeHermesModel(hermesProvider || DEFAULT_HERMES_PROVIDER, session.model || meta.defaultModel)
-      : normalizeModel(session.provider, session.model || meta.defaultModel);
+    const stageModelOverride = stagePlan?.modelOverridden ? stagePlan.model : null;
+    const normalizedRunModel = stageModelOverride
+      ? stageModelOverride
+      : runProvider === "hermes"
+        ? normalizeHermesModel(hermesProvider || DEFAULT_HERMES_PROVIDER, session.model || runMeta.defaultModel)
+        : normalizeModel(runProvider, session.model || runMeta.defaultModel);
     const runModelOptions = modelOptionsFor(
-	      session.provider,
+	      runProvider,
 	      normalizedRunModel,
 	      hermesProvider || DEFAULT_HERMES_PROVIDER,
 	      claudeRuntimeModels,
 	      codexRuntimeModels,
 	      openRouterRuntimeModels,
 	    );
-    const runModel = (session.provider === "claude" || session.provider === "codex" || session.provider === "gajecode" || session.provider === "grok" || (session.provider === "hermes" && isHermesProvider(hermesProvider)))
-      ? coerceModelToOptions(normalizedRunModel, runModelOptions)
-      : normalizedRunModel;
-    const useHermesCodexFastPath = session.provider === "hermes" && hermesProvider === "openai-codex";
-    const hermesResumeMatches = session.provider === "hermes"
+    // 단계 오버라이드 모델은 카탈로그 검증을 통과했을 때만 그대로 쓴다 —
+    // coerce 경로의 조용한 대체(fallback)를 타지 않는다 (fail-closed).
+    const runModel = stageModelOverride
+      ? stageModelOverride
+      : (runProvider === "claude" || runProvider === "codex" || runProvider === "gajecode" || runProvider === "grok" || (runProvider === "hermes" && isHermesProvider(hermesProvider)))
+        ? coerceModelToOptions(normalizedRunModel, runModelOptions)
+        : normalizedRunModel;
+    if (stageRun && stagePlan) {
+      // 실행 카탈로그 대조 (fail-closed): "현재 선택" 폴백 항목은 카탈로그가 아니다.
+      const stageCatalog = modelOptionsFor(
+        runProvider,
+        null,
+        hermesProvider || DEFAULT_HERMES_PROVIDER,
+        claudeRuntimeModels,
+        codexRuntimeModels,
+        openRouterRuntimeModels,
+      )
+        .concat(
+          runProvider === "gajecode" && stagePlan.model
+            ? modelOptionsFor(
+                runProvider,
+                stagePlan.model,
+                hermesProvider || DEFAULT_HERMES_PROVIDER,
+                claudeRuntimeModels,
+                codexRuntimeModels,
+                openRouterRuntimeModels,
+              ).filter((option) => option.label !== `현재 선택: ${stagePlan.model}`)
+            : [],
+        )
+        .filter((option) => !option.disabled)
+        .map((option) => option.value);
+      const stageError = validateStageExecution(stagePlan, stageSessionDefaults, stageCatalog, tw.language);
+      if (stageError) {
+        delete turnPreviewImpactRef.current[assistantId];
+        const failedReceipt = buildStageReceipt({
+          stage: stageRun.stage,
+          provider: stagePlan.provider,
+          model: stagePlan.model,
+          effort: stagePlan.effort,
+          status: "error",
+          durationMs: 0,
+          resultText: stageError,
+        });
+        const stageFailureText = tw.language === "en"
+          ? `Stella staged run stopped at stage ${stageRun.stageIndex + 1}/${STELLA_STAGES.length} (${stageRun.stage}): ${stageError}`
+          : `스텔라 단계 분할 실행이 ${stageRun.stageIndex + 1}/${STELLA_STAGES.length} 단계(${stageLabel(stageRun.stage, tw.language)})에서 중단됐습니다: ${stageError}`;
+        const failAssistantId = nowId("assistant");
+        patchSession(sessionId, (current) => ({
+          ...current,
+          messages: finalizeOrphanedStreamingMessages(current.messages)
+            .map((message) =>
+              message.id === payload.userMessageId ? { ...message, status: "done" as const } : message,
+            )
+            .concat({
+              id: failAssistantId,
+              role: "assistant",
+              text: stageFailureText,
+              createdAt: Date.now(),
+              status: "error",
+            }),
+          updatedAt: Date.now(),
+        }));
+        setStageRunStatus(sessionId, null);
+        updateReviewWorkflowStatus(sessionId, payload.reviewRequest, "failed", {
+          responseMessageId: failAssistantId,
+          responseExcerpt: stageFailureText,
+          error: stageFailureText,
+        });
+        if (isTauri()) {
+          stellaRecordEvidence({
+            cwd: runCwd || null,
+            title: `Stella stage ${stageRun.stageIndex + 1}/${STELLA_STAGES.length} ${stageRun.stage}: blocked`,
+            body: [stageReceiptLine(failedReceipt, tw.language), "", stageError].join("\n"),
+          }).catch(console.warn);
+          if (payload.controlRequestId) {
+            await controlRequestComplete(
+              payload.controlRequestId,
+              "failed",
+              clipBlockText(stageFailureText, 1200),
+              {
+                sessionId,
+                provider: session.provider,
+                model: session.model,
+                workspace: runCwd || null,
+                stageReceipts: [...stageRun.receipts, failedReceipt],
+              },
+            ).catch((error) => console.warn("Atelier CLI stage receipt write failed", error));
+          }
+        }
+        return;
+      }
+      setStageRunStatus(sessionId, {
+        stage: stageRun.stage,
+        stageIndex: stageRun.stageIndex,
+        provider: runProvider,
+        model: runModel,
+      });
+    }
+    const useHermesCodexFastPath = runProvider === "hermes" && hermesProvider === "openai-codex";
+    const hermesResumeMatches = runProvider === "hermes"
       && Boolean(session.providerSessionId)
       && session.providerSessionModel === runModel
       && session.providerSessionHermesProvider === hermesProvider;
     const modelChangedForRun = runModel !== session.model;
-    const resumeSessionId = session.provider === "hermes"
-      ? (useHermesCodexFastPath || !hermesResumeMatches ? null : session.providerSessionId || null)
-      : (!modelChangedForRun && (!session.providerSessionModel || session.providerSessionModel === runModel)
-          ? session.providerSessionId || null
-          : null);
+    // 단계 분할 실행은 provider 대화를 승계하지 않는다 — 컨텍스트는 stage handoff
+    // 산출물로만 전달한다 (계약 원칙 4).
+    const resumeSessionId = stageRun
+      ? null
+      : runProvider === "hermes"
+        ? (useHermesCodexFastPath || !hermesResumeMatches ? null : session.providerSessionId || null)
+        : (!modelChangedForRun && (!session.providerSessionModel || session.providerSessionModel === runModel)
+            ? session.providerSessionId || null
+            : null);
     const selectedElementContext = formatDevScreenElementSelectionPrompt(
       payload.elementSelection,
       tw.language,
@@ -8295,12 +8471,13 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
 	    patchSession(sessionId, (s) => ({
 	      ...s,
 	      cwd: runCwd,
-	      model: runModel,
-	      providerSessionId: modelChangedForRun ? undefined : s.providerSessionId,
-	      providerSessionModel: modelChangedForRun ? undefined : s.providerSessionModel,
-	      providerSessionHermesProvider: modelChangedForRun ? undefined : s.providerSessionHermesProvider,
-	      tokenUsage: modelChangedForRun ? undefined : s.tokenUsage,
-	      subscriptionUsage: modelChangedForRun ? undefined : s.subscriptionUsage,
+	      // 단계 오버라이드 모델은 이 턴에만 적용된다 — 세션의 선택 모델을 덮어쓰지 않는다.
+	      model: stageRun ? s.model : runModel,
+	      providerSessionId: stageRun ? s.providerSessionId : modelChangedForRun ? undefined : s.providerSessionId,
+	      providerSessionModel: stageRun ? s.providerSessionModel : modelChangedForRun ? undefined : s.providerSessionModel,
+	      providerSessionHermesProvider: stageRun ? s.providerSessionHermesProvider : modelChangedForRun ? undefined : s.providerSessionHermesProvider,
+	      tokenUsage: stageRun ? s.tokenUsage : modelChangedForRun ? undefined : s.tokenUsage,
+	      subscriptionUsage: stageRun ? s.subscriptionUsage : modelChangedForRun ? undefined : s.subscriptionUsage,
 	      messages: finalizeOrphanedStreamingMessages(s.messages)
 	        .map((message) =>
 	          message.id === payload.userMessageId ? { ...message, status: "done" as const } : message,
@@ -8313,6 +8490,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     let unlistenLifecycle: (() => void) | undefined;
     let unlistenSubscriptionUsage: (() => void) | undefined;
     let unlistenTokenUsage: (() => void) | undefined;
+    // 단계 분할 실행에서 이번 턴이 다음 단계를 큐에 넣었는지 (finally 의 상태줄 정리에 사용).
+    let stageContinues = false;
     try {
       if (isTauri()) {
         if (session.worktreeEnabled) {
@@ -8334,7 +8513,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         // 프리뷰 URL 이 잡힌 세션에서만 실측용 baseline 을 하나 더 잡아, 턴이 끝난 뒤
         // "이 턴에 파일이 바뀌었나"를 직접 재서 카드 노출을 판정한다. 위 changeBaseline 은
         // "변경 검토" 버튼 소유이므로 여기서 절대 재사용·소비하지 않는다.
-        if (turnNeedsWorkspaceMutationProbe(session.provider, Boolean(previewUrlAtTurnStart))) {
+        if (turnNeedsWorkspaceMutationProbe(runProvider, Boolean(previewUrlAtTurnStart))) {
           const probeBaseline = await captureChangeBaselineForTurn(
             runCwd || null,
             CHANGE_BASELINE_TIMEOUT_MS,
@@ -8351,51 +8530,53 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         unlistenLifecycle = await onAgentLifecycle(turnId, (event) =>
           handleAgentLifecycle(sessionId, assistantId, event),
         );
-        const requestedWorkload = fastPatchTask ? "low" : normalizeWorkloadLevel(session.codexEffort);
-        const runOpenRouterEffort = session.provider === "hermes" && hermesProvider === "openrouter"
+        const requestedWorkload = stagePlan?.effortOverridden
+          ? normalizeWorkloadLevel(stagePlan.effort)
+          : fastPatchTask ? "low" : normalizeWorkloadLevel(session.codexEffort);
+        const runOpenRouterEffort = runProvider === "hermes" && hermesProvider === "openrouter"
           ? coerceOpenRouterEffort(requestedWorkload, runModel, runModelOptions)
           : null;
-        const runGajaeAlibabaEffort = session.provider === "gajecode" && inferGajaeProviderFromModel(runModel) === "alibaba"
+        const runGajaeAlibabaEffort = runProvider === "gajecode" && inferGajaeProviderFromModel(runModel) === "alibaba"
           ? coerceGajaeAlibabaEffort(requestedWorkload, runModel)
           : null;
-        const runGrokBackendEffort = (session.provider === "hermes" && hermesProvider === "grok")
-          || (session.provider === "gajecode" && inferGajaeProviderFromModel(runModel) === "grok")
+        const runGrokBackendEffort = (runProvider === "hermes" && hermesProvider === "grok")
+          || (runProvider === "gajecode" && inferGajaeProviderFromModel(runModel) === "grok")
           ? coerceGrokApiEffort(requestedWorkload)
           : null;
-        const codexStyleRun = session.provider === "codex"
-          || (session.provider === "hermes" && hermesProvider === "openai-codex")
-          || (session.provider === "gajecode" && inferGajaeProviderFromModel(runModel) === "codex");
-        const grokStyleRun = session.provider === "grok";
+        const codexStyleRun = runProvider === "codex"
+          || (runProvider === "hermes" && hermesProvider === "openai-codex")
+          || (runProvider === "gajecode" && inferGajaeProviderFromModel(runModel) === "codex");
+        const grokStyleRun = runProvider === "grok";
         const runWorkload = runOpenRouterEffort
           || runGajaeAlibabaEffort
           || runGrokBackendEffort
           || (codexStyleRun ? normalizeCodexEffort(requestedWorkload) : requestedWorkload);
-        const runHermesEffort = session.provider === "hermes" ? runWorkload : null;
+        const runHermesEffort = runProvider === "hermes" ? runWorkload : null;
         const basePrompt = formatOntologyAgentPrompt(
           payload.text,
           tw.language,
           visualContext,
           payload.attachments,
-          normalizeStellaOntologyMode(session.stellaOntologyMode, session.provider),
-          session.provider,
+          normalizeStellaOntologyMode(session.stellaOntologyMode, runProvider),
+          runProvider,
           Boolean(payload.factoryCommand),
           runCwd,
         );
         const result = await agentSend({
-          provider: session.provider,
+          provider: runProvider,
           turnId,
-          prompt: formatWorkloadAgentPrompt(basePrompt, runWorkload, tw.language, session.provider),
+          prompt: formatWorkloadAgentPrompt(basePrompt, runWorkload, tw.language, runProvider),
           safetySubject: payload.displayText || null,
           resumeSessionId,
           cwd: runCwd || null,
           model: runModel,
           hermesProvider,
-          effort: session.provider === "codex" || (session.provider === "gajecode" && inferGajaeProviderFromModel(runModel) === "codex")
+          effort: runProvider === "codex" || (runProvider === "gajecode" && inferGajaeProviderFromModel(runModel) === "codex")
             ? nativeCodexEffort(runWorkload, runModel, runModelOptions)
             : grokStyleRun
               ? runWorkload
               : runHermesEffort || runGajaeAlibabaEffort,
-          speed: session.provider === "codex" || (session.provider === "gajecode" && inferGajaeProviderFromModel(runModel) === "codex")
+          speed: runProvider === "codex" || (runProvider === "gajecode" && inferGajaeProviderFromModel(runModel) === "codex")
             ? (fastPatchTask ? "fast" : normalizeCodexSpeed(session.codexSpeed))
             : null,
           permissionMode: normalizePermissionMode(session.permissionMode),
@@ -8426,18 +8607,25 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
           : null;
         patchSession(sessionId, (s) => ({
           ...s,
-          providerSessionId: result.provider_session_id || (resumeSessionId ? s.providerSessionId : undefined),
+          // 단계 턴의 provider 세션은 승계 금지 대상이므로 세션 상태에 남기지 않는다.
+          providerSessionId: stageRun
+            ? s.providerSessionId
+            : result.provider_session_id || (resumeSessionId ? s.providerSessionId : undefined),
           queuedTurns: retryPayload
             ? [retryPayload, ...(s.queuedTurns || [])]
             : s.queuedTurns,
-          providerSessionModel: result.provider_session_id
-            ? runModel
-            : (resumeSessionId ? s.providerSessionModel : undefined),
-          providerSessionHermesProvider: session.provider === "hermes"
-            ? (result.provider_session_id
-                ? hermesProvider || undefined
-                : (resumeSessionId ? s.providerSessionHermesProvider : undefined))
-            : s.providerSessionHermesProvider,
+          providerSessionModel: stageRun
+            ? s.providerSessionModel
+            : result.provider_session_id
+              ? runModel
+              : (resumeSessionId ? s.providerSessionModel : undefined),
+          providerSessionHermesProvider: stageRun
+            ? s.providerSessionHermesProvider
+            : session.provider === "hermes"
+              ? (result.provider_session_id
+                  ? hermesProvider || undefined
+                  : (resumeSessionId ? s.providerSessionHermesProvider : undefined))
+              : s.providerSessionHermesProvider,
           messages: s.messages.map((m) =>
             {
               if (m.id !== assistantId) return m;
@@ -8509,12 +8697,108 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
             error: result.is_error && !shouldScheduleCooldownRetry ? result.error || finalTextForReveal : undefined,
           },
         );
-        if (payload.controlRequestId && !shouldScheduleCooldownRetry) {
-          const controlStatus = wasStopped || wasInterrupted
-            ? "cancelled"
-            : result.is_error
-              ? "failed"
-              : "succeeded";
+        // Stella Mode 단계 분할: 단계 receipt 기록 후, 성공이면 다음 단계 턴을
+        // handoff 산출물과 함께 큐 맨 앞에 넣는다. 실패/중단은 fail-closed —
+        // 남은 단계를 실행하지 않고 종료 사유를 남긴다.
+        let stageReceiptsSoFar: StageReceipt[] | null = null;
+        let stageTerminalControlStatus: "succeeded" | "failed" | "cancelled" | null = null;
+        if (stageRun && !shouldScheduleCooldownRetry) {
+          const stageStatus: StageReceipt["status"] = wasStopped
+            ? "stopped"
+            : wasInterrupted
+              ? "interrupted"
+              : result.is_error
+                ? "error"
+                : "done";
+          const stageReceipt = buildStageReceipt({
+            stage: stageRun.stage,
+            provider: isProvider(runProvider) ? runProvider : session.provider,
+            model: runModel,
+            effort: String(runWorkload),
+            status: stageStatus,
+            durationMs: Date.now() - turnStartedAt,
+            resultText: finalTextForReveal || result.error || "",
+          });
+          stageReceiptsSoFar = [...stageRun.receipts, stageReceipt];
+          stellaRecordEvidence({
+            cwd: runCwd || null,
+            title: `Stella stage ${stageRun.stageIndex + 1}/${STELLA_STAGES.length} ${stageRun.stage}: ${payload.displayText || stageRun.baseText.slice(0, 80)}`,
+            body: [
+              stageReceiptLine(stageReceipt, tw.language),
+              `Workspace: ${runCwd || "(not set)"}`,
+              `\nResult:\n${clipBlockText(finalTextForReveal || result.error || copy.noResponse, 6000)}`,
+            ].join("\n"),
+          }).catch(console.warn);
+          if (stageStatus === "done") {
+            const nextStageState = advanceStageRunState(stageRun, {
+              handoff: buildStageHandoff({
+                stage: stageRun.stage,
+                provider: stageReceipt.provider,
+                model: runModel,
+                resultText: finalTextForReveal,
+              }),
+              receipt: stageReceipt,
+            });
+            if (nextStageState) {
+              const nextCreatedAt = Date.now();
+              const nextStageLabelText = tw.language === "en"
+                ? `[Stella stage ${nextStageState.stageIndex + 1}/${STELLA_STAGES.length} — ${nextStageState.stage}]`
+                : `[스텔라 단계 ${nextStageState.stageIndex + 1}/${STELLA_STAGES.length} — ${stageLabel(nextStageState.stage, tw.language)}]`;
+              const nextPayload: QueuedAgentTurn = {
+                id: nowId("queued-turn"),
+                userMessageId: nowId("user"),
+                text: buildStageTurnPrompt({
+                  stage: nextStageState.stage,
+                  stageIndex: nextStageState.stageIndex,
+                  baseText: nextStageState.baseText,
+                  handoffs: nextStageState.handoffs,
+                  language: tw.language,
+                }),
+                displayText: nextStageLabelText,
+                factoryCommand: payload.factoryCommand,
+                factoryEvidence: payload.factoryEvidence,
+                attachments: [],
+                cwd: payload.cwd,
+                createdAt: nextCreatedAt,
+                controlRequestId: payload.controlRequestId,
+                stageRun: nextStageState,
+              };
+              patchSession(sessionId, (s) => ({
+                ...s,
+                queuedTurns: [nextPayload, ...(s.queuedTurns || [])],
+                messages: [
+                  ...s.messages,
+                  {
+                    id: nextPayload.userMessageId,
+                    role: "user",
+                    text: nextStageLabelText,
+                    createdAt: nextCreatedAt,
+                    status: "queued",
+                    attachments: [],
+                  },
+                ],
+                updatedAt: nextCreatedAt,
+              }));
+              stageContinues = true;
+            } else {
+              stageTerminalControlStatus = "succeeded";
+            }
+          } else {
+            stageTerminalControlStatus = wasStopped || wasInterrupted ? "cancelled" : "failed";
+          }
+        }
+        if (
+          payload.controlRequestId
+          && !shouldScheduleCooldownRetry
+          && (!stageRun || stageTerminalControlStatus)
+        ) {
+          const controlStatus = stageRun
+            ? stageTerminalControlStatus!
+            : wasStopped || wasInterrupted
+              ? "cancelled"
+              : result.is_error
+                ? "failed"
+                : "succeeded";
           await controlRequestComplete(
             payload.controlRequestId,
             controlStatus,
@@ -8524,6 +8808,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
               provider: session.provider,
               model: runModel,
               workspace: runCwd || null,
+              ...(stageReceiptsSoFar ? { stageReceipts: stageReceiptsSoFar } : {}),
             },
           ).catch((error) => console.warn("Atelier CLI receipt write failed", error));
         }
@@ -8531,7 +8816,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
           revealMessageImmediately(assistantId, finalTextForReveal);
         }
         backgroundedAssistantIdsRef.current.delete(assistantId);
-        if (payload.factoryCommand) {
+        if (payload.factoryCommand && !stageRun) {
           stellaRecordEvidence({
             cwd: runCwd || null,
             title: `Stella Mode ${payload.factoryCommand}: ${payload.displayText || payload.text}`,
@@ -8607,6 +8892,22 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
           error: wasStopped || wasInterrupted ? undefined : finalTextForReveal || String(err),
         },
       );
+      // 단계 분할 실행에서 스폰 자체가 실패해도 fail-closed: 실패한 단계·사유를
+      // receipt 로 남기고 남은 단계는 실행하지 않는다.
+      const caughtStageReceipts: StageReceipt[] | null = stageRun
+        ? [
+            ...stageRun.receipts,
+            buildStageReceipt({
+              stage: stageRun.stage,
+              provider: isProvider(runProvider) ? runProvider : session.provider,
+              model: runModel,
+              effort: stagePlan?.effort || String(normalizeWorkloadLevel(session.codexEffort)),
+              status: wasStopped ? "stopped" : wasInterrupted ? "interrupted" : "error",
+              durationMs: Date.now() - turnStartedAt,
+              resultText: finalTextForReveal || String(err),
+            }),
+          ]
+        : null;
       if (payload.controlRequestId) {
         await controlRequestComplete(
           payload.controlRequestId,
@@ -8617,6 +8918,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
             provider: session.provider,
             model: runModel,
             workspace: runCwd || null,
+            ...(caughtStageReceipts ? { stageReceipts: caughtStageReceipts } : {}),
           },
         ).catch((error) => console.warn("Atelier CLI failure receipt write failed", error));
       }
@@ -8624,7 +8926,17 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         revealMessageImmediately(assistantId, finalTextForReveal);
       }
       backgroundedAssistantIdsRef.current.delete(assistantId);
-      if (payload.factoryCommand && isTauri()) {
+      if (stageRun && isTauri() && caughtStageReceipts) {
+        stellaRecordEvidence({
+          cwd: runCwd || null,
+          title: `Stella stage ${stageRun.stageIndex + 1}/${STELLA_STAGES.length} ${stageRun.stage}: spawn failure`,
+          body: [
+            stageReceiptLine(caughtStageReceipts[caughtStageReceipts.length - 1], tw.language),
+            `Workspace: ${runCwd || "(not set)"}`,
+            `\nError:\n${clipBlockText(finalTextForReveal || String(err), 6000)}`,
+          ].join("\n"),
+        }).catch(console.warn);
+      } else if (payload.factoryCommand && isTauri()) {
         stellaRecordEvidence({
           cwd: runCwd || null,
           title: `Stella Mode ${payload.factoryCommand}: ${payload.displayText || payload.text}`,
@@ -8672,6 +8984,8 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
           allowCapture: allowPreviewCapture,
         }).catch((error) => console.warn("Local preview evidence capture failed", error));
       }
+      // 단계가 이어지면 다음 턴이 상태줄을 갱신하고, 종료(성공/실패/중단)면 지운다.
+      if (stageRun && !stageContinues) setStageRunStatus(sessionId, null);
       clearTurnIntent(turnId);
       finishRunForSession(sessionId, turnId);
       startNextQueuedTurn(sessionId);
@@ -8755,6 +9069,14 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
           ? academicResearchRequest.prompt
           : gajaePromptText || userText;
     let factoryEvidence: string | undefined;
+    // 단계별 모델 오버라이드가 있으면 이번 스텔라 실행은 단계 분할 경로다.
+    // 스냅샷을 여기서 고정해 실행 중 전역 변경이 진행 중 런에 영향 없게 한다.
+    const stagedAssignmentsSnapshot = factoryRequest
+      ? { ...stageModelAssignmentsRef.current }
+      : null;
+    const useStagedFactoryRun = Boolean(
+      factoryRequest && stagedAssignmentsSnapshot && hasStageOverrides(stagedAssignmentsSnapshot),
+    );
     if (factoryRequest && isTauri()) {
       try {
         const analysis = await stellaProjectAnalysis(cwd || null);
@@ -8765,7 +9087,9 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
               goal: factoryRequest.body,
             })
           : null;
-        const autopilot = runManagedFactory
+        // 단계 분할 런은 자체가 단계 오케스트레이션이므로 managed autopilot
+        // 사전 사이클은 실행하지 않는다 (이중 오케스트레이션 방지).
+        const autopilot = runManagedFactory && !useStagedFactoryRun
           ? await stellaFactoryAutopilot({
               cwd: cwd || null,
               goal: factoryRequest.body,
@@ -8794,10 +9118,25 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     setPasteError(null);
 
     const createdAt = Date.now();
+    const initialStageRun = useStagedFactoryRun && stagedAssignmentsSnapshot
+      ? createStageRunState({
+          runId: nowId("stage-run"),
+          assignments: stagedAssignmentsSnapshot,
+          baseText: turnText,
+        })
+      : undefined;
     const payload: QueuedAgentTurn = {
       id: nowId("queued-turn"),
       userMessageId: nowId("user"),
-      text: turnText,
+      text: initialStageRun
+        ? buildStageTurnPrompt({
+            stage: initialStageRun.stage,
+            stageIndex: initialStageRun.stageIndex,
+            baseText: initialStageRun.baseText,
+            handoffs: initialStageRun.handoffs,
+            language: tw.language,
+          })
+        : turnText,
       displayText: visibleUserText,
       factoryCommand: factoryRequest?.command,
       factoryEvidence,
@@ -8805,6 +9144,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       attachments,
       cwd,
       createdAt,
+      stageRun: initialStageRun,
     };
     const isBusy = Boolean(busyTurnIdsRef.current[session.id]);
     const queueMode = Boolean(session.queueMode);
@@ -9025,6 +9365,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       let turnText = prompt;
       let factoryCommand: StellaFactoryCommand | undefined;
       let factoryEvidence: string | undefined;
+      // CLI `--stage-models`: normalize 단계에서 이미 형식 검증(fail-closed)을 통과한
+      // 배정만 도착한다. 오버라이드가 있으면 단계 분할 실행 경로로 진입한다.
+      const controlStageAssignments = controlTask.stellaMode && controlTask.stageModels
+        && hasStageOverrides(controlTask.stageModels)
+        ? controlTask.stageModels
+        : null;
       if (controlTask.stellaMode) {
         const factoryRequest = parseStellaFactoryCommand(`/goal ${prompt}`, tw.language);
         if (factoryRequest) {
@@ -9036,11 +9382,14 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
               cwd: workspace || null,
               goal: factoryRequest.body,
             });
-            const autopilot = await stellaFactoryAutopilot({
-              cwd: workspace || null,
-              goal: factoryRequest.body,
-              maxCycles: 12,
-            });
+            // 단계 분할 런은 자체가 단계 오케스트레이션 — autopilot 사전 사이클 생략.
+            const autopilot = controlStageAssignments
+              ? null
+              : await stellaFactoryAutopilot({
+                  cwd: workspace || null,
+                  goal: factoryRequest.body,
+                  maxCycles: 12,
+                });
             factoryEvidence = formatStellaFactoryPreflightBlock(
               { analysis, bootstrap, autopilot, probe: null },
               tw.language,
@@ -9054,10 +9403,25 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       }
 
       const createdAt = Date.now();
+      const controlStageRun = controlStageAssignments
+        ? createStageRunState({
+            runId: nowId("stage-run"),
+            assignments: controlStageAssignments,
+            baseText: turnText,
+          })
+        : undefined;
       const payload: QueuedAgentTurn = {
         id: nowId("queued-turn"),
         userMessageId: nowId("user"),
-        text: turnText,
+        text: controlStageRun
+          ? buildStageTurnPrompt({
+              stage: controlStageRun.stage,
+              stageIndex: controlStageRun.stageIndex,
+              baseText: controlStageRun.baseText,
+              handoffs: controlStageRun.handoffs,
+              language: tw.language,
+            })
+          : turnText,
         displayText: prompt,
         factoryCommand,
         factoryEvidence,
@@ -9065,6 +9429,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         cwd: workspace,
         createdAt,
         controlRequestId: request.requestId,
+        stageRun: controlStageRun,
       };
       session.messages = [{
         id: payload.userMessageId,
@@ -10166,7 +10531,97 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                         <span className="text-[#e26f4f]">{I.zap}</span>
                         <span>{copy.factoryLabel}</span>
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowStageModelPanel((value) => !value)}
+                        aria-pressed={showStageModelPanel}
+                        aria-label={tw.language === "en" ? "Stage model assignment" : "단계별 모델 배정"}
+                        title={tw.language === "en"
+                          ? "Assign a model per Stella Mode stage (planning/execution/verification/security/audit). Unassigned stages inherit the session model."
+                          : "스텔라 모드 단계(계획/구현/검증/보안/감사)별 모델을 배정합니다. 미지정 단계는 세션 모델을 상속합니다."}
+                        data-testid="stage-model-toggle"
+                        className={cls(
+                          "h-7 shrink-0 rounded-[7px] px-2.5 inline-flex items-center gap-1.5 text-[11px] font-medium border transition-colors",
+                          hasStageOverrides(stageModelAssignments) || showStageModelPanel
+                            ? dark
+                              ? "bg-[#3a2a23] border-[#e26f4f] text-dink"
+                              : "bg-[#fff1eb] border-[#e26f4f] text-ink"
+                            : dark
+                              ? "border-dline bg-dsurf text-dsub hover:text-dink"
+                              : "border-line bg-surface text-sub hover:text-ink",
+                        )}
+                      >
+                        <span>
+                          {tw.language === "en" ? "Stage models" : "단계 모델"}
+                          {hasStageOverrides(stageModelAssignments)
+                            ? ` · ${STELLA_STAGES.filter((stage) => stageModelAssignments[stage]?.model).length}`
+                            : ""}
+                        </span>
+                      </button>
+                      {(() => {
+                        const stageStatus = active ? stageRunStatusBySession[active.id] : null;
+                        if (!stageStatus) return null;
+                        return (
+                          <span
+                            data-testid="stage-model-status"
+                            className={cls(
+                              "min-w-0 truncate text-[11px] font-mono",
+                              dark ? "text-dsub" : "text-sub",
+                            )}
+                            title={`${stageStatus.provider}:${stageStatus.model}`}
+                          >
+                            {tw.language === "en"
+                              ? `Stage ${stageStatus.stageIndex + 1}/${STELLA_STAGES.length} · ${stageStatus.stage} · ${stageStatus.model}`
+                              : `단계 ${stageStatus.stageIndex + 1}/${STELLA_STAGES.length} · ${stageLabel(stageStatus.stage, tw.language)} · ${stageStatus.model}`}
+                          </span>
+                        );
+                      })()}
                     </div>
+                    {showStageModelPanel && (
+                      <div
+                        data-testid="stage-model-panel"
+                        className={cls(
+                          "mb-2 rounded-[9px] border p-2 flex flex-col gap-1.5",
+                          dark ? "border-dline bg-dsurf" : "border-line bg-surface",
+                        )}
+                      >
+                        <div className={cls("text-[11px] leading-[1.45]", dark ? "text-dsub" : "text-sub")}>
+                          {tw.language === "en"
+                            ? "Per-stage model for Stella Mode runs. Default inherits the session model; overrides split the run into sequential stages with explicit handoffs."
+                            : "스텔라 모드 실행의 단계별 모델입니다. 기본값은 세션 모델 상속이며, 오버라이드가 있으면 실행이 단계별로 분할되고 handoff 산출물로 컨텍스트가 전달됩니다."}
+                        </div>
+                        {STELLA_STAGES.map((stage) => {
+                          const assignedModel = stageModelAssignments[stage]?.model || "";
+                          const inheritLabel = tw.language === "en" ? "Inherit session model" : "세션 모델 상속";
+                          return (
+                            <div
+                              key={stage}
+                              data-testid={`stage-model-row-${stage}`}
+                              className="flex items-center gap-2"
+                            >
+                              <span className={cls("w-[104px] shrink-0 text-[11px] font-mono", dark ? "text-dink" : "text-ink")}>
+                                {`${stage === "planning" ? 1 : stage === "execution" ? 2 : stage === "verification" ? 3 : stage === "security" ? 4 : 5}. ${stageLabel(stage, tw.language)}`}
+                              </span>
+                              <ComposerSelectMenu
+                                dark={dark}
+                                value={assignedModel}
+                                options={[
+                                  { value: "", label: inheritLabel },
+                                  ...activeModelOptions,
+                                ]}
+                                onChange={(value) => updateStageModelAssignment(stage, value)}
+                                disabled={!active || !!busyTurnId}
+                                ariaLabel={tw.language === "en" ? `${stage} stage model` : `${stageLabel(stage, tw.language)} 단계 모델`}
+                                title={tw.language === "en" ? `${stage} stage model` : `${stageLabel(stage, tw.language)} 단계 모델`}
+                                triggerClassName="atelier-model-trigger h-7 min-w-[168px] max-w-[228px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2"
+                                menuWidth={292}
+                                testId={`stage-model-menu-${stage}`}
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </>
                 )}
 	                {showSlashMenu && slashMenuPosition && createPortal(
