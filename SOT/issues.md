@@ -1,16 +1,31 @@
 # Issues
 
-Updated: 2026-08-24 KST. Source and installed app: `0.2.28`
-(installed executable SHA-256 `b8cdfa26…1057`, codesign verified).
+Updated: 2026-08-25 KST. Source and installed app: `0.2.29`
+(installed executable SHA-256 `f3b41043…7bad`, codesign verified).
 Current disposition: `supervised local candidate, public release blocked`.
 
 Git baseline: branch `codex/release-readiness-final`, previous HEAD `fd47fba`
 (2026-07-28, 0.2.15). On 2026-08-24 the 0.2.16–0.2.27 working tree landed as
 `5cef1dc` (chore: ignore rules), `e4082eb` (feat: 0.2.16–0.2.27 source), and
 the docs commit tagged `v0.2.27`; the branch is pushed to `origin` for the
-first time in the same session.
+first time in the same session. 0.2.28 landed as `04cbc7b` (`v0.2.28`);
+0.2.29 adds the Stella Mode stage-model commits on the same branch.
 
 ## Open
+
+- 0.2.29 verification boundary: the stage-model composer surfaces
+  (`stage-model-toggle`/`stage-model-panel`/`stage-model-status`) are covered
+  by source/type gates and the staged execution itself is proven headlessly
+  through the installed CLI receipts, but the panel rendering has not been
+  visually exercised in the running UI. Same class as the standing
+  Connections-tab visual gap below.
+- Parallel-session WIP preserved, not merged: an interrupted parallel session
+  left an unreviewed gajecode-OpenRouter provider work-in-progress in the main
+  tree (agent.rs, AgentWorkspace.tsx, ConnectionsPanel.tsx,
+  agentProviderPreferences.ts, two smokes). It is preserved verbatim on branch
+  `wip/gajecode-openrouter-260824` (local, commit `8b29897`) and deliberately
+  excluded from the 0.2.29 release; that feature needs its own gates before it
+  can land.
 
 - Hermes pin promotion is blocked upstream: every hermes-agent release from
   `v2026.7.30` onward (including `v2026.8.19` / `fcbd107`, 0.20.5) ships a
@@ -21,14 +36,18 @@ first time in the same session.
   `HERMES_NIX_BUILD` escape hatch — the last is an upstream-internal switch and
   was deliberately not used). The Connections card now shows the newer upstream
   tag as a reference only.
-- 0.2.28 verification gaps: the Connections-tab rendering of the upstream
-  reference line was not visually exercised, and the installed-app Gajaecode
-  0.15.0 turn after the `--no-extensions` fix is queued as
-  `35b5a25d-3b66-48c9-93a8-175403b025cf` but unclaimed because the macOS
-  session was screen-locked (WebKit suspends the renderer; confirmed by a 10 s
-  `sample` of the WebContent process with zero JavaScript activity). Read
-  `atelier task status 35b5a25d-…` after unlock; expected summary contains
-  `0.2.28`. The same lock prevented a Hermes regression turn.
+- 0.2.28 verification gap (remaining): the Connections-tab rendering of the
+  upstream reference line has still not been visually exercised.
+- CLOSED 2026-08-24: installed-app real turns on 0.2.28 both succeeded once the
+  macOS session was unlocked (screen lock had suspended the WebKit renderer, so
+  the queued turn stayed unclaimed). Gajaecode 0.15.0 turn
+  `35b5a25d-3b66-48c9-93a8-175403b025cf` completed `succeeded` with summary
+  `0.2.28` (model `claude-opus-4-8`, ~51.6 min). The Hermes regression turn
+  `cdc520bc-36e9-4b31-9799-7a56b8d4de71` (pin `3ef6bbd`, model `gpt-5.5`)
+  completed `succeeded` with summary `0.2.28` (~15.3 min). Provider readiness
+  re-checked at the same time: `runtimePin` `0.15.0`, `dependencyPin` `1.4.0`,
+  installed `CFBundleShortVersionString` `0.2.28`; no new atelier entries in
+  `~/Library/Logs/DiagnosticReports`.
 - Recorded and closed in 0.2.28: managed-agent `업데이트 확인` compared only
   against the Atelier pin and never consulted upstream, so newer upstream
   releases (gajae 0.15.0, hermes v2026.8.19, grok 1.0.5) were invisible.

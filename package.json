@@ -1,6 +1,6 @@
 {
   "name": "atelier",
-  "version": "0.2.28",
+  "version": "0.2.29",
   "private": true,
   "type": "module",
   "description": "Atelier — 이미지 붙여넣기가 되는 GUI 터미널",
@@ -43,6 +43,7 @@
     "smoke:editor-diagnostics": "node --experimental-strip-types tools/editor-diagnostics-smoke.ts",
     "smoke:atelier-cli": "node --experimental-strip-types tools/atelier-cli-smoke.ts",
     "smoke:stella-safety": "node --experimental-strip-types tools/stella-safety-smoke.ts",
+    "smoke:stella-stage-models": "node --experimental-strip-types tools/stella-stage-models-smoke.ts",
     "smoke:stella-status-row": "node --experimental-strip-types tools/stella-status-row-smoke.ts",
     "smoke:agent-permission-capability": "node --experimental-strip-types tools/agent-permission-capability-smoke.ts",
     "smoke:github-workflows": "node --experimental-strip-types tools/github-workflows-smoke.ts",

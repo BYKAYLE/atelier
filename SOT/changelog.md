@@ -1,5 +1,82 @@
 # Changelog
 
+## 2026-08-25 — 0.2.29 Stella Mode per-stage model assignment (static mapping v1)
+
+- Stella Mode runs can now assign a different provider/model/effort per stage
+  (`planning`, `execution`, `verification`, `security`, `audit`). New pure
+  contract module `src/lib/stellaStageModels.ts` owns the stage canon,
+  untrusted-input parsing, inheritance resolution, pre-spawn catalog
+  validation, stage prompt/handoff/receipt assembly, and persistence guards.
+- Invariants: unassigned stages inherit the session model, and a run with zero
+  overrides never enters the staged path — the existing single-session Stella
+  execution is untouched (gated by `hasStageOverrides`, pinned by the new
+  `smoke:stella-stage-models` source assertions). Fail-closed everywhere: an
+  unknown model, an unsupported provider override, a bad effort, or a spawn
+  failure stops the run at that stage with the stage name and reason in the UI
+  message, `SOT/evidence-log.md`, and the receipt — no silent substitution.
+- Staged orchestration reuses the existing `agent_send` → per-provider spawn
+  path (`--model`) turn by turn; no new spawn route. Stage context crosses
+  stages only through explicit `STAGE HANDOFF` summaries (`resumeSessionId` is
+  forced null; provider session state is not persisted from stage turns). A
+  successful stage enqueues the next stage at the front of the session queue; a
+  staged run skips the managed autopilot pre-cycle since the stage pipeline is
+  the orchestration.
+- Global defaults persist in localStorage `atelier.stella.stageModels.v1` and
+  are snapshotted into the run at start, so mid-run edits never affect an
+  in-flight run. The stage-model override applies to its turn only and never
+  overwrites the session's selected model.
+- UI: `단계 모델` toggle next to the Stella launcher opens a five-row stage ×
+  model panel (default "세션 모델 상속", reusing the live model catalog and
+  `ComposerSelectMenu`; testids `stage-model-toggle`, `stage-model-panel`,
+  `stage-model-row-*`, `stage-model-menu-*`). During a staged run the launcher
+  row shows the current stage and model (`stage-model-status`).
+- CLI: `atelier task dispatch ... --stella --stage-models '<json>'` with
+  fail-closed Rust-side JSON/stage/field validation (requires `--stella`), a
+  second contract-module validation at normalize time, and per-stage
+  `stageReceipts` (provider/model/effort/status/duration) in the terminal
+  receipt. Documented in `docs/atelier-cli.md`.
+- v1 boundaries: cross-provider stage overrides are limited to
+  `claude`/`codex`/`grok` and require an explicit model; `hermes`/`gajecode`
+  cross-overrides are rejected with a reason (their sub-provider selection is
+  not expressible in the stage contract). The UI panel exposes model overrides
+  for the current session provider; provider/effort overrides ride the CLI.
+- Tests: `smoke:stella-stage-models` (inheritance identity, fail-closed
+  validation, parsing, stage transitions, handoff assembly, serialization
+  round-trip, wiring source gates), Rust
+  `stage_models_json_is_validated_fail_closed`,
+  `stage_models_option_requires_stella_mode`, and
+  `stage_distinct_models_reach_model_arg_unmerged`.
+- Fixed during installed-app verification: the first staged real dispatch
+  (receipt `5932cbee-033f-4e70-a105-829e1234b793`) wrongly rejected the
+  canonical ID `claude-sonnet-4-6` because the pre-spawn catalog only consulted
+  the runtime model list (docs-derived dated IDs). The stage catalog is now the
+  union of the runtime list and the static canonical catalog, and an
+  off-catalog alias is executed only when its canonical normalization
+  (`normalizeModel`/`normalizeHermesModel`) lands in the catalog; anything else
+  still stops fail-closed at the stage.
+- Fixed during installed-app verification (second staged dispatch,
+  `4a678551-0f77-4547-a12a-48007dbf80c6`): stages 1–4 completed on distinct
+  models (planning `claude-sonnet-4-6`, execution/verification/security
+  `claude-haiku-4-5-20251001`), but the security stage's handoff quoted the
+  phrase "자격증명 노출: 검출 안됨" and the backend safety gate's full-prompt
+  scan blocked the audit-stage spawn as credential exposure. Handoffs are prior
+  stage output (data), not new instructions, so a handoff summary that trips
+  `containsProtectedActionIntent` is now omitted from the next-stage prompt and
+  replaced with an evidence-log pointer — the same quoted-literal false-block
+  rule the DevScreen element selection already follows. Receipts and
+  `SOT/evidence-log.md` keep the full text.
+- Proof (installed app `0.2.29`, executable SHA-256
+  `38f3698ba1b1f960d050f13fe42cc076efdd5589a0e941b2ac14cc927c812b93`,
+  candidate/installed hashes match, codesign verified): headless staged
+  dispatch `60dde806-2573-4f14-8f6f-d755edeaec61` on a scratch workspace
+  completed `succeeded` with all five stage receipts `done` — planning
+  `claude-sonnet-4-6` (65s), execution/verification/security/audit
+  `claude-haiku-4-5-20251001` (29s/35s/16s/35s) — two distinct models in one
+  Stella run with the model name stamped in every stage receipt. Fail-closed
+  proof `1978cbcf-f66b-4884-b9df-6daf1bd8f9ac`: `claude-nonexistent-9` stopped
+  the run at stage 1/5 with the model name and reason, no substitution. No new
+  atelier entries in `~/Library/Logs/DiagnosticReports`.
+
 ## 2026-08-24 — 0.2.28 upstream-latest display, Gajaecode 0.15.0, Bun 1.4.0
 
 - Managed-agent `업데이트 확인` now also reports what upstream currently

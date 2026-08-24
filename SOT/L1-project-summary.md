@@ -1,6 +1,6 @@
 # Atelier Project Summary
 
-Last updated: 2026-08-24
+Last updated: 2026-08-25
 
 ## Identity
 
@@ -11,7 +11,17 @@ coding-agent workflows. It must not be treated as a greenfield rebuild.
 
 `supervised local candidate, public release blocked`
 
-- Current source and locally installed candidate: `0.2.28`.
+- Current source and locally installed candidate: `0.2.29`.
+- Stella Mode supports per-stage model assignment (static mapping v1):
+  planning/execution/verification/security/audit stages can each run a
+  different provider/model/effort through the existing per-provider spawn
+  path, with session-model inheritance for unassigned stages, fail-closed
+  validation, explicit `STAGE HANDOFF` context transfer (no conversation
+  resume), per-stage receipts in SOT evidence and CLI terminal receipts, a
+  five-row stage×model composer panel, and
+  `atelier task dispatch --stella --stage-models '<json>'` for headless staged
+  runs. Zero-override runs keep the unchanged single-session path
+  (`SOT/L2-features/feature-stage-model-assignment.md`).
 - Source gates: 274 Rust tests passed with 6 ignored; Orca previously passed 24
   contract smokes across 10 removable features; strict
   all-target/all-feature Clippy and format/diff checks passed; `npm audit`
@@ -53,10 +63,10 @@ coding-agent workflows. It must not be treated as a greenfield rebuild.
   remain available.
 - Frontend and Rust prompt guards share a regression corpus, but phrase matching
   is not a complete action-level guarantee.
-- The locally signed `0.2.28` candidate is installed at
+- The locally signed `0.2.29` candidate is installed at
   `/Applications/Atelier.app`. Candidate and installed executable SHA-256 values
   match at
-  `b8cdfa26598f61bf77fdc564505434d9b65e0a5d59ea73526c00b5ae18b21057`;
+  `f3b41043bf41003b2ae033b3b2ec22498e7a135c3455721a050498a8d5937bad`;
   codesign and renderer-ready checks pass. This is local installed-candidate
   proof, not Developer ID/notarization/public-distribution proof.
 - Mobile continuity publishes a bounded and native-redacted projection of the
