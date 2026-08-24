@@ -8315,29 +8315,12 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     const hermesProvider = runProvider === "hermes"
       ? normalizeHermesProvider(session.hermesProvider || inferHermesProviderFromModel(session.model))
       : null;
-    const stageModelOverride = stagePlan?.modelOverridden ? stagePlan.model : null;
-    const normalizedRunModel = stageModelOverride
-      ? stageModelOverride
-      : runProvider === "hermes"
-        ? normalizeHermesModel(hermesProvider || DEFAULT_HERMES_PROVIDER, session.model || runMeta.defaultModel)
-        : normalizeModel(runProvider, session.model || runMeta.defaultModel);
-    const runModelOptions = modelOptionsFor(
-	      runProvider,
-	      normalizedRunModel,
-	      hermesProvider || DEFAULT_HERMES_PROVIDER,
-	      claudeRuntimeModels,
-	      codexRuntimeModels,
-	      openRouterRuntimeModels,
-	    );
-    // 단계 오버라이드 모델은 카탈로그 검증을 통과했을 때만 그대로 쓴다 —
-    // coerce 경로의 조용한 대체(fallback)를 타지 않는다 (fail-closed).
-    const runModel = stageModelOverride
-      ? stageModelOverride
-      : (runProvider === "claude" || runProvider === "codex" || runProvider === "gajecode" || runProvider === "grok" || (runProvider === "hermes" && isHermesProvider(hermesProvider)))
-        ? coerceModelToOptions(normalizedRunModel, runModelOptions)
-        : normalizedRunModel;
+    let stageModelOverride = stagePlan?.modelOverridden ? stagePlan.model : null;
+    let stageValidationPlan = stagePlan;
     if (stageRun && stagePlan) {
       // 실행 카탈로그 대조 (fail-closed): "현재 선택" 폴백 항목은 카탈로그가 아니다.
+      // 카탈로그 = 런타임 모델 목록 ∪ 정적 정본 카탈로그 — 런타임 목록이 docs 유래
+      // dated ID 만 담고 있어도 정본 short ID(claude-sonnet-4-6 등)는 유효하다.
       const stageCatalog = modelOptionsFor(
         runProvider,
         null,
@@ -8346,6 +8329,16 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         codexRuntimeModels,
         openRouterRuntimeModels,
       )
+        .concat(
+          modelOptionsFor(
+            runProvider,
+            null,
+            hermesProvider || DEFAULT_HERMES_PROVIDER,
+            CLAUDE_MODELS,
+            CODEX_MODELS,
+            OPENROUTER_MODELS,
+          ),
+        )
         .concat(
           runProvider === "gajecode" && stagePlan.model
             ? modelOptionsFor(
@@ -8360,7 +8353,18 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         )
         .filter((option) => !option.disabled)
         .map((option) => option.value);
-      const stageError = validateStageExecution(stagePlan, stageSessionDefaults, stageCatalog, tw.language);
+      // 정본 별칭 해석: "sonnet 4.6" 같은 별칭이 정본 ID 로 정규화되어 카탈로그에
+      // 있으면 그 정본 ID 로 실행한다. 정규화 결과도 카탈로그 밖이면 fail-closed.
+      if (stageModelOverride && !stageCatalog.includes(stageModelOverride)) {
+        const aliasResolved = runProvider === "hermes"
+          ? normalizeHermesModel(hermesProvider || DEFAULT_HERMES_PROVIDER, stageModelOverride)
+          : normalizeModel(runProvider, stageModelOverride);
+        if (stageCatalog.includes(aliasResolved)) {
+          stageModelOverride = aliasResolved;
+          stageValidationPlan = { ...stagePlan, model: aliasResolved };
+        }
+      }
+      const stageError = validateStageExecution(stageValidationPlan, stageSessionDefaults, stageCatalog, tw.language);
       if (stageError) {
         delete turnPreviewImpactRef.current[assistantId];
         const failedReceipt = buildStageReceipt({
@@ -8420,6 +8424,28 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         }
         return;
       }
+    }
+    const normalizedRunModel = stageModelOverride
+      ? stageModelOverride
+      : runProvider === "hermes"
+        ? normalizeHermesModel(hermesProvider || DEFAULT_HERMES_PROVIDER, session.model || runMeta.defaultModel)
+        : normalizeModel(runProvider, session.model || runMeta.defaultModel);
+    const runModelOptions = modelOptionsFor(
+      runProvider,
+      normalizedRunModel,
+      hermesProvider || DEFAULT_HERMES_PROVIDER,
+      claudeRuntimeModels,
+      codexRuntimeModels,
+      openRouterRuntimeModels,
+    );
+    // 단계 오버라이드 모델은 카탈로그 검증(위)을 통과한 값만 그대로 쓴다 —
+    // coerce 경로의 조용한 대체(fallback)를 타지 않는다 (fail-closed).
+    const runModel = stageModelOverride
+      ? stageModelOverride
+      : (runProvider === "claude" || runProvider === "codex" || runProvider === "gajecode" || runProvider === "grok" || (runProvider === "hermes" && isHermesProvider(hermesProvider)))
+        ? coerceModelToOptions(normalizedRunModel, runModelOptions)
+        : normalizedRunModel;
+    if (stageRun && stagePlan) {
       setStageRunStatus(sessionId, {
         stage: stageRun.stage,
         stageIndex: stageRun.stageIndex,

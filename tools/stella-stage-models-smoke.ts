@@ -199,8 +199,18 @@ assert.equal(normalizeStageRunState(null), null);
   );
   // fail-closed: 검증 실패 시 coerce 폴백 없이 해당 단계에서 중단.
   assert.ok(
-    workspace.includes("validateStageExecution(stagePlan, stageSessionDefaults, stageCatalog"),
-    "stage execution must be validated against the live catalog before spawn",
+    workspace.includes("validateStageExecution(stageValidationPlan, stageSessionDefaults, stageCatalog"),
+    "stage execution must be validated against the catalog before spawn",
+  );
+  // 카탈로그 = 런타임 목록 ∪ 정적 정본 카탈로그 + 정본 별칭 해석 (260825 실턴 결함 수리 고정:
+  // 런타임 목록이 dated ID 만 담아도 정본 short ID/별칭은 유효해야 한다).
+  assert.ok(
+    workspace.includes("CLAUDE_MODELS,\n            CODEX_MODELS,\n            OPENROUTER_MODELS,"),
+    "the stage catalog must include the static canonical model catalog",
+  );
+  assert.ok(
+    workspace.includes("stageCatalog.includes(aliasResolved)"),
+    "canonical aliases must resolve against the catalog before rejecting a stage model",
   );
   // CLI 표면과 문서.
   assert.ok(cli.includes("--stage-models") && cli.includes("fn parse_stage_models"),
