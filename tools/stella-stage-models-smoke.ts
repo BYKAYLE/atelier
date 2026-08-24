@@ -212,6 +212,12 @@ assert.equal(normalizeStageRunState(null), null);
     workspace.includes("stageCatalog.includes(aliasResolved)"),
     "canonical aliases must resolve against the catalog before rejecting a stage model",
   );
+  // 인용 오탐 방지 (260825 실턴 결함 수리 고정): 보호문구를 인용한 handoff 는
+  // 프롬프트 주입 전에 생략된다 — 다음 단계 스폰이 안전 게이트에 오탐 차단되지 않게.
+  assert.ok(
+    workspace.includes("containsProtectedActionIntent(handoff.summary)"),
+    "handoff summaries quoting safety-gate vocabulary must be redacted from the next stage prompt",
+  );
   // CLI 표면과 문서.
   assert.ok(cli.includes("--stage-models") && cli.includes("fn parse_stage_models"),
     "the CLI must expose and validate --stage-models");

@@ -8770,6 +8770,22 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
               const nextStageLabelText = tw.language === "en"
                 ? `[Stella stage ${nextStageState.stageIndex + 1}/${STELLA_STAGES.length} — ${nextStageState.stage}]`
                 : `[스텔라 단계 ${nextStageState.stageIndex + 1}/${STELLA_STAGES.length} — ${stageLabel(nextStageState.stage, tw.language)}]`;
+              // 인용 오탐 방지: handoff 는 이전 단계 산출물(데이터)이지 새 지시가
+              // 아니다. 보안 검토 문구("자격증명 노출: 검출 안됨" 등)가 백엔드
+              // 안전 게이트의 실행 전 프롬프트 스캔과 충돌하면 그 handoff 요약만
+              // 생략하고 evidence-log 참조 안내로 대체한다 (element selection 의
+              // quoted-literal 오탐 방지와 같은 원칙). 실측 사례: 4/5 security
+              // handoff 가 5/5 audit 스폰을 credential-exposure 로 차단.
+              const promptSafeHandoffs = nextStageState.handoffs.map((handoff) =>
+                containsProtectedActionIntent(handoff.summary)
+                  ? {
+                      ...handoff,
+                      summary: tw.language === "en"
+                        ? `(stage completed with status "done"; its summary quotes safety-gate vocabulary and is omitted from this prompt. Read the full ${handoff.stage} record in SOT/evidence-log.md.)`
+                        : `(이 단계는 status "done" 으로 완료됐지만, 요약이 안전 게이트 어휘를 인용하고 있어 프롬프트에서 생략했습니다. 전체 내용은 SOT/evidence-log.md 의 ${handoff.stage} 기록을 참조하세요.)`,
+                    }
+                  : handoff,
+              );
               const nextPayload: QueuedAgentTurn = {
                 id: nowId("queued-turn"),
                 userMessageId: nowId("user"),
@@ -8777,7 +8793,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                   stage: nextStageState.stage,
                   stageIndex: nextStageState.stageIndex,
                   baseText: nextStageState.baseText,
-                  handoffs: nextStageState.handoffs,
+                  handoffs: promptSafeHandoffs,
                   language: tw.language,
                 }),
                 displayText: nextStageLabelText,
