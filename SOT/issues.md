@@ -1,7 +1,7 @@
 # Issues
 
-Updated: 2026-08-25 KST. Source and installed app: `0.2.30`
-(installed executable SHA-256 `88e45933…66ca`, codesign verified).
+Updated: 2026-08-25 KST. Source and installed app: `0.2.31`
+(installed executable SHA-256 `7c8de545…4f6c`, codesign verified).
 Current disposition: `supervised local candidate, public release blocked`.
 
 Git baseline: branch `codex/release-readiness-final`, previous HEAD `fd47fba`
@@ -12,6 +12,16 @@ first time in the same session. 0.2.28 landed as `04cbc7b` (`v0.2.28`);
 0.2.29 adds the Stella Mode stage-model commits on the same branch.
 
 ## Open
+
+- 0.2.31 boundary: the OpenRouter staged-run proof stops at the credential
+  boundary — receipt `c97a1ae7-c141-4e7f-9f8d-2f08f9f98e9f` shows the correct
+  routing (provider=hermes, backend=openrouter, model
+  `anthropic/claude-haiku-4.5`) and a clean fail-closed message asking to
+  connect OpenRouter in 설정 > 연결. The machine has no OpenRouter credential;
+  after the CEO connects one, re-run the same dispatch for a full `succeeded`
+  proof. The Alibaba supply path is fully proven
+  (`9bcc655e-a778-4d36-99c9-9fdcee7a0caa`, planning hermes/alibaba/
+  qwen3.7-plus succeeded).
 
 - **P0 INCIDENT (2026-08-25, 대표님/관리자 조치 필요)**: the 0.2.30 release
   commit was first created with `git add -A`, which swept in

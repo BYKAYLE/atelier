@@ -1,7 +1,33 @@
-# Feature: Stella Mode 단계별 모델 배정 (정적 매핑 v1.1)
+# Feature: Stella Mode 단계별 모델 배정 (정적 매핑 v1.2)
 
-Status: implemented local candidate (0.2.30)
+Status: implemented local candidate (0.2.31)
 Updated: 2026-08-25 KST
+
+## 0.2.31 (v1.2) — 공급 경로 도달성 부류 규칙
+
+- 대표님 결함 보고: 단계 provider 셀렉터에 Alibaba Cloud·OpenRouter 부재.
+  개별 항목 패치가 아니라 **부류 규칙**으로 폐쇄: "컴포저에서 선택 가능한
+  모든 공급 경로(top-level provider + managed 하위 backend)는 단계
+  셀렉터에서 한 번의 선택으로 도달 가능해야 한다" — 계약 정본
+  `deriveStageSupplyEntries`/`stageSupplyCoverageDiff`
+  (src/lib/stellaStageModels.ts).
+- 하위 backend 로만 존재하는 공급 경로(alibaba, openrouter, 향후 추가분)는
+  컴포저의 실제 `HERMES_PROVIDERS` 카탈로그에서 **파생**되어 단계 셀렉터에
+  `Alibaba Cloud`/`OpenRouter` 항목으로 나타난다 (내부 매핑: provider=hermes
+  + 모델에서 유도되는 backend — qwen*/glm*→alibaba, vendor/model→openrouter).
+  top-level 동급이 있는 backend(openai-codex→codex, anthropic→claude,
+  grok→grok)는 중복 항목을 만들지 않는다. 새 backend 추가 시 셀렉터 항목이
+  자동 파생되고, 전수 대조 스모크(`stageSupplyCoverageDiff` diff=0 +
+  미래-backend 시뮬레이션)가 부류를 고정한다.
+- OpenRouter 항목의 단계 모델 목록에는 0.2.30 에서 수리한 라이브 카탈로그
+  (실측 417종)가 그대로 흐른다 (`openRouterRuntimeModels` 재사용, 메뉴 열림
+  시 갱신).
+- 단계 receipt 에 managed `backend` 필드 추가 (hermes/gajecode 실행 시
+  provider·model·effort 와 함께 기록).
+- backend 는 배정의 **영속 필드**다 (`StageModelAssignment.backend`, CLI
+  `--stage-models` 의 `backend` 필드). 실행은 영속 backend 를 모델 값 유도보다
+  우선한다 — OpenRouter 카탈로그의 `anthropic/claude-*` 처럼 모델 값 유도가
+  모호한 경우를 확정하기 위함 (실턴 receipt 9446a48c 가 잡은 결함의 수리).
 
 ## 0.2.30 (v1.1) — 대표님 실사용 피드백 반영
 

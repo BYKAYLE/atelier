@@ -1,5 +1,51 @@
 # Changelog
 
+## 2026-08-25 — 0.2.31 stage-model v1.2: supply-path reachability (Alibaba/OpenRouter one selection away)
+
+CEO follow-up defects on 0.2.30: the stage provider selector offered neither
+Alibaba Cloud nor OpenRouter. Closed as a class, not as two patches:
+
+- New contract rule (`src/lib/stellaStageModels.ts`): every supply path
+  selectable in the composer — top-level providers plus managed sub-backends —
+  must be reachable in the stage selector with a single selection.
+  `deriveStageSupplyEntries` derives the selector entries from the composer's
+  real `PROVIDERS`/`HERMES_PROVIDERS` catalogs (no separate enumeration):
+  backends without a top-level equivalent (alibaba, openrouter, any future
+  backend) surface as their own entries ("Alibaba Cloud", "OpenRouter"),
+  mapped internally to `hermes` + the backend derived from the chosen model
+  (`qwen*`/`glm*` → alibaba, `vendor/model` → openrouter). Backends with a
+  top-level equivalent (openai-codex→codex, anthropic→claude, grok→grok) do
+  not duplicate. `stageSupplyCoverageDiff` performs the composer ↔ stage
+  selector full comparison; the smoke gates diff=0 and simulates a future
+  backend to prove the class stays closed.
+- The OpenRouter stage entry streams the live catalog fixed in 0.2.30
+  (417 models measured) through `openRouterRuntimeModels`, refreshing on menu
+  open. The Alibaba entry lists the `ALIBABA_TOKEN_PLAN_MODELS` token-plan
+  catalog.
+- Stage receipts now record the managed `backend` (hermes/gajecode) alongside
+  provider, model, and effort; `stageReceiptLine` and the CLI terminal
+  receipt include it.
+- The backend is a persisted assignment field (`StageModelAssignment.backend`,
+  CLI `--stage-models` `backend` key) and takes precedence over model-value
+  inference at run time. This was forced by a real installed-app measurement:
+  the first OpenRouter staged dispatch (`9446a48c-247d-492c-8fa0-9838fb756ee5`)
+  picked `anthropic/claude-haiku-4.5`, which model-inference misread as the
+  Anthropic backend and stopped fail-closed; with the persisted backend the
+  ambiguity class is closed.
+- Proof (installed app `0.2.31`, executable SHA-256
+  `7c8de545295da12080ef37305c76248c166d65870c2ea701b74fda8b8cdf4f6c`,
+  candidate/installed match, codesign verified; 0.2.30 backup preserved):
+  Alibaba staged dispatch `9bcc655e-a778-4d36-99c9-9fdcee7a0caa` completed
+  `succeeded` — planning `hermes`/backend `alibaba`/`qwen3.7-plus` (20s), the
+  other four stages `claude`/`claude-haiku-4-5-20251001`, backend stamped in
+  the stage receipt. OpenRouter dispatch
+  `c97a1ae7-c141-4e7f-9f8d-2f08f9f98e9f` routed correctly (provider `hermes`,
+  backend `openrouter`, model `anthropic/claude-haiku-4.5` accepted by the
+  catalog) and stopped fail-closed at the real credential boundary with the
+  connect-OpenRouter guidance — no OpenRouter credential exists on this
+  machine; re-run after connecting for a full success proof. No new atelier
+  entries in `~/Library/Logs/DiagnosticReports`.
+
 ## 2026-08-25 — 0.2.30 stage-model v1.1: cross-provider stages, assignment survival, fresh OpenRouter catalog
 
 Three defects reported from the CEO's first real use of 0.2.29:

@@ -11,7 +11,7 @@ coding-agent workflows. It must not be treated as a greenfield rebuild.
 
 `supervised local candidate, public release blocked`
 
-- Current source and locally installed candidate: `0.2.30`.
+- Current source and locally installed candidate: `0.2.31`.
 - Stella Mode supports per-stage model assignment (static mapping v1.1):
   planning/execution/verification/security/audit stages can each run a
   different provider/model/effort through the existing per-provider spawn
@@ -24,9 +24,14 @@ coding-agent workflows. It must not be treated as a greenfield rebuild.
   outlive session switches), and
   `atelier task dispatch --stella --stage-models '<json>'` for headless staged
   runs — cross-provider proven on the installed app (codex planning + claude
-  stages in one run). Zero-override runs keep the unchanged single-session
-  path. The OpenRouter catalog lists live models until their expiration date
-  actually passes (`SOT/L2-features/feature-stage-model-assignment.md`).
+  stages in one run; hermes+alibaba qwen stage in one run). Supply-path rule
+  (0.2.31): every composer-selectable supply path, including backend-only
+  Alibaba Cloud and OpenRouter, is one selection away in the stage selector,
+  derived from the real composer catalogs and pinned by a coverage-diff smoke;
+  the backend is a persisted assignment field that beats model-value
+  inference. Zero-override runs keep the unchanged single-session path. The
+  OpenRouter catalog lists live models until their expiration date actually
+  passes (`SOT/L2-features/feature-stage-model-assignment.md`).
 - Source gates: 274 Rust tests passed with 6 ignored; Orca previously passed 24
   contract smokes across 10 removable features; strict
   all-target/all-feature Clippy and format/diff checks passed; `npm audit`
@@ -68,10 +73,10 @@ coding-agent workflows. It must not be treated as a greenfield rebuild.
   remain available.
 - Frontend and Rust prompt guards share a regression corpus, but phrase matching
   is not a complete action-level guarantee.
-- The locally signed `0.2.30` candidate is installed at
+- The locally signed `0.2.31` candidate is installed at
   `/Applications/Atelier.app`. Candidate and installed executable SHA-256 values
   match at
-  `88e459338da776c1cb7b6c6a5a3db51dc177191a4c1e9814365dfe72b55266ca`;
+  `7c8de545295da12080ef37305c76248c166d65870c2ea701b74fda8b8cdf4f6c`;
   codesign and renderer-ready checks pass. This is local installed-candidate
   proof, not Developer ID/notarization/public-distribution proof.
 - Mobile continuity publishes a bounded and native-redacted projection of the
