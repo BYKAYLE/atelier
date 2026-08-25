@@ -596,6 +596,27 @@ fn openrouter_reasoning_metadata(item: &Value) -> (Option<Vec<String>>, Option<S
     (Some(levels), default_level)
 }
 
+/// OpenRouter `expiration_date` (RFC3339 또는 `YYYY-MM-DD`) 가 현재 시각보다
+/// 과거인 모델만 만료로 판정한다. 값이 없거나 파싱 불가능하면 만료 아님
+/// (목록 노출은 fail-open — 실제 실행 실패는 provider 가 알려준다).
+fn openrouter_model_expired(item: &Value) -> bool {
+    let Some(raw) = item.get("expiration_date").and_then(Value::as_str) else {
+        return false;
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let now = chrono::Utc::now();
+    if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(trimmed) {
+        return parsed.with_timezone(&chrono::Utc) < now;
+    }
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(trimmed, "%Y-%m-%d") {
+        return date < now.date_naive();
+    }
+    false
+}
+
 fn parse_openrouter_model_options(raw: &str, source: &str) -> Option<OpenRouterModelOptionsResult> {
     let value = serde_json::from_str::<Value>(raw).ok()?;
     let updated_at = json_string(&value, "fetched_at");
@@ -617,7 +638,11 @@ fn parse_openrouter_model_options(raw: &str, source: &str) -> Option<OpenRouterM
                     .any(|modality| modality.eq_ignore_ascii_case("text"))
             })
             .unwrap_or(true);
-        if !output_is_text || item.get("expiration_date").is_some_and(|v| !v.is_null()) {
+        // expiration_date 는 "예정된 만료일"이다. OpenRouter 는 신규 모델에도
+        // 2098-12-31 같은 먼 미래 만료일을 붙이므로, 존재 여부가 아니라
+        // "이미 지났는지"로만 제외한다 (260825 실측: 존재-여부 필터가 최신
+        // 모델 9종 — glm-5.3, kimi-k2.5 등 — 을 통째로 숨기고 있었다).
+        if !output_is_text || openrouter_model_expired(item) {
             continue;
         }
         if !seen.insert(id.clone()) {
@@ -882,6 +907,81 @@ mod tests {
             Some(Vec::new())
         );
         assert_eq!(result.models[1].default_reasoning_level, None);
+    }
+
+    #[test]
+    fn openrouter_future_expiration_models_stay_listed_and_expired_ones_drop() {
+        // 260825 결함 수리 고정: expiration_date "존재" 필터가 최신 모델
+        // (먼 미래 만료일 부착)을 숨겼다. 과거 만료만 제외해야 한다.
+        let raw = serde_json::json!({
+            "data": [
+                {
+                    "id": "z-ai/glm-5.3",
+                    "name": "Z.AI: GLM 5.3",
+                    "architecture": { "output_modalities": ["text"] },
+                    "expiration_date": "2098-12-31"
+                },
+                {
+                    "id": "vendor/already-expired",
+                    "name": "Vendor: Expired",
+                    "architecture": { "output_modalities": ["text"] },
+                    "expiration_date": "2020-01-01"
+                },
+                {
+                    "id": "vendor/expired-rfc3339",
+                    "name": "Vendor: Expired RFC3339",
+                    "architecture": { "output_modalities": ["text"] },
+                    "expiration_date": "2020-01-01T00:00:00Z"
+                },
+                {
+                    "id": "vendor/no-expiration",
+                    "name": "Vendor: No Expiration",
+                    "architecture": { "output_modalities": ["text"] },
+                    "expiration_date": null
+                },
+                {
+                    "id": "vendor/unparseable-expiration",
+                    "name": "Vendor: Unparseable",
+                    "architecture": { "output_modalities": ["text"] },
+                    "expiration_date": "someday"
+                }
+            ]
+        })
+        .to_string();
+
+        let result = parse_openrouter_model_options(&raw, "test").unwrap();
+        let ids: Vec<&str> = result
+            .models
+            .iter()
+            .map(|model| model.value.as_str())
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                "z-ai/glm-5.3",
+                "vendor/no-expiration",
+                "vendor/unparseable-expiration"
+            ]
+        );
+    }
+
+    #[test]
+    #[ignore = "live measurement against the real ~/.atelier OpenRouter cache; run explicitly with --ignored"]
+    fn openrouter_real_cache_includes_future_expiring_latest_models() {
+        let Some(raw) = read_openrouter_models_cache() else {
+            panic!("no real OpenRouter cache on this machine");
+        };
+        let result =
+            parse_openrouter_model_options(&raw, "live").expect("parse real OpenRouter cache");
+        let raw_value: Value = serde_json::from_str(&raw).unwrap();
+        let raw_count = raw_value["data"].as_array().unwrap().len();
+        // 과거-만료 모델을 제외한 나머지는 전부 노출되어야 한다.
+        assert!(
+            result.models.len() > raw_count.saturating_sub(20),
+            "parsed {} of {} raw models — future-expiring models are being hidden again",
+            result.models.len(),
+            raw_count
+        );
     }
 
     #[test]
