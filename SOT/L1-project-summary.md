@@ -11,17 +11,22 @@ coding-agent workflows. It must not be treated as a greenfield rebuild.
 
 `supervised local candidate, public release blocked`
 
-- Current source and locally installed candidate: `0.2.29`.
-- Stella Mode supports per-stage model assignment (static mapping v1):
+- Current source and locally installed candidate: `0.2.30`.
+- Stella Mode supports per-stage model assignment (static mapping v1.1):
   planning/execution/verification/security/audit stages can each run a
   different provider/model/effort through the existing per-provider spawn
-  path, with session-model inheritance for unassigned stages, fail-closed
+  path, with session inheritance for unassigned stages, fail-closed
   validation, explicit `STAGE HANDOFF` context transfer (no conversation
   resume), per-stage receipts in SOT evidence and CLI terminal receipts, a
-  five-row stage×model composer panel, and
+  five-row stage panel with per-row provider+model selectors (all five
+  top-level providers mixable; hermes/gajecode sub-backend derived from the
+  model value; explicit reset button; contract survival rules so assignments
+  outlive session switches), and
   `atelier task dispatch --stella --stage-models '<json>'` for headless staged
-  runs. Zero-override runs keep the unchanged single-session path
-  (`SOT/L2-features/feature-stage-model-assignment.md`).
+  runs — cross-provider proven on the installed app (codex planning + claude
+  stages in one run). Zero-override runs keep the unchanged single-session
+  path. The OpenRouter catalog lists live models until their expiration date
+  actually passes (`SOT/L2-features/feature-stage-model-assignment.md`).
 - Source gates: 274 Rust tests passed with 6 ignored; Orca previously passed 24
   contract smokes across 10 removable features; strict
   all-target/all-feature Clippy and format/diff checks passed; `npm audit`
@@ -63,10 +68,10 @@ coding-agent workflows. It must not be treated as a greenfield rebuild.
   remain available.
 - Frontend and Rust prompt guards share a regression corpus, but phrase matching
   is not a complete action-level guarantee.
-- The locally signed `0.2.29` candidate is installed at
+- The locally signed `0.2.30` candidate is installed at
   `/Applications/Atelier.app`. Candidate and installed executable SHA-256 values
   match at
-  `f3b41043bf41003b2ae033b3b2ec22498e7a135c3455721a050498a8d5937bad`;
+  `88e459338da776c1cb7b6c6a5a3db51dc177191a4c1e9814365dfe72b55266ca`;
   codesign and renderer-ready checks pass. This is local installed-candidate
   proof, not Developer ID/notarization/public-distribution proof.
 - Mobile continuity publishes a bounded and native-redacted projection of the

@@ -1,5 +1,55 @@
 # Changelog
 
+## 2026-08-25 — 0.2.30 stage-model v1.1: cross-provider stages, assignment survival, fresh OpenRouter catalog
+
+Three defects reported from the CEO's first real use of 0.2.29:
+
+- **Cross-provider stage assignment** ("공급사를 병합해서 사용을 못하는
+  구조인데?"): each stage row now has a provider selector plus that provider's
+  model selector. All five top-level providers (claude/codex/hermes/gajecode/
+  grok) can be mixed per stage — the feature's original purpose (e.g. planning
+  on Claude, execution on Grok/Codex). A provider override always requires an
+  explicit model. The hermes/gajecode sub-backend is derived from the model
+  value (`claude-*` → Anthropic, `vendor/model` → OpenRouter, default Codex) —
+  a documented contract boundary, not a silent limitation. A stage provider
+  whose runtime/authentication is not ready shows an inline warning in the row
+  and stops fail-closed with the reason at run time.
+- **Assignment "reset" defect** ("다른 모델 선택하면 초기화돼"): root cause was
+  display collapse, not data loss — stage rows rendered options from the
+  *session* provider catalog, so after a session provider/model switch an
+  assigned model was no longer among the options and `ComposerSelectMenu` fell
+  back to the first option ("세션 모델 상속"), making persisted assignments
+  look wiped (worse, a run would still use the hidden assignment). Fixed by
+  survival rules now written into the contract
+  (`STAGE_ASSIGNMENT_SURVIVAL_RULES`): assignments are independent of session
+  state, updates are row-scoped, clearing requires an explicit action (row
+  "상속" or the new `stage-model-reset` button), and off-catalog assignments
+  render as "현재 선택: …" instead of masquerading as inherit. Pinned by
+  `smoke:stella-stage-models` source gates.
+- **Stale OpenRouter catalog** ("모델이 최신화가 안 되고 있음"): the live
+  fetch + 5-minute refresh + cache pipeline was already in place, but
+  `parse_openrouter_model_options` dropped every model whose `expiration_date`
+  merely *existed*. OpenRouter attaches far-future dates (e.g. 2098-12-31) to
+  brand-new models, so the newest releases (z-ai/glm-5.3, glm-5-turbo,
+  moonshotai/kimi-k2.5, stealth/ox-alpha, …) were hidden — measured on the
+  real cache: 9 of 417 models filtered, all of them recent. Models are now
+  hidden only when the expiration date has actually passed (RFC3339 or
+  YYYY-MM-DD; unparseable dates keep the model listed). Rust tests cover
+  future/past/null/unparseable cases plus an `--ignored` live-cache
+  measurement (417/417 visible after the fix).
+- Proof (installed app `0.2.30`, executable SHA-256
+  `88e459338da776c1cb7b6c6a5a3db51dc177191a4c1e9814365dfe72b55266ca`,
+  candidate/installed match, codesign verified; 0.2.29 backup preserved):
+  cross-provider staged dispatch `fed49a83-2698-45f5-9a52-1743918f8c2d`
+  completed `succeeded` — planning `codex`/`gpt-5.5`/`low` (45s), the other
+  four stages `claude`/`claude-haiku-4-5-20251001` (14/27/17/114s), provider,
+  model, and effort stamped in every stage receipt. Fail-closed proofs:
+  unknown stage provider `openai` rejected at dispatch
+  (`4a4119d9-7524-4dec-934e-c184441fe5f9`); `grok` provider override without a
+  model stopped at stage 1/5 with the reason
+  (`8d20b8d0-9cb5-4b02-997b-47a36027ce0b`). No new atelier entries in
+  `~/Library/Logs/DiagnosticReports`.
+
 ## 2026-08-25 — 0.2.29 Stella Mode per-stage model assignment (static mapping v1)
 
 - Stella Mode runs can now assign a different provider/model/effort per stage

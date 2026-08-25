@@ -2,36 +2,36 @@
   "schemaVersion": 1,
   "status": "verified",
   "proofType": "local-installed-candidate",
-  "sourceSha": "c82d552af2343afb8af9f6fd164c9cec1c9d819e",
+  "sourceSha": "f63702c5294a3f6fc1207ac21685776b95692f78",
   "sourceState": {
-    "headSha": "c82d552af2343afb8af9f6fd164c9cec1c9d819e",
+    "headSha": "f63702c5294a3f6fc1207ac21685776b95692f78",
     "workingTreeDirtyAtProofTime": true,
     "buildArtifactIdentifier": {
       "kind": "sha256",
-      "value": "38f3698ba1b1f960d050f13fe42cc076efdd5589a0e941b2ac14cc927c812b93"
+      "value": "88e459338da776c1cb7b6c6a5a3db51dc177191a4c1e9814365dfe72b55266ca"
     }
   },
-  "version": "0.2.29",
+  "version": "0.2.30",
   "bundleIdentifier": "com.atelier.app",
-  "generatedAt": "2026-08-24T23:00:52.831Z",
+  "generatedAt": "2026-08-25T01:07:55.630Z",
   "candidate": {
     "appPath": "/Users/kansic/Service/atelier/src-tauri/target/release/bundle/macos/Atelier.app",
     "executablePath": "/Users/kansic/Service/atelier/src-tauri/target/release/bundle/macos/Atelier.app/Contents/MacOS/atelier",
-    "version": "0.2.29",
-    "executableSha256": "38f3698ba1b1f960d050f13fe42cc076efdd5589a0e941b2ac14cc927c812b93",
+    "version": "0.2.30",
+    "executableSha256": "88e459338da776c1cb7b6c6a5a3db51dc177191a4c1e9814365dfe72b55266ca",
     "codesignVerified": true
   },
   "installed": {
     "appPath": "/Applications/Atelier.app",
     "executablePath": "/Applications/Atelier.app/Contents/MacOS/atelier",
-    "version": "0.2.29",
-    "executableSha256": "38f3698ba1b1f960d050f13fe42cc076efdd5589a0e941b2ac14cc927c812b93",
+    "version": "0.2.30",
+    "executableSha256": "88e459338da776c1cb7b6c6a5a3db51dc177191a4c1e9814365dfe72b55266ca",
     "codesignVerified": true,
     "rendererReady": {
       "schemaVersion": 1,
-      "appVersion": "0.2.29",
-      "pid": 41000,
-      "readyAtUnixMs": 1787612452576,
+      "appVersion": "0.2.30",
+      "pid": 87860,
+      "readyAtUnixMs": 1787620075465,
       "executablePath": "/Applications/Atelier.app/Contents/MacOS/atelier",
       "windowLabel": "main",
       "status": "ready"

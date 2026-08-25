@@ -1,7 +1,28 @@
-# Feature: Stella Mode 단계별 모델 배정 (정적 매핑 v1)
+# Feature: Stella Mode 단계별 모델 배정 (정적 매핑 v1.1)
 
-Status: implemented local candidate (0.2.29)
+Status: implemented local candidate (0.2.30)
 Updated: 2026-08-25 KST
+
+## 0.2.30 (v1.1) — 대표님 실사용 피드백 반영
+
+- **교차 provider 배정**: 단계 행이 provider 셀렉터 + 그 provider 카탈로그의
+  모델 셀렉터로 확장됐다. top-level provider 5종(claude/codex/hermes/gajecode/
+  grok) 전부 단계별 혼합 가능 — 이 기능의 원래 목적(예: 계획=claude 상급,
+  구현=grok/codex)이다. provider 오버라이드는 항상 명시적 모델을 요구한다.
+  경계: hermes/gajecode 의 하위 backend 는 계약이 직접 표현하지 않고 **모델
+  값에서 유도**된다 (hermes: claude-* → anthropic, vendor/model → openrouter,
+  기본 openai-codex; gajecode: 모델 접두사). 미인증/미준비 provider 는 행 아래
+  경고(`stage-model-warning-*`)와 실행 전 fail-closed 사유로 노출된다 — 조용한
+  비활성화 금지.
+- **배정 생존 규칙 명문화** (초기화 결함 수리): 계약 모듈
+  `STAGE_ASSIGNMENT_SURVIVAL_RULES` 정본 — ① 배정은 세션 상태와 독립(세션
+  모델 변경·provider 전환·패널 재열기·재시작에도 유지) ② 행 단위 갱신만
+  (다른 행 초기화 금지) ③ 삭제는 명시 조작(행 "상속" 선택 또는 전체 초기화
+  버튼 `stage-model-reset`)뿐 ④ 카탈로그 밖 배정도 "현재 선택: …"으로 표시
+  (상속으로 위장하는 표시 붕괴 금지 — "다른 모델 선택하면 초기화돼 보임"
+  결함의 근본 원인이 이 표시 붕괴였다). 스모크가 소스 수준으로 고정.
+- UI 는 provider+model 오버라이드를 노출한다. effort 오버라이드는 여전히 CLI
+  `--stage-models` 경로 전용 (문서화된 경계).
 
 ## Goal
 
@@ -58,15 +79,12 @@ Cursor식 "단계마다 다른 AI 모델" 방식을 Stella Mode에 도입한다.
   `atelier task status <id>` 의 terminal receipt 에 단계별 `stageReceipts` 가
   실린다. docs/atelier-cli.md 에 계약 문서화.
 
-## Boundaries (v1 명시 경계)
+## Boundaries (v1 명시 경계 — v1.1 에서 갱신됨, 위 0.2.30 절이 정본)
 
-- 교차 provider 오버라이드는 `claude`/`codex`/`grok` 만 지원하며 명시적 모델을
-  요구한다. `hermes`/`gajecode` 로의 교차 오버라이드는 하위 provider 선택
-  (hermesProvider/managed 런타임 준비)을 단계 계약이 표현할 수 없어 검증에서
-  명시적으로 거부된다 (조용한 무시 아님). 세션 provider 가 hermes/gajecode 인
-  경우 모델 오버라이드는 해당 세션 provider 카탈로그 안에서 허용된다.
-- UI 패널은 모델 오버라이드만 노출한다 (현 세션 provider 카탈로그). provider/
-  effort 오버라이드는 CLI `--stage-models` 경로로 지정한다.
+- ~~교차 provider 오버라이드는 `claude`/`codex`/`grok` 만 지원~~ → 0.2.30 부터
+  top-level provider 5종 전부 지원. 하위 backend 는 모델 값에서 유도된다.
+- ~~UI 패널은 모델 오버라이드만 노출~~ → 0.2.30 부터 provider+model 노출.
+  effort 오버라이드는 CLI `--stage-models` 경로 전용.
 - 가재코드 세션의 컴포저 UI 에는 스텔라 런처 행 자체가 없으므로(기존 동작)
   단계 패널도 노출되지 않는다. CLI dispatch 로는 가재코드 세션에도 단계 배정이
   적용된다.

@@ -1,7 +1,7 @@
 # Issues
 
-Updated: 2026-08-25 KST. Source and installed app: `0.2.29`
-(installed executable SHA-256 `f3b41043…7bad`, codesign verified).
+Updated: 2026-08-25 KST. Source and installed app: `0.2.30`
+(installed executable SHA-256 `88e45933…66ca`, codesign verified).
 Current disposition: `supervised local candidate, public release blocked`.
 
 Git baseline: branch `codex/release-readiness-final`, previous HEAD `fd47fba`
@@ -13,12 +13,21 @@ first time in the same session. 0.2.28 landed as `04cbc7b` (`v0.2.28`);
 
 ## Open
 
-- 0.2.29 verification boundary: the stage-model composer surfaces
-  (`stage-model-toggle`/`stage-model-panel`/`stage-model-status`) are covered
-  by source/type gates and the staged execution itself is proven headlessly
-  through the installed CLI receipts, but the panel rendering has not been
-  visually exercised in the running UI. Same class as the standing
-  Connections-tab visual gap below.
+- 0.2.29/0.2.30 verification boundary: the stage-model composer surfaces
+  (`stage-model-toggle`/`stage-model-panel`/`stage-model-status`, and the
+  0.2.30 per-row provider selector, reset button, and auth warning) are covered
+  by source/type gates, and staged execution — including the 0.2.30
+  cross-provider path — is proven headlessly through installed CLI receipts,
+  but the panel rendering has not been visually exercised in the running UI.
+  Same class as the standing Connections-tab visual gap below. The 0.2.29
+  "reset" complaint was root-caused to a display collapse (fixed in 0.2.30
+  with contract survival rules); if the CEO still sees a reset after 0.2.30,
+  capture the exact interaction sequence — the remaining candidates would be
+  interaction paths outside the panel.
+- 0.2.30 CLI parse message: an unknown stage provider (e.g. "openai") is
+  rejected fail-closed, but the receipt message says the assignment "must be
+  an object with provider/model/effort strings" instead of naming the invalid
+  provider. Cosmetic; sharpen in a later pass.
 - Parallel-session WIP preserved, not merged: an interrupted parallel session
   left an unreviewed gajecode-OpenRouter provider work-in-progress in the main
   tree (agent.rs, AgentWorkspace.tsx, ConnectionsPanel.tsx,
