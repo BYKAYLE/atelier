@@ -3515,20 +3515,28 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       return persistStageAssignments(next);
     });
   };
-  const updateStageProviderAssignment = (stage: StellaStage, provider: string) => {
+  const updateStageProviderAssignment = (stage: StellaStage, provider: string, backend?: string) => {
     setStageModelAssignments((current) => {
       const next: StageModelAssignments = { ...current };
       const entry = { ...(next[stage] || {}) };
       // provider 를 바꾸면 그 행의 모델은 새 provider 카탈로그에서 다시 골라야
-      // 한다 (행 한정 명시 조작 — 다른 행에는 영향 없음).
+      // 한다 (행 한정 명시 조작 — 다른 행에는 영향 없음). backend 파생 항목
+      // (Alibaba/OpenRouter)은 backend 를 배정에 영속한다 — 모델 값 유도가
+      // 모호한 카탈로그(OpenRouter 의 anthropic/claude-* 등)를 확정하기 위함.
       if (!provider) {
         delete entry.provider;
+        delete entry.backend;
         delete entry.model;
       } else if (isProvider(provider)) {
         entry.provider = provider;
         delete entry.model;
+        if (backend) {
+          entry.backend = backend;
+        } else {
+          delete entry.backend;
+        }
       }
-      if (!entry.provider && !entry.model && !entry.effort) {
+      if (!entry.provider && !entry.backend && !entry.model && !entry.effort) {
         delete next[stage];
       } else {
         next[stage] = entry;
@@ -3537,7 +3545,6 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     });
   };
   const clearStageModelAssignments = () => {
-    setStageBackendHints({});
     setStageModelAssignments(() => persistStageAssignments({}));
   };
   // 공급 경로 도달성 계약: 단계 provider 셀렉터 항목은 컴포저의 실제 카탈로그
@@ -3551,9 +3558,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       }),
     [],
   );
-  // backend 파생 항목을 고른 뒤 모델을 아직 고르지 않은 행의 일시 상태
-  // (배정 자체는 provider+model 로 영속되고, backend 는 모델 값에서 유도된다).
-  const [stageBackendHints, setStageBackendHints] = useState<Partial<Record<StellaStage, string>>>({});
+
   const setStageRunStatus = (
     sessionId: string,
     status: { stage: StellaStage; stageIndex: number; provider: string; model: string } | null,
@@ -8369,11 +8374,13 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     // 계약 경계: stellaStageModels.ts CROSS_PROVIDER_OVERRIDES 주석 정본.
     const hermesProvider = runProvider === "hermes"
       ? normalizeHermesProvider(
-          stagePlan?.modelOverridden
-            ? inferHermesProviderFromModel(stagePlan.model)
-            : session.provider === "hermes"
-              ? session.hermesProvider || inferHermesProviderFromModel(session.model)
-              : inferHermesProviderFromModel(session.model),
+          stagePlan?.backend
+            ? stagePlan.backend
+            : stagePlan?.modelOverridden
+              ? inferHermesProviderFromModel(stagePlan.model)
+              : session.provider === "hermes"
+                ? session.hermesProvider || inferHermesProviderFromModel(session.model)
+                : inferHermesProviderFromModel(session.model),
         )
       : null;
     let stageModelOverride = stagePlan?.modelOverridden ? stagePlan.model : null;
@@ -10743,23 +10750,23 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                           const assignedModel = assignment.model || "";
                           const assignedProvider = assignment.provider || "";
                           const rowProvider = isProvider(assignedProvider) ? assignedProvider : activeProvider;
-                          const rowBackendHint = stageBackendHints[stage] || "";
+                          const assignedBackend = assignment.backend || "";
                           const rowHermesBackend = rowProvider === "hermes"
                             ? normalizeHermesProvider(
-                                assignedModel
-                                  ? inferHermesProviderFromModel(assignedModel)
-                                  : rowBackendHint
-                                    ? rowBackendHint
+                                assignedBackend
+                                  ? assignedBackend
+                                  : assignedModel
+                                    ? inferHermesProviderFromModel(assignedModel)
                                     : rowProvider === activeProvider && !assignedProvider
                                       ? activeHermesProvider
                                       : DEFAULT_HERMES_PROVIDER,
                               )
                             : DEFAULT_HERMES_PROVIDER;
                           // 셀렉터 표시값: backend 파생 항목(hermes:openrouter 등)은
-                          // 배정 모델에서 유도한 backend(또는 일시 힌트)로 복원한다.
+                          // 영속된 backend(없으면 모델 유도)로 복원한다.
                           const rowSupplyValue = assignedProvider === "hermes"
                             && !(rowHermesBackend in HERMES_BACKEND_TOP_LEVEL_EQUIVALENTS)
-                            && (assignedModel || rowBackendHint)
+                            && (assignedBackend || assignedModel)
                             ? `hermes:${rowHermesBackend}`
                             : assignedProvider;
                           // 배정 모델이 현재 카탈로그에 없어도 "현재 선택: …" 항목으로
@@ -10799,11 +10806,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                                   ]}
                                   onChange={(value) => {
                                     const entry = stageSupplyEntries.find((candidate) => candidate.value === value);
-                                    setStageBackendHints((current) => ({
-                                      ...current,
-                                      [stage]: entry?.hermesBackend || undefined,
-                                    }));
-                                    updateStageProviderAssignment(stage, entry ? entry.provider : "");
+                                    updateStageProviderAssignment(stage, entry ? entry.provider : "", entry?.hermesBackend);
                                   }}
                                   disabled={!active || !!busyTurnId}
                                   ariaLabel={tw.language === "en" ? `${stage} stage provider` : `${stageLabel(stage, tw.language)} 단계 공급사`}

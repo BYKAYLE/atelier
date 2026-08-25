@@ -147,9 +147,9 @@ fn parse_stage_models(raw: &str) -> Result<Value, String> {
             format!("Stage \"{stage}\" must map to an object with provider/model/effort strings.")
         })?;
         for (key, field) in assignment {
-            if !matches!(key.as_str(), "provider" | "model" | "effort") {
+            if !matches!(key.as_str(), "provider" | "backend" | "model" | "effort") {
                 return Err(format!(
-                    "Stage \"{stage}\" has unsupported field \"{key}\"; allowed fields are provider, model, effort."
+                    "Stage \"{stage}\" has unsupported field \"{key}\"; allowed fields are provider, backend, model, effort."
                 ));
             }
             if !field.is_string() {
@@ -503,6 +503,12 @@ mod tests {
         assert!(parse_stage_models(r#"{"deploy":{"model":"x"}}"#).is_err());
         assert!(parse_stage_models(r#"{"planning":"claude"}"#).is_err());
         assert!(parse_stage_models(r#"{"planning":{"speed":"fast"}}"#).is_err());
+        // hermes 하위 backend 명시 (OpenRouter 의 anthropic/claude-* 같은
+        // 모호한 모델 값 확정용) 는 유효 필드다.
+        assert!(parse_stage_models(
+            r#"{"planning":{"provider":"hermes","backend":"openrouter","model":"anthropic/claude-haiku-4.5"}}"#
+        )
+        .is_ok());
         assert!(parse_stage_models(r#"{"planning":{"model":1}}"#).is_err());
     }
 

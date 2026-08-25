@@ -360,4 +360,51 @@ assert.equal(normalizeStageRunState(null), null);
   assert.deepEqual(stageSupplyCoverageDiff({ providers: [...providers], hermesBackends: futureBackends }), []);
 }
 
+// ── backend 영속 필드 (0.2.31 실턴 결함 수리 고정) ─────────────────────────
+// OpenRouter 카탈로그의 anthropic/claude-* 모델은 모델 값 유도가 anthropic
+// backend 로 오판된다 (receipt 9446a48c 실측). backend 는 배정에 영속되어
+// 유도보다 우선해야 한다.
+{
+  const parsed = parseStageModelAssignments(
+    '{"planning":{"provider":"hermes","backend":"openrouter","model":"anthropic/claude-haiku-4.5"}}',
+  );
+  assert.deepEqual(parsed.errors, []);
+  assert.equal(parsed.assignments.planning?.backend, "openrouter");
+  const plan = resolveStageExecution("planning", parsed.assignments, session);
+  assert.equal(plan.backend, "openrouter", "the persisted backend must survive resolution");
+  assert.equal(
+    validateStageExecution(plan, session, ["anthropic/claude-haiku-4.5"], "ko"),
+    null,
+    "an OpenRouter-catalog anthropic/* model with an explicit backend must validate",
+  );
+  // backend 는 hermes 단계에만 유효하다.
+  const wrongProvider = resolveStageExecution(
+    "planning",
+    { planning: { provider: "claude", backend: "openrouter", model: "claude-fable-5" } },
+    session,
+  );
+  assert.ok(
+    validateStageExecution(wrongProvider, session, ["claude-fable-5"], "ko"),
+    "a backend on a non-hermes stage must be rejected",
+  );
+  // 알 수 없는 backend 는 파싱에서 거부된다.
+  const badBackend = parseStageModelAssignments('{"planning":{"provider":"hermes","backend":"acme","model":"x"}}');
+  assert.ok(badBackend.errors.length === 1, "an unknown backend must be a parse error");
+  // 직렬화 왕복에 backend 가 보존된다.
+  const reparsed = parseStageModelAssignments(serializeStageModelAssignments(parsed.assignments));
+  assert.equal(reparsed.assignments.planning?.backend, "openrouter");
+  // 배선: 셀렉터의 backend 파생 항목 선택이 배정에 backend 를 영속하고,
+  // 실행은 영속 backend 를 모델 유도보다 우선한다.
+  const { readFileSync } = await import("node:fs");
+  const workspace = readFileSync("src/components/AgentWorkspace.tsx", "utf8");
+  assert.ok(
+    workspace.includes('updateStageProviderAssignment(stage, entry ? entry.provider : "", entry?.hermesBackend)'),
+    "picking a backend-derived supply entry must persist the backend into the assignment",
+  );
+  assert.ok(
+    workspace.includes("stagePlan?.backend\n            ? stagePlan.backend"),
+    "the run must prefer the persisted stage backend over model inference",
+  );
+}
+
 console.log("stella stage models smoke passed");

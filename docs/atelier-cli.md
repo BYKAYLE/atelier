@@ -29,10 +29,14 @@ Optional task flags are `--model`, `--effort`, `--permission`, `--stella`, and
 stage. It requires `--stella`. Stages are `planning`, `execution`,
 `verification`, `security`, and `audit`; each stage entry may set `model`,
 `effort`, and `provider` (any of `claude`/`codex`/`hermes`/`gajecode`/`grok`,
-always with an explicit `model`). For a `hermes` or `gajecode` stage the
-sub-backend is derived from the model value (`claude-*` → Anthropic,
-`qwen*`/`glm*` → Alibaba Cloud, `vendor/model` → OpenRouter, `grok-*` → Grok
-API, default Codex); it cannot be named directly in the stage contract.
+always with an explicit `model`). For a `hermes` stage the sub-backend may be
+named explicitly with `backend` (`openai-codex`/`anthropic`/`openrouter`/
+`alibaba`/`grok`); without it the backend is derived from the model value
+(`claude-*` → Anthropic, `qwen*`/`glm*` → Alibaba Cloud, `vendor/model` →
+OpenRouter, `grok-*` → Grok API, default Codex). Name the backend whenever the
+model value is ambiguous — e.g. OpenRouter's `anthropic/claude-*` models
+require `"backend":"openrouter"`. A `gajecode` stage derives its sub-provider
+from the model prefix.
 Supply-path rule: every supply path selectable in the composer — including
 backend-only paths such as Alibaba Cloud and OpenRouter — is reachable in the
 stage selector with a single selection (the UI maps them to

@@ -21,9 +21,21 @@ export type StellaStage = (typeof STELLA_STAGES)[number];
 
 export const STAGE_MODELS_STORAGE_KEY = "atelier.stella.stageModels.v1";
 
-/** 단계 하나의 정적 배정. 비어 있는 필드는 세션 값을 상속한다. */
+/** hermes 하위 backend 정본 (컴포저 HERMES_PROVIDERS 와 동형). */
+export const STAGE_HERMES_BACKENDS = [
+  "openai-codex",
+  "anthropic",
+  "openrouter",
+  "alibaba",
+  "grok",
+] as const;
+
+/** 단계 하나의 정적 배정. 비어 있는 필드는 세션 값을 상속한다.
+ *  backend 는 provider=hermes 일 때만 유효하며, 모델 값 유도가 모호한 경우
+ *  (예: OpenRouter 카탈로그의 anthropic/claude-*)를 확정하기 위해 영속된다. */
 export type StageModelAssignment = {
   provider?: StageAgentProvider;
+  backend?: string;
   model?: string;
   effort?: string;
 };
@@ -39,6 +51,8 @@ export type StageSessionDefaults = {
 export type StageExecutionPlan = {
   stage: StellaStage;
   provider: StageAgentProvider;
+  /** hermes 실행의 명시적 하위 backend (없으면 모델 값에서 유도). */
+  backend?: string;
   model: string;
   effort: string;
   providerOverridden: boolean;
@@ -231,11 +245,16 @@ function cleanAssignment(raw: unknown): StageModelAssignment | null {
     if (!isStageProvider(provider)) return null;
     out.provider = provider;
   }
+  const backend = typeof record.backend === "string" ? record.backend.trim().toLowerCase() : "";
+  if (backend) {
+    if (!(STAGE_HERMES_BACKENDS as readonly string[]).includes(backend)) return null;
+    out.backend = backend;
+  }
   const model = typeof record.model === "string" ? record.model.trim() : "";
   if (model) out.model = model;
   const effort = typeof record.effort === "string" ? record.effort.trim().toLowerCase() : "";
   if (effort) out.effort = effort;
-  if (!out.provider && !out.model && !out.effort) return null;
+  if (!out.provider && !out.backend && !out.model && !out.effort) return null;
   return out;
 }
 
@@ -285,7 +304,7 @@ export function hasStageOverrides(assignments: StageModelAssignments | null | un
   if (!assignments) return false;
   return STELLA_STAGES.some((stage) => {
     const entry = assignments[stage];
-    return Boolean(entry && (entry.provider || entry.model || entry.effort));
+    return Boolean(entry && (entry.provider || entry.backend || entry.model || entry.effort));
   });
 }
 
@@ -306,6 +325,7 @@ export function resolveStageExecution(
   return {
     stage,
     provider: entry.provider || session.provider,
+    ...(entry.backend ? { backend: entry.backend } : {}),
     model: entry.model || session.model,
     effort: entry.effort || session.effort,
     providerOverridden,
@@ -342,6 +362,11 @@ export function validateStageExecution(
     return language === "en"
       ? `Stage "${label}" requested model "${plan.model}" which is not in the ${plan.provider} model catalog; the stage was stopped instead of silently substituting another model.`
       : `"${label}" 단계가 지정한 모델 "${plan.model}"이 ${plan.provider} 모델 카탈로그에 없습니다. 다른 모델로 조용히 대체하지 않고 해당 단계에서 중단했습니다.`;
+  }
+  if (plan.backend && plan.provider !== "hermes") {
+    return language === "en"
+      ? `Stage "${label}" names backend "${plan.backend}" but its provider is "${plan.provider}"; a backend applies only to hermes stages.`
+      : `"${label}" 단계가 backend "${plan.backend}"를 지정했지만 provider가 "${plan.provider}"입니다. backend는 hermes 단계에만 적용됩니다.`;
   }
   if (plan.effortOverridden && !isStageEffort(plan.effort)) {
     return language === "en"
@@ -497,7 +522,7 @@ export function serializeStageModelAssignments(assignments: StageModelAssignment
   const compact: StageModelAssignments = {};
   for (const stage of STELLA_STAGES) {
     const entry = assignments[stage];
-    if (entry && (entry.provider || entry.model || entry.effort)) compact[stage] = entry;
+    if (entry && (entry.provider || entry.backend || entry.model || entry.effort)) compact[stage] = entry;
   }
   return JSON.stringify(compact);
 }
