@@ -28,8 +28,11 @@ Optional task flags are `--model`, `--effort`, `--permission`, `--stella`, and
 `--stage-models` accepts a JSON object that assigns a model per Stella Mode
 stage. It requires `--stella`. Stages are `planning`, `execution`,
 `verification`, `security`, and `audit`; each stage entry may set `model`,
-`effort`, and (cross-provider, limited to `claude`/`codex`/`grok`, with an
-explicit `model`) `provider`.
+`effort`, and `provider` (any of `claude`/`codex`/`hermes`/`gajecode`/`grok`,
+always with an explicit `model`). For a `hermes` or `gajecode` stage the
+sub-backend is derived from the model value (`claude-*` → Anthropic,
+`vendor/model` → OpenRouter, default Codex); it cannot be named directly in
+the stage contract.
 
 ```bash
 atelier task dispatch \
@@ -48,8 +51,9 @@ Rules (static mapping v1):
   sequentially. Context crosses stages only through explicit `STAGE HANDOFF`
   summaries, never provider conversation resumption.
 - Fail-closed: an unknown stage, malformed JSON, a model missing from the
-  provider catalog, or an unsupported provider override stops the run at that
-  stage with the reason; no silent model substitution happens.
+  provider catalog, a provider override without a model, or a stage provider
+  whose runtime/authentication is not ready stops the run at that stage with
+  the reason; no silent model substitution happens.
 - The terminal receipt (`atelier task status <request-id>`) carries a
   `stageReceipts` array with the provider, model, effort, status, and duration
   of every executed stage.

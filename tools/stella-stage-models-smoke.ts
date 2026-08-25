@@ -78,13 +78,38 @@ assert.ok(bogusError && bogusError.includes("중단"), "rejection must state tha
 const noModel = resolveStageExecution("audit", { audit: { provider: "codex" } }, session);
 assert.ok(validateStageExecution(noModel, session, ["gpt-5.5"], "ko"), "provider override without model must be rejected");
 
-// managed 교차 provider 오버라이드 → 거부.
+// 0.2.30: top-level provider 5종 전부 교차 오버라이드 허용 (명시적 모델 필수).
+// hermes/gajecode 의 하위 backend 는 모델 값에서 유도된다 (계약 경계 주석 참조).
 const managed = resolveStageExecution(
   "audit",
   { audit: { provider: "hermes", model: "gpt-5.5" } },
   session,
 );
-assert.ok(validateStageExecution(managed, session, ["gpt-5.5"], "en"), "hermes cross-provider override must be rejected in v1");
+assert.equal(
+  validateStageExecution(managed, session, ["gpt-5.5"], "en"),
+  null,
+  "hermes cross-provider override with an explicit catalog model must validate (0.2.30)",
+);
+const managedGajae = resolveStageExecution(
+  "audit",
+  { audit: { provider: "gajecode", model: "claude-sonnet-4-6" } },
+  session,
+);
+assert.equal(
+  validateStageExecution(managedGajae, session, ["claude-sonnet-4-6"], "ko"),
+  null,
+  "gajecode cross-provider override with an explicit catalog model must validate (0.2.30)",
+);
+const grokCross = resolveStageExecution(
+  "execution",
+  { execution: { provider: "grok", model: "grok-4.6" } },
+  session,
+);
+assert.equal(
+  validateStageExecution(grokCross, session, ["grok-4.6"], "ko"),
+  null,
+  "grok cross-provider override must validate",
+);
 
 // 잘못된 effort → 거부.
 const badEffort = resolveStageExecution("planning", { planning: { effort: "hyper" } }, session);
@@ -223,6 +248,50 @@ assert.equal(normalizeStageRunState(null), null);
     "the CLI must expose and validate --stage-models");
   assert.ok(docs.includes("--stage-models") && docs.includes("stageReceipts"),
     "docs/atelier-cli.md must document the staged dispatch contract");
+
+  // ── 0.2.30 회귀 게이트 (대표님 실사용 결함 3건) ─────────────────────────
+  // ① 교차 provider: 단계 행에 provider 셀렉터가 있고, hermes 오버라이드의
+  //    하위 backend 는 단계 모델 값에서 유도되며, 미인증 provider 는 실행
+  //    전에 fail-closed 사유를 노출한다.
+  assert.ok(
+    workspace.includes("stage-provider-menu-") && workspace.includes("updateStageProviderAssignment"),
+    "each stage row must expose a provider selector",
+  );
+  assert.ok(
+    workspace.includes("inferHermesProviderFromModel(stagePlan.model)"),
+    "a hermes stage override must derive its backend from the stage model",
+  );
+  assert.ok(
+    workspace.includes("stageCapabilityReason") && workspace.includes("stage-model-warning-"),
+    "an unauthenticated stage provider must fail closed with a visible reason",
+  );
+  // ② 초기화 결함 수리 고정 (생존 규칙): 행 모델 옵션은 배정 모델을 selected 로
+  //    넘겨 카탈로그 밖 배정도 '현재 선택'으로 표시되고(표시 붕괴 금지),
+  //    provider 변경은 그 행의 모델만 지우며, 전체 삭제는 명시적 초기화
+  //    버튼(persistStageAssignments({}) 단일 호출부)뿐이다.
+  assert.ok(
+    /modelOptionsFor\(\s*rowProvider,\s*assignedModel \|\| null,/.test(workspace),
+    "stage rows must render off-catalog assignments as '현재 선택' instead of collapsing to inherit",
+  );
+  assert.ok(
+    workspace.includes("const updateStageProviderAssignment"),
+    "provider updates must be row-scoped",
+  );
+  assert.equal(
+    workspace.split("persistStageAssignments({})").length - 1,
+    1,
+    "only the explicit reset button may clear all stage assignments",
+  );
+  assert.ok(
+    workspace.includes('data-testid="stage-model-reset"'),
+    "the explicit reset button must exist",
+  );
+  // ③ OpenRouter 최신화: 만료-예정(미래) 모델을 숨기던 존재-여부 필터 금지.
+  const agentModels = readFileSync("src-tauri/src/agent_models.rs", "utf8");
+  assert.ok(
+    agentModels.includes("fn openrouter_model_expired") && !agentModels.includes('item.get("expiration_date").is_some_and'),
+    "OpenRouter models must only be hidden when their expiration date has passed",
+  );
 }
 
 console.log("stella stage models smoke passed");

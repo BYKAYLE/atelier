@@ -91,10 +91,34 @@ const STAGE_PROVIDERS: readonly StageAgentProvider[] = [
   "grok",
 ];
 
-/** 단계 provider 오버라이드로 허용되는 대상 (세션 provider와 다를 때). Managed
- *  런타임의 하위 provider 선택(hermes/gajecode 서브 프로바이더)은 단계 계약이
- *  표현할 수 없으므로 v1 에서는 교차 오버라이드를 단순 spawn 계열로 제한한다. */
-const CROSS_PROVIDER_OVERRIDES: readonly StageAgentProvider[] = ["claude", "codex", "grok"];
+/** 단계 provider 오버라이드로 허용되는 대상 (세션 provider와 다를 때).
+ *  0.2.30(v1.1): top-level provider 5종 전부 교차 지정 가능 — 이 기능의 원래
+ *  목적이 "계획=claude, 구현=grok/codex" 같은 공급사 혼합이다. 경계: hermes/
+ *  gajecode 의 하위 backend 는 단계 계약이 직접 표현하지 않고 **모델 값에서
+ *  유도**된다 (hermes: inferHermesProviderFromModel, 기본 openai-codex;
+ *  gajecode: 모델 접두사). provider 오버라이드에는 항상 명시적 모델이 필요하다. */
+const CROSS_PROVIDER_OVERRIDES: readonly StageAgentProvider[] = [
+  "claude",
+  "codex",
+  "grok",
+  "hermes",
+  "gajecode",
+];
+
+/** 배정 생존 규칙 (0.2.30 명문화 — 초기화 결함 수리의 계약 기준):
+ *  1. 배정은 세션 상태와 독립된 전역 값이다. 세션 모델 변경, 세션 provider
+ *     전환, 패널 닫기/재열기, 앱 재시작 어느 것도 배정을 지우지 않는다.
+ *  2. 한 단계 행의 변경은 그 행만 바꾼다 — 다른 행을 초기화하지 않는다.
+ *  3. 배정 삭제는 명시적 조작(행에서 "상속" 선택, 또는 전체 초기화 버튼)만
+ *     가능하다.
+ *  4. 표시 규칙: 배정 모델이 현재 카탈로그에 없어도 행은 "상속"으로 위장하지
+ *     않고 배정 값을 그대로 보여야 한다 (조용한 표시 붕괴 금지). */
+export const STAGE_ASSIGNMENT_SURVIVAL_RULES = [
+  "independent-of-session-state",
+  "row-scoped-updates",
+  "explicit-clear-only",
+  "no-silent-display-collapse",
+] as const;
 
 const STAGE_EFFORTS = [
   "none",

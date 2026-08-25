@@ -3489,18 +3489,53 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   const [stageRunStatusBySession, setStageRunStatusBySession] = useState<
     Record<string, { stage: StellaStage; stageIndex: number; provider: string; model: string } | null>
   >({});
+  // 생존 규칙 (STAGE_ASSIGNMENT_SURVIVAL_RULES 정본): 갱신은 항상 해당 행에만
+  // 적용되고, 삭제는 명시적 조작("상속" 선택 또는 전체 초기화 버튼)만 가능하다.
+  const persistStageAssignments = (next: StageModelAssignments) => {
+    stageModelAssignmentsRef.current = next;
+    safeLocalStorageSet(STAGE_MODELS_STORAGE_KEY, serializeStageModelAssignments(next));
+    return next;
+  };
   const updateStageModelAssignment = (stage: StellaStage, model: string) => {
     setStageModelAssignments((current) => {
       const next: StageModelAssignments = { ...current };
+      const entry = { ...(next[stage] || {}) };
       if (!model) {
+        delete entry.model;
+      } else {
+        entry.model = model;
+      }
+      if (!entry.provider && !entry.model && !entry.effort) {
         delete next[stage];
       } else {
-        next[stage] = { ...(next[stage] || {}), model };
+        next[stage] = entry;
       }
-      stageModelAssignmentsRef.current = next;
-      safeLocalStorageSet(STAGE_MODELS_STORAGE_KEY, serializeStageModelAssignments(next));
-      return next;
+      return persistStageAssignments(next);
     });
+  };
+  const updateStageProviderAssignment = (stage: StellaStage, provider: string) => {
+    setStageModelAssignments((current) => {
+      const next: StageModelAssignments = { ...current };
+      const entry = { ...(next[stage] || {}) };
+      // provider 를 바꾸면 그 행의 모델은 새 provider 카탈로그에서 다시 골라야
+      // 한다 (행 한정 명시 조작 — 다른 행에는 영향 없음).
+      if (!provider) {
+        delete entry.provider;
+        delete entry.model;
+      } else if (isProvider(provider)) {
+        entry.provider = provider;
+        delete entry.model;
+      }
+      if (!entry.provider && !entry.model && !entry.effort) {
+        delete next[stage];
+      } else {
+        next[stage] = entry;
+      }
+      return persistStageAssignments(next);
+    });
+  };
+  const clearStageModelAssignments = () => {
+    setStageModelAssignments(() => persistStageAssignments({}));
   };
   const setStageRunStatus = (
     sessionId: string,
@@ -8312,8 +8347,17 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     startTurnPreviewImpact(assistantId, runProvider);
     let runCwd = payload.cwd || session.cwd || cwd;
     const fastPatchTask = isFastPatchTask(payload.text);
+    // 단계 오버라이드로 hermes 를 지정하면 하위 backend 는 단계 모델 값에서
+    // 유도한다 (claude-* → anthropic, vendor/model → openrouter, 기본 codex).
+    // 계약 경계: stellaStageModels.ts CROSS_PROVIDER_OVERRIDES 주석 정본.
     const hermesProvider = runProvider === "hermes"
-      ? normalizeHermesProvider(session.hermesProvider || inferHermesProviderFromModel(session.model))
+      ? normalizeHermesProvider(
+          stagePlan?.modelOverridden
+            ? inferHermesProviderFromModel(stagePlan.model)
+            : session.provider === "hermes"
+              ? session.hermesProvider || inferHermesProviderFromModel(session.model)
+              : inferHermesProviderFromModel(session.model),
+        )
       : null;
     let stageModelOverride = stagePlan?.modelOverridden ? stagePlan.model : null;
     let stageValidationPlan = stagePlan;
@@ -8364,7 +8408,18 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
           stageValidationPlan = { ...stagePlan, model: aliasResolved };
         }
       }
-      const stageError = validateStageExecution(stageValidationPlan, stageSessionDefaults, stageCatalog, tw.language);
+      // 교차 provider 단계는 해당 provider 의 런타임 준비/권한 상태도 fail-closed
+      // 로 검사한다 — 인증/런타임이 없으면 조용한 비활성화 대신 사유를 노출한다.
+      const stageCapabilityReason = stagePlan.providerOverridden
+        ? managedAgentPermissionDisabledReason(
+            runProvider,
+            runtimeCapabilities?.find((item) => item.id === runProvider),
+            tw.language,
+            runtimeCapabilityError,
+          )
+        : null;
+      const stageError = stageCapabilityReason
+        || validateStageExecution(stageValidationPlan, stageSessionDefaults, stageCatalog, tw.language);
       if (stageError) {
         delete turnPreviewImpactRef.current[assistantId];
         const failedReceipt = buildStageReceipt({
@@ -10627,38 +10682,128 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                           dark ? "border-dline bg-dsurf" : "border-line bg-surface",
                         )}
                       >
-                        <div className={cls("text-[11px] leading-[1.45]", dark ? "text-dsub" : "text-sub")}>
-                          {tw.language === "en"
-                            ? "Per-stage model for Stella Mode runs. Default inherits the session model; overrides split the run into sequential stages with explicit handoffs."
-                            : "스텔라 모드 실행의 단계별 모델입니다. 기본값은 세션 모델 상속이며, 오버라이드가 있으면 실행이 단계별로 분할되고 handoff 산출물로 컨텍스트가 전달됩니다."}
+                        <div className="flex items-start gap-2">
+                          <div className={cls("flex-1 text-[11px] leading-[1.45]", dark ? "text-dsub" : "text-sub")}>
+                            {tw.language === "en"
+                              ? "Per-stage provider and model for Stella Mode runs. Defaults inherit the session; overrides split the run into sequential stages with explicit handoffs. Assignments persist across session/model switches — only this panel changes them."
+                              : "스텔라 모드 실행의 단계별 공급사·모델입니다. 기본값은 세션 상속이며, 오버라이드가 있으면 실행이 단계별로 분할되고 handoff 산출물로 컨텍스트가 전달됩니다. 배정은 세션 모델/공급사를 바꿔도 유지되며, 이 패널의 명시 조작으로만 변경됩니다."}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={clearStageModelAssignments}
+                            disabled={!hasStageOverrides(stageModelAssignments)}
+                            data-testid="stage-model-reset"
+                            className={cls(
+                              "h-6 shrink-0 rounded-[6px] border px-2 text-[11px] transition-colors disabled:opacity-40",
+                              dark
+                                ? "border-dline bg-dsurf text-dsub hover:text-dink"
+                                : "border-line bg-surface text-sub hover:text-ink",
+                            )}
+                            title={tw.language === "en"
+                              ? "Clear every stage assignment (explicit reset — nothing else clears them)"
+                              : "모든 단계 배정을 지웁니다 (명시적 초기화 — 다른 조작으로는 지워지지 않습니다)"}
+                          >
+                            {tw.language === "en" ? "Reset all" : "전체 초기화"}
+                          </button>
                         </div>
                         {STELLA_STAGES.map((stage) => {
-                          const assignedModel = stageModelAssignments[stage]?.model || "";
+                          const assignment = stageModelAssignments[stage] || {};
+                          const assignedModel = assignment.model || "";
+                          const assignedProvider = assignment.provider || "";
+                          const rowProvider = isProvider(assignedProvider) ? assignedProvider : activeProvider;
+                          const rowHermesBackend = rowProvider === "hermes"
+                            ? normalizeHermesProvider(
+                                assignedModel
+                                  ? inferHermesProviderFromModel(assignedModel)
+                                  : rowProvider === activeProvider
+                                    ? activeHermesProvider
+                                    : DEFAULT_HERMES_PROVIDER,
+                              )
+                            : DEFAULT_HERMES_PROVIDER;
+                          // 배정 모델이 현재 카탈로그에 없어도 "현재 선택: …" 항목으로
+                          // 그대로 표시한다 — 세션 전환 시 행이 "상속"으로 위장하던
+                          // 표시 붕괴(초기화처럼 보임) 방지 (생존 규칙 4).
+                          const rowModelOptions = modelOptionsFor(
+                            rowProvider,
+                            assignedModel || null,
+                            rowHermesBackend,
+                            claudeRuntimeModels,
+                            codexRuntimeModels,
+                            openRouterRuntimeModels,
+                          );
                           const inheritLabel = tw.language === "en" ? "Inherit session model" : "세션 모델 상속";
+                          const providerInheritLabel = tw.language === "en" ? "Session provider" : "세션 공급사 상속";
+                          const modelRequiredLabel = tw.language === "en" ? "Choose a model…" : "모델 선택 필요…";
+                          const stageProviderWarning = isProvider(assignedProvider)
+                            ? managedAgentPermissionDisabledReason(
+                                assignedProvider,
+                                runtimeCapabilities?.find((capabilityItem) => capabilityItem.id === assignedProvider),
+                                tw.language,
+                                runtimeCapabilityError,
+                              )
+                            : null;
                           return (
-                            <div
-                              key={stage}
-                              data-testid={`stage-model-row-${stage}`}
-                              className="flex items-center gap-2"
-                            >
-                              <span className={cls("w-[104px] shrink-0 text-[11px] font-mono", dark ? "text-dink" : "text-ink")}>
-                                {`${stage === "planning" ? 1 : stage === "execution" ? 2 : stage === "verification" ? 3 : stage === "security" ? 4 : 5}. ${stageLabel(stage, tw.language)}`}
-                              </span>
-                              <ComposerSelectMenu
-                                dark={dark}
-                                value={assignedModel}
-                                options={[
-                                  { value: "", label: inheritLabel },
-                                  ...activeModelOptions,
-                                ]}
-                                onChange={(value) => updateStageModelAssignment(stage, value)}
-                                disabled={!active || !!busyTurnId}
-                                ariaLabel={tw.language === "en" ? `${stage} stage model` : `${stageLabel(stage, tw.language)} 단계 모델`}
-                                title={tw.language === "en" ? `${stage} stage model` : `${stageLabel(stage, tw.language)} 단계 모델`}
-                                triggerClassName="atelier-model-trigger h-7 min-w-[168px] max-w-[228px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2"
-                                menuWidth={292}
-                                testId={`stage-model-menu-${stage}`}
-                              />
+                            <div key={stage} data-testid={`stage-model-row-${stage}`} className="flex flex-col gap-1">
+                              <div className="flex items-center gap-2">
+                                <span className={cls("w-[104px] shrink-0 text-[11px] font-mono", dark ? "text-dink" : "text-ink")}>
+                                  {`${stage === "planning" ? 1 : stage === "execution" ? 2 : stage === "verification" ? 3 : stage === "security" ? 4 : 5}. ${stageLabel(stage, tw.language)}`}
+                                </span>
+                                <ComposerSelectMenu
+                                  dark={dark}
+                                  value={assignedProvider}
+                                  options={[
+                                    { value: "", label: providerInheritLabel },
+                                    ...PROVIDERS.map((providerOption) => ({ value: providerOption.id, label: providerOption.label })),
+                                  ]}
+                                  onChange={(value) => updateStageProviderAssignment(stage, value)}
+                                  disabled={!active || !!busyTurnId}
+                                  ariaLabel={tw.language === "en" ? `${stage} stage provider` : `${stageLabel(stage, tw.language)} 단계 공급사`}
+                                  title={tw.language === "en"
+                                    ? "Changing the provider clears only this row's model"
+                                    : "공급사를 바꾸면 이 행의 모델만 다시 선택합니다"}
+                                  triggerClassName="atelier-provider-trigger h-7 min-w-[108px] max-w-[132px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2"
+                                  menuWidth={168}
+                                  testId={`stage-provider-menu-${stage}`}
+                                />
+                                <ComposerSelectMenu
+                                  dark={dark}
+                                  value={assignedModel}
+                                  options={[
+                                    {
+                                      value: "",
+                                      label: assignedProvider ? modelRequiredLabel : inheritLabel,
+                                    },
+                                    ...rowModelOptions,
+                                  ]}
+                                  onChange={(value) => updateStageModelAssignment(stage, value)}
+                                  onOpen={() => {
+                                    if (rowProvider === "claude" || (rowProvider === "hermes" && rowHermesBackend === "anthropic")) {
+                                      refreshClaudeRuntimeModels().catch(console.error);
+                                    } else if (rowProvider === "codex" || (rowProvider === "hermes" && rowHermesBackend === "openai-codex")) {
+                                      refreshCodexRuntimeModels().catch(console.error);
+                                    } else if (rowProvider === "hermes" && rowHermesBackend === "openrouter") {
+                                      refreshOpenRouterRuntimeModels().catch(console.error);
+                                    }
+                                  }}
+                                  disabled={!active || !!busyTurnId}
+                                  ariaLabel={tw.language === "en" ? `${stage} stage model` : `${stageLabel(stage, tw.language)} 단계 모델`}
+                                  title={tw.language === "en" ? `${stage} stage model` : `${stageLabel(stage, tw.language)} 단계 모델`}
+                                  triggerClassName="atelier-model-trigger h-7 min-w-[168px] max-w-[228px] rounded-[7px] border px-2.5 text-[11px] font-mono outline-none flex items-center justify-between gap-2"
+                                  menuWidth={292}
+                                  testId={`stage-model-menu-${stage}`}
+                                />
+                              </div>
+                              {stageProviderWarning && (
+                                <div
+                                  data-testid={`stage-model-warning-${stage}`}
+                                  className={cls(
+                                    "ml-[112px] text-[10px] leading-[1.4]",
+                                    dark ? "text-[#f0a38a]" : "text-[#9a472f]",
+                                  )}
+                                >
+                                  {stageProviderWarning}
+                                </div>
+                              )}
                             </div>
                           );
                         })}
