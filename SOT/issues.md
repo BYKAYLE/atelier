@@ -13,6 +13,24 @@ first time in the same session. 0.2.28 landed as `04cbc7b` (`v0.2.28`);
 
 ## Open
 
+- **P0 INCIDENT (2026-08-25, 대표님/관리자 조치 필요)**: the 0.2.30 release
+  commit was first created with `git add -A`, which swept in
+  `reports/2026-08-25_pythagoras_internal_tech_report.md` — a company-internal
+  R&D/IP report that a scheduled task had dropped into this **public** repo's
+  working tree at 08:14 — and it was pushed as `37a6b1b`. Remediation done:
+  the branch tip was rewritten without the file (`4747644`, force-with-lease),
+  the file was moved out of the repo to `~/Service/atelier-local-reports/`,
+  and `reports/` is now gitignored. **Remaining exposure**: the remote tag
+  `v0.2.30` still points at `37a6b1b` because a repository ruleset forbids tag
+  update and deletion (rejected via git push and REST API). Required admin
+  actions: (1) temporarily allow tag update in the ruleset, then
+  `git push -f origin v0.2.30` (the local tag already points at the clean
+  `4747644`), restore the ruleset; (2) ask GitHub Support to purge the
+  now-unreferenced `37a6b1b` objects from caches; (3) relocate the scheduled
+  task that writes company reports so its output never lands inside a public
+  repo working tree. Class-level guard added: `reports/` ignore rule; release
+  commits must never use `git add -A` in this repo.
+
 - 0.2.29/0.2.30 verification boundary: the stage-model composer surfaces
   (`stage-model-toggle`/`stage-model-panel`/`stage-model-status`, and the
   0.2.30 per-row provider selector, reset button, and auth warning) are covered
