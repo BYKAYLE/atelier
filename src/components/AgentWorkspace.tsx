@@ -35,9 +35,11 @@ import {
 } from "../lib/stellaFactory";
 import type { StellaFactoryCommand } from "../lib/stellaFactory";
 import {
+  HERMES_BACKEND_TOP_LEVEL_EQUIVALENTS,
   STAGE_MODELS_STORAGE_KEY,
   STELLA_STAGES,
   advanceStageRunState,
+  deriveStageSupplyEntries,
   buildStageHandoff,
   buildStageReceipt,
   buildStageTurnPrompt,
@@ -3535,8 +3537,23 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     });
   };
   const clearStageModelAssignments = () => {
+    setStageBackendHints({});
     setStageModelAssignments(() => persistStageAssignments({}));
   };
+  // 공급 경로 도달성 계약: 단계 provider 셀렉터 항목은 컴포저의 실제 카탈로그
+  // (PROVIDERS + HERMES_PROVIDERS)에서 파생된다 — 하위 backend 로만 존재하는
+  // 공급 경로(alibaba, openrouter, 향후 추가분)가 한 번의 선택으로 도달된다.
+  const stageSupplyEntries = useMemo(
+    () =>
+      deriveStageSupplyEntries({
+        providers: PROVIDERS.map((provider) => ({ id: provider.id, label: provider.label })),
+        hermesBackends: HERMES_PROVIDERS.map((backend) => ({ value: backend.value, label: backend.label })),
+      }),
+    [],
+  );
+  // backend 파생 항목을 고른 뒤 모델을 아직 고르지 않은 행의 일시 상태
+  // (배정 자체는 provider+model 로 영속되고, backend 는 모델 값에서 유도된다).
+  const [stageBackendHints, setStageBackendHints] = useState<Partial<Record<StellaStage, string>>>({});
   const setStageRunStatus = (
     sessionId: string,
     status: { stage: StellaStage; stageIndex: number; provider: string; model: string } | null,
@@ -8425,6 +8442,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         const failedReceipt = buildStageReceipt({
           stage: stageRun.stage,
           provider: stagePlan.provider,
+          backend: runProvider === "hermes"
+            ? hermesProvider
+            : runProvider === "gajecode"
+              ? inferGajaeProviderFromModel(stagePlan.model)
+              : null,
           model: stagePlan.model,
           effort: stagePlan.effort,
           status: "error",
@@ -8794,6 +8816,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
           const stageReceipt = buildStageReceipt({
             stage: stageRun.stage,
             provider: isProvider(runProvider) ? runProvider : session.provider,
+            backend: runProvider === "hermes"
+              ? hermesProvider
+              : runProvider === "gajecode"
+                ? inferGajaeProviderFromModel(runModel)
+                : null,
             model: runModel,
             effort: String(runWorkload),
             status: stageStatus,
@@ -8997,6 +9024,11 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
             buildStageReceipt({
               stage: stageRun.stage,
               provider: isProvider(runProvider) ? runProvider : session.provider,
+              backend: runProvider === "hermes"
+                ? hermesProvider
+                : runProvider === "gajecode"
+                  ? inferGajaeProviderFromModel(runModel)
+                  : null,
               model: runModel,
               effort: stagePlan?.effort || String(normalizeWorkloadLevel(session.codexEffort)),
               status: wasStopped ? "stopped" : wasInterrupted ? "interrupted" : "error",
@@ -10711,15 +10743,25 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                           const assignedModel = assignment.model || "";
                           const assignedProvider = assignment.provider || "";
                           const rowProvider = isProvider(assignedProvider) ? assignedProvider : activeProvider;
+                          const rowBackendHint = stageBackendHints[stage] || "";
                           const rowHermesBackend = rowProvider === "hermes"
                             ? normalizeHermesProvider(
                                 assignedModel
                                   ? inferHermesProviderFromModel(assignedModel)
-                                  : rowProvider === activeProvider
-                                    ? activeHermesProvider
-                                    : DEFAULT_HERMES_PROVIDER,
+                                  : rowBackendHint
+                                    ? rowBackendHint
+                                    : rowProvider === activeProvider && !assignedProvider
+                                      ? activeHermesProvider
+                                      : DEFAULT_HERMES_PROVIDER,
                               )
                             : DEFAULT_HERMES_PROVIDER;
+                          // 셀렉터 표시값: backend 파생 항목(hermes:openrouter 등)은
+                          // 배정 모델에서 유도한 backend(또는 일시 힌트)로 복원한다.
+                          const rowSupplyValue = assignedProvider === "hermes"
+                            && !(rowHermesBackend in HERMES_BACKEND_TOP_LEVEL_EQUIVALENTS)
+                            && (assignedModel || rowBackendHint)
+                            ? `hermes:${rowHermesBackend}`
+                            : assignedProvider;
                           // 배정 모델이 현재 카탈로그에 없어도 "현재 선택: …" 항목으로
                           // 그대로 표시한다 — 세션 전환 시 행이 "상속"으로 위장하던
                           // 표시 붕괴(초기화처럼 보임) 방지 (생존 규칙 4).
@@ -10750,12 +10792,19 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                                 </span>
                                 <ComposerSelectMenu
                                   dark={dark}
-                                  value={assignedProvider}
+                                  value={rowSupplyValue}
                                   options={[
                                     { value: "", label: providerInheritLabel },
-                                    ...PROVIDERS.map((providerOption) => ({ value: providerOption.id, label: providerOption.label })),
+                                    ...stageSupplyEntries.map((entry) => ({ value: entry.value, label: entry.label })),
                                   ]}
-                                  onChange={(value) => updateStageProviderAssignment(stage, value)}
+                                  onChange={(value) => {
+                                    const entry = stageSupplyEntries.find((candidate) => candidate.value === value);
+                                    setStageBackendHints((current) => ({
+                                      ...current,
+                                      [stage]: entry?.hermesBackend || undefined,
+                                    }));
+                                    updateStageProviderAssignment(stage, entry ? entry.provider : "");
+                                  }}
                                   disabled={!active || !!busyTurnId}
                                   ariaLabel={tw.language === "en" ? `${stage} stage provider` : `${stageLabel(stage, tw.language)} 단계 공급사`}
                                   title={tw.language === "en"

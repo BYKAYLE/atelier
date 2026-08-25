@@ -31,8 +31,14 @@ stage. It requires `--stella`. Stages are `planning`, `execution`,
 `effort`, and `provider` (any of `claude`/`codex`/`hermes`/`gajecode`/`grok`,
 always with an explicit `model`). For a `hermes` or `gajecode` stage the
 sub-backend is derived from the model value (`claude-*` → Anthropic,
-`vendor/model` → OpenRouter, default Codex); it cannot be named directly in
-the stage contract.
+`qwen*`/`glm*` → Alibaba Cloud, `vendor/model` → OpenRouter, `grok-*` → Grok
+API, default Codex); it cannot be named directly in the stage contract.
+Supply-path rule: every supply path selectable in the composer — including
+backend-only paths such as Alibaba Cloud and OpenRouter — is reachable in the
+stage selector with a single selection (the UI maps them to
+`hermes` + the derived backend), and headlessly via `hermes` plus a model of
+that backend. Stage receipts record the derived `backend` alongside provider,
+model, and effort.
 
 ```bash
 atelier task dispatch \

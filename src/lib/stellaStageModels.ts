@@ -56,6 +56,8 @@ export type StageHandoff = {
 export type StageReceipt = {
   stage: StellaStage;
   provider: StageAgentProvider;
+  /** managed 하위 backend (hermes/gajecode 실행 시 — 예: alibaba, openrouter). */
+  backend?: string;
   model: string;
   effort: string;
   status: "done" | "error" | "stopped" | "interrupted";
@@ -119,6 +121,76 @@ export const STAGE_ASSIGNMENT_SURVIVAL_RULES = [
   "explicit-clear-only",
   "no-silent-display-collapse",
 ] as const;
+
+// ── 공급 경로 도달성 계약 (0.2.31, 부류 규칙) ────────────────────────────
+//
+// 규칙: 컴포저에서 선택 가능한 모든 공급 경로(top-level provider + managed
+// 하위 backend)는 단계 provider 셀렉터에서도 **한 번의 선택**으로 도달
+// 가능해야 한다. 하위 backend 로만 존재하는 공급 경로(alibaba, openrouter,
+// 향후 추가분)는 top-level 과 동급의 셀렉터 항목으로 파생 노출된다.
+// 열거가 아니라 파생이다 — hermes backend 목록에 새 backend 가 추가되면
+// 단계 셀렉터 항목도 자동으로 나타나야 하며, 전수 대조 스모크가 이를
+// diff=0 으로 고정한다.
+
+/** top-level provider 로 동일 공급 경로가 이미 존재하는 hermes backend.
+ *  여기 없는 backend 는 단계 셀렉터에 전용 항목으로 파생된다. */
+export const HERMES_BACKEND_TOP_LEVEL_EQUIVALENTS: Record<string, StageAgentProvider> = {
+  "openai-codex": "codex",
+  anthropic: "claude",
+  grok: "grok",
+};
+
+export type StageSupplyEntry = {
+  /** 셀렉터 값. top-level 은 provider id, backend 파생 항목은 `hermes:<backend>`. */
+  value: string;
+  label: string;
+  provider: StageAgentProvider;
+  hermesBackend?: string;
+};
+
+/** 단계 provider 셀렉터 항목 파생. providers/hermesBackends 는 컴포저가 실제
+ *  사용하는 카탈로그 배열을 그대로 넘겨야 한다 (별도 열거 금지). */
+export function deriveStageSupplyEntries(args: {
+  providers: Array<{ id: StageAgentProvider; label: string }>;
+  hermesBackends: Array<{ value: string; label: string }>;
+}): StageSupplyEntry[] {
+  const entries: StageSupplyEntry[] = args.providers.map((provider) => ({
+    value: provider.id,
+    label: provider.label,
+    provider: provider.id,
+  }));
+  for (const backend of args.hermesBackends) {
+    if (HERMES_BACKEND_TOP_LEVEL_EQUIVALENTS[backend.value]) continue;
+    entries.push({
+      value: `hermes:${backend.value}`,
+      label: backend.label,
+      provider: "hermes",
+      hermesBackend: backend.value,
+    });
+  }
+  return entries;
+}
+
+/** 전수 대조: 컴포저 공급 경로(모든 top-level provider + 모든 hermes backend)
+ *  중 단계 셀렉터에서 도달 불가능한 경로 목록을 돌려준다. 게이트 기준 diff=0. */
+export function stageSupplyCoverageDiff(args: {
+  providers: Array<{ id: StageAgentProvider; label: string }>;
+  hermesBackends: Array<{ value: string; label: string }>;
+}): string[] {
+  const entries = deriveStageSupplyEntries(args);
+  const reachable = new Set(entries.map((entry) => entry.value));
+  const missing: string[] = [];
+  for (const provider of args.providers) {
+    if (!reachable.has(provider.id)) missing.push(provider.id);
+  }
+  for (const backend of args.hermesBackends) {
+    const equivalent = HERMES_BACKEND_TOP_LEVEL_EQUIVALENTS[backend.value];
+    if (equivalent ? !reachable.has(equivalent) : !reachable.has(`hermes:${backend.value}`)) {
+      missing.push(`hermes:${backend.value}`);
+    }
+  }
+  return missing;
+}
 
 const STAGE_EFFORTS = [
   "none",
@@ -365,6 +437,7 @@ export function buildStageHandoff(args: {
 export function buildStageReceipt(args: {
   stage: StellaStage;
   provider: StageAgentProvider;
+  backend?: string | null;
   model: string;
   effort: string;
   status: StageReceipt["status"];
@@ -374,6 +447,7 @@ export function buildStageReceipt(args: {
   return {
     stage: args.stage,
     provider: args.provider,
+    ...(args.backend ? { backend: args.backend } : {}),
     model: args.model,
     effort: args.effort,
     status: args.status,
@@ -430,7 +504,8 @@ export function serializeStageModelAssignments(assignments: StageModelAssignment
 
 export function stageReceiptLine(receipt: StageReceipt, language: Language): string {
   const label = stageLabel(receipt.stage, language);
-  return `${receipt.stage} (${label}) — provider=${receipt.provider} model=${receipt.model} effort=${receipt.effort} status=${receipt.status} duration=${Math.round(receipt.durationMs / 1000)}s`;
+  const backend = receipt.backend ? ` backend=${receipt.backend}` : "";
+  return `${receipt.stage} (${label}) — provider=${receipt.provider}${backend} model=${receipt.model} effort=${receipt.effort} status=${receipt.status} duration=${Math.round(receipt.durationMs / 1000)}s`;
 }
 
 /** 영속 복원 시 stageRun 상태의 형식 방어. 손상되면 null (기존 경로로 폴백). */

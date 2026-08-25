@@ -292,6 +292,72 @@ assert.equal(normalizeStageRunState(null), null);
     agentModels.includes("fn openrouter_model_expired") && !agentModels.includes('item.get("expiration_date").is_some_and'),
     "OpenRouter models must only be hidden when their expiration date has passed",
   );
+
+  // ── 0.2.31 공급 경로 도달성 (부류 게이트) ────────────────────────────────
+  // 단계 provider 셀렉터는 컴포저의 실제 카탈로그(PROVIDERS/HERMES_PROVIDERS)
+  // 에서 파생돼야 하며(별도 열거 금지), 단계 receipt 는 managed backend 를
+  // 기록해야 한다.
+  assert.ok(
+    workspace.includes("providers: PROVIDERS.map((provider) => ({ id: provider.id, label: provider.label }))"),
+    "stage supply entries must derive from the real composer PROVIDERS catalog",
+  );
+  assert.ok(
+    workspace.includes("hermesBackends: HERMES_PROVIDERS.map((backend) => ({ value: backend.value, label: backend.label }))"),
+    "stage supply entries must derive from the real composer HERMES_PROVIDERS catalog",
+  );
+  assert.ok(
+    workspace.includes("...stageSupplyEntries.map((entry) => ({ value: entry.value, label: entry.label }))"),
+    "the stage provider selector must render the derived supply entries",
+  );
+  assert.ok(
+    workspace.includes('backend: runProvider === "hermes"'),
+    "stage receipts must record the managed backend",
+  );
+}
+
+// ── 공급 경로 도달성 diff=0 (컴포저 ↔ 단계 셀렉터 전수 대조) ──────────────
+{
+  const { deriveStageSupplyEntries, stageSupplyCoverageDiff, HERMES_BACKEND_TOP_LEVEL_EQUIVALENTS } =
+    await import("../src/lib/stellaStageModels.ts");
+  // 컴포저 카탈로그와 동형의 실제 목록 (AgentWorkspace 의 PROVIDERS /
+  // HERMES_PROVIDERS 와의 일치는 위 소스 게이트가 고정한다).
+  const providers = [
+    { id: "claude", label: "Claude Code" },
+    { id: "hermes", label: "Hermes" },
+    { id: "codex", label: "Codex CLI" },
+    { id: "gajecode", label: "가재코드" },
+    { id: "grok", label: "Grok Build" },
+  ] as const;
+  const hermesBackends = [
+    { value: "openai-codex", label: "Codex" },
+    { value: "anthropic", label: "Claude" },
+    { value: "openrouter", label: "OpenRouter" },
+    { value: "alibaba", label: "Alibaba Cloud" },
+    { value: "grok", label: "Grok" },
+  ];
+  const entries = deriveStageSupplyEntries({ providers: [...providers], hermesBackends });
+  const values = entries.map((entry) => entry.value);
+  // 하위 backend 로만 존재하는 공급 경로는 전용 항목으로 노출된다.
+  assert.ok(values.includes("hermes:openrouter"), "OpenRouter must be one selection away in the stage selector");
+  assert.ok(values.includes("hermes:alibaba"), "Alibaba Cloud must be one selection away in the stage selector");
+  // top-level 동급이 있는 backend 는 중복 항목을 만들지 않는다.
+  for (const dup of ["hermes:openai-codex", "hermes:anthropic", "hermes:grok"]) {
+    assert.ok(!values.includes(dup), `${dup} duplicates a top-level provider and must not appear`);
+  }
+  assert.deepEqual(Object.keys(HERMES_BACKEND_TOP_LEVEL_EQUIVALENTS).sort(), ["anthropic", "grok", "openai-codex"]);
+  // 전수 대조 diff=0.
+  assert.deepEqual(
+    stageSupplyCoverageDiff({ providers: [...providers], hermesBackends }),
+    [],
+    "every composer supply path must be reachable from the stage selector (diff=0)",
+  );
+  // 부류 폐쇄 증명: 미래에 hermes backend 가 추가되면 자동으로 전용 항목이
+  // 파생돼 coverage 가 유지된다.
+  const futureBackends = [...hermesBackends, { value: "newvendor", label: "New Vendor" }];
+  const futureEntries = deriveStageSupplyEntries({ providers: [...providers], hermesBackends: futureBackends });
+  assert.ok(futureEntries.some((entry) => entry.value === "hermes:newvendor" && entry.hermesBackend === "newvendor"),
+    "a future sub-backend must automatically surface as a stage supply entry");
+  assert.deepEqual(stageSupplyCoverageDiff({ providers: [...providers], hermesBackends: futureBackends }), []);
 }
 
 console.log("stella stage models smoke passed");
