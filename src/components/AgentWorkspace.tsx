@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -3566,6 +3567,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     setStageRunStatusBySession((current) => ({ ...current, [sessionId]: status }));
   };
   const [showTaskList, setShowTaskList] = useState(() => safeLocalStorageGet(TASK_LIST_VISIBLE_KEY) !== "0");
+  const [workspacePickerBusy, setWorkspacePickerBusy] = useState(false);
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(() => initialWorkspaceView());
   const [workspaceChanges, setWorkspaceChanges] = useState<AgentChangeSummary | null>(null);
   const [workspaceChangesLoading, setWorkspaceChangesLoading] = useState(false);
@@ -4032,6 +4034,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         devScreenActionOk: "Screen action complete",
         devScreenActionFailed: (message: string) => `Screen action failed: ${message}`,
         cwd: "Working folder",
+        chooseWorkspace: "Choose project folder",
+        changeWorkspace: "Change folder",
+        workspacePickerRequiresApp: "Project folders can be selected in the installed Atelier app.",
+        workspacePickerFailed: (message: string) => `Could not select the project folder: ${message}`,
         noAgentProfiles: "No Claude/Hermes/Codex/Gajae Code profiles in Settings.",
         parallel: "Parallel",
         parallelTitle: "Parallel worktrees",
@@ -4243,6 +4249,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         devScreenActionOk: "화면 작업 완료",
         devScreenActionFailed: (message: string) => `화면 작업 실패: ${message}`,
         cwd: "작업 폴더",
+        chooseWorkspace: "프로젝트 폴더 선택",
+        changeWorkspace: "폴더 변경",
+        workspacePickerRequiresApp: "프로젝트 폴더 선택은 설치된 Atelier 앱에서 사용할 수 있습니다.",
+        workspacePickerFailed: (message: string) => `프로젝트 폴더를 선택하지 못했습니다: ${message}`,
         noAgentProfiles: "설정 프로필에 Claude/Hermes/Codex/가재코드가 없습니다.",
         parallel: "병렬",
         parallelTitle: "병렬 워크트리",
@@ -4390,7 +4400,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
   );
   const activeExecutionCwd = active?.worktreeEnabled && active.worktreeInfo?.worktree_cwd
     ? active.worktreeInfo.worktree_cwd
-    : cwd;
+    : active?.cwd || cwd;
   const quickOpenResults = useMemo<Array<QuickOpenItem<AgentSession>>>(() => {
     const labels = tw.language === "en"
       ? {
@@ -5934,6 +5944,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     profile: Profile | undefined,
     provider: AgentProvider,
     title?: string,
+    workspace = cwd,
   ): AgentSession => {
     const meta = providerMeta(provider);
     const id = nowId("agent");
@@ -5992,7 +6003,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       permissionMode: DEFAULT_PERMISSION_MODE,
       queueMode: false,
       worktreeEnabled: false,
-      cwd,
+      cwd: workspace,
       messages: [],
       queuedTurns: [],
       rawEvents: [],
@@ -6000,8 +6011,13 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     };
   };
 
-  const createSession = (profile: Profile | undefined, provider: AgentProvider, clearInput = true) => {
-    const session = makeSession(profile, provider);
+  const createSession = (
+    profile: Profile | undefined,
+    provider: AgentProvider,
+    workspace: string,
+    clearInput = true,
+  ) => {
+    const session = makeSession(profile, provider, undefined, workspace);
     const nextSessions = [session, ...sessionsRef.current];
     sessionsRef.current = nextSessions;
     persistSessions(nextSessions);
@@ -6011,6 +6027,63 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
     setShowProfilePicker(false);
     if (clearInput) resetComposer();
     return session;
+  };
+
+  const pickProjectWorkspace = async (): Promise<string | null> => {
+    if (!isTauri()) {
+      throw new Error(copy.workspacePickerRequiresApp);
+    }
+    const selected = await openDialog({
+      directory: true,
+      multiple: false,
+      title: copy.chooseWorkspace,
+    });
+    return typeof selected === "string" && selected.trim() ? selected.trim() : null;
+  };
+
+  const createSessionWithWorkspace = async (
+    profile: Profile | undefined,
+    provider: AgentProvider,
+  ) => {
+    if (workspacePickerBusy) return null;
+    setWorkspacePickerBusy(true);
+    setPasteError(null);
+    try {
+      const workspace = await pickProjectWorkspace();
+      if (!workspace) return null;
+      setCwd(workspace);
+      return createSession(profile, provider, workspace);
+    } catch (error) {
+      setPasteError(copy.workspacePickerFailed(String(error)));
+      return null;
+    } finally {
+      setWorkspacePickerBusy(false);
+    }
+  };
+
+  const changeActiveWorkspace = async () => {
+    if (!active || workspacePickerBusy || isSessionRunning(active)) return;
+    setWorkspacePickerBusy(true);
+    setPasteError(null);
+    try {
+      const workspace = await pickProjectWorkspace();
+      if (!workspace) return;
+      setCwd(workspace);
+      patchSession(active.id, (current) => ({
+        ...current,
+        cwd: workspace,
+        worktreeEnabled: false,
+        worktreeInfo: undefined,
+        updatedAt: Date.now(),
+      }));
+      setWorkspaceChanges(null);
+      setWorkspaceChangesError(null);
+      setWorkbenchFilePath(null);
+    } catch (error) {
+      setPasteError(copy.workspacePickerFailed(String(error)));
+    } finally {
+      setWorkspacePickerBusy(false);
+    }
   };
 
   const openParallelLauncher = () => {
@@ -6046,7 +6119,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
 
   const handleNewSessionClick = () => {
     if (agentProfiles.length === 1) {
-      createSession(agentProfiles[0].profile, agentProfiles[0].provider);
+      void createSessionWithWorkspace(agentProfiles[0].profile, agentProfiles[0].provider);
       return;
     }
     setShowProfilePicker((v) => !v);
@@ -9105,8 +9178,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
       delete turnPreviewProbeBaselineRef.current[assistantId];
       const previewUrlChangedThisTurn =
         cleanStoredPreviewUrl(completedPreviewUrl) !== previewUrlAtTurnStart;
-      const allowPreviewCapture = completionIntent !== "interrupted"
-        && completionIntent !== "stopped"
+      const allowPreviewCapture = completionIntent !== "interrupted" && completionIntent !== "stopped"
         && Boolean(completedPreviewUrl);
       if (allowPreviewCapture || turnPreviewProbeBaselineId) {
         void resolveTurnPreviewEvidence({
@@ -9845,7 +9917,7 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
 
   const createSessionFromRail = () => {
     if (agentProfiles.length === 1) {
-      createSession(agentProfiles[0].profile, agentProfiles[0].provider);
+      void createSessionWithWorkspace(agentProfiles[0].profile, agentProfiles[0].provider);
       return;
     }
     setShowTaskList(true);
@@ -10207,9 +10279,10 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
                   <button
                     key={profile.id}
                     type="button"
-                    onClick={() => createSession(profile, provider)}
+                    disabled={workspacePickerBusy}
+                    onClick={() => void createSessionWithWorkspace(profile, provider)}
                     className={cls(
-                      "w-full h-10 px-3 text-left text-[12px] flex items-center gap-2.5 transition-colors",
+                      "w-full h-10 px-3 text-left text-[12px] flex items-center gap-2.5 transition-colors disabled:opacity-50",
                       dark ? "text-dink hover:bg-dmuted" : "text-ink hover:bg-muted",
                     )}
                   >
@@ -10421,9 +10494,28 @@ const AgentWorkspace: React.FC<{ tw: Tweaks; onOpenTerminal?: () => void; isActi
         <div className={cls("atelier-workspace-header border-b flex items-center gap-3", dark ? "border-dline" : "border-line")}>
           <div className="min-w-0 flex-1">
             <div className="text-[13px] font-medium truncate">{active?.title || active?.profileName || activeProviderMeta.label}</div>
-            <div className={cls("text-[11.5px] font-mono truncate", dark ? "text-dsub" : "text-sub")}>
-              {copy.subtitle}
-            </div>
+            {active ? (
+              <button
+                type="button"
+                disabled={workspacePickerBusy || isSessionRunning(active)}
+                onClick={() => void changeActiveWorkspace()}
+                className={cls(
+                  "mt-0.5 flex max-w-full items-center gap-2 text-left text-[11.5px] font-mono disabled:cursor-default",
+                  dark ? "text-dsub hover:text-dink" : "text-sub hover:text-ink",
+                )}
+                title={`${active.cwd || copy.chooseWorkspace} · ${copy.changeWorkspace}`}
+                aria-label={copy.changeWorkspace}
+              >
+                <span className="truncate">{active.cwd || copy.chooseWorkspace}</span>
+                {!isSessionRunning(active) && (
+                  <span className="shrink-0 font-sans text-[10.5px]">{copy.changeWorkspace}</span>
+                )}
+              </button>
+            ) : (
+              <div className={cls("text-[11.5px] truncate", dark ? "text-dsub" : "text-sub")}>
+                {copy.chooseWorkspace}
+              </div>
+            )}
           </div>
         </div>
 
