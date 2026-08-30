@@ -105,10 +105,11 @@ first time in the same session. 0.2.28 landed as `04cbc7b` (`v0.2.28`);
   requires a physical Windows runner.
 - A real self-hosted model response has not been tested. The borrowed GPU
   server was intentionally left unchanged.
-- Gajae internal Codex still needs a real installed-app provider turn covering
-  both the missing/expired-token failure and a successful authenticated
-  response. A second physical clean company Mac and an authenticated
-  installed-app Gajaecode response remain distribution-level validation.
+- Gajae internal Codex: the successful authenticated installed-app response is
+  now proven (see Resolved 2026-08-31 — receipt `446a5c07`, model
+  `openai-codex/gpt-5.6-sol`, succeeded). The missing/expired-token failure
+  path still needs a deliberate negative turn, and a second physical clean
+  company Mac remains distribution-level validation.
 - Grok: the installed runtime is authenticated on this Mac (`0.2.26` proof
   `GROK_ATELIER_OK`), but a multi-turn, tool-using Grok Build task in the
   installed app has not been exercised beyond the one-turn read-only proof.
@@ -131,6 +132,21 @@ first time in the same session. 0.2.28 landed as `04cbc7b` (`v0.2.28`);
   honored and recorded, foreign untracked paths listed, non-git fails
   closed), plus a live mutation against the real `audit:release` (planted
   root file → exit 1 with the file named; clean → exit 0).
+
+## Resolved 2026-08-31 (0.2.34 installed-app live-turn proofs)
+
+- Gajaecode-over-Codex is live-proven on the installed 0.2.34 app: receipt
+  `446a5c07-89d3-459f-85f2-adc81e6242d0` — provider `gajecode`, model
+  `openai-codex/gpt-5.6-sol`, status `succeeded`, ~14s, summary returned the
+  correct live value (`"version": "0.2.34",`). This re-proves the 2026-08-04
+  gpt-5.6-sol schema failure as fixed on the real subscription path.
+- Hermes-over-Codex staged planning is live-proven: receipt
+  `0b2f9f70-a0ab-4240-9224-f0bcbe79da0f` — Stella staged run whose planning
+  stage ran `provider=hermes backend=openai-codex model=gpt-5.5 effort=xhigh
+  status=done` (75s, correct `0.2.34`), with the backend persisted in both the
+  stage receipt and the evidence log (the 0.2.31 `f9bccea` backend-persistence
+  fix observed live); the remaining four stages completed on
+  `claude-opus-4-8` and the run finished `succeeded`.
 
 ## Resolved 2026-08-30
 
