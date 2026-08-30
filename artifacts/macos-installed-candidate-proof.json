@@ -2,36 +2,37 @@
   "schemaVersion": 1,
   "status": "verified",
   "proofType": "local-installed-candidate",
-  "sourceSha": "8aae1a8f814ba721db929955e53667efdf30bc83",
+  "sourceSha": "7ae16bbd4f959a517ec01ada1799c99353c5f0c8",
   "sourceState": {
-    "headSha": "8aae1a8f814ba721db929955e53667efdf30bc83",
-    "workingTreeDirtyAtProofTime": true,
+    "headSha": "7ae16bbd4f959a517ec01ada1799c99353c5f0c8",
+    "workingTreeDirtyAtProofTime": false,
+    "versionTagOnHead": "v0.2.34",
     "buildArtifactIdentifier": {
       "kind": "sha256",
-      "value": "a55a53636251b26603044ededee6a38b4ccb3fea1a1bd4cd229398a2d35d788d"
+      "value": "c9bd04758dabfa741a1b3b941362178c58e6db40a499e6c0ecbbfa38577f3e1c"
     }
   },
-  "version": "0.2.33",
+  "version": "0.2.34",
   "bundleIdentifier": "com.atelier.app",
-  "generatedAt": "2026-08-26T02:49:11.953Z",
+  "generatedAt": "2026-08-30T16:22:06.595Z",
   "candidate": {
     "appPath": "/Users/kansic/Service/atelier/src-tauri/target/release/bundle/macos/Atelier.app",
     "executablePath": "/Users/kansic/Service/atelier/src-tauri/target/release/bundle/macos/Atelier.app/Contents/MacOS/atelier",
-    "version": "0.2.33",
-    "executableSha256": "a55a53636251b26603044ededee6a38b4ccb3fea1a1bd4cd229398a2d35d788d",
+    "version": "0.2.34",
+    "executableSha256": "c9bd04758dabfa741a1b3b941362178c58e6db40a499e6c0ecbbfa38577f3e1c",
     "codesignVerified": true
   },
   "installed": {
     "appPath": "/Applications/Atelier.app",
     "executablePath": "/Applications/Atelier.app/Contents/MacOS/atelier",
-    "version": "0.2.33",
-    "executableSha256": "a55a53636251b26603044ededee6a38b4ccb3fea1a1bd4cd229398a2d35d788d",
+    "version": "0.2.34",
+    "executableSha256": "c9bd04758dabfa741a1b3b941362178c58e6db40a499e6c0ecbbfa38577f3e1c",
     "codesignVerified": true,
     "rendererReady": {
       "schemaVersion": 1,
-      "appVersion": "0.2.33",
-      "pid": 76136,
-      "readyAtUnixMs": 1787712549646,
+      "appVersion": "0.2.34",
+      "pid": 88300,
+      "readyAtUnixMs": 1788106926348,
       "executablePath": "/Applications/Atelier.app/Contents/MacOS/atelier",
       "windowLabel": "main",
       "status": "ready"
@@ -43,7 +44,7 @@
     "executableHashesMatch": true
   },
   "limitations": {
-    "headShaUniquelyIdentifiesBuild": false,
+    "headShaUniquelyIdentifiesBuild": true,
     "developerIdNotarizationClaimed": false,
     "publicDistributionClaimed": false
   }

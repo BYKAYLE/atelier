@@ -11,9 +11,8 @@ coding-agent workflows. It must not be treated as a greenfield rebuild.
 
 `supervised local candidate, public release blocked`
 
-- Current source: `0.2.34`; locally installed candidate: `0.2.33` (the
-  0.2.34 install replaces it through the new gated canonical path in this
-  session; this line is updated by the installed-proof commit).
+- Current source and locally installed candidate: `0.2.34` (installed through
+  the gated canonical path; first proof with a clean working tree).
 - New tasks now require an explicit native project-folder selection after the
   agent is chosen. Cancelling the picker creates no task, the chosen source
   workspace is persisted on that task, and the current path plus a folder
@@ -97,12 +96,15 @@ coding-agent workflows. It must not be treated as a greenfield rebuild.
   remain available.
 - Frontend and Rust prompt guards share a regression corpus, but phrase matching
   is not a complete action-level guarantee.
-- The locally signed `0.2.33` candidate is installed at
+- The locally signed `0.2.34` candidate is installed at
   `/Applications/Atelier.app`. Candidate and installed executable SHA-256 values
   match at
-  `a55a53636251b26603044ededee6a38b4ccb3fea1a1bd4cd229398a2d35d788d`;
-  codesign and renderer-ready checks pass. This is local installed-candidate
-  proof, not Developer ID/notarization/public-distribution proof.
+  `c9bd04758dabfa741a1b3b941362178c58e6db40a499e6c0ecbbfa38577f3e1c`;
+  codesign and renderer-ready checks pass, and for the first time the proof
+  records `workingTreeDirtyAtProofTime: false` with
+  `versionTagOnHead: v0.2.34` and `headShaUniquelyIdentifiesBuild: true`
+  (source `7ae16bb`). This is local installed-candidate proof, not Developer
+  ID/notarization/public-distribution proof.
 - Mobile continuity publishes a bounded and native-redacted projection of the
   existing desktop work instead of lifecycle counters only. The current
   installed runtime exposed 3 existing tasks and 180 bounded messages over the

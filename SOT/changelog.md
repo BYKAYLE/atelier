@@ -37,6 +37,14 @@
   `tsc -b && vite build` passed, `audit:release` 0 vulnerabilities plus the
   new hygiene check, release preflight/guards/workspace-selection/
   provider-runtime-identity smokes passed.
+- Installed local Atelier 0.2.34 candidate SHA-256:
+  `c9bd04758dabfa741a1b3b941362178c58e6db40a499e6c0ecbbfa38577f3e1c`,
+  installed through the gated canonical path (gate passed without override:
+  clean tree, HEAD `7ae16bb` tagged `v0.2.34`; backup
+  `Atelier-0.2.33-before-0.2.34-guards-20260831012204.app`). For the first
+  time the installed proof records `workingTreeDirtyAtProofTime: false` and
+  `headShaUniquelyIdentifiesBuild: true`. No new Atelier entries in
+  `~/Library/Logs/DiagnosticReports`.
 
 ## 2026-08-26 — 0.2.33 real managed-agent validation: Gajaecode 0.15.2 promoted, Hermes blocker named
 

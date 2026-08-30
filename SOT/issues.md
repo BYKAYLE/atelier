@@ -1,7 +1,11 @@
 # Issues
 
-Updated: 2026-08-25 KST. Source and installed app: `0.2.31`
-(installed executable SHA-256 `7c8de545…4f6c`, codesign verified).
+Updated: 2026-08-31 KST. Source and installed app: `0.2.34`
+(installed executable SHA-256 `c9bd0475…f3e1c`, codesign verified; first
+installed proof with a clean working tree — `workingTreeDirtyAtProofTime:
+false`, `versionTagOnHead: v0.2.34`, source `7ae16bb`, installed via the
+gated canonical path with backup
+`Atelier-0.2.33-before-0.2.34-guards-20260831012204.app`).
 Current disposition: `supervised local candidate, public release blocked`.
 
 Git baseline: branch `codex/release-readiness-final`, previous HEAD `fd47fba`
