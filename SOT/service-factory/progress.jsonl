@@ -144,3 +144,6 @@
 {"timestamp": "2026-07-29T23:52:44+09:00", "factory_id": "sf-20260531-133552", "status": "running", "handoff": "/Users/kansic/Service/atelier/SOT/service-factory/handoff-latest.md"}
 {"timestamp": "2026-07-29T23:52:44+09:00", "factory_id": "sf-20260531-133552", "event": "recovery_report", "report": "/Users/kansic/Service/atelier/SOT/service-factory/recovery-proof.md", "recovered_requests": 2}
 {"timestamp": "2026-07-29T23:52:44+09:00", "factory_id": "sf-20260531-133552", "event": "recovery_report", "report": "/Users/kansic/Service/atelier/SOT/service-factory/recovery-proof.md", "recovered_requests": 2}
+{"payload":{"created_state":false,"event":"bootstrap","goal":"package.json의 version 값만 한 줄로 답하라","readiness":"running","state_path":"/Users/kansic/Service/atelier/SOT/service-factory-state.json"},"timestamp":1787695171}{"payload":{"created_state":false,"event":"bootstrap","goal":"package.json의 version 값만 한 줄로 답하라","readiness":"running","state_path":"/Users/kansic/Service/atelier/SOT/service-factory-state.json"},"timestamp":1787695171}
+
+{"payload":{"created_state":false,"event":"bootstrap","goal":"package.json의 version 값만 한 줄로 답하라","readiness":"running","state_path":"/Users/kansic/Service/atelier/SOT/service-factory-state.json"},"timestamp":1787695171}

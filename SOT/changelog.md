@@ -1,5 +1,58 @@
 # Changelog
 
+## 2026-08-26 — 0.2.33 real managed-agent validation: Gajaecode 0.15.2 promoted, Hermes blocker named
+
+- Replaced the passive `검증 대기` outcome with actual compatibility work.
+  `gajae-code@0.15.2` and `@gajae-code/coding-agent@0.15.2` were inspected from
+  the official npm registry, installed under a separate temporary HOME with
+  managed Bun 1.4.0, and passed `--version`, `--help`, `setup defaults`, and
+  `setup defaults --check`. The 0.15.1/0.15.2 wrapper changelog contains no
+  behavioral entry and the Bun engine floor remains `>=1.4.0`.
+- Promoted the Atelier Gajaecode support pin from 0.15.0 to 0.15.2. The real
+  managed runtime update completed with runtime pin 0.15.2, dependency pin
+  1.4.0, four verified adapter-default skills, a current readiness receipt,
+  and `update_available=false`. All nine Gajaecode DB/WAL/SHM hashes matched
+  before and after; an APFS recovery copy of the prior managed HOME was kept.
+- Actually tested Hermes `v2026.8.19` (`fcbd1076`). Its source build explicitly
+  rejects Atelier's current `uv tool install` path with `RuntimeError: Building
+  wheels or sdists for hermes-agent is not supported`; upstream now requires
+  the shell installer, Docker, or Nix. The Hermes card therefore reports
+  `Atelier 설치 방식 변경 필요` for this validated tag instead of the false
+  impression that an unseen background validation is still running. The safe
+  v2026.7.20 commit remains installed until a transactional shell-installer
+  migration is implemented.
+- Updated `h2` 0.4.15 to 0.4.16 after the current RustSec database reported
+  RUSTSEC-2026-0258. Release audit now reports 0 vulnerabilities; 334 Rust
+  tests passed with 8 intentionally ignored, provider/runtime and connection
+  smokes passed, and frontend/Cargo builds passed.
+- Installed local Atelier 0.2.33 candidate SHA-256:
+  `a55a53636251b26603044ededee6a38b4ccb3fea1a1bd4cd229398a2d35d788d`.
+  Candidate/installed hashes, codesign, and renderer-ready proof match. DMG
+  packaging still fails in Tauri's `bundle_dmg.sh`; no public distribution
+  claim is made.
+- Future newly detected versions now say `Atelier 호환성 미검증` instead of
+  `검증 대기`; the latter incorrectly implied that a background validation job
+  was already running.
+
+## 2026-08-26 — 0.2.32 explicit project folder on new task
+
+- `+ 새 작업` no longer copies the last global `cwd` into a new task. After
+  choosing Claude, Codex, Hermes, Gajaecode, or Grok, Atelier opens the native
+  single-directory picker and creates the task only after a project folder is
+  selected.
+- Cancelling the picker leaves the task list unchanged. The chosen folder is
+  written directly to the new session instead of relying on asynchronous
+  global state.
+- The active source workspace is visible below the task title. `폴더 변경`
+  repairs existing tasks that reference a deleted temporary folder and clears
+  stale worktree metadata without deleting project data.
+- `smoke:workspace-selection`, `smoke:agent-fleet`, frontend build, TypeScript,
+  Cargo check, local codesign, renderer-ready, candidate/installed version and
+  SHA-256 consistency all passed. Installed candidate: `0.2.32`, SHA-256
+  `ac800ca045bd6bf331e1f7385ce13d1aff8f3b7b573f6014a4ea184385f2e59f`.
+- The `.app` bundle and local signature succeeded. DMG packaging failed in
+  Tauri's `bundle_dmg.sh`; no notarized/public-distribution claim is made.
+
 ## 2026-08-25 — 0.2.31 stage-model v1.2: supply-path reachability (Alibaba/OpenRouter one selection away)
 
 CEO follow-up defects on 0.2.30: the stage provider selector offered neither

@@ -1,6 +1,6 @@
 # Atelier Project Summary
 
-Last updated: 2026-08-25
+Last updated: 2026-08-26
 
 ## Identity
 
@@ -11,7 +11,13 @@ coding-agent workflows. It must not be treated as a greenfield rebuild.
 
 `supervised local candidate, public release blocked`
 
-- Current source and locally installed candidate: `0.2.31`.
+- Current source and locally installed candidate: `0.2.33`.
+- New tasks now require an explicit native project-folder selection after the
+  agent is chosen. Cancelling the picker creates no task, the chosen source
+  workspace is persisted on that task, and the current path plus a folder
+  recovery action remain visible in the workspace header. This prevents a
+  stale global or deleted temporary scratchpad path from being inherited by a
+  new task.
 - Stella Mode supports per-stage model assignment (static mapping v1.1):
   planning/execution/verification/security/audit stages can each run a
   different provider/model/effort through the existing per-provider spawn
@@ -45,7 +51,7 @@ coding-agent workflows. It must not be treated as a greenfield rebuild.
   Basic/Auto through their existing paths; Hermes/Gajaecode use pinned,
   Atelier-owned macOS runtimes, isolated homes/default skills, and the managed
   sandbox. Direct CLI is a separate manual, limited path.
-- Gajaecode is pinned at 0.15.0 with managed Bun 1.4.0 and four adapter-owned
+- Gajaecode is pinned at 0.15.2 with managed Bun 1.4.0 and four adapter-owned
   defaults (`autoresearch`, `deep-interview`, `ralplan`, `ultragoal`). Hermes
   is pinned by commit (`3ef6bbd`, `v2026.7.20`), retains 453 durable
   bundled-source files, and verifies 73 installed skills; newer Hermes releases
@@ -54,13 +60,19 @@ coding-agent workflows. It must not be treated as a greenfield rebuild.
 - Managed-agent update checks show the upstream-latest version as a reference
   next to the Atelier pin (6h cache, 5s timeout, fail-soft). Update
   availability and the install target remain pin-based.
+- Gajaecode 0.15.2 passed isolated registry-integrity, install, CLI, default
+  skill, full Atelier regression, and real managed-runtime update proof. The
+  nine DB/WAL/SHM hashes were unchanged. Hermes v2026.8.19 was also actually
+  tested, but its source intentionally rejects Atelier's current `uv tool
+  install` path; the card now reports `Atelier 설치 방식 변경 필요` instead of
+  implying an active background validation.
 - Grok Build is a fifth structured agent, pinned at official xAI CLI `1.0.4`
   under an Atelier-owned HOME. Browser OAuth is connected and a real
   `grok-4.6` read-only turn returned verified final text and a session ID.
 - Hermes and Gajaecode additionally expose xAI API-backed Grok 4.5 models. This
   route requires an `XAI_API_KEY`; it does not reuse the Grok CLI browser token.
-- The real managed Gajaecode runtime was updated from 0.14.0 to 0.15.0 (Bun
-  1.3.14 to 1.4.0) through the installed app's readiness path. Its separate post-update status reports
+- The real managed Gajaecode runtime was updated from 0.14.0 through 0.15.0 to
+  0.15.2 (Bun 1.3.14 to 1.4.0) through the installed app's readiness path. Its separate post-update status reports
   `update_available: false`, and all nine DB/WAL/SHM file hashes remained
   unchanged.
 - Claude, Hermes, Codex, and Gajaecode share one terminal-answer contract:
@@ -73,10 +85,10 @@ coding-agent workflows. It must not be treated as a greenfield rebuild.
   remain available.
 - Frontend and Rust prompt guards share a regression corpus, but phrase matching
   is not a complete action-level guarantee.
-- The locally signed `0.2.31` candidate is installed at
+- The locally signed `0.2.33` candidate is installed at
   `/Applications/Atelier.app`. Candidate and installed executable SHA-256 values
   match at
-  `7c8de545295da12080ef37305c76248c166d65870c2ea701b74fda8b8cdf4f6c`;
+  `a55a53636251b26603044ededee6a38b4ccb3fea1a1bd4cd229398a2d35d788d`;
   codesign and renderer-ready checks pass. This is local installed-candidate
   proof, not Developer ID/notarization/public-distribution proof.
 - Mobile continuity publishes a bounded and native-redacted projection of the
