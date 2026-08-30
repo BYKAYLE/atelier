@@ -23,23 +23,14 @@ first time in the same session. 0.2.28 landed as `04cbc7b` (`v0.2.28`);
   (`9bcc655e-a778-4d36-99c9-9fdcee7a0caa`, planning hermes/alibaba/
   qwen3.7-plus succeeded).
 
-- **P0 INCIDENT (2026-08-25, 대표님/관리자 조치 필요)**: the 0.2.30 release
-  commit was first created with `git add -A`, which swept in
-  `reports/2026-08-25_pythagoras_internal_tech_report.md` — a company-internal
-  R&D/IP report that a scheduled task had dropped into this **public** repo's
-  working tree at 08:14 — and it was pushed as `37a6b1b`. Remediation done:
-  the branch tip was rewritten without the file (`4747644`, force-with-lease),
-  the file was moved out of the repo to `~/Service/atelier-local-reports/`,
-  and `reports/` is now gitignored. **Remaining exposure**: the remote tag
-  `v0.2.30` still points at `37a6b1b` because a repository ruleset forbids tag
-  update and deletion (rejected via git push and REST API). Required admin
-  actions: (1) temporarily allow tag update in the ruleset, then
-  `git push -f origin v0.2.30` (the local tag already points at the clean
-  `4747644`), restore the ruleset; (2) ask GitHub Support to purge the
-  now-unreferenced `37a6b1b` objects from caches; (3) relocate the scheduled
-  task that writes company reports so its output never lands inside a public
-  repo working tree. Class-level guard added: `reports/` ignore rule; release
-  commits must never use `git add -A` in this repo.
+- P0 residual (08-25 internal-report exposure, tag now clean): two admin
+  follow-ups remain unconfirmed — the GitHub Support purge of the
+  now-unreferenced `37a6b1b` objects from caches, and the relocation of the
+  scheduled task that writes company reports so its output never lands inside
+  a public repo working tree. The tag exposure itself is closed (see Resolved
+  2026-08-30), and the recurrence class is mechanically blocked by the
+  `reports/` ignore rule, the repo hygiene gate, and the no-`git add -A`
+  release rule.
 
 - 0.2.29/0.2.30 verification boundary: the stage-model composer surfaces
   (`stage-model-toggle`/`stage-model-panel`/`stage-model-status`, and the
@@ -118,18 +109,52 @@ first time in the same session. 0.2.28 landed as `04cbc7b` (`v0.2.28`);
   `GROK_ATELIER_OK`), but a multi-turn, tool-using Grok Build task in the
   installed app has not been exercised beyond the one-turn read-only proof.
 
-## Recommendations (new, 2026-08-24)
+## Recommendations (2026-08-24) — IMPLEMENTED in 0.2.34 (2026-08-30)
 
-- Gate installed-app replacement on a committed source state: the
-  `release:installed-proof:mac` receipt already records
-  `workingTreeDirtyAtProofTime` and `headShaUniquelyIdentifiesBuild`; make the
-  install/replace step refuse (or require an explicit override) when the tree
-  is dirty or the HEAD is not pushed, so an installed candidate can never again
-  outrun the repository by twelve versions.
-- Add a repo-root hygiene check to the preflight: fail when untracked files
-  outside the known layout (`src/`, `src-tauri/`, `tools/`, `SOT/`,
-  `artifacts/`) appear, so foreign agent scratch output is caught at the next
-  gate instead of the next audit.
+- Gate installed-app replacement on a committed source state — implemented:
+  `tools/install-macos-candidate.sh` (`npm run install:candidate:mac`) is the
+  canonical replacement path (gate → candidate validation → backup → quit →
+  ditto → relaunch → proof) and refuses when the working tree is dirty or
+  HEAD carries no `v*` tag. The single override,
+  `ATELIER_INSTALL_GATE_OVERRIDE_REASON`, records its reason into the proof
+  JSON; the proof also records `versionTagOnHead` at proof time.
+- Repo-root hygiene check — implemented: `tools/repo-hygiene.mjs` fails
+  `release:preflight` (check `repo-hygiene-untracked`) and `audit:release`
+  with the offending list when untracked files appear outside
+  `src/ src-tauri/ tools/ SOT/ artifacts/ docs/ PRD/`.
+- Both gates are covered by the forced-trigger mutation smoke
+  `smoke:release-guards` (untagged HEAD refused, dirty tree refused, override
+  honored and recorded, foreign untracked paths listed, non-git fails
+  closed), plus a live mutation against the real `audit:release` (planted
+  root file → exit 1 with the file named; clean → exit 0).
+
+## Resolved 2026-08-30
+
+- P0 (08-25) remote-tag exposure closed: `git ls-remote origin` verified on
+  2026-08-30 that `refs/tags/v0.2.30` points at the clean `4747644` (the
+  rewritten tip without the internal report), matching the local tag. The
+  ruleset-blocked repoint the incident called for was completed by the admin.
+  Residual admin follow-ups (GitHub cache purge, report-writer relocation)
+  stay tracked under Open.
+- Third foreign-scratch recurrence quarantined and the class mechanized: an
+  untracked `scripts/migrate_hermes_role_crons.py` (+ `__pycache__/`), a
+  Hermes cron role-isolation migration script operating only on
+  `~/.hermes/**` (created 2026-08-26 by a session with `cwd=atelier`), was
+  moved without deletion to
+  `/Users/kansic/Service/_quarantine/atelier-cleanup-260830/` with a
+  `README-origin.md`. After the 08-21 scrape output and the 08-25 report
+  drop, this third recurrence is why the repo hygiene gate above now fails
+  the audit/preflight mechanically instead of relying on manual sweeps.
+- The 27-day uncommitted-accumulation class is structurally closed: the
+  0.2.32–0.2.33 working tree (17 tracked files, +1,525/−1,883, plus the new
+  workspace-selection smoke) landed as three logical commits (`e1487c2` feat
+  workspace folder selection / `2816fe3` chore agents+version sync /
+  `5d65b26` SOT docs) with explicit file staging, and the install gate now
+  refuses to replace the installed app from an uncommitted tree.
+- nanoid advisory GHSA-2v37-7h3g-55p8 (high, custom generators can loop
+  indefinitely when size is zero): fixed via `npm audit fix`
+  (3.3.16 → 3.3.18, lockfile-only); `npm audit` reports 0 vulnerabilities and
+  the frontend build plus smokes re-passed.
 
 ## Incidents recorded 2026-08-24
 

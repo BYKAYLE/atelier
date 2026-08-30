@@ -1,6 +1,6 @@
 # Atelier Project Summary
 
-Last updated: 2026-08-26
+Last updated: 2026-08-30
 
 ## Identity
 
@@ -11,7 +11,9 @@ coding-agent workflows. It must not be treated as a greenfield rebuild.
 
 `supervised local candidate, public release blocked`
 
-- Current source and locally installed candidate: `0.2.33`.
+- Current source: `0.2.34`; locally installed candidate: `0.2.33` (the
+  0.2.34 install replaces it through the new gated canonical path in this
+  session; this line is updated by the installed-proof commit).
 - New tasks now require an explicit native project-folder selection after the
   agent is chosen. Cancelling the picker creates no task, the chosen source
   workspace is persisted on that task, and the current path plus a folder
@@ -38,11 +40,21 @@ coding-agent workflows. It must not be treated as a greenfield rebuild.
   inference. Zero-override runs keep the unchanged single-session path. The
   OpenRouter catalog lists live models until their expiration date actually
   passes (`SOT/L2-features/feature-stage-model-assignment.md`).
-- Source gates: 274 Rust tests passed with 6 ignored; Orca previously passed 24
+- Source gates (measured 2026-08-30 on the 0.2.34 tree): 334 Rust tests passed
+  with 8 ignored (all targets, all features); Orca previously passed 24
   contract smokes across 10 removable features; strict
   all-target/all-feature Clippy and format/diff checks passed; `npm audit`
-  reports 0 vulnerabilities; RustSec reports 0 known vulnerabilities with 18
+  reports 0 vulnerabilities (nanoid raised GHSA-2v37-7h3g-55p8 until the
+  3.3.18 fix on 2026-08-30); RustSec reports 0 known vulnerabilities with 18
   unmaintained and 3 unsound upstream warnings retained.
+- Structural release guards (0.2.34): `tools/install-macos-candidate.sh` is
+  the canonical installed-app replacement path and refuses to replace the
+  installed app while the working tree is dirty or HEAD carries no version
+  tag (single override env, reason recorded in the proof JSON, which now also
+  records `versionTagOnHead`); `tools/repo-hygiene.mjs` fails
+  `release:preflight` and `audit:release` when untracked files appear outside
+  the known layout. Both gates carry a forced-trigger mutation smoke
+  (`smoke:release-guards`).
 - Managed preview start is fail-closed. Atelier can still inspect a separately
   trusted localhost service.
 - Basic is the default permission. Auto keeps sandboxing and approval checks

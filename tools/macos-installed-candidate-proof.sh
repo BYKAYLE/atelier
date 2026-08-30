@@ -136,9 +136,12 @@ SOURCE_WORKTREE_DIRTY="false"
 if [[ -n "$(git -C "$ROOT_DIR" status --porcelain --untracked-files=all)" ]]; then
   SOURCE_WORKTREE_DIRTY="true"
 fi
+SOURCE_VERSION_TAG="$(git -C "$ROOT_DIR" tag --points-at HEAD | grep -E '^v[0-9]' | head -n 1 || true)"
+INSTALL_GATE_OVERRIDE_REASON="${ATELIER_INSTALL_GATE_OVERRIDE_REASON:-}"
 mkdir -p "$(dirname "$OUTPUT")"
 
-export OUTPUT SOURCE_SHA SOURCE_WORKTREE_DIRTY EXPECTED_VERSION CANDIDATE_VERSION INSTALLED_VERSION
+export OUTPUT SOURCE_SHA SOURCE_WORKTREE_DIRTY SOURCE_VERSION_TAG INSTALL_GATE_OVERRIDE_REASON
+export EXPECTED_VERSION CANDIDATE_VERSION INSTALLED_VERSION
 export CANDIDATE_BUNDLE_ID INSTALLED_BUNDLE_ID CANDIDATE_APP INSTALLED_APP
 export CANDIDATE_EXE INSTALLED_EXE CANDIDATE_EXE_SHA INSTALLED_EXE_SHA
 export PROBE_OUTPUT APP_PID
@@ -176,6 +179,10 @@ const evidence = {
   sourceState: {
     headSha: process.env.SOURCE_SHA,
     workingTreeDirtyAtProofTime: process.env.SOURCE_WORKTREE_DIRTY === "true",
+    versionTagOnHead: process.env.SOURCE_VERSION_TAG || null,
+    ...(process.env.INSTALL_GATE_OVERRIDE_REASON
+      ? { installGateOverrideReason: process.env.INSTALL_GATE_OVERRIDE_REASON }
+      : {}),
     buildArtifactIdentifier: {
       kind: "sha256",
       value: process.env.CANDIDATE_EXE_SHA,

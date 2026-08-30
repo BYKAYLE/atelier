@@ -13,6 +13,7 @@ import {
   evaluateGitHubReleaseReadiness,
   evaluateHostReleaseReadiness,
 } from "./release-readiness-probes.mjs";
+import { classifyUntrackedPaths } from "./repo-hygiene.mjs";
 
 const repository = "BYKAYLE/atelier";
 const version = "9.8.7";
@@ -187,6 +188,75 @@ for (const expected of [
   assert.ok(blocked.blockers.includes(expected), `missing expected blocker ${expected}`);
 }
 assert.deepEqual(blocked.missingCredentials, RELEASE_CREDENTIAL_NAMES);
+
+// Repo-root hygiene: foreign untracked paths must block, allowed-layout
+// untracked paths must not, and a missing inventory is only skipped.
+const hygieneClassification = classifyUntrackedPaths([
+  "src/components/New.tsx",
+  "tools/new-smoke.mjs",
+  "SOT/notes.md",
+  "scripts/migrate_foreign_crons.py",
+  "tmp_scrape_output.html",
+  "reports/internal.md",
+]);
+assert.deepEqual(hygieneClassification.foreign, [
+  "scripts/migrate_foreign_crons.py",
+  "tmp_scrape_output.html",
+  "reports/internal.md",
+]);
+
+const hygieneBlocked = evaluateReleasePreflight({
+  packageJson,
+  cargoToml,
+  tauriConfig,
+  storeConfig,
+  env: credentialEnv,
+  tag: `v${version}`,
+  repository,
+  sourceCommit: "abc123",
+  trackedSourceClean: true,
+  untrackedPaths: ["scripts/migrate_foreign_crons.py"],
+});
+assert.ok(
+  hygieneBlocked.blockers.includes("repo-hygiene-untracked"),
+  "foreign untracked paths must block the preflight",
+);
+
+const hygienePassing = evaluateReleasePreflight({
+  packageJson,
+  cargoToml,
+  tauriConfig,
+  storeConfig,
+  env: credentialEnv,
+  tag: `v${version}`,
+  repository,
+  sourceCommit: "abc123",
+  trackedSourceClean: true,
+  untrackedPaths: ["tools/new-smoke.mjs", "SOT/notes.md"],
+});
+assert.ok(
+  !hygienePassing.blockers.includes("repo-hygiene-untracked"),
+  "allowed-layout untracked paths must not block the preflight",
+);
+assert.deepEqual(hygienePassing.blockers, []);
+
+const hygieneSkipped = evaluateReleasePreflight({
+  packageJson,
+  cargoToml,
+  tauriConfig,
+  storeConfig,
+  env: credentialEnv,
+  tag: `v${version}`,
+  repository,
+  sourceCommit: "abc123",
+  trackedSourceClean: true,
+});
+assert.ok(
+  hygieneSkipped.checks.some(
+    (entry) => entry.id === "repo-hygiene-untracked" && entry.status === "not-evaluated",
+  ),
+  "a missing untracked inventory must be reported as not evaluated",
+);
 
 const infrastructureBlocked = evaluateReleasePreflight({
   packageJson,

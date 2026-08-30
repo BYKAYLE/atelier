@@ -9,6 +9,7 @@ import {
   evaluateGitHubReleaseReadiness,
   evaluateHostReleaseReadiness,
 } from "./release-readiness-probes.mjs";
+import { classifyUntrackedPaths, collectUntrackedPaths } from "./repo-hygiene.mjs";
 
 export const RELEASE_CREDENTIAL_NAMES = Object.freeze([
   "APPLE_CERTIFICATE",
@@ -75,6 +76,7 @@ export function evaluateReleasePreflight({
   repository = null,
   sourceCommit = null,
   trackedSourceClean = null,
+  untrackedPaths = null,
   hostReleaseSnapshot = null,
   githubReleaseSnapshot = null,
   requireEnvironmentCredentials = true,
@@ -160,6 +162,14 @@ export function evaluateReleasePreflight({
           "tracked-source-clean",
           trackedSourceClean,
           "tracked source must be clean before a release tag is created",
+        ),
+    untrackedPaths === null
+      ? skipped("repo-hygiene-untracked", "Untracked-path inventory was not available")
+      : check(
+          "repo-hygiene-untracked",
+          classifyUntrackedPaths(untrackedPaths).foreign.length === 0,
+          "untracked files outside the known repository layout must not exist (foreign agent scratch output)",
+          { foreign: classifyUntrackedPaths(untrackedPaths).foreign },
         ),
     requireEnvironmentCredentials
       ? check(
@@ -277,6 +287,7 @@ export function runReleasePreflight({ cwd = process.cwd(), argv = process.argv.s
     repository: options.repository,
     sourceCommit,
     trackedSourceClean: trackedStatus === "",
+    untrackedPaths: collectUntrackedPaths(cwd),
     hostReleaseSnapshot: options.inspectHost
       ? collectHostReleaseSnapshot({ env })
       : null,

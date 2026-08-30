@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 
+import { ALLOWED_UNTRACKED_DIRS, runRepoHygieneCheck } from "./repo-hygiene.mjs";
+
 const manifest = "src-tauri/Cargo.toml";
 const lockfile = "src-tauri/Cargo.lock";
 const excludedVersion = "quick-xml@0.39.2";
@@ -1203,3 +1205,23 @@ const warningCounts = Object.fromEntries(
   Object.entries(report.warnings || {}).map(([name, entries]) => [name, entries.length]),
 );
 console.log(`RustSec release audit: 0 vulnerabilities (${JSON.stringify(warningCounts)} upstream warnings)`);
+
+// Repo-root hygiene: foreign agent scratch output must fail the audit, not
+// wait for the next manual sweep (incidents 2026-08-21 / 08-25 / 08-26).
+const hygiene = runRepoHygieneCheck(process.cwd());
+if (!hygiene.evaluated) {
+  console.error("repo hygiene check failed: git untracked-path inventory is unavailable");
+  process.exit(1);
+}
+if (!hygiene.ok) {
+  console.error(
+    `repo hygiene check failed: ${hygiene.foreign.length} untracked path(s) outside the known layout (allowed: ${ALLOWED_UNTRACKED_DIRS.join(" ")})`,
+  );
+  for (const path of hygiene.foreign) {
+    console.error(`  foreign untracked: ${path}`);
+  }
+  process.exit(1);
+}
+console.log(
+  `repo hygiene check: ${hygiene.untracked.length} untracked path(s), 0 outside the known layout`,
+);

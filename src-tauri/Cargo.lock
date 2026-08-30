@@ -275,7 +275,7 @@ dependencies = [
 
 [[package]]
 name = "atelier"
-version = "0.2.33"
+version = "0.2.34"
 dependencies = [
  "anyhow",
  "atelier-process-tree",

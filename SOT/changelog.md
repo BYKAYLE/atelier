@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-08-30 — 0.2.34 structural release guards: gated install path, repo hygiene gate
+
+- The 2026-08-24 recommendations are machines now, not prose:
+  - `tools/install-macos-candidate.sh` (`npm run install:candidate:mac`) is
+    the canonical installed-app replacement path (gate → candidate validation
+    → backup to `Backups.noindex` → quit → ditto → relaunch → installed
+    proof). It refuses to replace `/Applications/Atelier.app` when the
+    working tree is dirty or HEAD carries no `v*` tag. The single override,
+    `ATELIER_INSTALL_GATE_OVERRIDE_REASON`, records its reason into the proof
+    JSON; the proof additionally records `versionTagOnHead`.
+  - `tools/repo-hygiene.mjs` fails `release:preflight`
+    (`repo-hygiene-untracked`) and `audit:release` with the offending list
+    when untracked files exist outside the known layout
+    (`src/ src-tauri/ tools/ SOT/ artifacts/ docs/ PRD/`), closing the
+    2026-08-21 / 08-25 / 08-26 foreign-scratch class mechanically.
+- Forced-trigger mutation smoke `smoke:release-guards` measures both gates
+  firing with real non-zero exits in scratch repositories (untagged HEAD
+  refused, dirty tree refused, override honored and recorded, foreign
+  untracked paths listed, non-git fails closed); a live mutation against the
+  real `audit:release` also failed with the planted file named, then passed
+  clean after removal.
+- The uncommitted 0.2.32–0.2.33 tree landed as three logical commits with
+  explicit file staging (feat workspace folder selection / chore agents and
+  version sync / SOT docs); a foreign hermes cron migration script under
+  `scripts/` was quarantined to
+  `~/Service/_quarantine/atelier-cleanup-260830/` with a README.
+- nanoid 3.3.16 → 3.3.18 (GHSA-2v37-7h3g-55p8, `npm audit fix`,
+  lockfile-only); `npm audit` reports 0 vulnerabilities again.
+- Remote tag `v0.2.30` verified repointed to the clean `4747644`
+  (`git ls-remote`, 2026-08-30); the 08-25 P0 tag exposure is closed, with
+  the GitHub cache purge and report-writer relocation still tracked as
+  residual admin follow-ups.
+- Gates on the committed 0.2.34 tree: 334 Rust tests passed / 8 ignored (all
+  targets, all features), strict Clippy 0, `cargo fmt --check` 0, frontend
+  `tsc -b && vite build` passed, `audit:release` 0 vulnerabilities plus the
+  new hygiene check, release preflight/guards/workspace-selection/
+  provider-runtime-identity smokes passed.
+
 ## 2026-08-26 — 0.2.33 real managed-agent validation: Gajaecode 0.15.2 promoted, Hermes blocker named
 
 - Replaced the passive `검증 대기` outcome with actual compatibility work.
