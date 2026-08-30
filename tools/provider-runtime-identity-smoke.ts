@@ -195,8 +195,8 @@ assert.match(
   "user-facing login output must be stripped of terminal control noise",
 );
 
-assert.match(credentials, /const GAJAE_CODE_PACKAGE: &str = "gajae-code@0\.15\.0"/);
-assert.match(credentials, /const GAJAE_CODE_VERSION: &str = "0\.15\.0"/);
+assert.match(credentials, /const GAJAE_CODE_PACKAGE: &str = "gajae-code@0\.15\.2"/);
+assert.match(credentials, /const GAJAE_CODE_VERSION: &str = "0\.15\.2"/);
 assert.match(credentials, /const GROK_VERSION: &str = "1\.0\.4"/);
 assert.match(credentials, /const BUN_VERSION: &str = "1\.4\.0"/);
 assert.match(credentials, /GROK_MACOS_AARCH64_SHA256/);
@@ -266,11 +266,11 @@ assert.match(
   /export async function gajecodeUpdate\(\): Promise<ManagedAgentRuntimeReadiness>/,
 );
 
-const readiness = { ready: true, runtimePin: "0.15.0" };
+const readiness = { ready: true, runtimePin: "0.15.2" };
 const verified = {
   installed: true,
-  current_version: "0.15.0",
-  latest_version: "0.15.0",
+  current_version: "0.15.2",
+  latest_version: "0.15.2",
   update_available: false,
 };
 assert.equal(gajecodeUpdateMatchesReadiness(readiness, verified), true);
@@ -304,7 +304,7 @@ assert.equal(upstreamReferenceLine({ pin: "0.14.0", status: null, language: "ko"
 const upstreamOk = { upstream_latest_version: "0.15.0", upstream_checked_at: "2026-08-24T00:00:00Z", upstream_error: null };
 assert.equal(
   upstreamReferenceLine({ pin: "0.14.0", status: upstreamOk, language: "ko" }),
-  "업스트림 최신 0.15.0 출시 · Atelier 검증 대기",
+  "업스트림 최신 0.15.0 출시 · Atelier 호환성 미검증",
 );
 assert.equal(
   upstreamReferenceLine({ pin: "0.15.0", status: upstreamOk, language: "ko" }),
@@ -312,7 +312,7 @@ assert.equal(
 );
 assert.equal(
   upstreamReferenceLine({ pin: "0.14.0", status: upstreamOk, language: "en" }),
-  "Upstream latest 0.15.0 released · awaiting Atelier verification",
+  "Upstream latest 0.15.0 released · not yet validated by Atelier",
 );
 assert.equal(
   upstreamReferenceLine({
@@ -330,7 +330,23 @@ assert.equal(
     status: { upstream_latest_version: "2026.8.19", upstream_latest_tag: "v2026.8.19", upstream_checked_at: "x", upstream_error: null },
     language: "ko",
   }),
-  "업스트림 최신 v2026.8.19 출시 · Atelier 검증 대기",
+  "업스트림 최신 v2026.8.19 출시 · Atelier 호환성 미검증",
+);
+assert.equal(
+  upstreamReferenceLine({
+    pin: "3ef6bbd",
+    pinVersionLabel: "v2026.7.20",
+    upstreamLabel: "v2026.8.19",
+    status: {
+      upstream_latest_version: "2026.8.19",
+      upstream_latest_tag: "v2026.8.19",
+      upstream_checked_at: "x",
+      upstream_error: null,
+      upstream_validation_status: "installer-migration-required",
+    },
+    language: "ko",
+  }),
+  "업스트림 최신 v2026.8.19 · Atelier 설치 방식 변경 필요",
 );
 
 console.log("provider runtime identity smoke: ok");

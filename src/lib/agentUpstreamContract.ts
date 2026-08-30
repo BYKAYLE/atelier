@@ -13,6 +13,7 @@ export interface UpstreamReferenceFields {
   upstream_latest_tag?: string | null;
   upstream_checked_at: string | null;
   upstream_error: string | null;
+  upstream_validation_status?: string | null;
 }
 
 export type UpstreamRelation =
@@ -79,6 +80,11 @@ export function upstreamReferenceLine(input: UpstreamLineInput): string | null {
     return ko ? `업스트림 확인 불가: ${reason}` : `Upstream unavailable: ${reason}`;
   }
   const shown = input.upstreamLabel?.trim() || upstream;
+  if (status.upstream_validation_status === "installer-migration-required") {
+    return ko
+      ? `업스트림 최신 ${shown} · Atelier 설치 방식 변경 필요`
+      : `Upstream latest ${shown} · Atelier installer migration required`;
+  }
   const relation = compareUpstreamToPin(upstream, input.pinVersionLabel ?? input.pin);
   if (relation === "same") {
     return ko ? `업스트림 최신 ${shown} · 업스트림과 동일` : `Upstream latest ${shown} · same as upstream`;
@@ -89,6 +95,6 @@ export function upstreamReferenceLine(input: UpstreamLineInput): string | null {
       : `Upstream latest ${shown} · Atelier pin is newer`;
   }
   return ko
-    ? `업스트림 최신 ${shown} 출시 · Atelier 검증 대기`
-    : `Upstream latest ${shown} released · awaiting Atelier verification`;
+    ? `업스트림 최신 ${shown} 출시 · Atelier 호환성 미검증`
+    : `Upstream latest ${shown} released · not yet validated by Atelier`;
 }

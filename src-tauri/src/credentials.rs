@@ -29,10 +29,11 @@ const CLAUDE_CODE_PACKAGE: &str = "@anthropic-ai/claude-code@2.1.217";
 const CODEX_PACKAGE: &str = "@openai/codex@0.145.0";
 #[cfg(not(target_os = "macos"))]
 const BUN_PACKAGE: &str = "bun@1.4.0";
-const GAJAE_CODE_PACKAGE: &str = "gajae-code@0.15.0";
-// gajae-code 0.15.0 hard-fails below Bun 1.4.0 (`engines.bun >=1.4.0`, checked in cli.ts).
+const GAJAE_CODE_PACKAGE: &str = "gajae-code@0.15.2";
+// gajae-code 0.15.2 keeps the Bun >=1.4.0 engine floor verified in the registry
+// package and in Atelier's isolated Bun 1.4.0 compatibility run (2026-08-26).
 const BUN_VERSION: &str = "1.4.0";
-const GAJAE_CODE_VERSION: &str = "0.15.0";
+const GAJAE_CODE_VERSION: &str = "0.15.2";
 const GROK_VERSION: &str = "1.0.4";
 // PEP 508 direct reference에 `[anthropic]` extra를 포함하는 이유:
 // 관리형 런타임(uv tool env)은 재프로비저닝 때 receipt(uv-receipt.toml) 기준으로
@@ -45,6 +46,12 @@ const HERMES_COMMIT: &str = "3ef6bbd201263d354fd83ec55b3c306ded2eb72a";
 // Upstream release tag that resolves (peeled) to HERMES_COMMIT. Display only —
 // install and readiness stay bound to the exact commit above.
 const HERMES_PINNED_RELEASE_TAG: &str = "v2026.7.20";
+// Latest upstream tag actually tested by Atelier on 2026-08-26. Its source
+// build raises `RuntimeError: Building wheels or sdists ... is not supported`
+// under the exact uv-tool path used by the managed adapter, so promotion needs
+// a transactional migration to Hermes' shell-installer layout first.
+const HERMES_VALIDATED_BLOCKED_TAG: &str = "v2026.8.19";
+const HERMES_VALIDATION_STATUS: &str = "installer-migration-required";
 const UV_BOOTSTRAP_VERSION: &str = "0.10.12";
 const MANAGED_RUNTIME_RECEIPT_SCHEMA: u32 = 2;
 const MANAGED_RUNTIME_POLICY_VERSION: &str = "atelier-managed-basic-auto-v1";
@@ -7043,6 +7050,7 @@ pub struct HermesUpdateStatus {
     pub upstream_latest_tag: Option<String>,
     pub upstream_checked_at: Option<String>,
     pub upstream_error: Option<String>,
+    pub upstream_validation_status: Option<String>,
 }
 
 fn hermes_update_status_base(
@@ -7066,6 +7074,7 @@ fn hermes_update_status_base(
         upstream_latest_tag: None,
         upstream_checked_at: None,
         upstream_error: None,
+        upstream_validation_status: None,
     }
 }
 
@@ -7077,6 +7086,9 @@ fn with_hermes_upstream(
     status.upstream_latest_tag = upstream.latest_tag;
     status.upstream_checked_at = upstream.checked_at;
     status.upstream_error = upstream.error;
+    if status.upstream_latest_tag.as_deref() == Some(HERMES_VALIDATED_BLOCKED_TAG) {
+        status.upstream_validation_status = Some(HERMES_VALIDATION_STATUS.to_string());
+    }
     status
 }
 
@@ -7367,6 +7379,19 @@ mod tests {
         );
         assert_eq!(hermes.upstream_latest_tag.as_deref(), Some("v99.0.0"));
         assert_eq!(hermes.pinned_commit.as_deref(), Some(&HERMES_COMMIT[..7]));
+        let validated_block = with_hermes_upstream(
+            hermes_update_status_base(true, Some("0.19.0".to_string()), true),
+            crate::upstream_check::UpstreamReference {
+                latest_version: Some("2026.8.19".to_string()),
+                latest_tag: Some(HERMES_VALIDATED_BLOCKED_TAG.to_string()),
+                checked_at: Some("2026-08-26T00:00:00Z".to_string()),
+                error: None,
+            },
+        );
+        assert_eq!(
+            validated_block.upstream_validation_status.as_deref(),
+            Some(HERMES_VALIDATION_STATUS)
+        );
         let hermes_stale = with_hermes_upstream(
             hermes_update_status_base(true, None, false),
             failed_upstream,
@@ -7965,7 +7990,7 @@ mod tests {
         write_test_executable(&bun, "#!/bin/sh\nprintf '1.4.0\\n'\n");
         write_test_executable(
             &gjc,
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'Gajae CLI 0.15.0\\n'; exit 0; fi\nif [ \"$1\" = \"setup\" ] && [ \"$2\" = \"defaults\" ]; then exit 0; fi\nexit 2\n",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'Gajae CLI 0.15.2\\n'; exit 0; fi\nif [ \"$1\" = \"setup\" ] && [ \"$2\" = \"defaults\" ]; then exit 0; fi\nexit 2\n",
         );
         for skill in GAJAE_DEFAULT_SKILLS {
             let skill_md = layout.skills.join(skill).join("SKILL.md");
@@ -8052,7 +8077,7 @@ mod tests {
         );
         write_test_executable(
             &layout.root.join("bun/bin/gjc"),
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'Gajae CLI 0.15.0\\n'; exit 0; fi\nif [ \"$1\" = \"setup\" ] && [ \"$2\" = \"defaults\" ]; then exit 0; fi\nexit 2\n",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'Gajae CLI 0.15.2\\n'; exit 0; fi\nif [ \"$1\" = \"setup\" ] && [ \"$2\" = \"defaults\" ]; then exit 0; fi\nexit 2\n",
         );
         for skill in GAJAE_DEFAULT_SKILLS {
             let skill_md = layout.skills.join(skill).join("SKILL.md");

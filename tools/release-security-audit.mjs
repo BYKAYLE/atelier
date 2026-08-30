@@ -249,7 +249,7 @@ const sourceInvariants = [
       credentialSource.includes("@anthropic-ai/claude-code@2.1.217") &&
       credentialSource.includes("@openai/codex@0.145.0") &&
       credentialSource.includes("bun@1.4.0") &&
-      credentialSource.includes("gajae-code@0.15.0") &&
+      credentialSource.includes("gajae-code@0.15.2") &&
       !credentialSource.includes("GAJAE_CODE_PACKAGE_NAME") &&
       !credentialSource.includes("read_gajecode_latest_version") &&
       credentialSource.includes('ensure_managed_agent_runtime(&app, "gajecode").await') &&
@@ -468,7 +468,7 @@ const sourceInvariants = [
       agentSource.includes('cmd.env("CLAUDE_CODE_OAUTH_TOKEN", token)') &&
       credentialSource.includes("atelier-keychain-env-migration") &&
       credentialSource.includes('vec![vec!["setup-token"], vec!["auth", "login", "--claudeai"]]') &&
-      credentialSource.includes("cache_claude_setup_token_from_output") &&
+      credentialSource.includes("capture_claude_setup_token") &&
       !credentialSource.includes("sync_claude_credentials_file_to_app_cache") &&
       !credentialSource.includes("read_claude_oauth_credential_from_credentials_file") &&
       !credentialSource.includes("refresh_claude_subscription_oauth_credential") &&

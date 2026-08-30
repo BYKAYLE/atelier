@@ -1587,6 +1587,7 @@ export interface ManagedAgentUpstreamReference {
   upstream_latest_version: string | null;
   upstream_checked_at: string | null;
   upstream_error: string | null;
+  upstream_validation_status?: string | null;
 }
 
 export interface HermesUpdateStatus extends ManagedAgentUpstreamReference {
