@@ -1,9 +1,13 @@
 # Feature: Reproducible managed Hermes, Gajaecode, and Grok runtime
 
-Status: managed runtime/bootstrap/provider defaults/Atelier-supported runtime-pin
-contract verified in source and installed app; authenticated Gajae Codex provider-
-turn proof remains distribution-pending
-Updated: 2026-08-17 KST
+Status: managed runtime/bootstrap/provider defaults verified in source and
+installed app. 0.2.35 re-contracts pins as minimum verified baselines: the
+readiness receipt records `installedVersion` (source of truth), upstream
+patches install through the fail-closed provider_patch pipeline (backup →
+install → verify → rollback, patch receipts), Hermes patches use the engine
+layout (git checkout at the release tag + editable `uv sync --frozen` venv),
+and repair reinstalls the receipt-proven version instead of restoring the pin.
+Updated: 2026-09-07 KST
 Release/install status: locally signed 0.2.26 candidate installed and matched;
 public distribution remains blocked
 

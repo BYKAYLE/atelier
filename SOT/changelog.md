@@ -1,5 +1,75 @@
 # Changelog
 
+## 2026-09-07 — 0.2.35 real patch button: managed Hermes/Gajae upstream patches with fail-closed rollback
+
+- The Connections update button is no longer display-only: it is a stateful
+  patch action. `최신 상태` (disabled) → `패치 가능 (vX)` (enabled, target
+  named) → `패치 중…` (double-click proof) → on failure
+  `패치 실패 — 롤백됨` with the surfaced reason and retry. The manual
+  recheck remains the small secondary action; Grok stays restore-only.
+- Pin re-contract: the support pin is now a minimum verified baseline, not an
+  exact target. The readiness receipt records `installedVersion` as the
+  source of truth (legacy receipts backfill from the pin), readiness fails
+  only below the baseline, and repair/re-provisioning reinstalls the
+  receipt-proven version — the 0.2.28-era pin-restore downgrade path is
+  removed and its absence is enforced by smoke.
+- Patch pipeline (`provider_patch.rs`; shared by the button, the repair path,
+  and the new headless CLI `atelier provider patch|prepare`): cross-process
+  patch lock (provisioning fails fast while a patch is live) → backup
+  (runtime + managed skills + receipts; newest kept) → install → verify
+  (target version + readiness receipt + skill integrity) → automatic rollback
+  restoring the pre-patch runtime on any failure, with an append-only
+  `patch-receipts.jsonl` evidence log and progress streamed as `patch_*`
+  states over the managed-runtime event channel.
+- Hermes upstream blocks wheel builds since v2026.8.19 (`setup.py` guard), so
+  patches install the shell-installer-equivalent "engine" layout: shallow
+  clone at the release tag with HEAD verified against the ls-remote peeled
+  commit, relocatable venv, `uv sync --frozen --extra anthropic` (lockfile
+  hashes), bundled skills bootstrapped from the engine checkout, and
+  layout-aware readiness/provenance verification. This closes the
+  2026-08-26 `installer-migration-required` blocker.
+- Dev-level isolated-HOME E2E (debug binary, scratch HOME): fresh provision
+  0.15.2 → patch 0.15.2→0.16.4 → re-provision kept 0.16.4 → forced repair
+  (package deleted) reinstalled 0.16.4 from the receipt, not the baseline.
+  Rollback E2E: a fake upstream version (99.99.99) made `bun install` fail
+  against the real registry; the pipeline rolled back automatically,
+  re-verified the original runtime, and recorded a `rolled-back` receipt.
+  A first round exposed that the managed skill tree was outside the rollback
+  surface; backup/restore now includes it (and the Hermes bundled source).
+- Live patches on the installed 0.2.35 app (canonical gated install, clean
+  tree, HEAD tagged `v0.2.35`):
+  - gajecode `0.15.2 → 0.16.4` (success receipt; re-provision kept 0.16.4;
+    no-op run reports `이미 최신 상태`). Live turn
+    `147b3496-38d4-4900-8793-5bc434fb96b0` succeeded in ~13s with the
+    correct answer `0.2.35` (model claude-opus-4-8).
+  - hermes `v2026.7.20 (3ef6bbd) → v2026.8.31 (29112bef)` engine layout,
+    58 bundled skills verified against the new commit,
+    `hermes --version` = `Hermes Agent v0.21.0 (2026.8.31)`; re-provision
+    kept the engine commit. The first live attempt failed by design and
+    rolled back cleanly (editable-install `.pth` breaks on staging move →
+    fixed by building in place; the rollback left the pinned runtime
+    verified). Live turn: Stella staged run
+    `e215fac1-be84-46a5-b9a5-a6ffc31d8238` on backend=anthropic
+    (claude-opus-4-8) succeeded 5/5 stages with the correct answer
+    `0.2.35`. The codex-backend attempt reached the real ChatGPT backend
+    and failed only on HTTP 429 `usage_limit_reached` (subscription quota,
+    resets ~7.8h) — runtime launch, auth staging, API calls, and retries
+    all exercised.
+- Gates on the committed tree: 343 Rust tests passed / 8 ignored (all
+  targets, all features), strict Clippy 0, `cargo fmt --check` 0,
+  `tsc -b && vite build` passed, `audit:release` 0 vulnerabilities with the
+  new patch-pipeline invariants, release preflight (local scope), release
+  guards / workspace-selection / provider-runtime-identity / orca feature
+  gate (24 contract smokes) all passed. Installed candidate SHA-256
+  `303f573fcce5973b4f91e9e1a9d746e69a82cd6c9fd0b21ffac47917639d9f43`,
+  `workingTreeDirtyAtProofTime: false`, tag `v0.2.35` on HEAD; no new
+  Atelier entries in `~/Library/Logs/DiagnosticReports`.
+- Residuals: the Connections patch-button rendering has not been visually
+  exercised (app Computer Use stop switch blocks the UI bridge; contract
+  enforced by smokes and `data-patch-state` testids). The hermes upstream
+  `git ls-remote` check intermittently exceeds its 5s bound on this network;
+  the 6h cache masks it for display, a manual recheck retry succeeds.
+
 ## 2026-08-30 — 0.2.34 structural release guards: gated install path, repo hygiene gate
 
 - The 2026-08-24 recommendations are machines now, not prose:

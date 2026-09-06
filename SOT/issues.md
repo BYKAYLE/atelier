@@ -59,17 +59,31 @@ first time in the same session. 0.2.28 landed as `04cbc7b` (`v0.2.28`);
   excluded from the 0.2.29 release; that feature needs its own gates before it
   can land.
 
-- Hermes pin promotion is blocked upstream: every hermes-agent release from
-  `v2026.7.30` onward (including `v2026.8.19` / `fcbd107`, 0.20.5) ships a
-  `setup.py` guard (#68217, 2026-07-22) that refuses wheel builds, so
-  `uv tool install "hermes-agent[anthropic] @ git+…"` fails. Atelier stays on
-  `3ef6bbd` (`v2026.7.20`). Moving forward requires a new managed install
-  strategy (editable `uv sync` checkout, upstream shell installer, or the
-  `HERMES_NIX_BUILD` escape hatch — the last is an upstream-internal switch and
-  was deliberately not used). The Connections card now shows the newer upstream
-  tag as a reference only.
-- 0.2.28 verification gap (remaining): the Connections-tab rendering of the
-  upstream reference line has still not been visually exercised.
+- CLOSED 2026-09-07 (0.2.35): the Hermes pin-promotion blocker is resolved by
+  the engine-layout patch pipeline. `provider_patch.rs` installs upstream
+  releases as a shallow git checkout at the release tag (HEAD verified
+  against the ls-remote peeled commit) with an editable
+  `uv sync --frozen --extra anthropic` venv — the strategy named here on
+  2026-08-26. Live-proven on the installed app: hermes
+  `v2026.7.20 → v2026.8.31` (engine, 58 bundled skills verified) with a
+  successful 5/5-stage managed turn on backend=anthropic; gajecode
+  `0.15.2 → 0.16.4` with a successful live turn. The pin is now a minimum
+  verified baseline; readiness records the actually installed version and
+  re-provisioning preserves it.
+- Hermes codex-backend live turn on the patched runtime was blocked only by
+  the external Codex subscription quota (HTTP 429 `usage_limit_reached`,
+  2026-09-07 04:16 KST, reset ~7.8h): the runtime launched, staged auth,
+  called the real ChatGPT backend, and retried per policy. Re-prove the
+  codex path after the quota window.
+- 0.2.28 verification gap (remaining, now for the patch button too): the
+  Connections-tab rendering of the upstream reference line and the new
+  4-state patch button has not been visually exercised — the in-app
+  Computer Use bridge is disabled by the global stop switch. Contract is
+  machine-enforced (identity smoke + `data-patch-state`/`*-patch-detail`
+  testids); visual pass stays open for a Probe/manual session.
+- Intermittent on this network: the hermes upstream `git ls-remote` lookup
+  sometimes exceeds its 5s bound, so a forced recheck can report
+  `업스트림 확인 불가` until retried; the 6h cache masks it for display.
 - CLOSED 2026-08-24: installed-app real turns on 0.2.28 both succeeded once the
   macOS session was unlocked (screen lock had suspended the WebKit renderer, so
   the queued turn stayed unclaimed). Gajaecode 0.15.0 turn

@@ -2,37 +2,37 @@
   "schemaVersion": 1,
   "status": "verified",
   "proofType": "local-installed-candidate",
-  "sourceSha": "7ae16bbd4f959a517ec01ada1799c99353c5f0c8",
+  "sourceSha": "8633955e5a3d3d098c9bc735f6be289d18880e20",
   "sourceState": {
-    "headSha": "7ae16bbd4f959a517ec01ada1799c99353c5f0c8",
+    "headSha": "8633955e5a3d3d098c9bc735f6be289d18880e20",
     "workingTreeDirtyAtProofTime": false,
-    "versionTagOnHead": "v0.2.34",
+    "versionTagOnHead": "v0.2.35",
     "buildArtifactIdentifier": {
       "kind": "sha256",
-      "value": "c9bd04758dabfa741a1b3b941362178c58e6db40a499e6c0ecbbfa38577f3e1c"
+      "value": "303f573fcce5973b4f91e9e1a9d746e69a82cd6c9fd0b21ffac47917639d9f43"
     }
   },
-  "version": "0.2.34",
+  "version": "0.2.35",
   "bundleIdentifier": "com.atelier.app",
-  "generatedAt": "2026-08-30T16:22:06.595Z",
+  "generatedAt": "2026-09-06T19:10:02.563Z",
   "candidate": {
     "appPath": "/Users/kansic/Service/atelier/src-tauri/target/release/bundle/macos/Atelier.app",
     "executablePath": "/Users/kansic/Service/atelier/src-tauri/target/release/bundle/macos/Atelier.app/Contents/MacOS/atelier",
-    "version": "0.2.34",
-    "executableSha256": "c9bd04758dabfa741a1b3b941362178c58e6db40a499e6c0ecbbfa38577f3e1c",
+    "version": "0.2.35",
+    "executableSha256": "303f573fcce5973b4f91e9e1a9d746e69a82cd6c9fd0b21ffac47917639d9f43",
     "codesignVerified": true
   },
   "installed": {
     "appPath": "/Applications/Atelier.app",
     "executablePath": "/Applications/Atelier.app/Contents/MacOS/atelier",
-    "version": "0.2.34",
-    "executableSha256": "c9bd04758dabfa741a1b3b941362178c58e6db40a499e6c0ecbbfa38577f3e1c",
+    "version": "0.2.35",
+    "executableSha256": "303f573fcce5973b4f91e9e1a9d746e69a82cd6c9fd0b21ffac47917639d9f43",
     "codesignVerified": true,
     "rendererReady": {
       "schemaVersion": 1,
-      "appVersion": "0.2.34",
-      "pid": 88300,
-      "readyAtUnixMs": 1788106926348,
+      "appVersion": "0.2.35",
+      "pid": 18152,
+      "readyAtUnixMs": 1788721801342,
       "executablePath": "/Applications/Atelier.app/Contents/MacOS/atelier",
       "windowLabel": "main",
       "status": "ready"

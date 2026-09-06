@@ -1,6 +1,6 @@
 # Atelier Project Summary
 
-Last updated: 2026-08-30
+Last updated: 2026-09-07
 
 ## Identity
 
@@ -11,8 +11,14 @@ coding-agent workflows. It must not be treated as a greenfield rebuild.
 
 `supervised local candidate, public release blocked`
 
-- Current source and locally installed candidate: `0.2.34` (installed through
-  the gated canonical path; first proof with a clean working tree).
+- Current source and locally installed candidate: `0.2.35` (installed through
+  the gated canonical path with a clean working tree).
+- Managed Hermes/Gajae runtimes are upstream-patchable from the Connections
+  cards and `atelier provider patch`: a fail-closed backup→install→verify→
+  rollback pipeline with patch receipts. Support pins are minimum verified
+  baselines; the readiness receipt records the actually installed version and
+  repair preserves it (live-proven: gajecode 0.16.4, hermes v2026.8.31 engine
+  layout — the post-wheel-guard install path).
 - New tasks now require an explicit native project-folder selection after the
   agent is chosen. Cancelling the picker creates no task, the chosen source
   workspace is persisted on that task, and the current path plus a folder
