@@ -699,9 +699,15 @@ fn patch_hermes(
 
 /// Install the Hermes engine layout at `tag`/`commit` into the managed
 /// provider root: shallow clone, provenance check, relocatable venv,
-/// `uv sync --frozen --extra anthropic`, version probe, atomic swap, install
-/// record, and bundled-skill bootstrap. Also used by the repair path so a
-/// patched runtime survives re-provisioning.
+/// `uv sync --frozen --extra anthropic`, version probe, install record, and
+/// bundled-skill bootstrap. Also used by the repair path so a patched runtime
+/// survives re-provisioning.
+///
+/// The build happens **in place** at the final engine path (any previous
+/// engine is parked first and restored on failure). An editable install
+/// records absolute source paths in the venv (`__editable__*.pth`), so a
+/// build-then-move staging flow breaks imports after the move — measured on
+/// 2026-09-07 as `ModuleNotFoundError: No module named 'hermes_cli'`.
 pub(crate) fn install_hermes_engine_at(
     app_support: &Path,
     tag: &str,
@@ -718,84 +724,16 @@ pub(crate) fn install_hermes_engine_at(
     {
         return Err(format!("Hermes 대상 태그가 유효하지 않습니다: {tag}"));
     }
-    let layout_temp = credentials::managed_runtime_layout_at(app_support, "hermes")?.temp;
+    let layout = credentials::managed_runtime_layout_at(app_support, "hermes")?;
+    let layout_temp = layout.temp.clone();
+    let managed_cache = layout.cache.clone();
     std::fs::create_dir_all(&layout_temp)
         .map_err(|error| format!("create {}: {error}", layout_temp.display()))?;
     let uv = credentials::ensure_uv_at(app_support)?;
     let python = credentials::ensure_hermes_managed_python_at(app_support, &uv)?;
 
-    let staging = layout_temp.join(format!(
-        "engine-staging-{}-{}",
-        chrono::Utc::now().timestamp_millis(),
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&staging);
-
-    progress(
-        "patch_install",
-        &format!("{tag} 소스를 내려받습니다 (shallow clone)."),
-    );
-    let mut clone = credentials::hermes_git_command(&layout_temp);
-    clone
-        .args(["clone", "--depth", "1", "--branch", tag])
-        .arg(crate::upstream_check::HERMES_UPSTREAM_REPOSITORY)
-        .arg(&staging);
-    credentials::run_cli_installer(clone, "Hermes engine clone")?;
-
-    let head = credentials::hermes_git_stdout(
-        &staging,
-        &["rev-parse", "--verify", "HEAD^{commit}"],
-        "Hermes engine HEAD verification",
-    )?;
-    if head != commit {
-        let _ = std::fs::remove_dir_all(&staging);
-        return Err(format!(
-            "클론된 체크아웃 HEAD({head})가 업스트림 태그 커밋({commit})과 다릅니다."
-        ));
-    }
-
-    progress("patch_install", "격리 가상환경을 생성합니다.");
-    let mut venv = credentials::cli_command(&uv.to_string_lossy());
-    credentials::configure_hermes_runtime_env(&mut venv)?;
-    venv.args(["venv", "--relocatable", "--python"])
-        .arg(&python)
-        .arg(staging.join(".venv"))
-        .current_dir(&staging)
-        .env(
-            "UV_CACHE_DIR",
-            credentials::managed_runtime_layout_at(app_support, "hermes")?.cache,
-        )
-        .env("UV_NO_CONFIG", "1");
-    credentials::run_cli_installer(venv, "Hermes engine venv")?;
-
-    progress(
-        "patch_install",
-        "잠금파일 그대로 의존성을 설치합니다 (uv sync --frozen --extra anthropic).",
-    );
-    let mut sync = credentials::cli_command(&uv.to_string_lossy());
-    credentials::configure_hermes_runtime_env(&mut sync)?;
-    sync.args(["sync", "--frozen", "--extra", "anthropic", "--no-dev"])
-        .current_dir(&staging)
-        .env(
-            "UV_CACHE_DIR",
-            credentials::managed_runtime_layout_at(app_support, "hermes")?.cache,
-        )
-        .env("UV_NO_CONFIG", "1")
-        .env("UV_PROJECT_ENVIRONMENT", staging.join(".venv"))
-        .env("GIT_TERMINAL_PROMPT", "0");
-    credentials::run_cli_installer(sync, "Hermes engine dependency sync")?;
-
-    let staged_executable = staging.join(".venv").join("bin").join("hermes");
-    let version_line = probe_hermes_version(&staged_executable, app_support)?;
-    let expected_version = crate::upstream_check::version_from_tag(tag);
-    if !version_line.contains(&expected_version) {
-        let _ = std::fs::remove_dir_all(&staging);
-        return Err(format!(
-            "설치된 Hermes 버전 출력({version_line})에 대상 릴리스({expected_version})가 없습니다."
-        ));
-    }
-
-    progress("patch_install", "엔진 체크아웃을 관리형 위치로 전환합니다.");
+    // Park any existing engine so the final path is free for the in-place
+    // build; restore it whenever the build fails.
     let engine_dir = credentials::hermes_engine_dir_at(app_support);
     let parked = layout_temp.join(format!(
         "engine-old-{}-{}",
@@ -812,33 +750,73 @@ pub(crate) fn install_hermes_engine_at(
             )
         })?;
     }
-    if let Err(error) = std::fs::rename(&staging, &engine_dir) {
-        if had_engine {
-            let _ = std::fs::rename(&parked, &engine_dir);
-        }
-        let _ = std::fs::remove_dir_all(&staging);
-        return Err(format!(
-            "publish {} -> {}: {error}",
-            staging.display(),
-            engine_dir.display()
-        ));
-    }
-
-    let executable = engine_dir.join(".venv").join("bin").join("hermes");
-    let final_version = match probe_hermes_version(&executable, app_support) {
-        Ok(line) if line.contains(&expected_version) => line,
-        Ok(line) => {
-            rollback_engine_swap(&engine_dir, &parked, had_engine);
-            return Err(format!(
-                "전환 후 Hermes 버전 출력({line})이 대상 릴리스({expected_version})와 다릅니다."
-            ));
-        }
-        Err(error) => {
-            rollback_engine_swap(&engine_dir, &parked, had_engine);
-            return Err(error);
-        }
+    let fail = |reason: String| -> String {
+        rollback_engine_swap(&engine_dir, &parked, had_engine);
+        reason
     };
 
+    let mut build = || -> Result<String, String> {
+        progress(
+            "patch_install",
+            &format!("{tag} 소스를 내려받습니다 (shallow clone)."),
+        );
+        let provider_root = credentials::hermes_provider_root_at(app_support);
+        let mut clone = credentials::hermes_git_command(&provider_root);
+        clone
+            .args(["clone", "--depth", "1", "--branch", tag])
+            .arg(crate::upstream_check::HERMES_UPSTREAM_REPOSITORY)
+            .arg(&engine_dir);
+        credentials::run_cli_installer(clone, "Hermes engine clone")?;
+
+        let head = credentials::hermes_git_stdout(
+            &engine_dir,
+            &["rev-parse", "--verify", "HEAD^{commit}"],
+            "Hermes engine HEAD verification",
+        )?;
+        if head != commit {
+            return Err(format!(
+                "클론된 체크아웃 HEAD({head})가 업스트림 태그 커밋({commit})과 다릅니다."
+            ));
+        }
+
+        progress("patch_install", "격리 가상환경을 생성합니다.");
+        let mut venv = credentials::cli_command(&uv.to_string_lossy());
+        credentials::configure_hermes_runtime_env(&mut venv)?;
+        venv.args(["venv", "--relocatable", "--python"])
+            .arg(&python)
+            .arg(engine_dir.join(".venv"))
+            .current_dir(&engine_dir)
+            .env("UV_CACHE_DIR", &managed_cache)
+            .env("UV_NO_CONFIG", "1");
+        credentials::run_cli_installer(venv, "Hermes engine venv")?;
+
+        progress(
+            "patch_install",
+            "잠금파일 그대로 의존성을 설치합니다 (uv sync --frozen --extra anthropic).",
+        );
+        let mut sync = credentials::cli_command(&uv.to_string_lossy());
+        credentials::configure_hermes_runtime_env(&mut sync)?;
+        sync.args(["sync", "--frozen", "--extra", "anthropic", "--no-dev"])
+            .current_dir(&engine_dir)
+            .env("UV_CACHE_DIR", &managed_cache)
+            .env("UV_NO_CONFIG", "1")
+            .env("UV_PROJECT_ENVIRONMENT", engine_dir.join(".venv"))
+            .env("GIT_TERMINAL_PROMPT", "0");
+        credentials::run_cli_installer(sync, "Hermes engine dependency sync")?;
+
+        let executable = engine_dir.join(".venv").join("bin").join("hermes");
+        let version_line = probe_hermes_version(&executable, app_support)?;
+        let expected_version = crate::upstream_check::version_from_tag(tag);
+        if !version_line.contains(&expected_version) {
+            return Err(format!(
+                "설치된 Hermes 버전 출력({version_line})에 대상 릴리스({expected_version})가 없습니다."
+            ));
+        }
+        Ok(version_line)
+    };
+    let final_version = build().map_err(fail)?;
+
+    let executable = engine_dir.join(".venv").join("bin").join("hermes");
     credentials::save_hermes_engine_install_record_at(
         app_support,
         &executable,

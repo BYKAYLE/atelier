@@ -2298,7 +2298,7 @@ fn write_hermes_install_record_at(
     Ok(())
 }
 
-fn hermes_provider_root_at(app_support: &Path) -> PathBuf {
+pub(crate) fn hermes_provider_root_at(app_support: &Path) -> PathBuf {
     app_support.join("providers").join("hermes")
 }
 
