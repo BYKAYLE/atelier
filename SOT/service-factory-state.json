@@ -8513,7 +8513,7 @@
     "truth_rule": "Kanban cards visualize queues only; Stella command_owner and AgentTopology remain the source of truth."
   },
   "known_issues": [],
-  "last_invocation_goal": "package.json의 version 값만 한 줄로 답하라",
+  "last_invocation_goal": "Read package.json in this workspace and report only the value of the version field.",
   "limits": {
     "max_child_agents": 12,
     "max_parallel_agents": 3,
@@ -10899,5 +10899,5 @@
     }
   ],
   "status": "running",
-  "updated_at": 1788107030
+  "updated_at": 1788722223
 }
