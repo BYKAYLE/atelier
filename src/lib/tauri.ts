@@ -912,7 +912,10 @@ export interface ManagedAgentRuntimeReadiness {
   tempDir: string;
   skillsDir: string;
   workspaceDir?: string | null;
+  /** Atelier minimum verified baseline (support floor). */
   runtimePin: string;
+  /** Actually installed runtime version (receipt-backed source of truth). */
+  installedVersion: string;
   dependencyPin?: string | null;
   policyVersion: string;
   skillBootstrapVersion: string;
@@ -925,7 +928,14 @@ export type ManagedAgentRuntimeProgressState =
   | "bootstrapping_skills"
   | "verifying"
   | "ready"
-  | "failed";
+  | "failed"
+  | "patch_check"
+  | "patch_backup"
+  | "patch_install"
+  | "patch_verify"
+  | "patch_rollback"
+  | "patch_done"
+  | "patch_failed";
 
 export interface ManagedAgentRuntimeProgress {
   provider: AgentProvider;
@@ -1580,14 +1590,15 @@ export async function providerInstallCli(provider: string): Promise<void> {
 
 /**
  * Upstream reference fields shared by every managed-agent update status.
- * They are informational only: `update_available` and the install target stay
- * bound to the Atelier support pin.
+ * For Hermes and Gajae Code, `update_available` now means "upstream published
+ * a newer version than the installed runtime" and the patch button installs
+ * that upstream version through the fail-closed backup→verify→rollback
+ * pipeline. Grok stays pin-based (restore-only).
  */
 export interface ManagedAgentUpstreamReference {
   upstream_latest_version: string | null;
   upstream_checked_at: string | null;
   upstream_error: string | null;
-  upstream_validation_status?: string | null;
 }
 
 export interface HermesUpdateStatus extends ManagedAgentUpstreamReference {
@@ -1598,6 +1609,8 @@ export interface HermesUpdateStatus extends ManagedAgentUpstreamReference {
   message: string | null;
   pinned_commit: string | null;
   pinned_tag: string | null;
+  /** Release tag of the runtime actually installed (engine layout after a patch). */
+  installed_tag: string | null;
   upstream_latest_tag: string | null;
 }
 
@@ -1647,6 +1660,34 @@ export async function grokCheckUpdate(
 
 export async function grokUpdate(): Promise<ManagedAgentRuntimeReadiness> {
   return invoke("grok_update");
+}
+
+/**
+ * Result of one upstream patch run (Hermes/Gajae Code). `no_op` marks an
+ * "already latest" run; a failed patch rejects with "패치 실패 — 롤백됨: 사유"
+ * after the pre-patch runtime has been restored and re-verified.
+ */
+export interface ProviderPatchOutcome {
+  provider: "hermes" | "gajecode";
+  fromVersion: string | null;
+  toVersion: string;
+  targetTag: string | null;
+  noOp: boolean;
+  rolledBack: boolean;
+  steps: string[];
+  receiptPath: string;
+}
+
+/**
+ * Install the newest upstream release for a managed agent runtime through the
+ * fail-closed pipeline: backup → install → verify (version + readiness receipt
+ * + skill integrity) → rollback on any failure. Progress streams over
+ * `managed-agent-runtime-progress` with `patch_*` states.
+ */
+export async function providerPatchUpstream(
+  provider: "hermes" | "gajecode",
+): Promise<ProviderPatchOutcome> {
+  return invoke("provider_patch_upstream", { provider });
 }
 
 // ─────────────────────────────────────────────────────────────────────────

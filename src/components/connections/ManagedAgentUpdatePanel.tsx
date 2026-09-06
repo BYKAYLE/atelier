@@ -1,5 +1,6 @@
 import React from "react";
 import { cls } from "../../lib/tokens";
+import type { PatchButtonContract } from "../../lib/agentUpstreamContract";
 
 export type ManagedAgentUpdateState = "idle" | "checking" | "available" | "ready";
 
@@ -11,7 +12,7 @@ interface Props {
   state: ManagedAgentUpdateState;
   statusText: string | null;
   versionText?: string | null;
-  /** Upstream-latest reference line (informational; never drives the update action). */
+  /** Upstream-latest reference line (patch target for Hermes/Gajae Code). */
   upstreamText?: string | null;
   message?: string | null;
   updateAvailable: boolean;
@@ -21,6 +22,13 @@ interface Props {
   checkLabel: string;
   updateDisabled?: boolean;
   checkDisabled?: boolean;
+  /**
+   * Stateful patch-button contract (Hermes/Gajae Code). When present the main
+   * action is always rendered — "최신 상태" disabled, "패치 가능 (vX)" enabled,
+   * "패치 중…" while running, and "패치 재시도" + reason after a rollback.
+   * Grok omits it and keeps the legacy restore-only button.
+   */
+  patch?: PatchButtonContract | null;
   onUpdate: () => void;
   onCheck: () => void;
 }
@@ -47,6 +55,7 @@ const ManagedAgentUpdatePanel: React.FC<Props> = ({
   checkLabel,
   updateDisabled = false,
   checkDisabled = false,
+  patch = null,
   onUpdate,
   onCheck,
 }) => {
@@ -58,13 +67,18 @@ const ManagedAgentUpdatePanel: React.FC<Props> = ({
       ? "#2f7d5b"
       : undefined;
 
+  const highlighted = patch
+    ? patch.state === "patch-available" || patch.state === "patch-failed"
+    : state === "available";
+
   return (
     <section
       data-testid={`${provider}-update-panel`}
       data-update-state={state}
+      data-patch-state={patch?.state}
       className={cls(
         "mt-2 rounded-md border px-3 py-2.5 flex items-center justify-between gap-3 flex-wrap",
-        state === "available"
+        highlighted
           ? "border-[var(--accent)]/40 bg-[var(--accent)]/5"
           : dark
             ? "border-dline bg-dbg"
@@ -98,6 +112,14 @@ const ManagedAgentUpdatePanel: React.FC<Props> = ({
             {upstreamText}
           </div>
         )}
+        {patch?.detail && (
+          <div
+            data-testid={`${provider}-patch-detail`}
+            className="text-[11px] mt-1 text-red-500"
+          >
+            {patch.detail}
+          </div>
+        )}
         {message && (
           <div className={cls("text-[11px] mt-1", dark ? "text-dsub" : "text-sub")}>
             {message}
@@ -106,20 +128,40 @@ const ManagedAgentUpdatePanel: React.FC<Props> = ({
       </div>
 
       <div className="shrink-0 flex items-center gap-1.5">
-        {updateAvailable && (
+        {patch ? (
           <button
             type="button"
             data-testid={`${provider}-update`}
             onClick={onUpdate}
-            disabled={updateDisabled}
+            disabled={!patch.enabled || updateDisabled}
             className={cls(
               "text-[12.5px] h-8 px-3 rounded-md border font-medium transition-colors",
-              "bg-[var(--accent)]/10 text-[var(--accent)] border-[var(--accent)]/40 hover:bg-[var(--accent)]/20",
+              patch.state === "patch-available" || patch.state === "patch-failed"
+                ? "bg-[var(--accent)]/10 text-[var(--accent)] border-[var(--accent)]/40 hover:bg-[var(--accent)]/20"
+                : dark
+                  ? "border-dline text-dsub"
+                  : "border-line text-sub",
               "disabled:opacity-50 disabled:cursor-not-allowed",
             )}
           >
-            {updating ? updatingLabel : updateLabel}
+            {patch.label}
           </button>
+        ) : (
+          updateAvailable && (
+            <button
+              type="button"
+              data-testid={`${provider}-update`}
+              onClick={onUpdate}
+              disabled={updateDisabled}
+              className={cls(
+                "text-[12.5px] h-8 px-3 rounded-md border font-medium transition-colors",
+                "bg-[var(--accent)]/10 text-[var(--accent)] border-[var(--accent)]/40 hover:bg-[var(--accent)]/20",
+                "disabled:opacity-50 disabled:cursor-not-allowed",
+              )}
+            >
+              {updating ? updatingLabel : updateLabel}
+            </button>
+          )
         )}
         <button
           type="button"

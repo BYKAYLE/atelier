@@ -5,7 +5,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import ManagedAgentUpdatePanel from "./connections/ManagedAgentUpdatePanel";
-import { upstreamReferenceLine } from "../lib/agentUpstreamContract";
+import { patchButtonContract, upstreamReferenceLine } from "../lib/agentUpstreamContract";
 import { cls, Tweaks } from "../lib/tokens";
 import {
   gajecodeCredentialReady,
@@ -14,7 +14,7 @@ import {
   writeGajaeModelProviderPreference,
   writeHermesModelProviderPreference,
 } from "../lib/agentProviderPreferences";
-import { gajecodeUpdateMatchesReadiness } from "../lib/gajecodeUpdateContract";
+import { gajecodePatchMatchesReadiness } from "../lib/gajecodeUpdateContract";
 import type {
   GajaeModelProvider,
   HermesModelProvider,
@@ -36,11 +36,9 @@ import {
   ProviderLoginOauthResult,
   ProviderStatus,
   gajecodeCheckUpdate,
-  gajecodeUpdate,
   grokCheckUpdate,
   grokUpdate,
   hermesCheckUpdate,
-  hermesUpdate,
   isTauri,
   onManagedAgentRuntimeProgress,
   providerClearCredentials,
@@ -48,6 +46,7 @@ import {
   providerLoginOauth,
   providerOauthBrowserProbe,
   providerOpenOauthLoginUrl,
+  providerPatchUpstream,
   providerPrepareManagedRuntime,
   providerOauthLoginState,
   providerSaveApiKey,
@@ -284,7 +283,8 @@ const COPY = {
     runtimeReady: "런타임·기본 스킬 준비 완료",
     runtimeFailed: "자동 준비 실패 · 설치·복구를 다시 실행하세요.",
     runtimeEvidence: "준비 증거",
-    runtimePin: "런타임 고정 버전",
+    runtimePin: "Atelier 기준선",
+    runtimeInstalledVersion: "설치 버전",
     runtimeDependencyPin: "의존성 고정 버전",
     runtimePolicy: "실행 정책",
     runtimeSkillBundle: "기본 스킬 번들",
@@ -362,16 +362,18 @@ const COPY = {
     hermesNotInstalled: "첫 작업을 보낼 때 Atelier가 자동으로 준비합니다.",
     hermesNeedCred: (label: string) =>
       `선택된 백엔드(${label})의 자격증명이 없습니다. 위 카드에서 먼저 연결하세요.`,
-    hermesUpdateLabel: "업데이트",
+    hermesUpdateLabel: "패치",
     hermesUpdateChecking: "확인 중…",
-    hermesUpdateLatest: "Atelier 지원 버전",
-    hermesUpdateAvailable: (n: number) => `업데이트 가능 · ${n} 커밋 뒤`,
-    hermesUpdateAvailableNoCount: "업데이트 가능",
-    hermesUpdating: "업데이트 중…",
-    hermesUpdateButton: "업데이트",
-    hermesRecheck: "업데이트 확인",
+    hermesUpdateLatest: "최신 상태",
+    hermesPatchAvailableStatus: "신규 패치 있음",
+    hermesUpdating: "패치 중…",
+    hermesUpdateButton: "패치",
+    hermesRecheck: "패치 확인",
     hermesVersionPrefix: "버전",
-    hermesPinnedPrefix: "지원 릴리스",
+    hermesInstalledTagPrefix: "설치 릴리스",
+    hermesPinnedPrefix: "Atelier 기준선",
+    hermesPatched: (tag: string) =>
+      `Hermes ${tag} 패치를 적용하고 실행환경과 기본 스킬을 다시 검증했습니다.`,
     gajecodeTitle: "가재코드",
     gajecodeDesc:
       "가재코드 에이전트는 Atelier 전용 HOME에서 실행됩니다. 첫 사용 시 고정 버전 런타임과 전용 기본 스킬을 자동 준비하므로 Atelier만 설치하면 됩니다.",
@@ -383,19 +385,19 @@ const COPY = {
     gajecodeRepair: "설치·복구",
     gajecodePreparing: "준비 중…",
     gajecodePrepared: "가재코드 실행환경과 기본 스킬 준비를 확인했습니다.",
-    gajecodeUpdateLabel: "업데이트",
+    gajecodeUpdateLabel: "패치",
     gajecodeUpdateChecking: "확인 중…",
-    gajecodeUpdateLatest: "Atelier 지원 버전",
-    gajecodeUpdateAvailable: "Atelier 지원 버전 업데이트 가능",
-    gajecodeUpdating: "업데이트 중…",
-    gajecodeUpdateButton: "지원 버전으로 업데이트",
+    gajecodeUpdateLatest: "최신 상태",
+    gajecodeUpdateAvailable: "신규 패치 있음",
+    gajecodeUpdating: "패치 중…",
+    gajecodeUpdateButton: "패치",
     gajecodeUpdated: (version: string) =>
-      `Atelier 지원 GJC ${version}로 업데이트하고 실행환경과 기본 스킬을 다시 검증했습니다.`,
+      `가재코드 ${version} 패치를 적용하고 실행환경과 기본 스킬을 다시 검증했습니다.`,
     gajecodeUpdateVerificationFailed:
-      "업데이트 후 Atelier 지원 GJC 실행환경을 검증하지 못했습니다. 설치·복구를 실행해 주세요.",
-    gajecodeRecheck: "업데이트 확인",
+      "패치 후 GJC 실행환경 검증에 실패했습니다. 설치·복구를 실행해 주세요.",
+    gajecodeRecheck: "패치 확인",
     gajecodeVersionPrefix: "현재 버전",
-    gajecodeSupportedVersionPrefix: "Atelier 지원",
+    gajecodeSupportedVersionPrefix: "Atelier 기준선",
     gajecodeNotInstalled: "첫 작업을 보낼 때 Atelier가 자동으로 준비합니다.",
     gajecodeInstallIsolation: "Atelier 전용 .gjc와 고정 버전 실행환경을 사용합니다.",
     gajecodeNeedCred: (label: string) =>
@@ -419,7 +421,8 @@ const COPY = {
     runtimeReady: "Runtime and default skills ready",
     runtimeFailed: "Automatic preparation failed · run Install/repair again.",
     runtimeEvidence: "Readiness evidence",
-    runtimePin: "Runtime pin",
+    runtimePin: "Atelier baseline",
+    runtimeInstalledVersion: "Installed version",
     runtimeDependencyPin: "Dependency pin",
     runtimePolicy: "Execution policy",
     runtimeSkillBundle: "Default skill bundle",
@@ -497,16 +500,18 @@ const COPY = {
     hermesNotInstalled: "Atelier prepares it automatically when you send the first task.",
     hermesNeedCred: (label: string) =>
       `No credential for the selected backend (${label}). Connect it in the card above first.`,
-    hermesUpdateLabel: "Update",
+    hermesUpdateLabel: "Patch",
     hermesUpdateChecking: "Checking…",
-    hermesUpdateLatest: "Atelier-supported version",
-    hermesUpdateAvailable: (n: number) => `Update available · ${n} commits behind`,
-    hermesUpdateAvailableNoCount: "Update available",
-    hermesUpdating: "Updating…",
-    hermesUpdateButton: "Update",
-    hermesRecheck: "Check for updates",
+    hermesUpdateLatest: "Up to date",
+    hermesPatchAvailableStatus: "New patch available",
+    hermesUpdating: "Patching…",
+    hermesUpdateButton: "Patch",
+    hermesRecheck: "Check for patches",
     hermesVersionPrefix: "Version",
-    hermesPinnedPrefix: "supported release",
+    hermesInstalledTagPrefix: "installed release",
+    hermesPinnedPrefix: "Atelier baseline",
+    hermesPatched: (tag: string) =>
+      `Applied the Hermes ${tag} patch and re-verified the runtime and default skills.`,
     gajecodeTitle: "Gajae Code",
     gajecodeDesc:
       "The Gajae Code agent runs under Atelier's dedicated HOME. Its pinned runtime and isolated default skills are prepared automatically on first use, so installing Atelier is enough.",
@@ -518,19 +523,19 @@ const COPY = {
     gajecodeRepair: "Install/repair",
     gajecodePreparing: "Preparing…",
     gajecodePrepared: "Gajae Code runtime and default skill readiness verified.",
-    gajecodeUpdateLabel: "Update",
+    gajecodeUpdateLabel: "Patch",
     gajecodeUpdateChecking: "Checking…",
-    gajecodeUpdateLatest: "Atelier-supported version",
-    gajecodeUpdateAvailable: "Atelier-supported update available",
-    gajecodeUpdating: "Updating…",
-    gajecodeUpdateButton: "Update to supported version",
+    gajecodeUpdateLatest: "Up to date",
+    gajecodeUpdateAvailable: "New patch available",
+    gajecodeUpdating: "Patching…",
+    gajecodeUpdateButton: "Patch",
     gajecodeUpdated: (version: string) =>
-      `Updated to Atelier-supported GJC ${version} and re-verified the runtime and default skills.`,
+      `Applied the Gajae Code ${version} patch and re-verified the runtime and default skills.`,
     gajecodeUpdateVerificationFailed:
-      "Atelier could not verify the supported GJC runtime after the update. Run Install/repair.",
-    gajecodeRecheck: "Check for updates",
+      "Atelier could not verify the GJC runtime after the patch. Run Install/repair.",
+    gajecodeRecheck: "Check for patches",
     gajecodeVersionPrefix: "Current version",
-    gajecodeSupportedVersionPrefix: "Atelier support",
+    gajecodeSupportedVersionPrefix: "Atelier baseline",
     gajecodeNotInstalled: "Atelier prepares it automatically when you send the first task.",
     gajecodeInstallIsolation: "Uses Atelier's dedicated .gjc and pinned runtime.",
     gajecodeNeedCred: (label: string) =>
@@ -564,7 +569,7 @@ function managedRuntimeProgressText(
   copy: CopyT,
 ) {
   if (!progress) return null;
-  const labels: Record<ManagedAgentRuntimeProgress["state"], string> = {
+  const labels: Partial<Record<ManagedAgentRuntimeProgress["state"], string>> = {
     checking: copy.runtimeChecking,
     installing: copy.runtimeInstalling,
     bootstrapping_skills: copy.runtimeSkills,
@@ -572,6 +577,7 @@ function managedRuntimeProgressText(
     ready: copy.runtimeReady,
     failed: copy.runtimeFailed,
   };
+  // patch_* states carry already-localized pipeline messages from the backend.
   return labels[progress.state] || progress.message;
 }
 
@@ -613,6 +619,10 @@ const RuntimeReadinessEvidence: React.FC<{
         {copy.runtimeEvidence} · {copy.runtimeReady}
       </summary>
       <dl className={cls("mt-2 grid gap-1 text-[10.5px]", dark ? "text-dsub" : "text-sub")}>
+        <div className="grid grid-cols-[132px_minmax(0,1fr)] gap-2">
+          <dt>{copy.runtimeInstalledVersion}</dt>
+          <dd className="break-all font-mono">{readiness.installedVersion}</dd>
+        </div>
         <div className="grid grid-cols-[132px_minmax(0,1fr)] gap-2">
           <dt>{copy.runtimePin}</dt>
           <dd className="break-all font-mono">{readiness.runtimePin}</dd>
@@ -1567,6 +1577,8 @@ const HermesCard: React.FC<{
   const [updating, setUpdating] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [installError, setInstallError] = useState<string | null>(null);
+  const [patchError, setPatchError] = useState<string | null>(null);
+  const [patchNotice, setPatchNotice] = useState<string | null>(null);
   const [runtimeReadiness, setRuntimeReadiness] = useState<ManagedAgentRuntimeReadiness | null>(null);
   const runtimeProgress = useManagedRuntimeProgress("hermes");
   const runtimeProgressText = managedRuntimeProgressText(runtimeProgress, copy);
@@ -1588,17 +1600,22 @@ const HermesCard: React.FC<{
     else setUpdateStatus(null);
   }, [installed, refreshUpdate]);
 
-  async function runUpdate() {
+  async function runPatch() {
     setUpdating(true);
-    setInstallError(null);
+    setPatchError(null);
+    setPatchNotice(null);
     try {
-      await hermesUpdate();
+      const outcome = await providerPatchUpstream("hermes");
       setRuntimeReadiness(await providerPrepareManagedRuntime("hermes"));
       const next = await hermesCheckUpdate();
       setUpdateStatus(next);
+      if (!outcome.noOp) {
+        setPatchNotice(copy.hermesPatched(outcome.targetTag ?? outcome.toVersion));
+      }
       onInstalled();
     } catch (error) {
-      setInstallError(String(error));
+      // The backend already rolled the runtime back; surface the reason.
+      setPatchError(String(error));
     } finally {
       setUpdating(false);
     }
@@ -1709,25 +1726,28 @@ const HermesCard: React.FC<{
         statusText={checkingUpdate
           ? copy.hermesUpdateChecking
           : updateStatus?.update_available
-            ? (typeof updateStatus.commits_behind === "number"
-                ? copy.hermesUpdateAvailable(updateStatus.commits_behind)
-                : copy.hermesUpdateAvailableNoCount)
+            ? copy.hermesPatchAvailableStatus
             : updateStatus
               ? copy.hermesUpdateLatest
               : null}
         versionText={updateStatus?.current_version
           ? `${copy.hermesVersionPrefix}: ${updateStatus.current_version}${
+              updateStatus.installed_tag
+                ? ` · ${copy.hermesInstalledTagPrefix}: ${updateStatus.installed_tag}`
+                : ""
+            }${
               updateStatus.pinned_tag
-                ? ` · Atelier ${copy.hermesPinnedPrefix}: ${updateStatus.pinned_tag}`
+                ? ` · ${copy.hermesPinnedPrefix}: ${updateStatus.pinned_tag}`
                 : ""
             }`
           : null}
         upstreamText={upstreamReferenceLine({
-          pin: updateStatus?.pinned_commit,
-          pinVersionLabel: updateStatus?.pinned_tag,
+          pin: updateStatus?.installed_tag,
+          pinVersionLabel: updateStatus?.installed_tag,
           upstreamLabel: updateStatus?.upstream_latest_tag,
           status: updateStatus,
           language: lang,
+          patchable: true,
         })}
         message={updateStatus?.message}
         updateAvailable={Boolean(updateStatus?.update_available)}
@@ -1735,11 +1755,30 @@ const HermesCard: React.FC<{
         updateLabel={copy.hermesUpdateButton}
         updatingLabel={copy.hermesUpdating}
         checkLabel={copy.hermesRecheck}
-        updateDisabled={updating || checkingUpdate || installing}
+        updateDisabled={checkingUpdate || installing}
         checkDisabled={checkingUpdate || updating || installing}
-        onUpdate={() => void runUpdate()}
+        patch={patchButtonContract({
+          installed: Boolean(updateStatus?.installed),
+          updateAvailable: Boolean(updateStatus?.update_available),
+          targetLabel: updateStatus?.upstream_latest_tag,
+          patching: updating,
+          lastError: patchError,
+          language: lang,
+        })}
+        onUpdate={() => void runPatch()}
         onCheck={() => void refreshUpdate({ force: true })}
       />
+
+      {patchNotice && (
+        <div
+          className={cls(
+            "mt-3 text-[12px] px-3 py-2 rounded-md border",
+            dark ? "border-emerald-700/40 bg-emerald-900/20 text-emerald-300" : "border-emerald-200 bg-emerald-50 text-emerald-700",
+          )}
+        >
+          {patchNotice}
+        </div>
+      )}
 
       {installError && (
         <div
@@ -1833,13 +1872,13 @@ const GajecodeCard: React.FC<{
   const [preparing, setPreparing] = useState(false);
   const [preparationError, setPreparationError] = useState<string | null>(null);
   const [preparationNotice, setPreparationNotice] = useState<string | null>(null);
+  const [patchError, setPatchError] = useState<string | null>(null);
   const [runtimeReadiness, setRuntimeReadiness] = useState<ManagedAgentRuntimeReadiness | null>(null);
   const runtimeProgress = useManagedRuntimeProgress("gajecode");
   const runtimeProgressText = managedRuntimeProgressText(runtimeProgress, copy);
   const runtimeDetected = installed || Boolean(updateStatus?.installed);
   const supportedVersionReady = Boolean(
-    updateStatus?.current_version
-      && updateStatus.current_version === updateStatus.latest_version,
+    updateStatus?.installed && updateStatus.current_version && !updateStatus.update_available,
   );
 
   const refreshUpdate = useCallback(async (options: { force?: boolean } = {}) => {
@@ -1858,25 +1897,32 @@ const GajecodeCard: React.FC<{
     void refreshUpdate();
   }, [installed, refreshUpdate]);
 
-  async function runUpdate() {
+  async function runPatch() {
     setUpdating(true);
+    setPatchError(null);
     setPreparationError(null);
     setPreparationNotice(null);
     try {
-      const readiness = await gajecodeUpdate();
+      const outcome = await providerPatchUpstream("gajecode");
+      const readiness = await providerPrepareManagedRuntime("gajecode");
       if (!readiness.ready) {
         throw new Error(copy.gajecodeUpdateVerificationFailed);
       }
       setRuntimeReadiness(readiness);
       const next = await gajecodeCheckUpdate();
       setUpdateStatus(next);
-      if (!gajecodeUpdateMatchesReadiness(readiness, next)) {
-        throw new Error(copy.gajecodeUpdateVerificationFailed);
+      if (!outcome.noOp) {
+        // Post-patch cross-check: the receipt and an independent CLI read must
+        // both report the patched version before we announce success.
+        if (!gajecodePatchMatchesReadiness(outcome, readiness, next)) {
+          throw new Error(copy.gajecodeUpdateVerificationFailed);
+        }
+        setPreparationNotice(copy.gajecodeUpdated(outcome.toVersion));
       }
-      setPreparationNotice(copy.gajecodeUpdated(readiness.runtimePin));
       onUpdated();
     } catch (error) {
-      setPreparationError(String(error));
+      // The backend already rolled the runtime back; surface the reason.
+      setPatchError(String(error));
     } finally {
       setUpdating(false);
     }
@@ -1995,9 +2041,10 @@ const GajecodeCard: React.FC<{
             }`
           : null}
         upstreamText={upstreamReferenceLine({
-          pin: updateStatus?.latest_version,
+          pin: updateStatus?.current_version,
           status: updateStatus,
           language: tw.language,
+          patchable: true,
         })}
         message={updateStatus?.message}
         updateAvailable={Boolean(updateStatus?.update_available)}
@@ -2005,9 +2052,17 @@ const GajecodeCard: React.FC<{
         updateLabel={copy.gajecodeUpdateButton}
         updatingLabel={copy.gajecodeUpdating}
         checkLabel={copy.gajecodeRecheck}
-        updateDisabled={updating || checkingUpdate || preparing}
+        updateDisabled={checkingUpdate || preparing}
         checkDisabled={checkingUpdate || updating || preparing}
-        onUpdate={() => void runUpdate()}
+        patch={patchButtonContract({
+          installed: Boolean(updateStatus?.installed),
+          updateAvailable: Boolean(updateStatus?.update_available),
+          targetLabel: updateStatus?.upstream_latest_version,
+          patching: updating,
+          lastError: patchError,
+          language: tw.language,
+        })}
+        onUpdate={() => void runPatch()}
         onCheck={() => void refreshUpdate({ force: true })}
       />
 
