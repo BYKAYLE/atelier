@@ -131,6 +131,7 @@ const gajecodeUpdateContractSource = readFileSync(
   "src/lib/gajecodeUpdateContract.ts",
   "utf8",
 );
+const providerPatchSource = readFileSync("src-tauri/src/provider_patch.rs", "utf8");
 const providerRuntimeIdentitySmokeSource = readFileSync(
   "tools/provider-runtime-identity-smoke.ts",
   "utf8",
@@ -255,13 +256,22 @@ const sourceInvariants = [
       !credentialSource.includes("GAJAE_CODE_PACKAGE_NAME") &&
       !credentialSource.includes("read_gajecode_latest_version") &&
       credentialSource.includes('ensure_managed_agent_runtime(&app, "gajecode").await') &&
-      connectionsSource.includes("const readiness = await gajecodeUpdate()") &&
-      connectionsSource.includes("gajecodeUpdateMatchesReadiness(readiness, next)") &&
-      gajecodeUpdateContractSource.includes("status.current_version === readiness.runtimePin") &&
-      gajecodeUpdateContractSource.includes("status.latest_version === readiness.runtimePin") &&
+      connectionsSource.includes('await providerPatchUpstream("gajecode")') &&
+      connectionsSource.includes("gajecodePatchMatchesReadiness(outcome, readiness, next)") &&
+      gajecodeUpdateContractSource.includes("readiness.installedVersion === outcome.toVersion") &&
+      gajecodeUpdateContractSource.includes("status.current_version === outcome.toVersion") &&
       providerRuntimeIdentitySmokeSource.includes(
-        "a stale post-update CLI status must enter the visible failure branch",
+        "a stale post-patch CLI status must enter the visible failure branch",
       ) &&
+      // Patch pipeline: clone-by-tag is only trusted after the checkout HEAD is
+      // verified against the ls-remote peeled commit, and every failure path
+      // rolls back to the pre-patch runtime before returning.
+      providerPatchSource.includes('"rev-parse", "--verify", "HEAD^{commit}"') &&
+      providerPatchSource.includes("head != commit") &&
+      providerPatchSource.includes("패치 실패 — 롤백됨") &&
+      providerPatchSource.includes("fn ensure_no_active_patch") &&
+      providerPatchSource.includes('args(["sync", "--frozen", "--extra", "anthropic", "--no-dev"])') &&
+      !providerPatchSource.includes("curl -fsSL") &&
       !gajecodeCardSource.includes("5 * 60 * 1000") &&
       credentialSource.includes("3ef6bbd201263d354fd83ec55b3c306ded2eb72a") &&
       windowsProviderSmokeSource.includes("@anthropic-ai/claude-code@2.1.217") &&

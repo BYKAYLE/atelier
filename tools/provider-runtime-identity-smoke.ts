@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { gajecodeUpdateMatchesReadiness } from "../src/lib/gajecodeUpdateContract.ts";
+import { gajecodePatchMatchesReadiness } from "../src/lib/gajecodeUpdateContract.ts";
 import {
   compareUpstreamToPin,
+  patchButtonContract,
   upstreamReferenceLine,
 } from "../src/lib/agentUpstreamContract.ts";
 
@@ -16,6 +17,7 @@ const tauri = readFileSync(new URL("../src/lib/tauri.ts", import.meta.url), "utf
 const credentials = readFileSync(new URL("../src-tauri/src/credentials.rs", import.meta.url), "utf8");
 const upstreamCheck = readFileSync(new URL("../src-tauri/src/upstream_check.rs", import.meta.url), "utf8");
 const cliInstallers = readFileSync(new URL("../src/lib/cliInstallers.ts", import.meta.url), "utf8");
+const cli = readFileSync(new URL("../src-tauri/src/atelier_cli.rs", import.meta.url), "utf8");
 const styles = readFileSync(new URL("../src/index.css", import.meta.url), "utf8");
 const gajecodeCard = connections.slice(
   connections.indexOf("const GajecodeCard"),
@@ -147,14 +149,15 @@ assert.ok(
 );
 assert.match(connections, /id: "grok"/);
 assert.match(connections, /await grokCheckUpdate\(options\)/);
+assert.match(connections, /await providerPatchUpstream\("hermes"\)/);
+assert.match(connections, /await providerPatchUpstream\("gajecode"\)/);
 assert.match(connections, /await grokCheckUpdate\(\)/);
 assert.match(connections, /const nextReadiness = await grokUpdate\(\)/);
 assert.match(connections, /data-testid="gajecode-isolated-skills"/);
 assert.match(connections, /await providerPrepareManagedRuntime\("gajecode"\)/);
 assert.match(connections, /await providerPrepareManagedRuntime\("hermes"\)/);
-assert.match(connections, /const readiness = await gajecodeUpdate\(\)/);
-assert.match(connections, /gajecodeUpdateLatest: "Atelier 지원 버전"/);
-assert.match(connections, /gajecodeUpdateMatchesReadiness\(readiness, next\)/);
+assert.match(connections, /gajecodeUpdateLatest: "최신 상태"/);
+assert.match(connections, /gajecodePatchMatchesReadiness\(outcome, readiness, next\)/);
 assert.match(connections, /throw new Error\(copy\.gajecodeUpdateVerificationFailed\)/);
 assert.match(connections, /setPreparationError\(String\(error\)\)/);
 assert.doesNotMatch(gajecodeCard, /5 \* 60 \* 1000/);
@@ -201,8 +204,10 @@ assert.match(credentials, /const GROK_VERSION: &str = "1\.0\.4"/);
 assert.match(credentials, /const BUN_VERSION: &str = "1\.4\.0"/);
 assert.match(credentials, /GROK_MACOS_AARCH64_SHA256/);
 assert.match(credentials, /Developer ID verification/);
-// 업스트림 최신 버전은 참고 표시 전용이다. update_available 산출 함수 본문에는
-// upstream 토큰이 등장해선 안 된다 — 설치 대상은 언제나 Atelier 지원 pin.
+// 패치 계약: hermes/gajecode 의 update_available 은 "업스트림이 설치본보다
+// 최신"일 때만 참이다 — 업스트림 참조를 부착하는 with_*_upstream 이 판정을
+// 소유한다. grok 은 패치 범위 밖이라 pin 복원 판정을 유지하며, 그 판정 함수
+// 본문에는 upstream 토큰이 등장해선 안 된다.
 function fnBody(source: string, signature: RegExp): string {
   const start = source.search(signature);
   assert.ok(start >= 0, `missing ${signature}`);
@@ -217,20 +222,60 @@ function fnBody(source: string, signature: RegExp): string {
   }
   throw new Error(`unterminated body for ${signature}`);
 }
-for (const signature of [
-  /fn gajecode_update_status\(/,
-  /fn grok_update_status\(/,
-  /fn hermes_update_status_base\(/,
-  /fn hermes_install_record_is_current\(/,
-]) {
+for (const signature of [/fn with_gajecode_upstream\(/, /fn with_hermes_upstream\(/]) {
   const body = fnBody(credentials, signature);
   assert.ok(
-    !/upstream_latest_version\s*[^:]|upstream_reference_for|resolve_upstream_reference/.test(
-      body.replace(/upstream_(latest_version|latest_tag|checked_at|error): None/g, ""),
-    ),
-    `${signature} must not consult the upstream reference when deciding update_available`,
+    /update_available = status\.installed/.test(body),
+    `${signature} must derive update_available from the attached upstream reference`,
   );
 }
+const grokBody = fnBody(credentials, /fn grok_update_status\(/);
+assert.ok(
+  !/upstream_latest_version\s*[^:]|upstream_reference_for|resolve_upstream_reference/.test(
+    grokBody.replace(/upstream_(latest_version|latest_tag|checked_at|error): None/g, ""),
+  ),
+  "grok stays pin-based: its update decision must not consult the upstream reference",
+);
+// 베이스라인 계약: 핀은 최소 검증 기준선이다 — 기준선보다 최신인 설치본을
+// 핀으로 되돌리는 다운그레이드 경로가 있어선 안 된다.
+assert.ok(
+  !/지원 버전으로 복원/.test(credentials),
+  "the pin-restore (downgrade) message must not exist anymore",
+);
+assert.match(
+  fnBody(credentials, /fn verify_gajecode_components_at\(/),
+  /compare_semver\(&detected, GAJAE_CODE_VERSION\) == std::cmp::Ordering::Less/,
+  "gajecode readiness must fail only below the baseline, not above it",
+);
+assert.match(
+  fnBody(credentials, /fn gajecode_repair_package_spec_at\(/),
+  /installed_version/,
+  "re-provisioning must reinstall the receipt-proven installed version",
+);
+// 패치 파이프라인 fail-closed 골격: 백업 → 설치 → 검증 → 롤백.
+const providerPatch = readFileSync(new URL("../src-tauri/src/provider_patch.rs", import.meta.url), "utf8");
+for (const marker of [
+  "fn acquire_patch_lock",
+  "fn ensure_no_active_patch",
+  "patch_backup",
+  "patch_rollback",
+  "패치 실패 — 롤백됨",
+  "prune_old_backups",
+  "fn install_hermes_engine_at",
+  "uv sync --frozen --extra anthropic",
+]) {
+  assert.ok(providerPatch.includes(marker), `provider_patch.rs must keep: ${marker}`);
+}
+assert.match(
+  credentials,
+  /crate::provider_patch::ensure_no_active_patch\(app_support, provider\)\?;/,
+  "provisioning must fail fast while a patch holds the cross-process lock",
+);
+assert.match(
+  cli,
+  /fn run_provider\(/,
+  "the CLI must expose the same patch pipeline headlessly (atelier provider patch)",
+);
 assert.match(credentials, /with_gajecode_upstream\(status, upstream_reference_for\("gajecode", force\)\)/);
 assert.match(credentials, /with_hermes_upstream\(status, upstream_reference_for\("hermes", force\)\)/);
 assert.match(credentials, /upstream_reference_for\("grok", force\)/);
@@ -244,13 +289,27 @@ assert.doesNotMatch(
 );
 assert.match(tauri, /upstream_latest_version: string \| null;/);
 assert.match(managedAgentUpdatePanel, /data-testid=\{`\$\{provider\}-upstream-reference`\}/);
+assert.match(managedAgentUpdatePanel, /data-patch-state=\{patch\?\.state\}/);
+assert.match(managedAgentUpdatePanel, /data-testid=\{`\$\{provider\}-patch-detail`\}/);
 for (const provider of ["hermes", "gajecode", "grok"]) {
   assert.match(
     connections,
-    new RegExp(`provider="${provider}"[\\s\\S]{0,2500}upstreamText=\\{upstreamReferenceLine\\(`),
+    new RegExp(`provider="${provider}"[\\s\\S]{0,3500}upstreamText=\\{upstreamReferenceLine\\(`),
     `${provider} card must render the upstream reference line`,
   );
 }
+// hermes/gajecode 카드는 상태형 패치 버튼 계약을 사용하고, grok 은 사용하지 않는다.
+for (const provider of ["hermes", "gajecode"]) {
+  assert.match(
+    connections,
+    new RegExp(`provider="${provider}"[\\s\\S]{0,4500}patch=\\{patchButtonContract\\(`),
+    `${provider} card must drive the stateful patch button contract`,
+  );
+}
+assert.ok(
+  !new RegExp('provider="grok"[\\s\\S]{0,4500}patch=\\{').test(connections),
+  "grok stays on the legacy restore-only button (no patch contract)",
+);
 assert.equal(
   (connections.match(/onCheck=\{\(\) => void refreshUpdate\(\{ force: true \}\)\}/g) ?? []).length,
   3,
@@ -266,30 +325,33 @@ assert.match(
   /export async function gajecodeUpdate\(\): Promise<ManagedAgentRuntimeReadiness>/,
 );
 
-const readiness = { ready: true, runtimePin: "0.15.2" };
-const verified = {
-  installed: true,
-  current_version: "0.15.2",
-  latest_version: "0.15.2",
-  update_available: false,
-};
-assert.equal(gajecodeUpdateMatchesReadiness(readiness, verified), true);
+// gajecodePatchMatchesReadiness: 수령증과 독립 CLI 재확인이 패치 버전에
+// 합의해야만 성공을 렌더한다. 핀(runtimePin)은 기준선일 뿐이라 설치본이
+// 앞서 있어도 성공이다.
+const readiness = { ready: true, runtimePin: "0.15.2", installedVersion: "0.16.4" };
+const outcome = { toVersion: "0.16.4" };
+const verified = { installed: true, current_version: "0.16.4" };
+assert.equal(gajecodePatchMatchesReadiness(outcome, readiness, verified), true);
 assert.equal(
-  gajecodeUpdateMatchesReadiness(readiness, {
+  gajecodePatchMatchesReadiness(outcome, readiness, {
     ...verified,
-    current_version: "0.12.8",
-    update_available: true,
+    current_version: "0.15.2",
   }),
   false,
-  "a stale post-update CLI status must enter the visible failure branch",
+  "a stale post-patch CLI status must enter the visible failure branch",
 );
 assert.equal(
-  gajecodeUpdateMatchesReadiness(readiness, {
-    ...verified,
-    latest_version: "0.12.9",
-  }),
+  gajecodePatchMatchesReadiness(
+    outcome,
+    { ...readiness, installedVersion: "0.15.2" },
+    verified,
+  ),
   false,
-  "a support-pin disagreement must never render an update success notice",
+  "a receipt that disagrees with the patch target must never render success",
+);
+assert.equal(
+  gajecodePatchMatchesReadiness(outcome, { ...readiness, ready: false }, verified),
+  false,
 );
 
 // agentUpstreamContract: 순수 비교·문구 계약
@@ -307,12 +369,20 @@ assert.equal(
   "업스트림 최신 0.15.0 출시 · Atelier 호환성 미검증",
 );
 assert.equal(
+  upstreamReferenceLine({ pin: "0.14.0", status: upstreamOk, language: "ko", patchable: true }),
+  "업스트림 최신 0.15.0 출시 · 패치로 설치할 수 있습니다",
+);
+assert.equal(
   upstreamReferenceLine({ pin: "0.15.0", status: upstreamOk, language: "ko" }),
   "업스트림 최신 0.15.0 · 업스트림과 동일",
 );
 assert.equal(
-  upstreamReferenceLine({ pin: "0.14.0", status: upstreamOk, language: "en" }),
-  "Upstream latest 0.15.0 released · not yet validated by Atelier",
+  upstreamReferenceLine({ pin: "0.16.0", status: upstreamOk, language: "ko", patchable: true }),
+  "업스트림 최신 0.15.0 · 설치된 버전이 더 최신",
+);
+assert.equal(
+  upstreamReferenceLine({ pin: "0.14.0", status: upstreamOk, language: "en", patchable: true }),
+  "Upstream latest 0.15.0 released · installable via patch",
 );
 assert.equal(
   upstreamReferenceLine({
@@ -324,29 +394,43 @@ assert.equal(
 );
 assert.equal(
   upstreamReferenceLine({
-    pin: "3ef6bbd",
+    pin: "v2026.7.20",
     pinVersionLabel: "v2026.7.20",
-    upstreamLabel: "v2026.8.19",
-    status: { upstream_latest_version: "2026.8.19", upstream_latest_tag: "v2026.8.19", upstream_checked_at: "x", upstream_error: null },
+    upstreamLabel: "v2026.8.31",
+    status: { upstream_latest_version: "2026.8.31", upstream_latest_tag: "v2026.8.31", upstream_checked_at: "x", upstream_error: null },
     language: "ko",
+    patchable: true,
   }),
-  "업스트림 최신 v2026.8.19 출시 · Atelier 호환성 미검증",
+  "업스트림 최신 v2026.8.31 출시 · 패치로 설치할 수 있습니다",
 );
+
+// patchButtonContract: 상태형 단일 버튼 4상태 계약
+assert.deepEqual(
+  patchButtonContract({ installed: true, updateAvailable: false, targetLabel: null, patching: false, lastError: null, language: "ko" }),
+  { state: "up-to-date", label: "최신 상태", enabled: false, detail: null },
+);
+assert.deepEqual(
+  patchButtonContract({ installed: true, updateAvailable: true, targetLabel: "v2026.8.31", patching: false, lastError: null, language: "ko" }),
+  { state: "patch-available", label: "패치 가능 (v2026.8.31)", enabled: true, detail: null },
+);
+assert.deepEqual(
+  patchButtonContract({ installed: true, updateAvailable: true, targetLabel: "0.16.4", patching: true, lastError: null, language: "ko" }),
+  { state: "patching", label: "패치 중…", enabled: false, detail: null },
+);
+const failed = patchButtonContract({
+  installed: true,
+  updateAvailable: true,
+  targetLabel: "0.16.4",
+  patching: false,
+  lastError: "패치 실패 — 롤백됨: 검증 실패",
+  language: "ko",
+});
+assert.equal(failed.state, "patch-failed");
+assert.equal(failed.enabled, true, "a rolled-back patch must stay retryable");
+assert.equal(failed.detail, "패치 실패 — 롤백됨: 검증 실패");
 assert.equal(
-  upstreamReferenceLine({
-    pin: "3ef6bbd",
-    pinVersionLabel: "v2026.7.20",
-    upstreamLabel: "v2026.8.19",
-    status: {
-      upstream_latest_version: "2026.8.19",
-      upstream_latest_tag: "v2026.8.19",
-      upstream_checked_at: "x",
-      upstream_error: null,
-      upstream_validation_status: "installer-migration-required",
-    },
-    language: "ko",
-  }),
-  "업스트림 최신 v2026.8.19 · Atelier 설치 방식 변경 필요",
+  patchButtonContract({ installed: false, updateAvailable: true, targetLabel: "x", patching: false, lastError: null, language: "en" }).state,
+  "up-to-date",
 );
 
 console.log("provider runtime identity smoke: ok");
