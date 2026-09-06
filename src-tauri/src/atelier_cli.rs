@@ -37,7 +37,9 @@ Usage:\n\
   atelier task list [--json]\n\
   atelier task status <request-id> [--json]\n\
   atelier task cancel <request-id> [--reason <text>] [--json]\n\
-  atelier worktree create --workspace <path> --task <name> [--json]\n\n\
+  atelier worktree create --workspace <path> --task <name> [--json]\n\
+  atelier provider patch --provider <hermes|gajecode> [--json]\n\
+  atelier provider prepare --provider <hermes|gajecode> [--json]\n\n\
   atelier ui focus\n\
   atelier ui browser --url <https-url>\n\
   atelier ui open --url <loopback-url>\n\
@@ -356,6 +358,66 @@ fn run_worktree(args: &[String]) -> Result<(), String> {
     print_json(&json!({ "queued": true, "request": request }))
 }
 
+/// `atelier provider patch` — headless twin of the Connections patch button.
+/// Runs the exact same backup → install → verify → rollback pipeline in this
+/// process (guarded by the cross-process patch lock) and prints the outcome.
+fn run_provider(args: &[String]) -> Result<(), String> {
+    let action = args.get(2).map(String::as_str);
+    if !matches!(action, Some("patch") | Some("prepare")) {
+        return Err(
+            "Usage: atelier provider <patch|prepare> --provider <hermes|gajecode> [--json]"
+                .to_string(),
+        );
+    }
+    let provider = required_option(args, "--provider")?.to_ascii_lowercase();
+    if !matches!(provider.as_str(), "hermes" | "gajecode") {
+        return Err("Provider must be hermes or gajecode.".to_string());
+    }
+    let json_output = flag(args, "--json");
+    let app_support = crate::credentials::app_support_dir().ok_or_else(|| {
+        "Could not resolve the Atelier Application Support directory.".to_string()
+    })?;
+    let mut progress = |state: &str, message: &str| {
+        if !json_output {
+            println!("[{state}] {message}");
+        }
+    };
+    if action == Some("prepare") {
+        let readiness = crate::credentials::prepare_managed_runtime_blocking(
+            &app_support,
+            &provider,
+            &mut progress,
+        )?;
+        return if json_output {
+            print_json(&readiness)
+        } else {
+            println!(
+                "{}: ready (installed {})",
+                readiness.provider, readiness.installed_version
+            );
+            Ok(())
+        };
+    }
+    let outcome =
+        crate::provider_patch::patch_provider_blocking(&app_support, &provider, &mut progress)?;
+    if json_output {
+        print_json(&outcome)
+    } else {
+        println!(
+            "{}: {} -> {}{}",
+            outcome.provider,
+            outcome.from_version.as_deref().unwrap_or("-"),
+            outcome.to_version,
+            if outcome.no_op {
+                " (already latest)"
+            } else {
+                ""
+            },
+        );
+        Ok(())
+    }
+}
+
 fn run_ui(args: &[String]) -> Result<(), String> {
     let subcommand = args.get(2).map(String::as_str).unwrap_or("");
     let (action, target, value, width, height) = match subcommand {
@@ -449,6 +511,7 @@ pub(crate) fn try_run(args: &[String]) -> Option<Result<(), String>> {
             | "verify"
             | "task"
             | "worktree"
+            | "provider"
             | "ui"
     );
     if !handled {
@@ -465,6 +528,7 @@ pub(crate) fn try_run(args: &[String]) -> Option<Result<(), String>> {
         "verify" => run_snapshot(args, true),
         "task" => run_task(args),
         "worktree" => run_worktree(args),
+        "provider" => run_provider(args),
         "ui" => run_ui(args),
         _ => unreachable!(),
     };

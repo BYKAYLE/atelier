@@ -46,18 +46,17 @@ const HERMES_COMMIT: &str = "3ef6bbd201263d354fd83ec55b3c306ded2eb72a";
 // Upstream release tag that resolves (peeled) to HERMES_COMMIT. Display only —
 // install and readiness stay bound to the exact commit above.
 const HERMES_PINNED_RELEASE_TAG: &str = "v2026.7.20";
-// Latest upstream tag actually tested by Atelier on 2026-08-26. Its source
-// build raises `RuntimeError: Building wheels or sdists ... is not supported`
-// under the exact uv-tool path used by the managed adapter, so promotion needs
-// a transactional migration to Hermes' shell-installer layout first.
-const HERMES_VALIDATED_BLOCKED_TAG: &str = "v2026.8.19";
-const HERMES_VALIDATION_STATUS: &str = "installer-migration-required";
+// Upstream blocks wheel/sdist builds since v2026.8.19 (`setup.py` guard), so
+// newer tags cannot install through the legacy uv-tool path. The patch
+// pipeline (provider_patch.rs) instead installs the shell-installer layout:
+// a shallow git checkout at the release tag plus an editable `uv sync` venv
+// ("engine" layout), self-contained inside the managed provider root.
 const UV_BOOTSTRAP_VERSION: &str = "0.10.12";
 const MANAGED_RUNTIME_RECEIPT_SCHEMA: u32 = 2;
 const MANAGED_RUNTIME_POLICY_VERSION: &str = "atelier-managed-basic-auto-v1";
 // v3: gajae-code 0.15.0 retired the bundled `team` skill and ships `autoresearch` instead.
 const MANAGED_SKILL_BOOTSTRAP_VERSION: &str = "atelier-default-skills-integrity-v3";
-const MANAGED_RUNTIME_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const MANAGED_RUNTIME_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 const MANAGED_RUNTIME_LOCK_WAIT: Duration = Duration::from_secs(21 * 60);
 const MANAGED_RECEIPT_MAX_BYTES: u64 = 64 * 1024;
 const CODEX_AUTH_MAX_BYTES: u64 = 64 * 1024;
@@ -119,6 +118,10 @@ pub struct ManagedAgentRuntimeReadiness {
     pub skills_dir: String,
     pub workspace_dir: Option<String>,
     pub runtime_pin: String,
+    /// Actual installed runtime version (semver, or a commit hash for Hermes).
+    /// `runtime_pin` is only the minimum verified baseline; the receipt-backed
+    /// installed version is the source of truth after an upstream patch.
+    pub installed_version: String,
     pub dependency_pin: Option<String>,
     pub policy_version: String,
     pub skill_bootstrap_version: String,
@@ -138,7 +141,13 @@ struct ManagedAgentRuntimeProgress {
 struct ManagedRuntimeReceipt {
     schema_version: u32,
     provider: String,
+    /// Minimum verified baseline for this Atelier build. Not the install target
+    /// identity: `installed_version` is. Kept name for receipt compatibility.
     runtime_pin: String,
+    /// Actual installed runtime version. Legacy receipts (pin-exact installs)
+    /// omit it; `load_runtime_receipt` backfills it from `runtime_pin`.
+    #[serde(default)]
+    installed_version: Option<String>,
     dependency_pin: Option<String>,
     policy_version: String,
     skill_bootstrap_version: String,
@@ -148,16 +157,16 @@ struct ManagedRuntimeReceipt {
 }
 
 #[derive(Clone, Debug)]
-struct ManagedRuntimeLayout {
-    provider: &'static str,
-    root: PathBuf,
-    home: PathBuf,
-    state: PathBuf,
-    cache: PathBuf,
-    temp: PathBuf,
-    skills: PathBuf,
-    workspace: Option<PathBuf>,
-    receipt: PathBuf,
+pub(crate) struct ManagedRuntimeLayout {
+    pub(crate) provider: &'static str,
+    pub(crate) root: PathBuf,
+    pub(crate) home: PathBuf,
+    pub(crate) state: PathBuf,
+    pub(crate) cache: PathBuf,
+    pub(crate) temp: PathBuf,
+    pub(crate) skills: PathBuf,
+    pub(crate) workspace: Option<PathBuf>,
+    pub(crate) receipt: PathBuf,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -295,7 +304,7 @@ fn configure_background_command(command: &mut Command) {
 #[cfg(not(target_os = "windows"))]
 fn configure_background_command(_: &mut Command) {}
 
-fn cli_command(cli: &str) -> Command {
+pub(crate) fn cli_command(cli: &str) -> Command {
     #[cfg(target_os = "windows")]
     {
         crate::agent_process::command_for_cli(cli)
@@ -2081,7 +2090,7 @@ fn mask_key(key: &str) -> String {
     format!("{head}…{tail}")
 }
 
-fn app_support_dir() -> Option<PathBuf> {
+pub(crate) fn app_support_dir() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
         let base = std::env::var_os("APPDATA")
@@ -2105,7 +2114,7 @@ fn app_support_dir() -> Option<PathBuf> {
     }
 }
 
-fn managed_runtime_layout_at(
+pub(crate) fn managed_runtime_layout_at(
     app_support: &Path,
     provider: &str,
 ) -> Result<ManagedRuntimeLayout, String> {
@@ -2195,6 +2204,98 @@ fn ensure_runtime_layout(layout: &ManagedRuntimeLayout) -> Result<(), String> {
 struct HermesInstallRecord {
     spec: String,
     executable: String,
+    /// `None`/absent = legacy uv-tool layout at the pinned commit.
+    /// `Some("engine")` = git-checkout + editable-venv layout that upstream
+    /// patches install; `engine` then carries the verified identity.
+    #[serde(default)]
+    layout: Option<String>,
+    #[serde(default)]
+    engine: Option<HermesEngineRecord>,
+}
+
+/// Identity of an engine-layout Hermes install: the upstream release tag, its
+/// peeled commit (checkout HEAD), and the `hermes --version` version string.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct HermesEngineRecord {
+    pub(crate) tag: String,
+    pub(crate) commit: String,
+    pub(crate) version: String,
+}
+
+pub(crate) const HERMES_ENGINE_LAYOUT: &str = "engine";
+
+pub(crate) fn hermes_engine_dir_at(app_support: &Path) -> PathBuf {
+    hermes_provider_root_at(app_support).join("engine")
+}
+
+pub(crate) fn hermes_engine_executable_path_at(app_support: &Path) -> Option<PathBuf> {
+    let candidate = hermes_engine_dir_at(app_support)
+        .join(".venv")
+        .join("bin")
+        .join("hermes");
+    candidate
+        .is_file()
+        .then(|| std::fs::canonicalize(&candidate).unwrap_or(candidate))
+}
+
+fn load_hermes_install_record_at(app_support: &Path) -> Option<HermesInstallRecord> {
+    let path = hermes_install_record_path_at(app_support);
+    let metadata = std::fs::metadata(&path).ok()?;
+    if metadata.len() == 0 || metadata.len() > MANAGED_RECEIPT_MAX_BYTES {
+        return None;
+    }
+    let text = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+pub(crate) fn load_hermes_engine_record_at(app_support: &Path) -> Option<HermesEngineRecord> {
+    let record = load_hermes_install_record_at(app_support)?;
+    if record.layout.as_deref() != Some(HERMES_ENGINE_LAYOUT) {
+        return None;
+    }
+    record.engine
+}
+
+pub(crate) fn save_hermes_engine_install_record_at(
+    app_support: &Path,
+    executable: &Path,
+    engine: &HermesEngineRecord,
+) -> Result<(), String> {
+    let record = HermesInstallRecord {
+        spec: format!(
+            "hermes-agent[anthropic] @ engine-checkout {}@{}",
+            engine.tag, engine.commit
+        ),
+        executable: std::fs::canonicalize(executable)
+            .unwrap_or_else(|_| executable.to_path_buf())
+            .to_string_lossy()
+            .into_owned(),
+        layout: Some(HERMES_ENGINE_LAYOUT.to_string()),
+        engine: Some(engine.clone()),
+    };
+    write_hermes_install_record_at(app_support, &record)
+}
+
+fn write_hermes_install_record_at(
+    app_support: &Path,
+    record: &HermesInstallRecord,
+) -> Result<(), String> {
+    let path = hermes_install_record_path_at(app_support);
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Could not resolve the Atelier Hermes state directory.".to_string())?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("create {}: {error}", parent.display()))?;
+    let text = serde_json::to_string_pretty(record)
+        .map_err(|error| format!("serialize Hermes install record: {error}"))?;
+    std::fs::write(&path, format!("{text}\n"))
+        .map_err(|error| format!("write {}: {error}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
 }
 
 fn hermes_provider_root_at(app_support: &Path) -> PathBuf {
@@ -2247,30 +2348,25 @@ fn load_hermes_install_record() -> Option<HermesInstallRecord> {
 }
 
 fn save_hermes_install_record_at(app_support: &Path, executable: &Path) -> Result<(), String> {
-    let path = hermes_install_record_path_at(app_support);
-    let parent = path
-        .parent()
-        .ok_or_else(|| "Could not resolve the Atelier Hermes state directory.".to_string())?;
-    std::fs::create_dir_all(parent)
-        .map_err(|error| format!("create {}: {error}", parent.display()))?;
     let executable = std::fs::canonicalize(executable).unwrap_or_else(|_| executable.to_path_buf());
     let record = HermesInstallRecord {
         spec: HERMES_GIT_SPEC.to_string(),
         executable: executable.to_string_lossy().into_owned(),
+        layout: None,
+        engine: None,
     };
-    let text = serde_json::to_string_pretty(&record)
-        .map_err(|error| format!("serialize Hermes install record: {error}"))?;
-    std::fs::write(&path, format!("{text}\n"))
-        .map_err(|error| format!("write {}: {error}", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-    }
-    Ok(())
+    write_hermes_install_record_at(app_support, &record)
 }
 
 fn hermes_managed_executable_path_at(app_support: &Path) -> Option<PathBuf> {
+    // The install record decides which layout is authoritative: after an
+    // upstream patch the engine checkout owns the runtime even while the
+    // legacy uv-tool install is retained as the rollback copy.
+    if load_hermes_engine_record_at(app_support).is_some() {
+        if let Some(engine) = hermes_engine_executable_path_at(app_support) {
+            return Some(engine);
+        }
+    }
     let bins = [
         hermes_uv_bin_dir_at(app_support),
         hermes_provider_root_at(app_support).join("bin"),
@@ -2331,10 +2427,13 @@ fn hermes_install_record_matches_spec_at(app_support: &Path) -> bool {
 
 fn hermes_install_record_is_current() -> bool {
     load_hermes_install_record().is_some_and(|record| {
-        let executable = PathBuf::from(record.executable);
-        record.spec == HERMES_GIT_SPEC
-            && executable.is_file()
-            && hermes_provider_root().is_some_and(|root| executable.starts_with(root))
+        let executable = PathBuf::from(&record.executable);
+        let in_root = executable.is_file()
+            && hermes_provider_root().is_some_and(|root| executable.starts_with(root));
+        if record.layout.as_deref() == Some(HERMES_ENGINE_LAYOUT) {
+            return in_root && record.engine.is_some();
+        }
+        record.spec == HERMES_GIT_SPEC && in_root
     })
 }
 
@@ -2547,7 +2646,7 @@ fn clear_bootstrap_credential_env(command: &mut Command) {
     }
 }
 
-fn configure_hermes_runtime_env_at(
+pub(crate) fn configure_hermes_runtime_env_at(
     command: &mut Command,
     app_support: &Path,
 ) -> Result<(), String> {
@@ -4441,7 +4540,7 @@ fn installer_output(stdout: &[u8], stderr: &[u8]) -> String {
     crate::agent_process::clip_cli_output(redact_login_output(&combined))
 }
 
-fn run_cli_installer(mut command: Command, label: &'static str) -> Result<(), String> {
+pub(crate) fn run_cli_installer(mut command: Command, label: &'static str) -> Result<(), String> {
     configure_background_command(&mut command);
     let has_explicit_path = command
         .get_envs()
@@ -4512,7 +4611,7 @@ fn run_cli_installer(mut command: Command, label: &'static str) -> Result<(), St
     }
 }
 
-fn run_runtime_probe(
+pub(crate) fn run_runtime_probe(
     mut command: Command,
     label: &'static str,
     timeout: Duration,
@@ -5172,7 +5271,7 @@ fn verify_hermes_installed_skills_against_source_at(
     Ok(installed_hashes.len())
 }
 
-fn hermes_git_command(checkout: &Path) -> Command {
+pub(crate) fn hermes_git_command(checkout: &Path) -> Command {
     let executable = if cfg!(target_os = "macos") && Path::new("/usr/bin/git").is_file() {
         PathBuf::from("/usr/bin/git")
     } else {
@@ -5223,7 +5322,11 @@ fn run_hermes_git_output(mut command: Command, label: &str) -> Result<Output, St
     Ok(output)
 }
 
-fn hermes_git_stdout(checkout: &Path, args: &[&str], label: &str) -> Result<String, String> {
+pub(crate) fn hermes_git_stdout(
+    checkout: &Path,
+    args: &[&str],
+    label: &str,
+) -> Result<String, String> {
     let mut command = hermes_git_command(checkout);
     command.args(args);
     let output = run_hermes_git_output(command, label)?;
@@ -5269,6 +5372,25 @@ fn hermes_checkout_matches_commit(
         std::fs::canonicalize(managed_cache)
             .map_err(|error| format!("resolve {}: {error}", managed_cache.display()))?,
     ))
+}
+
+/// Locate a git checkout whose HEAD is `expected_commit`, to serve as the
+/// durable bundled-skill source. The engine checkout (patched layout) is
+/// preferred; the uv git cache scan remains the pinned-layout path.
+fn locate_hermes_source_checkout_at(
+    app_support: &Path,
+    expected_commit: &str,
+) -> Result<PathBuf, String> {
+    let engine_dir = hermes_engine_dir_at(app_support);
+    if engine_dir.join(".git").exists() {
+        let layout = managed_runtime_layout_at(app_support, "hermes")?;
+        let engine_dir =
+            canonical_real_directory_within(&engine_dir, &layout.root, "Hermes engine checkout")?;
+        if hermes_checkout_matches_commit(&engine_dir, &engine_dir, expected_commit)? {
+            return Ok(engine_dir);
+        }
+    }
+    locate_hermes_pinned_checkout_at(app_support, expected_commit)
 }
 
 fn locate_hermes_pinned_checkout_at(
@@ -5559,7 +5681,7 @@ fn materialize_hermes_bundled_source_at(
     if let Ok((skills_dir, _)) = verify_hermes_bundled_source_at(app_support, expected_commit) {
         return Ok(skills_dir);
     }
-    let checkout = locate_hermes_pinned_checkout_at(app_support, expected_commit)?;
+    let checkout = locate_hermes_source_checkout_at(app_support, expected_commit)?;
     let entries = hermes_git_tree_entries(&checkout, expected_commit)?;
     let staging = layout
         .temp
@@ -5936,7 +6058,7 @@ fn gajecode_command_at(app_support: &Path) -> Result<Command, String> {
     Ok(command)
 }
 
-fn verify_gajecode_components_at(app_support: &Path) -> Result<(PathBuf, usize), String> {
+fn verify_gajecode_components_at(app_support: &Path) -> Result<(PathBuf, usize, String), String> {
     let layout = managed_runtime_layout_at(app_support, "gajecode")?;
     let bun = gajecode_bun_executable_path_at(app_support)
         .ok_or_else(|| "The Atelier-managed Bun executable is missing.".to_string())?;
@@ -5967,9 +6089,12 @@ fn verify_gajecode_components_at(app_support: &Path) -> Result<(PathBuf, usize),
         MANAGED_RUNTIME_CHECK_TIMEOUT,
     )?)
     .ok_or_else(|| "Could not parse the Atelier-managed Gajaecode version.".to_string())?;
-    if detected != GAJAE_CODE_VERSION {
+    // The pin is a minimum verified baseline, not an exact target: upstream
+    // patches may legitimately move the installed runtime ahead of it. Only a
+    // runtime below the baseline fails readiness (auto-repair reinstalls).
+    if compare_semver(&detected, GAJAE_CODE_VERSION) == std::cmp::Ordering::Less {
         return Err(format!(
-            "Atelier requires Gajaecode {GAJAE_CODE_VERSION}, but the managed runtime reported {detected}."
+            "Atelier requires Gajaecode {GAJAE_CODE_VERSION} or newer, but the managed runtime reported {detected}."
         ));
     }
 
@@ -5988,11 +6113,14 @@ fn verify_gajecode_components_at(app_support: &Path) -> Result<(PathBuf, usize),
         MANAGED_RUNTIME_CHECK_TIMEOUT,
     )?;
     let skill_count = verify_gajecode_skill_integrity_manifest(&layout.skills)?;
-    Ok((executable, skill_count))
+    Ok((executable, skill_count, detected))
 }
 
-fn verify_hermes_components_at(app_support: &Path) -> Result<(PathBuf, usize), String> {
+fn verify_hermes_components_at(app_support: &Path) -> Result<(PathBuf, usize, String), String> {
     let layout = managed_runtime_layout_at(app_support, "hermes")?;
+    if let Some(engine) = load_hermes_engine_record_at(app_support) {
+        return verify_hermes_engine_components_at(app_support, &layout, &engine);
+    }
     let executable = hermes_managed_executable_path_at(app_support)
         .ok_or_else(|| "The Atelier-managed Hermes executable is missing.".to_string())?;
     let executable = canonical_managed_file(&executable, &layout.root)?;
@@ -6015,7 +6143,60 @@ fn verify_hermes_components_at(app_support: &Path) -> Result<(PathBuf, usize), S
         &layout.skills,
         HERMES_COMMIT,
     )?;
-    Ok((executable, skill_count))
+    Ok((executable, skill_count, HERMES_COMMIT.to_string()))
+}
+
+/// Readiness for the engine (git-checkout + editable venv) Hermes layout that
+/// upstream patches install. Fail-closed on provenance (checkout HEAD must be
+/// the recorded commit), the baseline floor (recorded tag must not be older
+/// than the Atelier-pinned release), Python isolation, and skill integrity.
+fn verify_hermes_engine_components_at(
+    app_support: &Path,
+    layout: &ManagedRuntimeLayout,
+    engine: &HermesEngineRecord,
+) -> Result<(PathBuf, usize, String), String> {
+    let engine_dir = hermes_engine_dir_at(app_support);
+    let engine_dir =
+        canonical_real_directory_within(&engine_dir, &layout.root, "Hermes engine checkout")?;
+    if !hermes_checkout_matches_commit(&engine_dir, &engine_dir, &engine.commit)? {
+        return Err(format!(
+            "The Atelier-managed Hermes engine checkout does not match recorded commit {}.",
+            engine.commit
+        ));
+    }
+    if semver_parts(&crate::upstream_check::version_from_tag(&engine.tag))
+        < semver_parts(&crate::upstream_check::version_from_tag(
+            HERMES_PINNED_RELEASE_TAG,
+        ))
+    {
+        return Err(format!(
+            "The Atelier-managed Hermes engine tag {} is older than the verified baseline {HERMES_PINNED_RELEASE_TAG}.",
+            engine.tag
+        ));
+    }
+    let executable = hermes_engine_executable_path_at(app_support)
+        .ok_or_else(|| "The Atelier-managed Hermes engine executable is missing.".to_string())?;
+    let executable = canonical_managed_file(&executable, &layout.root)?;
+    let python = engine_dir.join(".venv").join("bin").join("python");
+    let resolved = std::fs::canonicalize(&python)
+        .map_err(|error| format!("resolve Hermes engine Python {}: {error}", python.display()))?;
+    let provider_root = canonical_real_directory_within(
+        &hermes_provider_root_at(app_support),
+        app_support,
+        "Hermes provider root",
+    )?;
+    if !resolved.starts_with(&provider_root) {
+        return Err(format!(
+            "Hermes engine Python escaped the Atelier provider runtime root: {}",
+            resolved.display()
+        ));
+    }
+    let skill_count = verify_hermes_installed_skills_against_source_at(
+        app_support,
+        &layout.skills,
+        &engine.commit,
+    )?;
+    Ok((executable, skill_count, engine.commit.clone()))
 }
 
 fn grok_macos_binary_sha256(target: &str) -> Option<&'static str> {
@@ -6034,7 +6215,7 @@ fn grok_command_at(app_support: &Path) -> Result<Command, String> {
     Ok(command)
 }
 
-fn verify_grok_components_at(app_support: &Path) -> Result<(PathBuf, usize), String> {
+fn verify_grok_components_at(app_support: &Path) -> Result<(PathBuf, usize, String), String> {
     let layout = managed_runtime_layout_at(app_support, "grok")?;
     let executable = grok_executable_path_at(app_support)
         .ok_or_else(|| "The Atelier-managed Grok executable is missing.".to_string())?;
@@ -6063,7 +6244,7 @@ fn verify_grok_components_at(app_support: &Path) -> Result<(PathBuf, usize), Str
             "Atelier requires Grok {GROK_VERSION}, but the managed runtime reported {detected}."
         ));
     }
-    Ok((executable, 0))
+    Ok((executable, 0, GROK_VERSION.to_string()))
 }
 
 fn runtime_pins(provider: &str) -> Result<(&'static str, Option<&'static str>), String> {
@@ -6079,12 +6260,14 @@ fn expected_runtime_receipt(
     layout: &ManagedRuntimeLayout,
     executable: &Path,
     skill_count: usize,
+    installed_version: &str,
 ) -> Result<ManagedRuntimeReceipt, String> {
     let (runtime_pin, dependency_pin) = runtime_pins(layout.provider)?;
     Ok(ManagedRuntimeReceipt {
         schema_version: MANAGED_RUNTIME_RECEIPT_SCHEMA,
         provider: layout.provider.to_string(),
         runtime_pin: runtime_pin.to_string(),
+        installed_version: Some(installed_version.to_string()),
         dependency_pin: dependency_pin.map(str::to_string),
         policy_version: MANAGED_RUNTIME_POLICY_VERSION.to_string(),
         skill_bootstrap_version: MANAGED_SKILL_BOOTSTRAP_VERSION.to_string(),
@@ -6099,7 +6282,13 @@ fn load_runtime_receipt(path: &Path) -> Option<ManagedRuntimeReceipt> {
     if metadata.len() == 0 || metadata.len() > MANAGED_RECEIPT_MAX_BYTES {
         return None;
     }
-    serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
+    let mut receipt: ManagedRuntimeReceipt =
+        serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    // Legacy (pre-patch-era) receipts were always written at the exact pin.
+    if receipt.installed_version.is_none() {
+        receipt.installed_version = Some(receipt.runtime_pin.clone());
+    }
+    Some(receipt)
 }
 
 fn write_runtime_receipt(path: &Path, receipt: &ManagedRuntimeReceipt) -> Result<(), String> {
@@ -6122,36 +6311,38 @@ fn write_runtime_receipt(path: &Path, receipt: &ManagedRuntimeReceipt) -> Result
     std::fs::rename(&temp, path).map_err(|error| format!("publish {}: {error}", path.display()))
 }
 
-fn verify_managed_runtime_at(
+pub(crate) fn verify_managed_runtime_at(
     app_support: &Path,
     provider: &str,
 ) -> Result<ManagedAgentRuntimeReadiness, String> {
     let layout = managed_runtime_layout_at(app_support, provider)?;
-    let (executable, skill_count) = match provider {
+    let (executable, skill_count, installed_version) = match provider {
         "hermes" => verify_hermes_components_at(app_support)?,
         "gajecode" => verify_gajecode_components_at(app_support)?,
         "grok" => verify_grok_components_at(app_support)?,
         _ => return Err(format!("Unsupported managed runtime provider: {provider}")),
     };
-    let expected = expected_runtime_receipt(&layout, &executable, skill_count)?;
+    let expected = expected_runtime_receipt(&layout, &executable, skill_count, &installed_version)?;
     if load_runtime_receipt(&layout.receipt).as_ref() != Some(&expected) {
         return Err(format!(
             "{provider} managed runtime readiness receipt is missing or stale."
         ));
     }
-    readiness_from(layout, executable, false)
+    readiness_from(layout, executable, false, installed_version)
 }
 
 fn readiness_from(
     layout: ManagedRuntimeLayout,
     executable: PathBuf,
     repaired: bool,
+    installed_version: String,
 ) -> Result<ManagedAgentRuntimeReadiness, String> {
     let (runtime_pin, dependency_pin) = runtime_pins(layout.provider)?;
     Ok(ManagedAgentRuntimeReadiness {
         provider: layout.provider.to_string(),
         ready: true,
         repaired,
+        installed_version,
         executable: executable.to_string_lossy().into_owned(),
         provider_root: layout.root.to_string_lossy().into_owned(),
         home_dir: layout.home.to_string_lossy().into_owned(),
@@ -6170,7 +6361,9 @@ fn readiness_from(
     })
 }
 
-fn acquire_runtime_install_lock(provider: &str) -> Result<MutexGuard<'static, ()>, String> {
+pub(crate) fn acquire_runtime_install_lock(
+    provider: &str,
+) -> Result<MutexGuard<'static, ()>, String> {
     let lock = match provider {
         "hermes" => &*HERMES_RUNTIME_INSTALL_LOCK,
         "gajecode" => &*GAJAE_RUNTIME_INSTALL_LOCK,
@@ -6323,7 +6516,7 @@ fn download_managed_uv_at(_: &Path) -> Result<PathBuf, String> {
         .ok_or_else(|| "Automatic uv bootstrap is currently available on macOS only.".to_string())
 }
 
-fn ensure_uv_at(app_support: &Path) -> Result<PathBuf, String> {
+pub(crate) fn ensure_uv_at(app_support: &Path) -> Result<PathBuf, String> {
     let managed = hermes_provider_root_at(app_support)
         .join("bootstrap")
         .join("bin")
@@ -6387,7 +6580,7 @@ fn bootstrap_hermes_skills_at(app_support: &Path) -> Result<(), String> {
     bootstrap_hermes_skills_at_with_commit(app_support, HERMES_COMMIT)
 }
 
-fn bootstrap_hermes_skills_at_with_commit(
+pub(crate) fn bootstrap_hermes_skills_at_with_commit(
     app_support: &Path,
     expected_commit: &str,
 ) -> Result<(), String> {
@@ -6478,7 +6671,10 @@ fn install_hermes_cli_at(app_support: &Path) -> Result<(), String> {
     bootstrap_hermes_skills_at(app_support)
 }
 
-fn ensure_hermes_managed_python_at(app_support: &Path, uv: &Path) -> Result<PathBuf, String> {
+pub(crate) fn ensure_hermes_managed_python_at(
+    app_support: &Path,
+    uv: &Path,
+) -> Result<PathBuf, String> {
     let layout = managed_runtime_layout_at(app_support, "hermes")?;
     let python_dir = hermes_uv_python_dir_at(app_support);
     std::fs::create_dir_all(&python_dir)
@@ -6521,12 +6717,6 @@ fn ensure_hermes_managed_python_at(app_support: &Path, uv: &Path) -> Result<Path
             python_dir.display()
         )
     })
-}
-
-fn install_hermes_cli() -> Result<(), String> {
-    let app_support = app_support_dir()
-        .ok_or_else(|| "Could not resolve the Atelier Hermes directory.".to_string())?;
-    install_hermes_cli_at(&app_support)
 }
 
 #[cfg(target_os = "macos")]
@@ -6620,7 +6810,10 @@ fn bootstrap_gajecode_skills_at(app_support: &Path) -> Result<(), String> {
     write_gajecode_skill_integrity_manifest(&layout.skills)
 }
 
-fn install_gajecode_cli_at(app_support: &Path) -> Result<(), String> {
+pub(crate) fn install_gajecode_cli_at(
+    app_support: &Path,
+    package_spec: &str,
+) -> Result<(), String> {
     let bun = install_managed_bun_at(app_support)?;
     let mut bun_version = cli_command(&bun.to_string_lossy());
     configure_gajecode_runtime_env_at(&mut bun_version, app_support)?;
@@ -6638,7 +6831,7 @@ fn install_gajecode_cli_at(app_support: &Path) -> Result<(), String> {
     }
     let mut command = cli_command(&bun.to_string_lossy());
     configure_gajecode_runtime_env_at(&mut command, app_support)?;
-    command.args(["install", "-g", GAJAE_CODE_PACKAGE]);
+    command.arg("install").arg("-g").arg(package_spec);
     run_cli_installer(command, "gajecode")?;
     bootstrap_gajecode_skills_at(app_support)
 }
@@ -6668,7 +6861,7 @@ fn install_grok_cli_at(app_support: &Path) -> Result<(), String> {
 
     let destination = layout.root.join("bin").join("grok");
     atomic_install_executable(&downloaded, &destination)?;
-    let (verified, _) = verify_grok_components_at(app_support)?;
+    let (verified, _, _) = verify_grok_components_at(app_support)?;
     if verified != std::fs::canonicalize(&destination).unwrap_or(destination) {
         return Err("Grok installer published an unexpected executable path.".to_string());
     }
@@ -6680,6 +6873,19 @@ fn install_grok_cli_at(_: &Path) -> Result<(), String> {
     Err("Automatic pinned Grok installation is currently verified on macOS only.".to_string())
 }
 
+/// Headless twin of `provider_prepare_managed_runtime` for the Atelier CLI
+/// (`atelier provider prepare`): same verify→install→receipt pipeline, with
+/// progress lines instead of Tauri events.
+pub(crate) fn prepare_managed_runtime_blocking(
+    app_support: &Path,
+    provider: &str,
+    progress: &mut dyn FnMut(&str, &str),
+) -> Result<ManagedAgentRuntimeReadiness, String> {
+    ensure_managed_agent_runtime_blocking_at(app_support, provider, |state, message| {
+        progress(state, message)
+    })
+}
+
 fn ensure_managed_agent_runtime_blocking_at<F>(
     app_support: &Path,
     provider: &str,
@@ -6689,6 +6895,7 @@ where
     F: FnMut(&str, &str),
 {
     let _guard = acquire_runtime_install_lock(provider)?;
+    crate::provider_patch::ensure_no_active_patch(app_support, provider)?;
     progress("checking", "Checking the Atelier-managed runtime.");
     if let Ok(ready) = verify_managed_runtime_at(app_support, provider) {
         progress("ready", "The Atelier-managed runtime is ready.");
@@ -6697,11 +6904,28 @@ where
 
     progress(
         "installing",
-        "Installing or repairing the pinned Atelier-managed runtime.",
+        "Installing or repairing the verified Atelier-managed runtime.",
     );
+    // Repair reinstalls the version the receipt/install record proves was last
+    // verified on this machine — a successful upstream patch must survive
+    // re-provisioning instead of being silently rolled back to the baseline.
     match provider {
-        "hermes" => install_hermes_cli_at(app_support)?,
-        "gajecode" => install_gajecode_cli_at(app_support)?,
+        "hermes" => {
+            if let Some(engine) = load_hermes_engine_record_at(app_support) {
+                crate::provider_patch::install_hermes_engine_at(
+                    app_support,
+                    &engine.tag,
+                    &engine.commit,
+                    &mut |_, _| {},
+                )?;
+            } else {
+                install_hermes_cli_at(app_support)?;
+            }
+        }
+        "gajecode" => {
+            let target = gajecode_repair_package_spec_at(app_support);
+            install_gajecode_cli_at(app_support, &target)?;
+        }
         "grok" => install_grok_cli_at(app_support)?,
         _ => return Err(format!("Unsupported managed runtime provider: {provider}")),
     }
@@ -6710,24 +6934,58 @@ where
         "bootstrapping_skills",
         "Verifying the isolated default skill bundle.",
     );
-    let layout = managed_runtime_layout_at(app_support, provider)?;
-    let (executable, skill_count) = match provider {
-        "hermes" => verify_hermes_components_at(app_support)?,
-        "gajecode" => verify_gajecode_components_at(app_support)?,
-        "grok" => verify_grok_components_at(app_support)?,
-        _ => return Err(format!("Unsupported managed runtime provider: {provider}")),
-    };
-    let receipt = expected_runtime_receipt(&layout, &executable, skill_count)?;
-    write_runtime_receipt(&layout.receipt, &receipt)?;
+    finalize_managed_runtime_receipt_at(app_support, provider)?;
 
     progress(
         "verifying",
-        "Validating the pinned runtime readiness receipt.",
+        "Validating the managed runtime readiness receipt.",
     );
     let mut ready = verify_managed_runtime_at(app_support, provider)?;
     ready.repaired = true;
     progress("ready", "The Atelier-managed runtime is ready.");
     Ok(ready)
+}
+
+/// Verify the freshly installed components, publish the readiness receipt that
+/// records the actually installed version, and re-verify end to end.
+pub(crate) fn finalize_managed_runtime_receipt_at(
+    app_support: &Path,
+    provider: &str,
+) -> Result<ManagedAgentRuntimeReadiness, String> {
+    let layout = managed_runtime_layout_at(app_support, provider)?;
+    let (executable, skill_count, installed_version) = match provider {
+        "hermes" => verify_hermes_components_at(app_support)?,
+        "gajecode" => verify_gajecode_components_at(app_support)?,
+        "grok" => verify_grok_components_at(app_support)?,
+        _ => return Err(format!("Unsupported managed runtime provider: {provider}")),
+    };
+    let receipt = expected_runtime_receipt(&layout, &executable, skill_count, &installed_version)?;
+    write_runtime_receipt(&layout.receipt, &receipt)?;
+    verify_managed_runtime_at(app_support, provider)
+}
+
+/// Package spec the gajecode repair path should reinstall: the receipt-proven
+/// installed version when it is at or above the baseline, otherwise the pin.
+fn gajecode_repair_package_spec_at(app_support: &Path) -> String {
+    let receipt = managed_runtime_layout_at(app_support, "gajecode")
+        .ok()
+        .and_then(|layout| load_runtime_receipt(&layout.receipt));
+    let installed = receipt.and_then(|receipt| receipt.installed_version);
+    match installed {
+        Some(version)
+            if !version.is_empty()
+                && version
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || c == '.' || c == '-')
+                && compare_semver(&version, GAJAE_CODE_VERSION) != std::cmp::Ordering::Less =>
+        {
+            format!(
+                "{}@{version}",
+                crate::upstream_check::GAJAE_UPSTREAM_PACKAGE
+            )
+        }
+        _ => GAJAE_CODE_PACKAGE.to_string(),
+    }
 }
 
 fn emit_managed_runtime_progress<R: Runtime>(
@@ -6793,16 +7051,19 @@ pub async fn provider_prepare_managed_runtime<R: Runtime>(
 pub struct GajecodeUpdateStatus {
     pub installed: bool,
     pub current_version: Option<String>,
+    /// Atelier minimum verified baseline (display); not the patch target.
     pub latest_version: Option<String>,
+    /// True when upstream publishes a version newer than the installed one —
+    /// the Connections patch button installs that upstream version.
     pub update_available: bool,
     pub message: Option<String>,
-    /// Upstream reference only (npm latest). Never feeds `update_available`.
     pub upstream_latest_version: Option<String>,
     pub upstream_checked_at: Option<String>,
     pub upstream_error: Option<String>,
 }
 
-/// Attach the upstream reference to a status without touching pin-based fields.
+/// Attach the upstream reference and derive `update_available` from it: the
+/// patch contract compares the installed version against upstream latest.
 fn with_gajecode_upstream(
     mut status: GajecodeUpdateStatus,
     upstream: crate::upstream_check::UpstreamReference,
@@ -6810,10 +7071,23 @@ fn with_gajecode_upstream(
     status.upstream_latest_version = upstream.latest_version;
     status.upstream_checked_at = upstream.checked_at;
     status.upstream_error = upstream.error;
+    status.update_available = status.installed
+        && match (
+            status.current_version.as_deref(),
+            status.upstream_latest_version.as_deref(),
+        ) {
+            (Some(current), Some(latest)) => {
+                compare_semver(latest, current) == std::cmp::Ordering::Greater
+            }
+            _ => false,
+        };
     status
 }
 
-fn upstream_reference_for(provider: &str, force: bool) -> crate::upstream_check::UpstreamReference {
+pub(crate) fn upstream_reference_for(
+    provider: &str,
+    force: bool,
+) -> crate::upstream_check::UpstreamReference {
     let provider_root = match provider {
         "gajecode" => gajecode_provider_root(),
         "hermes" => hermes_provider_root(),
@@ -6850,14 +7124,14 @@ fn first_semver_token(text: &str) -> Option<String> {
         .filter(|token| !token.is_empty())
 }
 
-fn semver_parts(version: &str) -> Vec<u64> {
+pub(crate) fn semver_parts(version: &str) -> Vec<u64> {
     version
         .split(['.', '-', '_'])
         .filter_map(|part| part.parse::<u64>().ok())
         .collect()
 }
 
-fn compare_semver(left: &str, right: &str) -> std::cmp::Ordering {
+pub(crate) fn compare_semver(left: &str, right: &str) -> std::cmp::Ordering {
     let left_parts = semver_parts(left);
     let right_parts = semver_parts(right);
     for index in 0..left_parts.len().max(right_parts.len()) {
@@ -6908,9 +7182,9 @@ fn gajecode_update_status(
             installed: true,
             current_version: None,
             latest_version,
-            update_available: true,
+            update_available: false,
             message: Some(
-                "설치된 가재코드 버전을 확인하지 못했습니다. 업데이트로 Atelier 지원 버전을 복구할 수 있습니다."
+                "설치된 가재코드 버전을 확인하지 못했습니다. 설치·복구를 실행해 검증된 런타임을 복원하세요."
                     .to_string(),
             ),
             upstream_latest_version: None,
@@ -6919,21 +7193,20 @@ fn gajecode_update_status(
         };
     };
 
-    let (update_available, message) = match compare_semver(&current, GAJAE_CODE_VERSION) {
-        std::cmp::Ordering::Less => (true, None),
-        std::cmp::Ordering::Equal => (false, None),
-        std::cmp::Ordering::Greater => (
-            false,
-            Some(format!(
-                "설치된 가재코드 {current}은 Atelier 지원 버전 {GAJAE_CODE_VERSION}보다 최신입니다. 설치·복구를 실행하면 지원 버전으로 복원됩니다."
-            )),
-        ),
-    };
+    // The pin is a minimum baseline. A runtime below it is a repair case for
+    // the install/repair button; upstream comparison (patch) happens in
+    // `with_gajecode_upstream` once the reference is attached.
+    let message = (compare_semver(&current, GAJAE_CODE_VERSION) == std::cmp::Ordering::Less)
+        .then(|| {
+            format!(
+                "설치된 가재코드 {current}은 Atelier 기준선 {GAJAE_CODE_VERSION}보다 오래되었습니다. 설치·복구를 실행하세요."
+            )
+        });
     GajecodeUpdateStatus {
         installed: true,
         current_version: Some(current),
         latest_version,
-        update_available,
+        update_available: false,
         message,
         upstream_latest_version: None,
         upstream_checked_at: None,
@@ -7039,45 +7312,51 @@ pub async fn grok_update<R: Runtime>(
 pub struct HermesUpdateStatus {
     pub installed: bool,
     pub current_version: Option<String>,
+    /// True when upstream publishes a release tag newer than the installed
+    /// runtime — the Connections patch button installs that tag.
     pub update_available: bool,
     pub commits_behind: Option<u32>,
     pub message: Option<String>,
-    /// Atelier-pinned commit (short) and its upstream release tag so the card can name the support pin.
+    /// Atelier baseline commit (short) and its upstream release tag so the card can name the support floor.
     pub pinned_commit: Option<String>,
     pub pinned_tag: Option<String>,
-    /// Upstream reference only (highest GitHub release tag). Never feeds `update_available`.
+    /// Release tag of the runtime that is actually installed (engine layout),
+    /// or the baseline tag for a pinned-layout install.
+    pub installed_tag: Option<String>,
     pub upstream_latest_version: Option<String>,
     pub upstream_latest_tag: Option<String>,
     pub upstream_checked_at: Option<String>,
     pub upstream_error: Option<String>,
-    pub upstream_validation_status: Option<String>,
 }
 
 fn hermes_update_status_base(
     installed: bool,
     current_version: Option<String>,
     install_record_current: bool,
+    installed_tag: Option<String>,
 ) -> HermesUpdateStatus {
-    let update_available = installed && !install_record_current;
-    let message = update_available.then(|| {
-        "Reinstall the Atelier-pinned Hermes build to restore a verified runtime.".to_string()
+    let message = (installed && !install_record_current).then(|| {
+        "설치 기록이 이 Atelier 빌드와 일치하지 않습니다. 설치·복구를 실행해 검증된 런타임을 복원하세요."
+            .to_string()
     });
     HermesUpdateStatus {
         installed,
         current_version,
-        update_available,
+        update_available: false,
         commits_behind: None,
         message,
         pinned_commit: Some(HERMES_COMMIT.chars().take(7).collect()),
         pinned_tag: Some(HERMES_PINNED_RELEASE_TAG.to_string()),
+        installed_tag,
         upstream_latest_version: None,
         upstream_latest_tag: None,
         upstream_checked_at: None,
         upstream_error: None,
-        upstream_validation_status: None,
     }
 }
 
+/// Attach the upstream reference and derive `update_available` from it: a
+/// release tag numerically newer than the installed tag is patchable.
 fn with_hermes_upstream(
     mut status: HermesUpdateStatus,
     upstream: crate::upstream_check::UpstreamReference,
@@ -7086,15 +7365,22 @@ fn with_hermes_upstream(
     status.upstream_latest_tag = upstream.latest_tag;
     status.upstream_checked_at = upstream.checked_at;
     status.upstream_error = upstream.error;
-    if status.upstream_latest_tag.as_deref() == Some(HERMES_VALIDATED_BLOCKED_TAG) {
-        status.upstream_validation_status = Some(HERMES_VALIDATION_STATUS.to_string());
-    }
+    status.update_available = status.installed
+        && match (
+            status.installed_tag.as_deref(),
+            status.upstream_latest_version.as_deref(),
+        ) {
+            (Some(installed_tag), Some(latest)) => {
+                semver_parts(latest)
+                    > semver_parts(&crate::upstream_check::version_from_tag(installed_tag))
+            }
+            _ => false,
+        };
     status
 }
 
-/// `hermes --version` 출력을 파싱해 현재 버전과 업데이트 여부를 보고한다.
-/// 업데이트 가능 여부는 설치 기록이 이 빌드의 고정 커밋과 일치하는지로만 판정하고,
-/// 업스트림 최신 태그는 참고용으로만 함께 보고한다.
+/// `hermes --version` 출력을 파싱해 현재 버전을 보고하고, 설치 기록의 태그와
+/// 업스트림 최신 태그를 비교해 패치 가능 여부(update_available)를 판정한다.
 #[tauri::command]
 pub async fn hermes_check_update(force: Option<bool>) -> Result<HermesUpdateStatus, String> {
     let force = force.unwrap_or(false);
@@ -7106,9 +7392,22 @@ pub async fn hermes_check_update(force: Option<bool>) -> Result<HermesUpdateStat
     .map_err(|error| format!("hermes update check task failed: {error}"))
 }
 
+fn hermes_installed_tag() -> Option<String> {
+    Some(hermes_installed_tag_at(&app_support_dir()?))
+}
+
+/// Release tag of the runtime that is actually installed: the engine record's
+/// tag after an upstream patch, otherwise the Atelier baseline tag.
+pub(crate) fn hermes_installed_tag_at(app_support: &Path) -> String {
+    match load_hermes_engine_record_at(app_support) {
+        Some(engine) => engine.tag,
+        None => HERMES_PINNED_RELEASE_TAG.to_string(),
+    }
+}
+
 fn hermes_check_update_blocking() -> HermesUpdateStatus {
     let Some(executable) = hermes_executable_path() else {
-        return hermes_update_status_base(false, None, true);
+        return hermes_update_status_base(false, None, true, None);
     };
     let mut command = cli_command(&executable.to_string_lossy());
     command
@@ -7117,14 +7416,14 @@ fn hermes_check_update_blocking() -> HermesUpdateStatus {
     configure_background_command(&mut command);
     let output = match command.output() {
         Ok(o) => o,
-        Err(_) => return hermes_update_status_base(false, None, true),
+        Err(_) => return hermes_update_status_base(false, None, true, None),
     };
     let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
     combined.push('\n');
     combined.push_str(&String::from_utf8_lossy(&output.stderr));
     let mut current_version: Option<String> = None;
     if !output.status.success() {
-        return hermes_update_status_base(false, None, true);
+        return hermes_update_status_base(false, None, true, None);
     }
     for line in combined.lines() {
         let trimmed = line.trim();
@@ -7132,16 +7431,36 @@ fn hermes_check_update_blocking() -> HermesUpdateStatus {
             current_version = Some(rest.to_string());
         }
     }
-    hermes_update_status_base(true, current_version, hermes_install_record_is_current())
+    hermes_update_status_base(
+        true,
+        current_version,
+        hermes_install_record_is_current(),
+        hermes_installed_tag(),
+    )
 }
 
-/// Mutable upstream updates can silently change the runtime after release. Reinstall the
-/// immutable Hermes commit selected by this Atelier build and return only after verification.
+/// Repair path: reinstall the verified runtime recorded for this machine (the
+/// engine checkout after a patch, otherwise the immutable pinned commit) and
+/// return only after verification.
 #[tauri::command]
 pub async fn hermes_update() -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(install_hermes_cli)
-        .await
-        .map_err(|error| format!("Hermes reinstall task failed: {error}"))?
+    tauri::async_runtime::spawn_blocking(|| -> Result<(), String> {
+        let app_support = app_support_dir()
+            .ok_or_else(|| "Could not resolve the Atelier Hermes directory.".to_string())?;
+        if let Some(engine) = load_hermes_engine_record_at(&app_support) {
+            crate::provider_patch::install_hermes_engine_at(
+                &app_support,
+                &engine.tag,
+                &engine.commit,
+                &mut |_, _| {},
+            )?;
+            finalize_managed_runtime_receipt_at(&app_support, "hermes").map(|_| ())
+        } else {
+            install_hermes_cli_at(&app_support)
+        }
+    })
+    .await
+    .map_err(|error| format!("Hermes reinstall task failed: {error}"))?
 }
 
 fn should_inject_agent_api_key(provider: &str, state: &CredentialState) -> bool {
@@ -7196,6 +7515,175 @@ pub fn env_var_for(provider: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temp_app_support(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "atelier-patch-contract-{label}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp app support");
+        dir
+    }
+
+    #[test]
+    fn legacy_readiness_receipts_backfill_installed_version_from_pin() {
+        let dir = temp_app_support("receipt-backfill");
+        let path = dir.join("readiness.json");
+        std::fs::write(
+            &path,
+            r#"{
+  "schemaVersion": 2,
+  "provider": "gajecode",
+  "runtimePin": "0.15.2",
+  "dependencyPin": "1.4.0",
+  "policyVersion": "atelier-managed-basic-auto-v1",
+  "skillBootstrapVersion": "atelier-default-skills-integrity-v3",
+  "executable": "/tmp/x",
+  "skillsDir": "/tmp/s",
+  "verifiedSkillCount": 4
+}"#,
+        )
+        .expect("write legacy receipt");
+        let receipt = load_runtime_receipt(&path).expect("legacy receipt must load");
+        assert_eq!(receipt.installed_version.as_deref(), Some("0.15.2"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn patched_receipt_round_trips_installed_version_ahead_of_pin() {
+        let dir = temp_app_support("receipt-patched");
+        let path = dir.join("readiness.json");
+        let receipt = ManagedRuntimeReceipt {
+            schema_version: MANAGED_RUNTIME_RECEIPT_SCHEMA,
+            provider: "gajecode".to_string(),
+            runtime_pin: GAJAE_CODE_VERSION.to_string(),
+            installed_version: Some("0.16.4".to_string()),
+            dependency_pin: Some(BUN_VERSION.to_string()),
+            policy_version: MANAGED_RUNTIME_POLICY_VERSION.to_string(),
+            skill_bootstrap_version: MANAGED_SKILL_BOOTSTRAP_VERSION.to_string(),
+            executable: "/tmp/x".to_string(),
+            skills_dir: "/tmp/s".to_string(),
+            verified_skill_count: 4,
+        };
+        write_runtime_receipt(&path, &receipt).expect("write receipt");
+        assert_eq!(load_runtime_receipt(&path).as_ref(), Some(&receipt));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gajecode_repair_reinstalls_receipt_version_not_the_baseline() {
+        let dir = temp_app_support("repair-target");
+        let provider_root = dir.join("providers").join("gajecode");
+        std::fs::create_dir_all(&provider_root).expect("provider root");
+        // No receipt at all → baseline package.
+        assert_eq!(gajecode_repair_package_spec_at(&dir), GAJAE_CODE_PACKAGE);
+        // Patched receipt ahead of the pin → reinstall the patched version.
+        let layout = managed_runtime_layout_at(&dir, "gajecode").expect("layout");
+        let receipt = ManagedRuntimeReceipt {
+            schema_version: MANAGED_RUNTIME_RECEIPT_SCHEMA,
+            provider: "gajecode".to_string(),
+            runtime_pin: GAJAE_CODE_VERSION.to_string(),
+            installed_version: Some("0.16.4".to_string()),
+            dependency_pin: Some(BUN_VERSION.to_string()),
+            policy_version: MANAGED_RUNTIME_POLICY_VERSION.to_string(),
+            skill_bootstrap_version: MANAGED_SKILL_BOOTSTRAP_VERSION.to_string(),
+            executable: "/tmp/x".to_string(),
+            skills_dir: "/tmp/s".to_string(),
+            verified_skill_count: 4,
+        };
+        write_runtime_receipt(&layout.receipt, &receipt).expect("write receipt");
+        assert_eq!(gajecode_repair_package_spec_at(&dir), "gajae-code@0.16.4");
+        // Below-baseline or malformed versions fall back to the pin.
+        let mut stale = receipt.clone();
+        stale.installed_version = Some("0.10.0".to_string());
+        write_runtime_receipt(&layout.receipt, &stale).expect("write receipt");
+        assert_eq!(gajecode_repair_package_spec_at(&dir), GAJAE_CODE_PACKAGE);
+        let mut garbage = receipt;
+        garbage.installed_version = Some("$(rm -rf /)".to_string());
+        write_runtime_receipt(&layout.receipt, &garbage).expect("write receipt");
+        assert_eq!(gajecode_repair_package_spec_at(&dir), GAJAE_CODE_PACKAGE);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gajecode_patch_availability_is_upstream_versus_installed() {
+        let base = gajecode_update_status(true, Some("0.15.2".to_string()));
+        let newer = crate::upstream_check::UpstreamReference {
+            latest_version: Some("0.16.4".to_string()),
+            latest_tag: None,
+            latest_commit: None,
+            checked_at: Some("2026-09-07T00:00:00Z".to_string()),
+            error: None,
+        };
+        assert!(with_gajecode_upstream(base, newer.clone()).update_available);
+        let same = crate::upstream_check::UpstreamReference {
+            latest_version: Some("0.15.2".to_string()),
+            ..newer.clone()
+        };
+        let status = gajecode_update_status(true, Some("0.15.2".to_string()));
+        assert!(!with_gajecode_upstream(status, same).update_available);
+        // Installed ahead of upstream (or lookup failure) must not offer a patch.
+        let status = gajecode_update_status(true, Some("0.17.0".to_string()));
+        assert!(!with_gajecode_upstream(status, newer).update_available);
+        let failed = crate::upstream_check::UpstreamReference {
+            latest_version: None,
+            latest_tag: None,
+            latest_commit: None,
+            checked_at: Some("2026-09-07T00:00:00Z".to_string()),
+            error: Some("offline".to_string()),
+        };
+        let status = gajecode_update_status(true, Some("0.15.2".to_string()));
+        assert!(!with_gajecode_upstream(status, failed).update_available);
+    }
+
+    #[test]
+    fn hermes_patch_availability_compares_release_tags() {
+        let newer = crate::upstream_check::UpstreamReference {
+            latest_version: Some("2026.8.31".to_string()),
+            latest_tag: Some("v2026.8.31".to_string()),
+            latest_commit: Some("29112bef099274229cadff79cdff7bf7b99c4b77".to_string()),
+            checked_at: Some("2026-09-07T00:00:00Z".to_string()),
+            error: None,
+        };
+        let pinned = hermes_update_status_base(
+            true,
+            Some("v0.19.0 (2026.7.20)".to_string()),
+            true,
+            Some(HERMES_PINNED_RELEASE_TAG.to_string()),
+        );
+        assert!(with_hermes_upstream(pinned, newer.clone()).update_available);
+        let patched = hermes_update_status_base(
+            true,
+            Some("v0.21.0 (2026.8.31)".to_string()),
+            true,
+            Some("v2026.8.31".to_string()),
+        );
+        assert!(!with_hermes_upstream(patched, newer.clone()).update_available);
+        let not_installed = hermes_update_status_base(false, None, true, None);
+        assert!(!with_hermes_upstream(not_installed, newer).update_available);
+    }
+
+    #[test]
+    fn hermes_engine_install_record_round_trips_and_switches_layout() {
+        let dir = temp_app_support("engine-record");
+        std::fs::create_dir_all(hermes_provider_root_at(&dir)).expect("provider root");
+        assert!(load_hermes_engine_record_at(&dir).is_none());
+        let engine = HermesEngineRecord {
+            tag: "v2026.8.31".to_string(),
+            commit: "29112bef099274229cadff79cdff7bf7b99c4b77".to_string(),
+            version: "Hermes Agent v0.21.0 (2026.8.31)".to_string(),
+        };
+        save_hermes_engine_install_record_at(&dir, Path::new("/tmp/hermes"), &engine)
+            .expect("save engine record");
+        assert_eq!(load_hermes_engine_record_at(&dir), Some(engine));
+        assert_eq!(hermes_installed_tag_at(&dir), "v2026.8.31");
+        // Legacy record wins back the pinned layout.
+        save_hermes_install_record_at(&dir, Path::new("/tmp/hermes")).expect("save legacy record");
+        assert!(load_hermes_engine_record_at(&dir).is_none());
+        assert_eq!(hermes_installed_tag_at(&dir), HERMES_PINNED_RELEASE_TAG);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn grok_auth_detection_requires_a_non_empty_token_field() {
@@ -7272,133 +7760,42 @@ mod tests {
     }
 
     #[test]
-    fn gajecode_update_status_compares_only_against_atelier_supported_pin() {
+    fn gajecode_status_treats_pin_as_minimum_baseline_not_exact_target() {
+        // Below-baseline runtime = repair case (install button), never a patch.
         let old = gajecode_update_status(true, Some("0.12.8".to_string()));
         assert!(old.installed);
         assert_eq!(old.current_version.as_deref(), Some("0.12.8"));
         assert_eq!(old.latest_version.as_deref(), Some(GAJAE_CODE_VERSION));
-        assert!(old.update_available);
-        assert!(old.message.is_none());
+        assert!(!old.update_available);
+        assert!(old
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains("설치·복구")));
 
+        // At or above the baseline: no repair message, no downgrade prompt.
         let supported = gajecode_update_status(true, Some(GAJAE_CODE_VERSION.to_string()));
-        assert!(supported.installed);
-        assert_eq!(
-            supported.current_version.as_deref(),
-            Some(GAJAE_CODE_VERSION)
+        assert!(!supported.update_available && supported.message.is_none());
+        let patched = gajecode_update_status(true, Some("0.16.4".to_string()));
+        assert!(!patched.update_available && patched.message.is_none());
+        assert!(
+            !format!("{:?}", patched.message).contains("복원"),
+            "a runtime ahead of the baseline must never be offered a restore/downgrade"
         );
-        assert_eq!(
-            supported.latest_version.as_deref(),
-            Some(GAJAE_CODE_VERSION)
-        );
-        assert!(!supported.update_available);
-        assert!(supported.message.is_none());
 
         let missing = gajecode_update_status(false, None);
-        assert!(!missing.installed);
-        assert!(missing.current_version.is_none());
-        assert_eq!(missing.latest_version.as_deref(), Some(GAJAE_CODE_VERSION));
-        assert!(!missing.update_available);
-        assert!(missing
-            .message
-            .as_deref()
-            .is_some_and(|message| message.contains("설치되어 있지 않습니다")));
-
-        let newer = gajecode_update_status(true, Some("0.16.0".to_string()));
-        assert!(newer.installed);
-        assert_eq!(newer.current_version.as_deref(), Some("0.16.0"));
-        assert!(!newer.update_available);
-        assert!(newer
-            .message
-            .as_deref()
-            .is_some_and(|message| message.contains("지원 버전으로 복원")));
-
+        assert!(!missing.installed && !missing.update_available);
         let unreadable = gajecode_update_status(true, None);
-        assert!(unreadable.installed);
-        assert!(unreadable.update_available);
+        assert!(!unreadable.update_available);
         assert!(unreadable
             .message
             .as_deref()
             .is_some_and(|message| message.contains("버전을 확인하지 못했습니다")));
-    }
 
-    #[test]
-    fn upstream_reference_never_changes_pin_based_update_fields() {
-        let newer_upstream = crate::upstream_check::UpstreamReference {
-            latest_version: Some("99.0.0".to_string()),
-            latest_tag: Some("v99.0.0".to_string()),
-            checked_at: Some("2026-08-24T00:00:00Z".to_string()),
-            error: None,
-        };
-        let failed_upstream = crate::upstream_check::UpstreamReference {
-            latest_version: None,
-            latest_tag: None,
-            checked_at: Some("2026-08-24T00:00:00Z".to_string()),
-            error: Some("offline".to_string()),
-        };
-
-        let supported = with_gajecode_upstream(
-            gajecode_update_status(true, Some(GAJAE_CODE_VERSION.to_string())),
-            newer_upstream.clone(),
-        );
-        assert!(
-            !supported.update_available,
-            "upstream newer must not flip update_available"
-        );
-        assert_eq!(
-            supported.latest_version.as_deref(),
-            Some(GAJAE_CODE_VERSION)
-        );
-        assert_eq!(supported.upstream_latest_version.as_deref(), Some("99.0.0"));
-        assert!(supported.upstream_error.is_none());
-
-        let offline = with_gajecode_upstream(
-            gajecode_update_status(true, Some("0.1.0".to_string())),
-            failed_upstream.clone(),
-        );
-        assert!(
-            offline.update_available,
-            "pin comparison survives upstream failure"
-        );
-        assert!(offline.upstream_latest_version.is_none());
-        assert_eq!(offline.upstream_error.as_deref(), Some("offline"));
-
+        // Grok stays pin-exact (out of patch scope).
         let grok = grok_update_status(true, Some(GROK_VERSION.to_string()), true);
         assert!(!grok.update_available);
-        assert_eq!(grok.latest_version.as_deref(), Some(GROK_VERSION));
-        assert!(grok.upstream_latest_version.is_none());
         let grok_stale = grok_update_status(true, Some("0.0.1".to_string()), true);
         assert!(grok_stale.update_available);
-
-        let hermes = with_hermes_upstream(
-            hermes_update_status_base(true, Some("0.20.0".to_string()), true),
-            newer_upstream,
-        );
-        assert!(
-            !hermes.update_available,
-            "install-record match wins over upstream tag"
-        );
-        assert_eq!(hermes.upstream_latest_tag.as_deref(), Some("v99.0.0"));
-        assert_eq!(hermes.pinned_commit.as_deref(), Some(&HERMES_COMMIT[..7]));
-        let validated_block = with_hermes_upstream(
-            hermes_update_status_base(true, Some("0.19.0".to_string()), true),
-            crate::upstream_check::UpstreamReference {
-                latest_version: Some("2026.8.19".to_string()),
-                latest_tag: Some(HERMES_VALIDATED_BLOCKED_TAG.to_string()),
-                checked_at: Some("2026-08-26T00:00:00Z".to_string()),
-                error: None,
-            },
-        );
-        assert_eq!(
-            validated_block.upstream_validation_status.as_deref(),
-            Some(HERMES_VALIDATION_STATUS)
-        );
-        let hermes_stale = with_hermes_upstream(
-            hermes_update_status_base(true, None, false),
-            failed_upstream,
-        );
-        assert!(hermes_stale.update_available);
-        let hermes_missing = hermes_update_status_base(false, None, true);
-        assert!(!hermes_missing.installed && !hermes_missing.update_available);
     }
 
     #[cfg(unix)]
@@ -7898,7 +8295,7 @@ mod tests {
                 .expect("canonicalize verified readiness provider root"),
             canonical_provider_root
         );
-        let (_, skill_count) = verify_gajecode_components_at(&app_support)
+        let (_, skill_count, _) = verify_gajecode_components_at(&app_support)
             .expect("updated managed Gajaecode components must verify");
         assert_eq!(skill_count, GAJAE_DEFAULT_SKILLS.len());
         let mut version_probe = gajecode_command_at(&app_support)
@@ -7957,7 +8354,7 @@ mod tests {
         assert!(readiness.ready);
         assert_eq!(readiness.runtime_pin, GROK_VERSION);
         assert!(readiness.dependency_pin.is_none());
-        let (executable, skill_count) =
+        let (executable, skill_count, _) =
             verify_grok_components_at(&app_support).expect("verify managed Grok components");
         assert_eq!(skill_count, 0);
         assert_eq!(
@@ -8002,10 +8399,10 @@ mod tests {
         write_gajecode_skill_integrity_manifest(&layout.skills)
             .expect("write Gajaecode skill integrity fixture");
 
-        let (executable, count) =
+        let (executable, count, detected) =
             verify_gajecode_components_at(root.path()).expect("verify exact Gajaecode pins");
-        let receipt =
-            expected_runtime_receipt(&layout, &executable, count).expect("expected receipt");
+        let receipt = expected_runtime_receipt(&layout, &executable, count, &detected)
+            .expect("expected receipt");
         write_runtime_receipt(&layout.receipt, &receipt).expect("write readiness receipt");
         let ready = verify_managed_runtime_at(root.path(), "gajecode").expect("verified readiness");
         assert!(ready.ready);
@@ -8345,11 +8742,12 @@ mod tests {
         )
         .expect("write Hermes manifest");
 
-        let (verified_executable, count) =
+        let (verified_executable, count, installed_commit) =
             verify_hermes_components_at(root.path()).expect("verify Hermes components");
         assert_eq!(count, 1);
-        let receipt = expected_runtime_receipt(&layout, &verified_executable, count)
-            .expect("expected Hermes receipt");
+        let receipt =
+            expected_runtime_receipt(&layout, &verified_executable, count, &installed_commit)
+                .expect("expected Hermes receipt");
         write_runtime_receipt(&layout.receipt, &receipt).expect("write Hermes receipt");
         let ready =
             verify_managed_runtime_at(root.path(), "hermes").expect("Hermes should be ready");

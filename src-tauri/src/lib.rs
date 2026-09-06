@@ -31,6 +31,7 @@ mod linear_workflows;
 mod mobile_continuity;
 #[cfg(feature = "orca-mobile-control")]
 mod mobile_control;
+mod provider_patch;
 #[cfg(feature = "orca-provider-usage")]
 mod provider_usage;
 mod pty;
@@ -1641,6 +1642,7 @@ pub fn run() {
             credentials::gajecode_update,
             credentials::grok_check_update,
             credentials::grok_update,
+            provider_patch::provider_patch_upstream,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

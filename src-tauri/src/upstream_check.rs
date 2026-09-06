@@ -1,9 +1,10 @@
 //! Upstream "latest version" reference lookups for Atelier-managed agents.
 //!
-//! This module only answers "what does upstream currently publish?" so the
-//! Connections cards can show it next to the Atelier support pin. It never
-//! participates in `update_available`, install targets, or readiness: the
-//! managed install/update path keeps using the exact pin selected by this build.
+//! This module only answers "what does upstream currently publish?". The
+//! status layer (credentials.rs) compares that reference against the installed
+//! runtime to decide patch availability, and the patch pipeline
+//! (provider_patch.rs) installs it fail-closed with backup and rollback.
+//! Readiness itself stays receipt-based and never consults this module.
 //!
 //! Every lookup is failure-tolerant (network errors become a short reason
 //! string), bounded by a 5 second timeout, and cached per provider in
@@ -28,10 +29,14 @@ pub(crate) const GAJAE_UPSTREAM_PACKAGE: &str = "gajae-code";
 
 /// Result of one upstream lookup. `latest_version` is `None` whenever the lookup
 /// failed; `error` then carries a short, user-presentable reason.
+/// `latest_commit` is the peeled commit of `latest_tag` (Hermes only) so the
+/// patch pipeline can verify provenance of what it installs.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpstreamReference {
     pub latest_version: Option<String>,
     pub latest_tag: Option<String>,
+    #[serde(default)]
+    pub latest_commit: Option<String>,
     pub checked_at: Option<String>,
     pub error: Option<String>,
 }
@@ -201,6 +206,32 @@ pub(crate) fn version_from_tag(tag: &str) -> String {
     tag.trim_start_matches('v').to_string()
 }
 
+/// Commit object a tag points at, from the same `git ls-remote --tags` output.
+/// Annotated tags list a peeled `refs/tags/<tag>^{}` entry whose hash is the
+/// actual commit; lightweight tags only list the direct entry. The peeled hash
+/// wins so the patch pipeline can compare it against a checkout HEAD.
+pub(crate) fn tag_commit(ls_remote: &str, tag: &str) -> Option<String> {
+    let direct_ref = format!("refs/tags/{tag}");
+    let peeled_ref = format!("refs/tags/{tag}^{{}}");
+    let mut direct = None;
+    let mut peeled = None;
+    for line in ls_remote.lines() {
+        let mut fields = line.split_whitespace();
+        let (Some(hash), Some(reference)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        if hash.len() != 40 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            continue;
+        }
+        if reference == peeled_ref {
+            peeled = Some(hash.to_string());
+        } else if reference == direct_ref {
+            direct = Some(hash.to_string());
+        }
+    }
+    peeled.or(direct)
+}
+
 // ---------------------------------------------------------------------------
 // Provider-specific lookups
 // ---------------------------------------------------------------------------
@@ -229,7 +260,7 @@ fn lookup_gajecode(managed_bun: Option<&Path>, path_env: &str) -> Result<String,
     Err(last_error)
 }
 
-fn lookup_hermes(path_env: &str) -> Result<(String, String), String> {
+fn lookup_hermes(path_env: &str) -> Result<(String, String, Option<String>), String> {
     let mut command = crate::agent_process::command_for_cli("git");
     command
         .args(["ls-remote", "--tags", HERMES_UPSTREAM_REPOSITORY])
@@ -238,7 +269,8 @@ fn lookup_hermes(path_env: &str) -> Result<(String, String), String> {
     let stdout = run_lookup(command, "git ls-remote")?;
     let tag =
         highest_version_tag(&stdout).ok_or_else(|| "git ls-remote: v* 태그 없음".to_string())?;
-    Ok((version_from_tag(&tag), tag))
+    let commit = tag_commit(&stdout, &tag);
+    Ok((version_from_tag(&tag), tag, commit))
 }
 
 fn lookup_grok() -> Result<String, String> {
@@ -283,24 +315,29 @@ pub(crate) fn resolve_upstream_reference(context: UpstreamLookupContext<'_>) -> 
         }
     }
     let started = Instant::now();
-    let result: Result<(String, Option<String>), String> = match context.provider {
-        "gajecode" => lookup_gajecode(context.managed_bun, context.path_env).map(|v| (v, None)),
-        "hermes" => lookup_hermes(context.path_env).map(|(v, tag)| (v, Some(tag))),
-        "grok" => lookup_grok().map(|v| (v, None)),
+    type LookupOk = (String, Option<String>, Option<String>);
+    let result: Result<LookupOk, String> = match context.provider {
+        "gajecode" => {
+            lookup_gajecode(context.managed_bun, context.path_env).map(|v| (v, None, None))
+        }
+        "hermes" => lookup_hermes(context.path_env).map(|(v, tag, commit)| (v, Some(tag), commit)),
+        "grok" => lookup_grok().map(|v| (v, None, None)),
         other => Err(format!("unknown provider {other}")),
     };
     let elapsed_ms = started.elapsed().as_millis();
     let reference = match result {
-        Ok((version, tag)) => {
+        Ok((version, tag, commit)) => {
             log::info!(
-                "upstream check {}: latest={} tag={} ({elapsed_ms}ms)",
+                "upstream check {}: latest={} tag={} commit={} ({elapsed_ms}ms)",
                 context.provider,
                 version,
-                tag.as_deref().unwrap_or("-")
+                tag.as_deref().unwrap_or("-"),
+                commit.as_deref().unwrap_or("-")
             );
             UpstreamReference {
                 latest_version: Some(version),
                 latest_tag: tag,
+                latest_commit: commit,
                 checked_at: Some(now_rfc3339()),
                 error: None,
             }
@@ -313,6 +350,7 @@ pub(crate) fn resolve_upstream_reference(context: UpstreamLookupContext<'_>) -> 
             UpstreamReference {
                 latest_version: None,
                 latest_tag: None,
+                latest_commit: None,
                 checked_at: Some(now_rfc3339()),
                 error: Some(error),
             }
@@ -361,6 +399,27 @@ ggg\trefs/tags/v2025.12.31
     }
 
     #[test]
+    fn tag_commit_prefers_peeled_hash_and_requires_exact_reference() {
+        let ls_remote = "\
+1111111111111111111111111111111111111111\trefs/tags/v2026.8.31
+2222222222222222222222222222222222222222\trefs/tags/v2026.8.31^{}
+3333333333333333333333333333333333333333\trefs/tags/v2026.8.3
+";
+        assert_eq!(
+            tag_commit(ls_remote, "v2026.8.31").as_deref(),
+            Some("2222222222222222222222222222222222222222"),
+            "annotated tags must resolve to the peeled commit"
+        );
+        assert_eq!(
+            tag_commit(ls_remote, "v2026.8.3").as_deref(),
+            Some("3333333333333333333333333333333333333333"),
+            "lightweight tags resolve to the direct hash"
+        );
+        assert_eq!(tag_commit(ls_remote, "v2026.8"), None);
+        assert_eq!(tag_commit("bogus line\n", "v2026.8.31"), None);
+    }
+
+    #[test]
     fn cache_round_trips_and_honors_ttl_and_provider() {
         let dir =
             std::env::temp_dir().join(format!("atelier-upstream-cache-{}", std::process::id()));
@@ -368,6 +427,7 @@ ggg\trefs/tags/v2025.12.31
         let fresh = UpstreamReference {
             latest_version: Some("0.15.0".to_string()),
             latest_tag: None,
+            latest_commit: None,
             checked_at: Some("2026-08-24T00:00:00Z".to_string()),
             error: None,
         };
@@ -392,6 +452,7 @@ ggg\trefs/tags/v2025.12.31
         let failed = UpstreamReference {
             latest_version: None,
             latest_tag: None,
+            latest_commit: None,
             checked_at: Some("2026-08-24T00:00:00Z".to_string()),
             error: Some("offline".to_string()),
         };
